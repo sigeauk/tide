@@ -1,0 +1,22 @@
+ELASTIC_URL="kibana:5601"
+ELASTICSEARCH_URL="elasticsearch:9200"
+ELASTIC_API_KEY=""
+OPENCTI_URL="opencti:8080"
+OPENCTI_TOKEN=""
+GITLAB_URL="gitlab:8929/"
+GITLAB_TOKEN=""
+SYNC_INTERVAL_MINUTES=60
+TIDE_VERSION="1.1.0"
+MITRE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
+MITRE_MOBILE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json"
+MITRE_ICS_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json"
+MITRE_PRE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json"
+
+# ---- Authentication (Keycloak) ----
+# Set AUTH_DISABLED=true for local development without Keycloak
+AUTH_DISABLED=False
+KEYCLOAK_URL="http://localhost:8080"
+KEYCLOAK_REALM="tide"
+KEYCLOAK_CLIENT_ID="tide-app"
+KEYCLOAK_CLIENT_SECRET=""
+APP_URL="http://localhost:8501"

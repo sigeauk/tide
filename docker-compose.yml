@@ -1,0 +1,33 @@
+name: TIDE
+services:
+  tide-ui:
+    image: 047741/tide-core:${TIDE_VERSION}
+    container_name: tide-ui
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - ENV_FILE_LOCATION=.env
+      - AUTH_DISABLED=${AUTH_DISABLED:-false}
+      - STREAMLIT_SERVER_FOLDER_WATCH_BLACKLIST=['data', 'logs', '.git', '__pycache__']
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=poll
+      - STREAMLIT_SERVER_RUN_ON_SAVE=true
+    volumes:
+      - tide_data:/app/data
+    command: streamlit run app/Home.py --server.runOnSave=true --server.fileWatcherType=poll
+
+  tide-worker:
+    image: 047741/tide-core:${TIDE_VERSION}
+    container_name: tide-worker
+    env_file:
+      - .env
+    volumes:
+      - tide_data:/app/data
+    command: python app/worker.py
+    environment:
+      - PYTHONPATH=/app
+
+volumes:
+  tide_data:
+    driver: local
