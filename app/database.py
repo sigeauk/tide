@@ -95,50 +95,50 @@ def run_migrations(conn):
     if current_version < 1:
         try:
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS threat_actors (
-                    name VARCHAR PRIMARY KEY,
-                    description VARCHAR,
-                    ttps VARCHAR[],
-                    ttp_count INTEGER,
-                    aliases VARCHAR,
-                    origin VARCHAR,
-                    last_updated TIMESTAMP
-                )
-            """)
+            CREATE TABLE IF NOT EXISTS threat_actors (
+                name VARCHAR PRIMARY KEY,
+                description VARCHAR,
+                ttps VARCHAR[],
+                ttp_count INTEGER,
+                aliases VARCHAR,
+                origin VARCHAR,
+                last_updated TIMESTAMP
+            )
+        """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS detection_rules (
-                    rule_id VARCHAR PRIMARY KEY,
-                    name VARCHAR,
-                    severity VARCHAR,
-                    author VARCHAR,
-                    enabled INTEGER,
-                    space VARCHAR,
-                    score INTEGER,
-                    quality_score INTEGER,
-                    meta_score INTEGER,
-                    score_mapping INTEGER,
-                    score_field_type INTEGER,
-                    score_search_time INTEGER,
-                    score_language INTEGER,
-                    score_note INTEGER,
-                    score_override INTEGER,
-                    score_tactics INTEGER,
-                    score_techniques INTEGER,
-                    score_author INTEGER,
-                    score_highlights INTEGER,
-                    last_updated TIMESTAMP,
-                    mitre_ids VARCHAR[], 
-                    raw_data JSON
-                )
-            """)
+            CREATE TABLE IF NOT EXISTS detection_rules (
+                rule_id VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                severity VARCHAR,
+                author VARCHAR,
+                enabled INTEGER,
+                space VARCHAR,
+                score INTEGER,
+                quality_score INTEGER,
+                meta_score INTEGER,
+                score_mapping INTEGER,
+                score_field_type INTEGER,
+                score_search_time INTEGER,
+                score_language INTEGER,
+                score_note INTEGER,
+                score_override INTEGER,
+                score_tactics INTEGER,
+                score_techniques INTEGER,
+                score_author INTEGER,
+                score_highlights INTEGER,
+                last_updated TIMESTAMP,
+                mitre_ids VARCHAR[], 
+                raw_data JSON
+            )
+        """)
             conn.execute("""
-                CREATE TABLE IF NOT EXISTS mitre_techniques (
-                    id VARCHAR PRIMARY KEY,
-                    name VARCHAR,
-                    tactic VARCHAR,
-                    url VARCHAR
-                )
-            """)
+            CREATE TABLE IF NOT EXISTS mitre_techniques (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                tactic VARCHAR,
+                url VARCHAR
+            )
+        """)
             set_schema_version(conn, 1)
             log_info("✅ Migration 1 completed: Initial schema created")
         except Exception as e:
