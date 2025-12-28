@@ -1,8 +1,8 @@
-# TIDE (Threat Informed Detection Engine)
+# Threat Informed Detection Engine (TIDE)
 
 ![TIDE](./app/static/TIDE.png)
 
-**TIDE** is a containerized, air-gap friendly platform designed to manage the lifecycle of Detection Engineering. It acts as the "Human-in-the-Loop" interface between **Elastic Security**, **OpenCTI**, **VECTR**, and your **GitOps** workflow.
+TIDE is a modular threat intelligence and detection platform designed to streamline the management, analysis, and automation of threat data. It integrates with Elasticsearch, GitLab, and Sigma rules to provide a robust solution for security teams.
 
 ---
 
@@ -46,8 +46,8 @@
 - **Executive Dashboards**: Clean visualizations for stakeholder presentations
 - **Exportable Metrics**: Key statistics ready for reporting
 
-### 🎯 VECTR Integration
-- **Campaign Tracking**: Connect to VECTR for purple team exercise management
+### 🎯 Attack Tree Integration
+- **Campaign Tracking**: Manage and visualize purple team exercises and attack scenarios using the Attack Tree module.
 - **Coverage Validation**: Map detection rules to adversary emulation results
 
 ### 🔄 SIGMA Conversion
@@ -61,28 +61,6 @@
 
 ---
 
-## 🏗️ Architecture
-
-TIDE follows a **Hybrid State** architecture:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         TIDE Platform                            │
-├─────────────────┬─────────────────┬─────────────────────────────┤
-│   tide-ui       │   tide-worker   │   keycloak                  │
-│   (Streamlit)   │   (Scheduler)   │   (Authentication)          │
-│   Port 8501     │   Background    │   Port 8080                 │
-├─────────────────┴─────────────────┴─────────────────────────────┤
-│                         tide-net (Docker Network)                │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-        ┌──────────┐   ┌──────────┐   ┌──────────┐
-        │ Elastic  │   │ OpenCTI  │   │  GitLab  │
-        │ Security │   │          │   │          │
-        └──────────┘   └──────────┘   └──────────┘
-```
 
 - **Frontend (UI)**: Streamlit on Port 8501 - Visualizes data and captures analyst actions
 - **Backend (Worker)**: Python Scheduler - Syncs data from APIs, calculates scores, runs heavy logic
@@ -103,14 +81,13 @@ TIDE follows a **Hybrid State** architecture:
 - Access to Elastic Security (Kibana) with API key
 - (Optional) OpenCTI instance for threat intelligence
 - (Optional) GitLab for GitOps workflow
-- (Optional) VECTR for purple team integration
 
 ### Quick Start (Development Mode)
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/your-org/TIDE.git
-   cd TIDE
+   git clone https://github.com/sigeauk/tide.git
+   cd tide
    ```
 
 2. **Create environment file**
@@ -136,7 +113,6 @@ TIDE follows a **Hybrid State** architecture:
 
 5. **Access the UI**
    - TIDE: http://localhost:8501
-   - Keycloak Admin (if auth enabled): http://localhost:8080
 
 ---
 
@@ -149,7 +125,7 @@ For deploying TIDE on an isolated network with full authentication:
 Ensure Docker images are available (transfer via portable media if air-gapped):
 ```bash
 # On connected system, save images
-docker save tide-ui:1.1.0 tide-worker:1.1.0 quay.io/keycloak/keycloak:26.0 | gzip > tide-images.tar.gz
+docker save tide-ui:1.1.0 tide-worker:1.1.0 | gzip > tide-images.tar.gz
 
 # On standalone system, load images
 docker load < tide-images.tar.gz
@@ -305,31 +281,6 @@ docker compose ps
 
 ---
 
-## 🗺️ Roadmap
-
-### ✅ Completed
-- [x] Docker multi-container setup (UI + Worker + Keycloak)
-- [x] DuckDB database with rule/TTP relationships
-- [x] Rule Health scoring engine (Quality + Meta scores)
-- [x] Threat Landscape with actor coverage
-- [x] Rule Promotion workflow (Staging → Production)
-- [x] Keycloak OIDC authentication
-- [x] MITRE ATT&CK heatmap
-- [x] User validation tracking
-
-### 🔄 In Progress
-- [ ] SIGMA rule conversion improvements
-- [ ] VECTR integration enhancements
-- [ ] PDF report generation
-
-### 📋 Planned
-- [ ] Local AI assistant (Ollama integration)
-- [ ] Advanced data quality monitoring
-- [ ] Scheduled report distribution
-- [ ] Multi-tenancy support
-
----
-
 ## 🤝 Contributing
 
 Contributions are welcome! Please read our contributing guidelines and submit pull requests to the `develop` branch.
@@ -345,3 +296,5 @@ See [LICENSE](LICENSE) for details.
 ## 📞 Support
 
 For issues and feature requests, please use the GitHub issue tracker.
+
+---
