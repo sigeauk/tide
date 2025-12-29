@@ -596,9 +596,9 @@ else:
 <div class="promo-header">
 <div class="promo-name">{rule_name}</div>
 <div class="pill-row">
-<div class="status-pill"><span class="status-dot" style="background-color:{dot_color};"></span>{enabled_text}</div>
-<div class="sev-pill" style="background-color:{sev_color};">{severity.upper()}</div>
 {mitre_pills}
+<div class="sev-pill" style="background-color:{sev_color};">{severity.upper()}</div>
+<div class="status-pill"><span class="status-dot" style="background-color:{dot_color};"></span>{enabled_text}</div>
 </div>
 </div>
 <div class="card-body">
