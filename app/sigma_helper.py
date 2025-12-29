@@ -1,7 +1,3 @@
-"""
-Sigma rule helper module for loading, searching, and converting Sigma rules.
-"""
-
 import os
 import yaml
 import re
@@ -9,6 +5,7 @@ import subprocess
 import uuid
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
+from log import log_info, log_error, log_debug
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -36,7 +33,7 @@ def ensure_sigma_repo() -> str:
     for repo_path in possible_paths:
         rules_path = os.path.join(repo_path, 'rules')
         if os.path.exists(rules_path):
-            print(f"[SIGMA] Found rules at: {rules_path}")
+            log_info(f"[SIGMA] Found rules at: {rules_path}")
             return rules_path
     
     # No repo found - try to clone
@@ -45,7 +42,7 @@ def ensure_sigma_repo() -> str:
         clone_path = '/opt/repos/sigma' if os.path.exists('/opt') else os.path.join(os.getcwd(), 'repos', 'sigma')
         
         try:
-            print(f"[SIGMA] Cloning Sigma repo to {clone_path}...")
+            log_info(f"[SIGMA] Cloning Sigma repo to {clone_path}...")
             os.makedirs(os.path.dirname(clone_path), exist_ok=True)
             subprocess.run(
                 ['git', 'clone', '--depth', '1', SIGMA_REPO_URL, clone_path],
@@ -55,10 +52,10 @@ def ensure_sigma_repo() -> str:
             )
             rules_path = os.path.join(clone_path, 'rules')
             if os.path.exists(rules_path):
-                print(f"[SIGMA] Successfully cloned repo, rules at: {rules_path}")
+                log_info(f"[SIGMA] Successfully cloned repo, rules at: {rules_path}")
                 return rules_path
         except Exception as e:
-            print(f"[SIGMA] Failed to clone repo: {e}")
+            log_error(f"[SIGMA] Failed to clone repo: {e}")
     
     # Return default path even if it doesn't exist
     return os.path.join(SIGMA_REPO_PATH, 'rules')
@@ -80,7 +77,7 @@ def load_sigma_rule(file_path: str) -> Optional[Dict]:
                 rule['_raw_yaml'] = content
                 return rule
     except Exception as e:
-        print(f"Error loading {file_path}: {e}")
+        log_error(f"Error loading {file_path}: {e}")
     return None
 
 
@@ -111,7 +108,7 @@ def load_all_rules(force_reload: bool = False) -> List[Dict]:
     rules_path = get_sigma_rules_path()
     
     if not os.path.exists(rules_path):
-        print(f"Sigma rules path not found: {rules_path}")
+        log_error(f"Sigma rules path not found: {rules_path}")
         return rules
     
     # Walk through all YAML files in the rules directory
@@ -127,7 +124,7 @@ def load_all_rules(force_reload: bool = False) -> List[Dict]:
                     rules.append(rule)
     
     _rules_cache = rules
-    print(f"Loaded {len(rules)} Sigma rules")
+    log_info(f"Loaded {len(rules)} Sigma rules")
     return rules
 
 
