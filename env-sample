@@ -1,22 +1,41 @@
-ELASTIC_URL="kibana:5601"
-ELASTICSEARCH_URL="elasticsearch:9200"
-ELASTIC_API_KEY=""
-OPENCTI_URL="opencti:8080"
-OPENCTI_TOKEN=""
-GITLAB_URL="gitlab:8929/"
-GITLAB_TOKEN=""
+# --- APPLICATION SETTINGS ---
+TIDE_VERSION=1.0.0
+APP_URL=localhost:8501
 SYNC_INTERVAL_MINUTES=60
-TIDE_VERSION="1.1.0"
-MITRE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
-MITRE_MOBILE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json"
-MITRE_ICS_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json"
-MITRE_PRE_SOURCE="https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json"
+AUTH_DISABLED=false
 
-# ---- Authentication (Keycloak) ----
-# Set AUTH_DISABLED=true for local development without Keycloak
-AUTH_DISABLED=False
-KEYCLOAK_URL="http://localhost:8080"
-KEYCLOAK_REALM="tide"
-KEYCLOAK_CLIENT_ID="tide-app"
-KEYCLOAK_CLIENT_SECRET=""
-APP_URL="http://localhost:8501"
+# --- AUTHENTICATION (KEYCLOAK) ---
+KEYCLOAK_URL=http://keycloak:8080 
+KEYCLOAK_INTERNAL_URL=http://keycloak:8080 
+KEYCLOAK_REALM=tide
+KEYCLOAK_CLIENT_ID=tide-app
+KEYCLOAK_CLIENT_SECRET=
+
+# --- INFRASTRUCTURE CONNECTIONS ---
+
+# Elasticsearch 
+ELASTICSEARCH_URL=http://elasticsearch:9200
+# Kibana 
+ELASTIC_URL=http://kibana:5601
+ELASTIC_API_KEY=
+
+# OpenCTI
+OPENCTI_URL=http://opencti:8080
+OPENCTI_TOKEN=
+
+# GitLab 
+GITLAB_URL=http://gitlab:8929/
+GITLAB_TOKEN=
+
+# Splunk 
+SPLUNK_URL=http://splunk:8089
+SPLUNK_API_KEY=
+
+# --- EXTERNAL DATA SOURCES ---
+MITRE_SOURCE=https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json
+MITRE_MOBILE_SOURCE=https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json
+MITRE_ICS_SOURCE=https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json
+MITRE_PRE_SOURCE=https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json
+SIGMA_REPO_URL=https://github.com/SigmaHQ/sigma.git
+ELASTIC_REPO_URL=https://github.com/elastic/detection-rules.git
+KIBANA_SPACES=production, staging
