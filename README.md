@@ -230,7 +230,7 @@ docker compose ps
 │   │   ├── 4_Rule_health.py
 │   │   ├── 5_Heatmap.py
 │   │   ├── 6_Pressentation.py
-│   │   ├── 7_Vectr.py
+│   │   ├── 7_Attack_Tree.py
 │   │   ├── 8_Sigma_Convert.py
 │   │   └── 9_Settings.py
 │   ├── 📂 static/           # Flags and icons
@@ -242,17 +242,12 @@ docker compose ps
 │   ├── Home.py              # Main entry point
 │   ├── license_mgr.py       # License management
 │   ├── log.py               # Logging utilities
+│   ├── sigma_helper.py      # import and convert Sigma rules
 │   ├── styles.py            # Global CSS styles
 │   └── worker.py            # Background sync worker
-├── 📂 data/
-│   ├── checkedRule.json     # Validation records
-│   └── tide.duckdb          # Local database
-├── 📂 scripts/              # Utility scripts
-├── .env                     # Environment configuration
-├── .gitattributes           # Git line ending config
 ├── docker-compose.yml       # Container orchestration
 ├── dockerfile               # Container build instructions
-├── env-sample               # Example environment file
+├── env-sample               # Example environment fileconfiguration
 ├── README.md                # This file
 └── requirements.txt         # Python dependencies
 ```
