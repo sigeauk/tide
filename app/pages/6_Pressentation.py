@@ -61,16 +61,6 @@ except Exception as e:
 
 df_actors = pd.DataFrame(threats)
 
-
-
-
-st.markdown("""
-<style>
-    .stApp { background-color: #0e1117; }
-    h1 { color: #60a5fa; font-family: 'Helvetica Neue', sans-serif; }
-</style>
-""", unsafe_allow_html=True)
-
 st.title("TIDE: Ecosystem Connectivity")
 st.caption("Interact with the ecosystem: **Click** to view details, **Drag** to rearrange.")
 

@@ -7,40 +7,6 @@ st.set_page_config(page_title="Sigma Convert | TIDE", page_icon="app/static/icon
 apply_custom_styles()
 require_auth()
 
-# --- CUSTOM CSS ---
-st.markdown("""
-<style>
-    /* Level pill badges with appropriate text colors */
-    .level-pill {
-        display: inline-block;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 11px;
-        font-weight: 600;
-        margin-right: 6px;
-    }
-    .level-critical { background: #dc2626; color: white; }
-    .level-high { background: #ea580c; color: white; }
-    .level-medium { background: #eab308; color: black; }
-    .level-low { background: #22c55e; color: black; }
-    .level-informational { background: #06b6d4; color: black; }
-    
-    /* Query output label */
-    .query-label {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background: #0ea5e9;
-        color: white;
-        padding: 4px 12px;
-        border-radius: 6px;
-        font-size: 13px;
-        font-weight: 600;
-        margin-bottom: 12px;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # --- HEADER (matching other pages) ---
 st.title("🔄 Sigma Converter")
 

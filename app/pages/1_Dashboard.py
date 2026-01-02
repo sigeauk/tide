@@ -41,46 +41,6 @@ threat_metrics = db.get_threat_landscape_metrics()
 validated_pct = round((rule_health['validated_count'] / rule_health['total_rules'] * 100), 1) if rule_health['total_rules'] > 0 else 0
 needs_review = rule_health['validation_expired_count'] + rule_health['never_validated_count']
 
-# --- METRICS CARDS CSS ---
-st.markdown("""
-<style>
-    .metric-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 20px;
-        text-align: center;
-    }
-    .metric-value {
-        font-size: 2.2rem;
-        font-weight: 700;
-        color: #f1f5f9;
-        margin: 0;
-    }
-    .metric-label {
-        font-size: 0.85rem;
-        color: #94a3b8;
-        margin-top: 4px;
-    }
-    .metric-sub {
-        font-size: 0.75rem;
-        color: #64748b;
-        margin-top: 8px;
-    }
-    .metric-good { color: #4ade80; }
-    .metric-warn { color: #facc15; }
-    .metric-bad { color: #f87171; }
-    .section-header {
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: #94a3b8;
-        margin: 20px 0 10px 0;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #334155;
-    }
-</style>
-""", unsafe_allow_html=True)
-
 # --- 3. UI LAYOUT ---
 
 # === RULE HEALTH SECTION ===

@@ -23,20 +23,6 @@ VALIDATION_FILE = "data/checkedRule.json"
 # --- METRICS DISPLAY ---
 metrics = db.get_rule_health_metrics(VALIDATION_FILE)
 
-# Additional metric-specific styles (extends global styles)
-st.markdown("""
-<style>
-    .metric-sub {
-        font-size: 0.75rem;
-        color: #64748b;
-        margin-top: 8px;
-    }
-    .metric-good { color: #4ade80; }
-    .metric-warn { color: #facc15; }
-    .metric-bad { color: #f87171; }
-</style>
-""", unsafe_allow_html=True)
-
 # Metrics Row
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 

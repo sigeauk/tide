@@ -271,39 +271,11 @@ def logout():
 
 def render_login_page(current_page_path: str = ''):
     """Render the login page with Keycloak redirect."""
+    # Hide sidebar on login page
     st.markdown("""
     <style>
-        /* Hide sidebar on login page */
-        [data-testid="stSidebar"] {
-            display: none;
-        }
-        [data-testid="stSidebarCollapsedControl"] {
-            display: none;
-        }
-        .login-container {
-            max-width: 400px;
-            margin: 100px auto;
-            text-align: center;
-        }
-        .login-title {
-            font-size: 48px;
-            margin-bottom: 10px;
-        }
-        .login-subtitle {
-            color: #60a5fa;
-            font-size: 24px;
-            margin-bottom: 30px;
-        }
-        .login-card {
-            background: #1e293b;
-            border: 1px solid #334155;
-            border-radius: 16px;
-            padding: 40px;
-        }
-        .login-message {
-            color: #94a3b8;
-            margin-bottom: 20px;
-        }
+        [data-testid="stSidebar"] { display: none; }
+        [data-testid="stSidebarCollapsedControl"] { display: none; }
     </style>
     """, unsafe_allow_html=True)
     
