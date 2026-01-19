@@ -282,7 +282,8 @@ def get_threat_landscape(api_url, api_token):
                 "aliases": aliases,
                 "origin": get_iso_code(desc) or get_iso_code(name) or "unknown",
                 "ttps": list(set(ttps)), # Unique IDs
-                "ttp_count": len(set(ttps))
+                "ttp_count": len(set(ttps)),
+                "source": "OpenCTI"
             })
 
         log_info(f"✅ Fetched {len(actors)} Threat Actors from OpenCTI")

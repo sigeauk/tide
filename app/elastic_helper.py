@@ -451,7 +451,7 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
             highlighted_str = ",".join(investigation_fields) if investigation_fields else "❌"
             
             rule_data = {
-                "rule_id": r.get('id'), "name": r.get('name'), "enabled": r.get('enabled'),
+                "rule_id": r.get('rule_id'), "name": r.get('name'), "enabled": r.get('enabled'),
                 "author_str": str(r.get('author', [])), "severity": r.get('severity'), "risk_score": r.get('risk_score'),
                 "timestamp_override": r.get('timestamp_override', "❌"), "note_exists": "✔️" if r.get('note') else "❌",
                 "note": r.get('note', ''),

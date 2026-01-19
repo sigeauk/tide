@@ -65,7 +65,7 @@ st.title("TIDE: Ecosystem Connectivity")
 st.caption("Interact with the ecosystem: **Click** to view details, **Drag** to rearrange.")
 
 # --- 2. CONFIGURATION ---
-STATIC_PATH = "app/static" 
+STATIC_PATH = "/app/app/static" 
 
 # Define Nodes: 'img' (filename) and 'emoji' (fallback)
 nodes = {
