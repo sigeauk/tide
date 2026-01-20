@@ -279,9 +279,11 @@ def render_login_page(current_page_path: str = ''):
     </style>
     """, unsafe_allow_html=True)
     
-    st.markdown("""
+    from styles import get_icon_base64
+    tide_icon_b64 = get_icon_base64("tide.png")
+    st.markdown(f"""
     <div class="login-container">
-        <img src="app/static/icons/tide.png" class="login-title" style="width: 48px; height: 48px;" alt="TIDE">
+        <img src="data:image/png;base64,{tide_icon_b64}" class="login-title" style="width: 48px; height: 48px;" alt="TIDE">
         <div class="login-subtitle">TIDE</div>
         <div class="login-card">
             <p class="login-message">Sign in to access the Threat Informed Detection Engine</p>

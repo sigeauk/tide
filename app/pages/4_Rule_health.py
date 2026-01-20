@@ -5,11 +5,11 @@ from datetime import datetime
 import json
 import math
 import database as db
-from styles import apply_custom_styles
+from styles import apply_custom_styles, get_icon_path
 from auth import require_auth, get_current_user
 
 # 1. Page Config
-st.set_page_config(page_title="Rule Health | TIDE", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Rule Health | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
 apply_custom_styles()
 require_auth()
 st.title("Detection Rule Health")
@@ -85,6 +85,16 @@ with m6:
         <p class="metric-sub">{spaces_str if spaces_str else "No spaces"}</p>
     </div>
     ''', unsafe_allow_html=True)
+
+# --- DATA MANAGEMENT ---
+with st.expander("🗑️ Data Management", expanded=False):
+    st.warning("⚠️ Detection rules are synced live from Elastic. Clearing this data will remove all cached rules until the next sync.")
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("🗑️ Clear Detection Rules", type="secondary", use_container_width=True):
+            deleted = db.clear_detection_rules()
+            st.success(f"✅ Cleared {deleted} detection rules. Run a sync to reload.")
+            st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 st.divider()

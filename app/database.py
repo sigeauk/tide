@@ -9,7 +9,7 @@ from datetime import datetime
 # --- CONFIG ---
 DB_PATH = "/app/data/tide.duckdb"
 TRIGGER_DIR = "/app/data/triggers"
-SCHEMA_VERSION = 2  # Increment this when adding migrations
+SCHEMA_VERSION = 3  # Increment this when adding migrations
 
 
 def get_connection(read_only=False, retries=5, delay=0.5):
@@ -154,6 +154,46 @@ def run_migrations(conn):
             log_info("✅ Migration 2 completed: Added source column to threat_actors")
         except Exception as e:
             log_error(f"Migration 2 failed: {e}")
+            raise
+    
+    # Migration 3: Change detection_rules PK to composite (rule_id, space) (v2 -> v3)
+    if current_version < 3:
+        try:
+            # Drop and recreate detection_rules with new composite PK
+            # Data is ephemeral (live feed from Elastic) so no need to preserve
+            log_info("🔄 Recreating detection_rules table with new schema...")
+            conn.execute("DROP TABLE IF EXISTS detection_rules")
+            conn.execute("""
+                CREATE TABLE detection_rules (
+                    rule_id VARCHAR,
+                    name VARCHAR,
+                    severity VARCHAR,
+                    author VARCHAR,
+                    enabled INTEGER,
+                    space VARCHAR,
+                    score INTEGER,
+                    quality_score INTEGER,
+                    meta_score INTEGER,
+                    score_mapping INTEGER,
+                    score_field_type INTEGER,
+                    score_search_time INTEGER,
+                    score_language INTEGER,
+                    score_note INTEGER,
+                    score_override INTEGER,
+                    score_tactics INTEGER,
+                    score_techniques INTEGER,
+                    score_author INTEGER,
+                    score_highlights INTEGER,
+                    last_updated TIMESTAMP,
+                    mitre_ids VARCHAR[], 
+                    raw_data JSON,
+                    PRIMARY KEY (rule_id, space)
+                )
+            """)
+            set_schema_version(conn, 3)
+            log_info("✅ Migration 3 completed: Recreated detection_rules with PK (rule_id, space)")
+        except Exception as e:
+            log_error(f"Migration 3 failed: {e}")
             raise
     
     log_info(f"✅ Database migrations complete. Schema version: {target_version}")
@@ -315,6 +355,14 @@ def save_audit_results(audit_list):
         'last_updated', 'mitre_ids', 'raw_data'
     ]
     df_final = ensure_columns(df, target_cols)
+    
+    # Check for duplicates within the incoming data (same rule_id + space)
+    duplicates = df_final[df_final.duplicated(subset=['rule_id', 'space'], keep='first')]
+    if not duplicates.empty:
+        dup_names = duplicates['name'].tolist()
+        log_info(f"⚠️ Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
+        # Keep only first occurrence of each rule_id + space combo
+        df_final = df_final.drop_duplicates(subset=['rule_id', 'space'], keep='first')
 
     conn = get_connection(read_only=False)
     try:
@@ -322,9 +370,33 @@ def save_audit_results(audit_list):
         conn.execute("DELETE FROM detection_rules WHERE 1=1")
         conn.execute("CHECKPOINT")
         
-        # Insert fresh data
+        # Insert fresh data with ON CONFLICT to handle any edge cases
         conn.register('rules_source', df_final)
-        conn.execute("INSERT INTO detection_rules SELECT * FROM rules_source")
+        conn.execute("""
+            INSERT INTO detection_rules 
+            SELECT * FROM rules_source
+            ON CONFLICT (rule_id, space) DO UPDATE SET
+                name = EXCLUDED.name,
+                severity = EXCLUDED.severity,
+                author = EXCLUDED.author,
+                enabled = EXCLUDED.enabled,
+                score = EXCLUDED.score,
+                quality_score = EXCLUDED.quality_score,
+                meta_score = EXCLUDED.meta_score,
+                score_mapping = EXCLUDED.score_mapping,
+                score_field_type = EXCLUDED.score_field_type,
+                score_search_time = EXCLUDED.score_search_time,
+                score_language = EXCLUDED.score_language,
+                score_note = EXCLUDED.score_note,
+                score_override = EXCLUDED.score_override,
+                score_tactics = EXCLUDED.score_tactics,
+                score_techniques = EXCLUDED.score_techniques,
+                score_author = EXCLUDED.score_author,
+                score_highlights = EXCLUDED.score_highlights,
+                last_updated = EXCLUDED.last_updated,
+                mitre_ids = EXCLUDED.mitre_ids,
+                raw_data = EXCLUDED.raw_data
+        """)
         
         # Force checkpoint to flush data to disk immediately
         conn.execute("CHECKPOINT")
@@ -466,6 +538,38 @@ def check_and_clear_trigger(trigger_name):
         try: os.remove(path); return True
         except: return False
     return False
+
+# --- TABLE MANAGEMENT ---
+
+def clear_detection_rules():
+    """Clear all detection rules from the database. Returns count of deleted rows."""
+    conn = get_connection(read_only=False)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM detection_rules").fetchone()[0]
+        conn.execute("DELETE FROM detection_rules WHERE 1=1")
+        conn.execute("CHECKPOINT")
+        log_info(f"🗑️ Cleared {count} detection rules from database")
+        return count
+    except Exception as e:
+        log_error(f"Clear Detection Rules Failed: {e}")
+        return 0
+    finally:
+        conn.close()
+
+def clear_threat_actors():
+    """Clear all threat actors from the database. Returns count of deleted rows."""
+    conn = get_connection(read_only=False)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM threat_actors").fetchone()[0]
+        conn.execute("DELETE FROM threat_actors WHERE 1=1")
+        conn.execute("CHECKPOINT")
+        log_info(f"🗑️ Cleared {count} threat actors from database")
+        return count
+    except Exception as e:
+        log_error(f"Clear Threat Actors Failed: {e}")
+        return 0
+    finally:
+        conn.close()
 
 def get_all_covered_ttps():
     conn = get_connection(read_only=False)

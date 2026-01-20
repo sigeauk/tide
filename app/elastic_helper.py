@@ -451,14 +451,25 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
             highlighted_str = ",".join(investigation_fields) if investigation_fields else "❌"
             
             rule_data = {
-                "rule_id": r.get('rule_id'), "name": r.get('name'), "enabled": r.get('enabled'),
-                "author_str": str(r.get('author', [])), "severity": r.get('severity'), "risk_score": r.get('risk_score'),
-                "timestamp_override": r.get('timestamp_override', "❌"), "note_exists": "✔️" if r.get('note') else "❌",
+                "rule_id": r.get('rule_id'),
+                "name": r.get('name'),
+                "enabled": r.get('enabled'),
+                "author_str": str(r.get('author', [])),
+                "severity": r.get('severity'),
+                "risk_score": r.get('risk_score'),
+                "timestamp_override": r.get('timestamp_override', "❌"),
+                "note_exists": "✔️" if r.get('note') else "❌",
                 "note": r.get('note', ''),
-                "tactics": ",".join(tactics), "techniques": ",".join(techniques), "highlighted_str": highlighted_str,
-                "search_time": 0, "language": r.get('language', 'kuery'), "indices": meta["indices"],
-                "fields": list(meta["fields"]), "results": results, "query": r.get('query', ''),
-                "mitre_ids": list(set(mitre_ids)), "raw_data": r, "space_id": r.get('space_id', 'default')
+                "tactics": ",".join(tactics),
+                "techniques": ",".join(techniques),
+                "highlighted_str": highlighted_str,
+                "search_time": 0, "language": r.get('language', 'kuery'),
+                "indices": meta["indices"],
+                "fields": list(meta["fields"]),
+                "results": results, "query": r.get('query', ''),
+                "mitre_ids": list(set(mitre_ids)),
+                "raw_data": r,
+                "space_id": r.get('space_id', 'default')
             }
             processed_rules.append(calculate_score(rule_data))
 

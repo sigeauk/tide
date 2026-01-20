@@ -6,11 +6,11 @@ import json
 import math
 import database as db
 import elastic_helper as eh
-from styles import apply_custom_styles
+from styles import apply_custom_styles, get_icon_path
 from auth import require_auth, get_current_user
 
 # 1. Page Config
-st.set_page_config(page_title="Promotion | TIDE", page_icon="🚀", layout="wide")
+st.set_page_config(page_title="Promotion | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
 apply_custom_styles()
 require_auth()
 st.title("Rule Promotion")

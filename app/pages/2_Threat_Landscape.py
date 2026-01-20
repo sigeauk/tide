@@ -13,15 +13,15 @@ if parent_dir not in sys.path:
 
 import database as db
 from cti_helper import get_iso_code
-from styles import apply_custom_styles, render_sidebar_status
+from styles import apply_custom_styles, render_sidebar_status, get_icon_path
 from auth import require_auth
 
 # 1. Page Config
-st.set_page_config(page_title="Threat Landscape | TIDE", page_icon="🏴‍☠️", layout="wide")
+st.set_page_config(page_title="Threat Landscape | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
 apply_custom_styles()
 require_auth()
 
-st.title("🏴‍☠️ Threat Landscape")
+st.title("Threat Landscape")
 
 # --- GET METRICS ---
 threat_metrics = db.get_threat_landscape_metrics()
@@ -87,6 +87,16 @@ with m6:
         <p class="metric-sub">🎯 {short_name}</p>
     </div>
     ''', unsafe_allow_html=True)
+
+# --- DATA MANAGEMENT ---
+with st.expander("🗑️ Data Management", expanded=False):
+    st.warning("⚠️ Threat actors are synced live from OpenCTI/MITRE. Clearing this data will remove all cached actors until the next sync.")
+    col1, col2 = st.columns([1, 4])
+    with col1:
+        if st.button("🗑️ Clear Threat Actors", type="secondary", use_container_width=True):
+            deleted = db.clear_threat_actors()
+            st.success(f"✅ Cleared {deleted} threat actors. Run a sync to reload.")
+            st.rerun()
 
 st.markdown("<br>", unsafe_allow_html=True)
 

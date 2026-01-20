@@ -3,10 +3,13 @@ import streamlit as st
 import importlib
 from dotenv import dotenv_values
 
+# Import get_icon_path early for page config
+from styles import get_icon_path
+
 # --- 1. CONFIG MUST BE FIRST ---
 st.set_page_config(
     page_title="Settings | TIDE", 
-    page_icon="app/static/icons/tide.png", 
+    page_icon=get_icon_path("tide.png"), 
     layout="wide", 
     initial_sidebar_state="expanded"
 )

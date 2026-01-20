@@ -4,9 +4,10 @@ import requests
 import json
 import collections
 from auth import require_auth
+from styles import get_icon_path
 
 # --- 1. CONFIGURATION & DATA CACHING ---
-st.set_page_config(page_title="MITRE Custom Builder", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="Attack Tree", layout="wide", page_icon=get_icon_path("tide.png"))
 require_auth()
 
 @st.cache_data
@@ -410,6 +411,6 @@ html_code = f"""
 </html>
 """
 
-st.title("🛡️ Interactive Attack Tree")
+st.title("Interactive Attack Tree")
 st.caption("Add techniques from the sidebar. **Drag nodes** to arrange them.")
 components.html(html_code, height=620)

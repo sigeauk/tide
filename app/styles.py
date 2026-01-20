@@ -1,8 +1,33 @@
 import streamlit as st
 import requests
 import os
+import base64
 from datetime import datetime
 from dotenv import dotenv_values
+
+
+def get_icon_path(icon_name: str = "tide.png") -> str:
+    """Get the correct icon path that works in both local and Docker environments."""
+    # Try Docker path first, then local path
+    docker_path = f"/app/app/static/icons/{icon_name}"
+    local_path = os.path.join(os.path.dirname(__file__), "static", "icons", icon_name)
+    
+    if os.path.exists(docker_path):
+        return docker_path
+    elif os.path.exists(local_path):
+        return local_path
+    # Fallback to relative path (for page_icon which handles it specially)
+    return f"app/static/icons/{icon_name}"
+
+
+def get_icon_base64(icon_name: str = "tide.png") -> str:
+    """Get base64 encoded icon for use in HTML img tags."""
+    icon_path = get_icon_path(icon_name)
+    try:
+        with open(icon_path, "rb") as f:
+            return base64.b64encode(f.read()).decode()
+    except FileNotFoundError:
+        return ""
 
 # ============================================================
 # COLOR PALETTE - All colors in one place for VS Code swatches

@@ -1,11 +1,11 @@
 import streamlit as st
 import pandas as pd
 import database as db
-from styles import apply_custom_styles, render_sidebar_status
+from styles import apply_custom_styles, render_sidebar_status, get_icon_path
 from auth import require_auth
 
 # Page Config
-st.set_page_config(page_title="Coverage Matrix | TIDE", page_icon="🧱", layout="wide")
+st.set_page_config(page_title="Heatmap | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
 apply_custom_styles()
 require_auth()
 
@@ -34,7 +34,7 @@ SLUG_TO_TITLE = {
     "resource-development": "Resource Dev"    # Optional Support
 }
 
-st.title("🧱 Coverage Matrix")
+st.title("Heatmap")
 
 # --- 3. LOAD DATA (Dynamic Map) ---
 def load_tactic_map():

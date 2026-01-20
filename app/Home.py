@@ -1,14 +1,14 @@
 import streamlit as st
 import database as db
 import os
-from styles import apply_custom_styles
+from styles import apply_custom_styles, get_icon_path, get_icon_base64
 from auth import require_auth, get_current_user
 from dotenv import load_dotenv
 load_dotenv()
 version = os.getenv('TIDE_VERSION', 'v1.0.0')
 
 # Page Config
-st.set_page_config(page_title="TIDE", page_icon="app/static/icons/tide.png", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="TIDE", page_icon=get_icon_path("tide.png"), layout="wide", initial_sidebar_state="expanded")
 apply_custom_styles()
 
 # Initialize database (ensures schema is up to date)
@@ -29,9 +29,10 @@ except Exception as e:
     threat_metrics = {'total_actors': 0, 'global_coverage_pct': 0, 'uncovered_ttps': 0}
 
 # --- HERO SECTION ---
+tide_icon_b64 = get_icon_base64("tide.png")
 st.markdown(f"""
 <div class="hero-section">
-    <img src="app/static/icons/tide.png" class="hero-title" style="width: 72px; height: 72px;" alt="TIDE">
+    <img src="data:image/png;base64,{tide_icon_b64}" class="hero-title" style="width: 72px; height: 72px;" alt="TIDE">
     <p class="hero-subtitle">TIDE</p>
     <p class="hero-tagline">Threat Informed Detection Engine</p>
     <div class="stat-row">
@@ -75,7 +76,6 @@ st.markdown('<p class="section-header">Key Features</p>', unsafe_allow_html=True
 st.markdown("""
 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px;">
     <div class="feature-card">
-        <div class="feature-icon">🎯</div>
         <div class="feature-title">Threat-Driven Coverage</div>
         <div class="feature-desc">
             Map detection rules to MITRE ATT&CK techniques. Visualize which adversary TTPs you can detect 
@@ -83,7 +83,6 @@ st.markdown("""
         </div>
     </div>
     <div class="feature-card">
-        <div class="feature-icon">🩺</div>
         <div class="feature-title">Rule Quality Scoring</div>
         <div class="feature-desc">
             Automated quality checks for field mappings, query syntax, metadata completeness, and performance. 
@@ -91,7 +90,6 @@ st.markdown("""
         </div>
     </div>
     <div class="feature-card">
-        <div class="feature-icon">🚀</div>
         <div class="feature-title">GitOps Promotion</div>
         <div class="feature-desc">
             Promote rules from Staging to Production with validation gates. 
@@ -101,7 +99,6 @@ st.markdown("""
 </div>
 <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;">
     <div class="feature-card">
-        <div class="feature-icon">🧱</div>
         <div class="feature-title">Coverage Heatmap</div>
         <div class="feature-desc">
             Interactive MITRE ATT&CK matrix showing coverage per tactic. 
@@ -109,7 +106,6 @@ st.markdown("""
         </div>
     </div>
     <div class="feature-card">
-        <div class="feature-icon">🔄</div>
         <div class="feature-title">Automated Sync</div>
         <div class="feature-desc">
             Background workers continuously sync data from Elastic, OpenCTI, and MITRE. 
@@ -117,7 +113,6 @@ st.markdown("""
         </div>
     </div>
     <div class="feature-card">
-        <div class="feature-icon">📊</div>
         <div class="feature-title">Executive Dashboards</div>
         <div class="feature-desc">
             High-level metrics for security leadership. Track coverage trends, 

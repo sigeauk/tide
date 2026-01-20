@@ -1,14 +1,14 @@
 import streamlit as st
-from styles import apply_custom_styles
+from styles import apply_custom_styles, get_icon_path
 from auth import require_auth
 import sigma_helper as sigma
 
-st.set_page_config(page_title="Sigma Convert | TIDE", page_icon="app/static/icons/tide.png", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Sigma Convert | TIDE", page_icon=get_icon_path("tide.png"), layout="wide", initial_sidebar_state="expanded")
 apply_custom_styles()
 require_auth()
 
 # --- HEADER (matching other pages) ---
-st.title("🔄 Sigma Converter")
+st.title("Sigma Converter")
 
 # --- Read URL Query Parameters ---
 query_params = st.query_params

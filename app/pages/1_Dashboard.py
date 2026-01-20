@@ -2,15 +2,15 @@ import streamlit as st
 import database as db
 import pandas as pd
 import plotly.express as px
-from styles import apply_custom_styles, render_sidebar_status
+from styles import apply_custom_styles, render_sidebar_status, get_icon_path
 from auth import require_auth
 
 # Page Configuration
-st.set_page_config(page_title="Dashboard | TIDE", page_icon="app/static/icons/tide.png", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Dashboard | TIDE", page_icon=get_icon_path("tide.png"), layout="wide", initial_sidebar_state="expanded")
 apply_custom_styles()
 require_auth()
 
-st.title("🛡️ Security Posture Dashboard")
+st.title("Security Posture Dashboard")
 
 # --- 1. DATA FETCHING (Fail Gracefully) ---
 try:
@@ -44,7 +44,7 @@ needs_review = rule_health['validation_expired_count'] + rule_health['never_vali
 # --- 3. UI LAYOUT ---
 
 # === RULE HEALTH SECTION ===
-st.markdown('<p class="section-header">🩺 Rule Health</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-header">Rule Health</p>', unsafe_allow_html=True)
 m1, m2, m3, m4, m5, m6 = st.columns(6)
 
 with m1:
@@ -109,7 +109,7 @@ with m6:
 st.markdown("<br>", unsafe_allow_html=True)
 
 # === THREAT LANDSCAPE SECTION ===
-st.markdown('<p class="section-header">🏴‍☠️ Threat Landscape</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-header">Threat Landscape</p>', unsafe_allow_html=True)
 t1, t2, t3, t4, t5, t6 = st.columns(6)
 
 with t1:
@@ -233,7 +233,7 @@ with col_right:
 
 # Row 3: Quality Assurance (The "Review" Queue)
 st.divider()
-st.subheader("🩺 Quality Assurance Needed")
+st.subheader("Quality Assurance Needed")
 
 if not df_rules.empty:
     # Filter for "Low Quality" rules that are enabled
