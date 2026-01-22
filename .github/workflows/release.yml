@@ -7,7 +7,7 @@ on:
 
 permissions:
   contents: write  # Required to create a Release
-  packages: write  # Required if pushing to GHCR (optional)
+  packages: write  # Required if pushing to GHCR
 
 jobs:
   release:
@@ -45,12 +45,11 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      # 5. Create GitHub Release (The Missing Part)
+      # 5. Create GitHub Release
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          # Optional: Use your CHANGELOG.md or auto-generate notes
           generate_release_notes: true 
           draft: false
           prerelease: false
