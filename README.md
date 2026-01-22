@@ -211,7 +211,6 @@ docker compose ps
 2. You should be redirected to Keycloak login
 3. Login with your created user
 4. Verify the Dashboard loads with your Elastic rules
-
 ---
 
 ## 📁 Project Structure
