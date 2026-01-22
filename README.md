@@ -248,7 +248,6 @@ docker compose ps
 ├── README.md                # This file
 └── requirements.txt         # Python dependencies
 ```
-
 ---
 
 ## 🔧 Configuration Reference
