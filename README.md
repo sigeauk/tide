@@ -201,9 +201,6 @@ APP_URL="https://tide.yourdomain.local:8501"
 # Build and start all services
 docker compose up --build -d
 
-# View logs
-docker compose logs -f tide-ui
-
 # Check status
 docker compose ps
 ```
