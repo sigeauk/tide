@@ -151,7 +151,7 @@ GITLAB_TOKEN="your-gitlab-token"
 
 # ===== Sync Settings =====
 SYNC_INTERVAL_MINUTES=60
-TIDE_VERSION="1.1.0"
+TIDE_VERSION="1.1.1"
 
 # ===== MITRE ATT&CK Sources =====
 # For air-gapped: host these files locally
@@ -201,9 +201,6 @@ APP_URL="https://tide.yourdomain.local:8501"
 # Build and start all services
 docker compose up --build -d
 
-# View logs
-docker compose logs -f tide-ui
-
 # Check status
 docker compose ps
 ```
@@ -214,7 +211,6 @@ docker compose ps
 2. You should be redirected to Keycloak login
 3. Login with your created user
 4. Verify the Dashboard loads with your Elastic rules
-
 ---
 
 ## 📁 Project Structure
@@ -251,7 +247,6 @@ docker compose ps
 ├── README.md                # This file
 └── requirements.txt         # Python dependencies
 ```
-
 ---
 
 ## 🔧 Configuration Reference

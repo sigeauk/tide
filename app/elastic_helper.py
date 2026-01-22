@@ -165,10 +165,10 @@ def get_batch_mappings(session, base_url, index_field_map):
             
             if es_direct_url:
                 full_url = f"{es_direct_url}/{target_index}/_mapping"
-                response = session.get(full_url, params={"ignore_unavailable": "true", "allow_no_indices": "true"}, verify=False, timeout=10)
+                response = session.get(full_url, params={"ignore_unavailable": "true", "allow_no_indices": "true"}, verify=False, timeout=30)
             else:
                 proxy_url = f"{base_url}/api/console/proxy"
-                response = session.post(proxy_url, params={"path": path, "method": "GET"}, verify=False, timeout=10)
+                response = session.post(proxy_url, params={"path": path, "method": "GET"}, verify=False, timeout=30)
 
             found_mappings = {}
 
