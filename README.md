@@ -151,7 +151,7 @@ GITLAB_TOKEN="your-gitlab-token"
 
 # ===== Sync Settings =====
 SYNC_INTERVAL_MINUTES=60
-TIDE_VERSION="1.1.0"
+TIDE_VERSION="1.1.1"
 
 # ===== MITRE ATT&CK Sources =====
 # For air-gapped: host these files locally
