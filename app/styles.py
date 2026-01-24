@@ -164,7 +164,12 @@ def apply_custom_styles():
             display: flex;
             flex-direction: column;
             justify-content: space-between;
-            min-height: 280px;
+            height: 280px;
+        }}
+        .card-content {{
+            display: flex;
+            flex-direction: column;
+            flex: 1;
         }}
         
         /* Rule Health Card Header */
@@ -288,13 +293,18 @@ def apply_custom_styles():
         .status-pill {{ font-size: 0.85rem; background: {COLOR_BG_PILL}; padding: 4px 12px; border-radius: 12px; border: 1px solid {COLOR_BORDER}; color: {COLOR_TEXT_MUTED}; white-space: nowrap; display: flex; align-items: center; gap: 6px; }}
         .sev-pill {{ font-size: 0.75rem; font-weight: 700; padding: 3px 10px; border-radius: 12px; white-space: nowrap; color: white; }}
         .status-dot {{ display: inline-block; width: 6px; height: 6px; border-radius: 50%; }}
+        
+        /* MITRE pills - full width row */
+        .mitre-row {{ display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; flex: 1; align-content: flex-start; }}
+        .mitre-pill {{ font-size: 0.75rem; background: {COLOR_BG_MITRE_PILL}; padding: 4px 10px; border-radius: 10px; color: {COLOR_INFO}; white-space: nowrap; }}
+        
+        /* Legacy mitre-pills (for other pages) */
         .mitre-pills {{ display: flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; max-width: 150px; max-height: 28px; overflow: hidden; }}
-        .mitre-pill {{ font-size: 0.7rem; background: {COLOR_BG_MITRE_PILL}; padding: 2px 6px; border-radius: 8px; color: {COLOR_INFO}; white-space: nowrap; }}
 
         /* ========================================
            PROGRESS BAR
            ======================================== */
-        .score-meta {{ display: flex; justify-content: space-between; font-size: 0.8rem; color: {COLOR_TEXT_DARK}; margin-bottom: 4px; }}
+        .score-meta {{ display: flex; justify-content: space-between; font-size: 0.8rem; color: {COLOR_TEXT_DARK}; margin-bottom: 4px; margin-top: auto; }}
         .track {{ background-color: {COLOR_BORDER}; height: 6px; border-radius: 3px; width: 100%; overflow: hidden; }}
         .fill {{ height: 100%; border-radius: 3px; transition: width 0.5s ease; }}
 

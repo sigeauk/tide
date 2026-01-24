@@ -368,16 +368,25 @@ else:
             if score >= 50: score_color = "#facc15" 
             if score >= 80: score_color = "#4ade80" 
             
-            author = row.get('author', 'Unknown')
-            if len(author) > 20: author = "Multiple/Long"
+            author_raw = row.get('author', 'Unknown')
+            # Parse author - if list-like string, get first author
+            if author_raw and author_raw.startswith('['):
+                try:
+                    import ast
+                    author_list = ast.literal_eval(author_raw)
+                    author = author_list[0] if author_list else 'Unknown'
+                except:
+                    author = author_raw
+            else:
+                author = author_raw
+            # Truncate long author names
+            if len(str(author)) > 25: author = author[:22] + '...'
             
             # Get MITRE technique IDs and generate pills HTML
             mitre_ids = row.get('mitre_ids', [])
             if isinstance(mitre_ids, list) and mitre_ids:
-                # Generate pill HTML for each MITRE ID (max 4)
-                mitre_pills = ''.join([f'<span class="mitre-pill">{mid}</span>' for mid in mitre_ids[:4]])
-                if len(mitre_ids) > 4:
-                    mitre_pills += f'<span class="mitre-pill">+{len(mitre_ids) - 4}</span>'
+                # Generate pill HTML for all MITRE IDs
+                mitre_pills = ''.join([f'<span class="mitre-pill">{mid}</span>' for mid in mitre_ids])
             else:
                 mitre_pills = ''
             
@@ -406,10 +415,10 @@ else:
                         except: pass
             
             # --- RENDER CARD (HTML) ---
-            mitre_html = f'<div class="mitre-pills">{mitre_pills}</div>' if mitre_pills else ''
+            mitre_html = f'<div class="mitre-row">{mitre_pills}</div>' if mitre_pills else ''
             st.markdown(f"""
 <div class="rule-card">
-<div>
+<div class="card-content">
 <div class="rule-header">
 <div class="rule-name-container">
 <div class="rule-name" title="{rule_name}">{rule_name}</div>
@@ -417,9 +426,9 @@ else:
 <div class="pill-stack">
 <div class="status-pill"><span class="status-dot" style="background-color:{dot_color};"></span>{status_text}</div>
 <div class="sev-pill" style="background-color:{sev_color};">{severity.upper()}</div>
+</div>
+</div>
 {mitre_html}
-</div>
-</div>
 <div class="score-meta">
 <span>Quality Score</span>
 <span style="color:{score_color}">{score}</span>
