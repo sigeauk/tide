@@ -81,14 +81,51 @@ except Exception as e:
 with st.sidebar:
     st.header("Matrix Settings")
     
-    # FIXED: 'name' instead of 'Actor'
-    all_actors = sorted(df_threats['name'].unique()) if not df_threats.empty else []
+    # Initialize session state for selected actors
+    if 'heatmap_selected_actors' not in st.session_state:
+        st.session_state.heatmap_selected_actors = []
+    
+    # Search box for filtering actors by name or alias
+    actor_search = st.text_input(
+        "Search Actors",
+        placeholder="Search by name or alias...",
+        key="actor_search"
+    )
+    
+    # Filter actors based on search (matches name or aliases)
+    if not df_threats.empty:
+        all_actor_names = set(df_threats['name'].unique())
+        
+        if actor_search:
+            search_lower = actor_search.lower()
+            # Check if search matches name or any alias
+            def matches_search(row):
+                if search_lower in str(row.get('name', '')).lower():
+                    return True
+                aliases = row.get('aliases', '')
+                if aliases and search_lower in str(aliases).lower():
+                    return True
+                return False
+            filtered_df = df_threats[df_threats.apply(matches_search, axis=1)]
+            filtered_actors = set(filtered_df['name'].unique())
+        else:
+            filtered_actors = all_actor_names
+        
+        # Always include previously selected actors in the options
+        available_actors = filtered_actors.union(set(st.session_state.heatmap_selected_actors))
+        all_actors = sorted(available_actors)
+    else:
+        all_actors = []
     
     selected_actors = st.multiselect(
         "Select Adversaries", 
         all_actors,
+        default=st.session_state.heatmap_selected_actors,
         placeholder="e.g. APT29, Lazarus Group..."
     )
+    
+    # Update session state when selection changes
+    st.session_state.heatmap_selected_actors = selected_actors
     
     show_defense = st.checkbox(
         "Show 'Defense in Depth'", 
