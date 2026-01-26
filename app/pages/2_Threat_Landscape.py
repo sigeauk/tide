@@ -23,6 +23,8 @@ require_auth()
 
 st.title("Threat Landscape")
 
+st.text("Analyze tracked threat actors, their TTPs, and your coverage gaps.")
+
 # --- GET METRICS ---
 threat_metrics = db.get_threat_landscape_metrics()
 
@@ -160,15 +162,15 @@ st.divider()
 # 4. Filters
 with st.sidebar:
     st.header("Filters")
-    search_term = st.text_input("Search Actor", placeholder="e.g. APT29, China...")
+    search_term = st.text_input("Search Actor", placeholder="e.g. APT29, Cozy Bear...")
 
     if not df_threats.empty:
         if search_term:
-            mask = (
-                df_threats['name'].str.contains(search_term, case=False, na=False) | 
-                df_threats.get('description', pd.Series()).str.contains(search_term, case=False, na=False) |
-                df_threats.get('aliases', pd.Series()).str.contains(search_term, case=False, na=False)
-            )
+            # Search by name, description, or aliases
+            name_match = df_threats['name'].str.contains(search_term, case=False, na=False)
+            desc_match = df_threats['description'].fillna('').str.contains(search_term, case=False, na=False) if 'description' in df_threats.columns else False
+            alias_match = df_threats['aliases'].fillna('').str.contains(search_term, case=False, na=False) if 'aliases' in df_threats.columns else False
+            mask = name_match | desc_match | alias_match
             df_threats = df_threats[mask]
 
 # 5. PAGINATION

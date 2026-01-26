@@ -15,6 +15,8 @@ apply_custom_styles()
 require_auth()
 st.title("Rule Promotion")
 
+st.text("Promote validated detection rules from the Staging environment to Production.")
+
 # Initialize session state for force refresh
 if 'refresh_counter' not in st.session_state:
     st.session_state.refresh_counter = 0

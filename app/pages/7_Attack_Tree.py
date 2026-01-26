@@ -4,10 +4,11 @@ import requests
 import json
 import collections
 from auth import require_auth
-from styles import get_icon_path
+from styles import get_icon_path, apply_custom_styles
 
 # --- 1. CONFIGURATION & DATA CACHING ---
-st.set_page_config(page_title="Attack Tree", layout="wide", page_icon=get_icon_path("tide.png"))
+st.set_page_config(page_title="Attack Tree | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
+apply_custom_styles()
 require_auth()
 
 @st.cache_data
@@ -412,5 +413,6 @@ html_code = f"""
 """
 
 st.title("Interactive Attack Tree")
+st.text("Build and visualize your attack tree using MITRE ATT&CK techniques. Use the sidebar to add goals and techniques, create connections, and see the relationships dynamically.")
 st.caption("Add techniques from the sidebar. **Drag nodes** to arrange them.")
 components.html(html_code, height=620)

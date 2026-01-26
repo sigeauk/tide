@@ -9,7 +9,7 @@ require_auth()
 
 # --- HEADER (matching other pages) ---
 st.title("Sigma Converter")
-
+st.text("Convert Sigma detection rules into SIEM-specific queries for deployment.")
 # --- Read URL Query Parameters ---
 query_params = st.query_params
 url_technique = query_params.get("technique", "")

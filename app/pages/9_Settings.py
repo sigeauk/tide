@@ -23,6 +23,9 @@ from auth import require_auth
 apply_custom_styles()
 require_auth()
 
+st.title("Settings")
+st.text("Configure platform integrations and environment settings.")
+
 # --- 3. DYNAMIC IMPORTS WITH RELOAD ---
 # We still keep these imports if you want to add status checks later,
 # even though the heavy lifting is moving to the worker.

@@ -9,7 +9,7 @@ import database as db
 import cti_helper as cti
 import pandas as pd
 
-st.set_page_config(page_title="TIDE Ecosystem", page_icon=get_icon_path("tide.png"), layout="wide")
+st.set_page_config(page_title="Presentation | TIDE", page_icon=get_icon_path("tide.png"), layout="wide")
 apply_custom_styles()
 require_auth()
 
@@ -64,6 +64,7 @@ except Exception as e:
 df_actors = pd.DataFrame(threats)
 
 st.title("TIDE: Ecosystem Connectivity")
+st.text("Shows how TIDE interacts with other components in your security stack.")
 st.caption("Interact with the ecosystem: **Click** to view details, **Drag** to rearrange.")
 
 # --- 2. CONFIGURATION ---

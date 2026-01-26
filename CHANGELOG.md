@@ -4,10 +4,10 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [unreleased]
+## [UNRELEASED]
 
 #### Added
--
+- 
 
 #### Changed
 -
@@ -19,10 +19,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 -
 
 #### Fixed
--
+- 
 
 #### Security
 -
+
+## [1.2.1]
+
+#### Added
+- Add description to each page. 
+
+#### Fixed
+- Title uniformity
+
+## [1.2.0]
+
+#### Added
+- Search for Threat actors by aliases
+
+#### Fixed
+- Author not displaying on some cards
+- Pills on rule health now full width
+
+#### Security
+-
+
+
+## [1.1.6]
+
+#### Fixed
+- Author not displaying on some cards
+- Pills on rule health now full width
 
 
 ## [1.1.0] - 2026-01-20
