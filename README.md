@@ -6,20 +6,20 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
 
 ---
 
-## 🚀 Features
+## Features
 
-### 📊 Dashboard
+### Dashboard
 - **Real-time Metrics**: View total rules, average quality scores, validation status, and coverage statistics
 - **Quick Overview**: At-a-glance health of your detection engineering program
 - **Space Breakdown**: See rules distributed across Kibana spaces (Staging, Production, etc.)
 
-### 🌊 Threat Landscape
+### Threat Landscape
 - **Actor Tracking**: Syncs Intrusion Sets/Threat Actors from OpenCTI
 - **Coverage Calculation**: Dynamically calculates TTP coverage per actor based on enabled rules
 - **Country Attribution**: Visual country flags for threat actor origin
 - **Global Metrics**: View total TTP coverage across the entire estate
 
-### 🚀 Rule Promotion
+### Rule Promotion
 - **Staging → Production Workflow**: Promote validated rules from staging to production Kibana spaces
 - **Quality Gates**: View quality and meta scores before promotion
 - **Rule Details Modal**: 
@@ -29,7 +29,7 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
   - Timestamp override configuration
   - Author attribution
 
-### 🩺 Rule Health
+### Rule Health
 - **Scoring Engine**: Automatically rates rules (0-100) based on:
   - **Quality Score (50 pts)**: Field mappings, field types, search time, query language
   - **Meta Score (50 pts)**: Investigation guide, timestamp override, MITRE mappings, author, highlighted fields
@@ -37,24 +37,24 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
 - **Visual Indicators**: Traffic light system for quality and overdue badges (12-week validation cycle)
 - **Card View**: Beautiful rule cards with severity, MITRE techniques, and validation status
 
-### 🗺️ MITRE ATT&CK Heatmap
+### MITRE ATT&CK Heatmap
 - **Visual Coverage**: Interactive heatmap showing technique coverage across the MITRE ATT&CK matrix
 - **Gap Analysis**: Identify uncovered techniques at a glance
 - **Tactic Breakdown**: Coverage percentages per tactic
 
-### 📊 Presentation Mode
+### Presentation Mode
 - **Executive Dashboards**: Clean visualizations for stakeholder presentations
 - **Exportable Metrics**: Key statistics ready for reporting
 
-### 🎯 Attack Tree Integration
+### Attack Tree Integration
 - **Campaign Tracking**: Manage and visualize purple team exercises and attack scenarios using the Attack Tree module.
 - **Coverage Validation**: Map detection rules to adversary emulation results
 
-### 🔄 SIGMA Conversion
+### SIGMA Conversion
 - **Rule Conversion**: Convert SIGMA rules to Elastic query formats
 - **Multi-format Support**: Output to KQL, Lucene, EQL, or ES|QL
 
-### ⚙️ Settings
+### Settings
 - **Sync Controls**: Manual sync triggers for rules and threat intelligence
 - **Configuration Management**: View and update integration settings
 - **License Management**: Built-in license validation
@@ -73,7 +73,7 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
 
 ---
 
-## 🛠️ Installation
+## Installation
 
 ### Prerequisites
 
@@ -116,7 +116,7 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
 
 ---
 
-## 🔐 Standalone System Setup (Air-Gapped / Production)
+## Standalone System Setup (Air-Gapped / Production)
 
 For deploying TIDE on an isolated network with full authentication:
 
@@ -249,7 +249,7 @@ docker compose ps
 ```
 ---
 
-## 🔧 Configuration Reference
+## Configuration Reference
 
 | Variable | Description | Required |
 |----------|-------------|----------|
@@ -271,19 +271,19 @@ docker compose ps
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please read our contributing guidelines and submit pull requests to the `develop` branch.
 
 ---
 
-## 📄 License
+## License
 
 See [LICENSE](LICENSE) for details.
 
 ---
 
-## 📞 Support
+## Support
 
 For issues and feature requests, please use the GitHub issue tracker.
 
