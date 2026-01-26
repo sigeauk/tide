@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 #### Security
 -
 
+<<<<<<< HEAD
 ## [1.2.1]
 
 #### Added
@@ -32,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 #### Fixed
 - Title uniformity
 
+=======
+>>>>>>> bb35b7e5f427de7aba1e2718af119d261c3c7766
 ## [1.2.0]
 
 #### Added
