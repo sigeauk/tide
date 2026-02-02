@@ -1,0 +1,151 @@
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
+<!-- Promotion Card Component - Full Width -->
+
+{% set severity_colors = {
+    'critical': '#f87171',
+    'high': '#fb923c', 
+    'medium': '#facc15',
+    'low': '#4ade80',
+    'informational': '#60a5fa'
+} %}
+
+{% set rule_score = rule.score | default(0) %}
+{% set quality_score = rule.quality_score | default(0) %}
+{% set meta_score = rule.meta_score | default(0) %}
+{% set quality_max = 50 %}
+{% set meta_max = 50 %}
+{% set quality_pct = ((quality_score / quality_max) * 100) | round(1) if quality_max > 0 else 0 %}
+{% set meta_pct = ((meta_score / meta_max) * 100) | round(1) if meta_max > 0 else 0 %}
+
+{% set score_color = 'var(--color-success)' if rule_score >= 80 else ('var(--color-warning)' if rule_score >= 50 else 'var(--color-danger)') %}
+{% set quality_color = 'var(--color-success)' if quality_pct >= 80 else ('var(--color-warning)' if quality_pct >= 50 else 'var(--color-danger)') %}
+{% set meta_color = 'var(--color-success)' if meta_pct >= 80 else ('var(--color-warning)' if meta_pct >= 50 else 'var(--color-danger)') %}
+{% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
+{% set sev_color = severity_colors.get(sev_value, '#94a3b8') %}
+
+<div class="promo-card" id="promo-{{ rule.rule_id }}">
+    <!-- Header Row -->
+    <div class="promo-header">
+        <div class="promo-name" title="{{ rule.name }}">{{ rule.name }}</div>
+        <div class="promo-pills">
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', assume_covered=rule.enabled) }}
+            <span class="sev-pill" style="background-color: {{ sev_color }};">{{ sev_value | upper }}</span>
+            <span class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
+                {% if rule.enabled %}
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                {% else %}
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                    <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                </svg>
+                {% endif %}
+                {{ 'Enabled' if rule.enabled else 'Disabled' }}
+            </span>
+        </div>
+    </div>
+    
+    <!-- Scores Grid - Cards Layout -->
+    <div class="promo-body">
+        <!-- Quality Scores Card -->
+        <div class="score-card">
+            <div class="score-card-header">
+                <span class="score-card-title">Quality Scores</span>
+                <span class="score-card-value" style="color: {{ quality_color }};">{{ quality_score }}/{{ quality_max }}</span>
+            </div>
+            <div class="score-track">
+                <div class="score-fill" style="width: {{ quality_pct }}%; background-color: {{ quality_color }};"></div>
+            </div>
+            <div class="score-grid quality">
+                <div class="score-item">
+                    <span class="score-label">Mapping</span>
+                    <span class="score-val">{{ rule.score_mapping }}/20</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Field Type</span>
+                    <span class="score-val">{{ rule.score_field_type }}/11</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Search Time</span>
+                    <span class="score-val">{{ rule.score_search_time }}/10</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Language</span>
+                    <span class="score-val">{{ rule.score_language }}/9</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Meta Scores Card -->
+        <div class="score-card">
+            <div class="score-card-header">
+                <span class="score-card-title">Meta Scores</span>
+                <span class="score-card-value" style="color: {{ meta_color }};">{{ meta_score }}/{{ meta_max }}</span>
+            </div>
+            <div class="score-track">
+                <div class="score-fill" style="width: {{ meta_pct }}%; background-color: {{ meta_color }};"></div>
+            </div>
+            <div class="score-grid meta">
+                <div class="score-item">
+                    <span class="score-label">Note</span>
+                    <span class="score-val">{{ rule.score_note }}/20</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Override</span>
+                    <span class="score-val">{{ rule.score_override }}/5</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Tactics</span>
+                    <span class="score-val">{{ rule.score_tactics }}/3</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Techniques</span>
+                    <span class="score-val">{{ rule.score_techniques }}/7</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Author</span>
+                    <span class="score-val">{{ rule.score_author }}/5</span>
+                </div>
+                <div class="score-item">
+                    <span class="score-label">Highlights</span>
+                    <span class="score-val">{{ rule.score_highlights }}/10</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Total Score Card -->
+        <div class="score-card total">
+            <div class="total-label">Rule Score</div>
+            <div class="total-value" style="color: {{ score_color }};">{{ rule_score }}</div>
+        </div>
+    </div>
+    
+    <!-- Footer Row -->
+    <div class="promo-footer">
+        <div class="promo-meta">
+            <span class="meta-item">
+                <span class="meta-label">Author:</span>
+                <span class="meta-val">{{ rule.author[:25] ~ '...' if rule.author and rule.author | length > 25 else rule.author | default('-') }}</span>
+            </span>
+            <span class="meta-item">
+                <span class="meta-label">Language:</span>
+                <span class="meta-val">{{ rule.language | default('kuery') }}</span>
+            </span>
+        </div>
+        <div class="promo-actions">
+            <button 
+                class="btn btn-secondary btn-sm"
+                hx-get="/api/promotion/{{ rule.rule_id }}/detail"
+                hx-target="#modal-container"
+                hx-swap="innerHTML">
+                {{ icon_text('clipboard-list', 'Details', '14') }}
+            </button>
+            <button 
+                class="btn btn-primary btn-sm"
+                onclick="showPromoteConfirm('{{ rule.rule_id }}', '{{ rule.name | replace("'", "\\'") | replace('"', '\\"') }}')">
+                {{ icon_text('arrow-up-right', 'Promote', '14') }}
+            </button>
+        </div>
+    </div>
+</div>

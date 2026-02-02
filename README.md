@@ -1,75 +1,109 @@
 # Threat Informed Detection Engine (TIDE)
 
-![TIDE](./app/static/TIDE.png)
-
-TIDE is a modular threat intelligence and detection platform designed to streamline the management, analysis, and automation of threat data. It integrates with Elasticsearch, GitLab, and Sigma rules to provide a robust solution for security teams.
+TIDE is a **standalone, containerized platform** for Detection Engineering lifecycle management. It provides a "Human-in-the-Loop" interface for managing detection rules, analyzing threat coverage, and automating security workflows.
 
 ---
 
-## Features
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                         NGINX                                │
+│              (Reverse Proxy + SSL Termination)               │
+│                      Port 80/443                             │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        FASTAPI                               │
+│                (REST API + HTMX Endpoints)                   │
+│                       Port 8000                              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        DUCKDB                                │
+│              (Embedded Analytics Database)                   │
+│                   /app/data/tide.duckdb                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Reverse Proxy** | Nginx | SSL termination, static assets, rate limiting |
+| **Backend** | FastAPI (Python) | REST API, HTMX partials, business logic |
+| **Database** | DuckDB | Embedded analytics DB, zero external dependencies |
+| **Frontend** | HTMX + Jinja2 | Server-rendered HTML with dynamic updates |
+| **Styling** | Tailwind CSS v4 | HSL Variable Engine (hue: 220, 4-layer elevation) |
+| **Auth** | Keycloak (optional) | OIDC SSO for enterprise deployments |
+
+---
+
+## Key Features
 
 ### Dashboard
-- **Real-time Metrics**: View total rules, average quality scores, validation status, and coverage statistics
-- **Quick Overview**: At-a-glance health of your detection engineering program
-- **Space Breakdown**: See rules distributed across Kibana spaces (Staging, Production, etc.)
+- Real-time metrics for rule counts, quality scores, and validation status
+- Quick overview of detection engineering program health
+- Kibana space breakdown (Staging, Production)
 
 ### Threat Landscape
-- **Actor Tracking**: Syncs Intrusion Sets/Threat Actors from OpenCTI
-- **Coverage Calculation**: Dynamically calculates TTP coverage per actor based on enabled rules
-- **Country Attribution**: Visual country flags for threat actor origin
-- **Global Metrics**: View total TTP coverage across the entire estate
+- Threat actor tracking from OpenCTI
+- Dynamic TTP coverage calculation per actor
+- Country attribution with visual flags
+- Global coverage metrics
 
 ### Rule Promotion
-- **Staging → Production Workflow**: Promote validated rules from staging to production Kibana spaces
-- **Quality Gates**: View quality and meta scores before promotion
-- **Rule Details Modal**: 
-  - MITRE ATT&CK hierarchy (Tactics → Techniques)
-  - Investigation guides
-  - Highlighted fields
-  - Timestamp override configuration
-  - Author attribution
+- Staging → Production workflow
+- Quality gates before promotion
+- Rule details modal with MITRE mappings
 
 ### Rule Health
-- **Scoring Engine**: Automatically rates rules (0-100) based on:
-  - **Quality Score (50 pts)**: Field mappings, field types, search time, query language
-  - **Meta Score (50 pts)**: Investigation guide, timestamp override, MITRE mappings, author, highlighted fields
-- **Review Lifecycle**: Track when a rule was last validated and by whom
-- **Visual Indicators**: Traffic light system for quality and overdue badges (12-week validation cycle)
-- **Card View**: Beautiful rule cards with severity, MITRE techniques, and validation status
+- Scoring engine (0-100) based on:
+  - **Quality Score (50 pts)**: Field mappings, query language, search time
+  - **Meta Score (50 pts)**: Investigation guides, MITRE mappings, author
+- 12-week validation cycle tracking
+- Visual traffic light system
 
 ### MITRE ATT&CK Heatmap
-- **Visual Coverage**: Interactive heatmap showing technique coverage across the MITRE ATT&CK matrix
-- **Gap Analysis**: Identify uncovered techniques at a glance
-- **Tactic Breakdown**: Coverage percentages per tactic
+- Interactive technique coverage visualization
+- Gap analysis across tactics
+- Coverage percentages per tactic
 
-### Presentation Mode
-- **Executive Dashboards**: Clean visualizations for stakeholder presentations
-- **Exportable Metrics**: Key statistics ready for reporting
-
-### Attack Tree Integration
-- **Campaign Tracking**: Manage and visualize purple team exercises and attack scenarios using the Attack Tree module.
-- **Coverage Validation**: Map detection rules to adversary emulation results
-
-### SIGMA Conversion
-- **Rule Conversion**: Convert SIGMA rules to Elastic query formats
-- **Multi-format Support**: Output to KQL, Lucene, EQL, or ES|QL
-
-### Settings
-- **Sync Controls**: Manual sync triggers for rules and threat intelligence
-- **Configuration Management**: View and update integration settings
-- **License Management**: Built-in license validation
+### Sigma Conversion
+- Convert Sigma rules to Elastic formats
+- Multi-format output: KQL, Lucene, EQL, ES|QL
 
 ---
 
+## Deployment Models
 
-- **Frontend (UI)**: Streamlit on Port 8501 - Visualizes data and captures analyst actions
-- **Backend (Worker)**: Python Scheduler - Syncs data from APIs, calculates scores, runs heavy logic
-- **Authentication**: Keycloak OIDC - Enterprise SSO with local bypass mode for development
-- **Database**: DuckDB (`tide.duckdb`) - Fast analytical queries for dashboards
-- **Source of Truth**:
-  - *Detection Logic*: Elastic Security API
-  - *Threat Intelligence*: OpenCTI API
-  - *Human Context*: `checkedRule.json` (Git-managed validation records)
+### Client Deployment Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    CLIENT ENVIRONMENT                        │
+│                                                              │
+│  ┌─────────────────┐         ┌─────────────────┐           │
+│  │  TIDE Container │ ◀─────▶ │  Elastic SIEM   │           │
+│  │ (GitHub Image)  │  Sync   │  (Detections)   │           │
+│  └─────────────────┘         └─────────────────┘           │
+│           │                                                  │
+│           │ Reports                                          │
+│           ▼                                                  │
+│  ┌─────────────────┐                                        │
+│  │  Internal GitLab│  ◀── Reports dispatched here          │
+│  │  (Client-owned) │                                        │
+│  └─────────────────┘                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Points:**
+- Docker images are pulled from **GitHub Container Registry**
+- TIDE syncs detection rules from the client's **Elastic SIEM**
+- Reports are dispatched to the client's **internal GitLab** (not GitHub)
+- No outbound internet required after initial container pull
 
 ---
 
@@ -80,200 +114,163 @@ TIDE is a modular threat intelligence and detection platform designed to streaml
 - Docker & Docker Compose v2+
 - Access to Elastic Security (Kibana) with API key
 - (Optional) OpenCTI instance for threat intelligence
-- (Optional) GitLab for GitOps workflow
+- (Optional) Internal GitLab for report dispatching
 
-### Quick Start (Development Mode)
+### Quick Start (Development)
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/sigeauk/tide.git
-   cd tide
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/sigeauk/tide.git`
+cd tide
+```
+```bash
+# Create environment file
+cp .env.example .env
+```
+```bash
+# Configure minimum required settings
+nano .env
+```
+```bash
+# Start TIDE
+docker compose up --build -d
+```
+```bash
+# Access the UI
+open http://localhost:8000
+```
 
-2. **Create environment file**
-   ```bash
-   cp env-sample .env
-   ```
 
-3. **Configure `.env`** (minimum required):
-   ```env
-   # Elastic Security (Required)
-   ELASTIC_URL="http://your-kibana:5601"
-   ELASTICSEARCH_URL="http://your-elasticsearch:9200"
-   ELASTIC_API_KEY="your-api-key-here"
-   
-   # Disable auth for local development
-   AUTH_DISABLED=true
-   ```
+### Production Deployment (Nginx + SSL)
 
-4. **Start TIDE**
-   ```bash
-   docker compose up --build -d
-   ```
+```bash
+# Configure SSL certificates in nginx/
+# Update docker-compose.yml with production settings
+docker compose up -d
+```
 
-5. **Access the UI**
-   - TIDE: http://localhost:8501
+### Air-Gapped Deployment
+
+```bash
+# On connected machine - save images
+docker save tide:latest | gzip > tide.tar.gz
+```
+```bash
+# Transfer to air-gapped system
+# On air-gapped machine
+docker load < tide.tar.gz
+docker compose up -d
+```
 
 ---
 
-## Standalone System Setup (Air-Gapped / Production)
+## Configuration
 
-For deploying TIDE on an isolated network with full authentication:
+### Environment Variables
 
-### 1. Pre-requisites on Standalone System
-
-Ensure Docker images are available (transfer via portable media if air-gapped):
-```bash
-# On connected system, save images
-docker save tide-ui:1.1.0 tide-worker:1.1.0 | gzip > tide-images.tar.gz
-
-# On standalone system, load images
-docker load < tide-images.tar.gz
-```
-
-### 2. Configure Environment Variables
-
-Create `.env` with full configuration:
+Copy `.env.example` to `.env` and configure:
 
 ```env
-# ===== Elastic Security =====
+# Required - Elastic Security
 ELASTIC_URL="https://kibana.yourdomain.local:5601"
 ELASTICSEARCH_URL="https://elasticsearch.yourdomain.local:9200"
-ELASTIC_API_KEY="your-elastic-api-key"
+ELASTIC_API_KEY="your-api-key"
 
-# ===== OpenCTI (Optional) =====
-OPENCTI_URL="https://opencti.yourdomain.local:8080"
-OPENCTI_TOKEN="your-opencti-token"
-
-# ===== GitLab (Optional) =====
-GITLAB_URL="https://gitlab.yourdomain.local/"
-GITLAB_TOKEN="your-gitlab-token"
-
-# ===== Sync Settings =====
-SYNC_INTERVAL_MINUTES=60
-TIDE_VERSION="1.1.1"
-
-# ===== MITRE ATT&CK Sources =====
-# For air-gapped: host these files locally
-MITRE_SOURCE="https://your-local-server/enterprise-attack.json"
-MITRE_MOBILE_SOURCE="https://your-local-server/mobile-attack.json"
-MITRE_ICS_SOURCE="https://your-local-server/ics-attack.json"
-
-# ===== Authentication (Keycloak) =====
+# Optional - Authentication
 AUTH_DISABLED=false
-KEYCLOAK_URL="http://keycloak.yourdomain.local:8080"
-KEYCLOAK_INTERNAL_URL="http://keycloak:8080"  # Docker internal
-KEYCLOAK_REALM="tide"
-KEYCLOAK_CLIENT_ID="tide-app"
-KEYCLOAK_CLIENT_SECRET="your-client-secret"
-APP_URL="https://tide.yourdomain.local:8501"
+KEYCLOAK_URL="http://keycloak:8080"
+
+# Optional - Threat Intelligence
+OPENCTI_URL="https://opencti.yourdomain.local:8080"
+OPENCTI_TOKEN="your-token"
+
+# Optional - Report Dispatching
+GITLAB_URL="https://gitlab.internal.local/"
+GITLAB_TOKEN="your-token"
 ```
 
-### 3. Configure Keycloak
-
-1. **Access Keycloak Admin Console**: http://localhost:8080
-   - Default credentials: `admin` / `admin`
-
-2. **Create a Realm**:
-   - Click "Create Realm"
-   - Name: `tide`
-   - Click "Create"
-
-3. **Create a Client**:
-   - Go to Clients → Create Client
-   - Client ID: `tide-app`
-   - Client authentication: ON
-   - Valid redirect URIs: `http://localhost:8501/*` (or your production URL)
-   - Web origins: `http://localhost:8501`
-
-4. **Get Client Secret**:
-   - Go to Clients → tide-app → Credentials
-   - Copy the Client Secret to your `.env`
-
-5. **Create Users**:
-   - Go to Users → Add User
-   - Set username, email, first/last name
-   - Go to Credentials tab → Set Password
-
-### 4. Deploy
-
-```bash
-# Build and start all services
-docker compose up --build -d
-
-# Check status
-docker compose ps
-```
-
-### 5. Verify Installation
-
-1. Navigate to http://localhost:8501 (or your configured URL)
-2. You should be redirected to Keycloak login
-3. Login with your created user
-4. Verify the Dashboard loads with your Elastic rules
----
-
-## 📁 Project Structure
-
-```
-📂 TIDE/
-├── 📂 app/
-│   ├── 📂 static/           # Images, flags, and icons
-│   ├── 📂 pages/            # Streamlit pages
-│   │   ├── 1_Dashboard.py
-│   │   ├── 2_Threat_Landscape.py
-│   │   ├── 3_Promotion.py
-│   │   ├── 4_Rule_health.py
-│   │   ├── 5_Heatmap.py
-│   │   ├── 6_Pressentation.py
-│   │   ├── 7_Attack_Tree.py
-│   │   ├── 8_Sigma_Convert.py
-│   │   └── 9_Settings.py
-│   ├── 📂 static/           # Flags and icons
-│   ├── auth.py              # Keycloak OIDC authentication
-│   ├── cti_helper.py        # OpenCTI integration
-│   ├── database.py          # DuckDB operations
-│   ├── elastic_helper.py    # Elastic Security API
-│   ├── git_helper.py        # GitLab integration
-│   ├── Home.py              # Main entry point
-│   ├── license_mgr.py       # License management
-│   ├── log.py               # Logging utilities
-│   ├── sigma_helper.py      # import and convert Sigma rules
-│   ├── styles.py            # Global CSS styles
-│   └── worker.py            # Background sync worker
-├── docker-compose.yml       # Container orchestration
-├── dockerfile               # Container build instructions
-├── env-sample               # Example environment fileconfiguration
-├── README.md                # This file
-└── requirements.txt         # Python dependencies
-```
----
-
-## Configuration Reference
+### Configuration Reference
 
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `ELASTIC_URL` | Kibana URL | ✅ |
 | `ELASTICSEARCH_URL` | Elasticsearch URL | ✅ |
-| `ELASTIC_API_KEY` | Elastic API key with detection rules access | ✅ |
+| `ELASTIC_API_KEY` | API key with detection rules access | ✅ |
+| `KIBANA_SPACES` | Comma-separated spaces (e.g., `production,staging`) | ❌ |
+| `AUTH_DISABLED` | Set `true` to bypass Keycloak | ❌ |
 | `OPENCTI_URL` | OpenCTI platform URL | ❌ |
-| `OPENCTI_TOKEN` | OpenCTI API token | ❌ |
-| `GITLAB_URL` | GitLab instance URL | ❌ |
-| `GITLAB_TOKEN` | GitLab personal access token | ❌ |
+| `GITLAB_URL` | Internal GitLab for reports | ❌ |
 | `SYNC_INTERVAL_MINUTES` | Background sync interval (default: 60) | ❌ |
-| `AUTH_DISABLED` | Set `true` to bypass Keycloak auth | ❌ |
-| `KEYCLOAK_URL` | Keycloak server URL (browser access) | ❌ |
-| `KEYCLOAK_INTERNAL_URL` | Keycloak URL from Docker network | ❌ |
-| `KEYCLOAK_REALM` | Keycloak realm name | ❌ |
-| `KEYCLOAK_CLIENT_ID` | OIDC client ID | ❌ |
-| `KEYCLOAK_CLIENT_SECRET` | OIDC client secret | ❌ |
-| `APP_URL` | TIDE application URL for redirects | ❌ |
+
+---
+
+## Design System (Sajid-Style HSL)
+
+| Principle | Implementation |
+|-----------|----------------|
+| **HSL Variable Engine** | Base hue: 220 (Blue), Chroma: 0.05 |
+| **4-Layer Elevation** | Layer 0→3: 10%→28% lightness |
+| **Depth Simulation** | Border-top highlights 15-20% lighter |
+| **Typography** | 14px base, Manrope font, 100%/75%/60% lightness hierarchy |
+| **Semantic Pills** | Severity (Critical→Low), MITRE status (covered/gap/defense) |
+| **Glow Effects** | Pill shadows matching status colors |
+
+Customize theme by changing `--brand-hue` in CSS:
+- `0` = Red
+- `30` = Orange  
+- `145` = Green
+- `220` = Blue (default)
+- `264` = Purple
+
+---
+
+## Data Persistence
+
+### Persistent Data (Survives Updates)
+
+Located in `/app/data/` (volume mounted):
+
+| File | Purpose |
+|------|---------|
+| `tide.duckdb` | Rule cache, coverage calculations |
+| `checkedRule.json` | Analyst validation records |
+| `triggers/*` | Sync state files |
+
+### Transient Data (Recalculated)
+
+| Data | Calculation |
+|------|-------------|
+| Quality Scores | Live from rule metadata |
+| Coverage % | Live from enabled rules vs MITRE |
+| Meta Scores | Live from rule completeness |
+
+---
+
+## Project Structure
+
+```
+📂 TIDE/
+├── 📂 app/
+│   ├── 📂 api/           # FastAPI route handlers
+│   ├── 📂 models/        # Pydantic schemas
+│   ├── 📂 services/      # Business logic layer
+│   ├── 📂 templates/     # Jinja2 HTML templates
+│   ├── 📂 static/        # CSS, JS, icons
+│   └── main.py           # FastAPI entry point
+├── 📂 data/              # Persistent database files
+├── 📂 nginx/             # Nginx configuration
+├── docker-compose.yml    # Production orchestration
+├── .env.example          # Environment template
+└── DOCS_ARCHITECTURE.md  # Detailed architecture docs
+```
+
+See [DOCS_ARCHITECTURE.md](DOCS_ARCHITECTURE.md) for complete documentation.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please read our contributing guidelines and submit pull requests to the `develop` branch.
+Contributions welcome! Please read the architecture documentation and submit PRs to the `develop` branch.
 
 ---
 
@@ -285,6 +282,4 @@ See [LICENSE](LICENSE) for details.
 
 ## Support
 
-For issues and feature requests, please use the GitHub issue tracker.
-
----
+For issues and feature requests, use the GitHub issue tracker.

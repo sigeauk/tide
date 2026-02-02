@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}TIDE - Platform Overview{% endblock %}
+
+{% block head %}
+<style>
+.overview-section {
+    background: var(--color-bg-light);
+    border: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-highlight);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: var(--shadow);
+}
+
+.overview-section h2 {
+    font-size: 1.1rem;
+    color: var(--color-primary);
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.module-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.module-card {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    transition: all var(--transition-fast);
+    text-decoration: none;
+    display: block;
+}
+
+.module-card:hover {
+    border-color: var(--color-primary);
+    background: var(--color-bg-lighter);
+    transform: translateY(-2px);
+}
+
+.module-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--color-text);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.module-title svg {
+    color: var(--color-primary);
+}
+
+.module-desc {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+}
+
+.tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 0.75rem;
+}
+
+.tech-item {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    padding: 0.75rem;
+    text-align: center;
+}
+
+.tech-item svg {
+    color: var(--color-primary);
+    margin-bottom: 0.25rem;
+}
+
+.tech-item-name {
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--color-text);
+}
+
+.tech-item-desc {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    margin-top: 0.15rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header" style="text-align: center; margin-bottom: 2rem;">
+    <img src="/static/icons/tide.png" alt="TIDE" style="width: 80px; height: 80px; margin: 0 auto 1rem;">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        TIDE
+    </h1>
+    <p class="page-subtitle" style="font-size: 1rem; max-width: 700px; margin: 0 auto;">
+        <strong>Threat Informed Detection Engineering</strong> — A standalone, containerized platform 
+        for managing detection rules, analyzing threat coverage, and automating security workflows.
+    </p>
+</div>
+
+<!-- Key Modules -->
+<div class="overview-section">
+    <h2>{{ icon('layout-grid', '20') }} Key Modules</h2>
+    <div class="module-grid">
+        <a href="/dashboard" class="module-card">
+            <div class="module-title">{{ icon('layout-dashboard', '18') }} Dashboard</div>
+            <div class="module-desc">Aggregated overview of detection engineering program health.</div>
+        </a>
+        <a href="/rules" class="module-card">
+            <div class="module-title">{{ icon('shield-check', '18') }} Rule Health</div>
+            <div class="module-desc">Assess quality scores, field mappings, and validation status of detection rules.</div>
+        </a>
+        <a href="/promotion" class="module-card">
+            <div class="module-title">{{ icon('circle-arrow-up', '18') }} Promotion</div>
+            <div class="module-desc">Promote validated rules from staging to production with quality gates.</div>
+        </a>
+        <a href="/threats" class="module-card">
+            <div class="module-title">{{ icon('target', '18') }} Threat Landscape</div>
+            <div class="module-desc">Track threat actors and their TTPs from OpenCTI and other sources.</div>
+        </a>
+        <a href="/heatmap" class="module-card">
+            <div class="module-title">{{ icon('grid-3x3', '18') }} MITRE Heatmap</div>
+            <div class="module-desc">Visualize ATT&CK technique coverage and identify detection gaps.</div>
+        </a>
+        <a href="/sigma" class="module-card">
+            <div class="module-title">{{ icon('sigma', '18') }} Sigma Converter</div>
+            <div class="module-desc">Convert Sigma rules to Elastic KQL, Lucene, EQL, or ES|QL queries.</div>
+        </a>
+    </div>
+</div>
+
+<!-- Technology Stack -->
+<div class="overview-section">
+    <h2>{{ icon('cpu', '20') }} Technology Stack</h2>
+    <div class="tech-grid">
+        <div class="tech-item">
+            {{ icon('server', '22') }}
+            <div class="tech-item-name">Nginx</div>
+            <div class="tech-item-desc">Reverse proxy, SSL</div>
+        </div>
+        <div class="tech-item">
+            {{ icon('zap', '22') }}
+            <div class="tech-item-name">FastAPI</div>
+            <div class="tech-item-desc">REST API, HTMX</div>
+        </div>
+        <div class="tech-item">
+            {{ icon('database', '22') }}
+            <div class="tech-item-name">DuckDB</div>
+            <div class="tech-item-desc">Analytics DB</div>
+        </div>
+        <div class="tech-item">
+            {{ icon('code', '22') }}
+            <div class="tech-item-name">HTMX</div>
+            <div class="tech-item-desc">Server UI</div>
+        </div>
+        <div class="tech-item">
+            {{ icon('palette', '22') }}
+            <div class="tech-item-name">Tailwind</div>
+            <div class="tech-item-desc">HSL System</div>
+        </div>
+        <div class="tech-item">
+            {{ icon('shield', '22') }}
+            <div class="tech-item-name">Keycloak</div>
+            <div class="tech-item-desc">OIDC SSO</div>
+        </div>
+    </div>
+</div>
+
+<!-- Key Principles -->
+<div class="overview-section">
+    <h2>{{ icon('lightbulb', '20') }} Design Principles</h2>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+        <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+            <span style="color: var(--color-success);">{{ icon('check-circle', '20') }}</span>
+            <div>
+                <strong style="color: var(--color-text);">Standalone First</strong>
+                <p style="font-size: 0.8rem; color: var(--color-text-muted);">Operates independently in air-gapped environments</p>
+            </div>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+            <span style="color: var(--color-success);">{{ icon('check-circle', '20') }}</span>
+            <div>
+                <strong style="color: var(--color-text);">Bundled Data</strong>
+                <p style="font-size: 0.8rem; color: var(--color-text-muted);">Sigma & MITRE ATT&CK data included in image</p>
+            </div>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+            <span style="color: var(--color-success);">{{ icon('check-circle', '20') }}</span>
+            <div>
+                <strong style="color: var(--color-text);">Persistent User Data</strong>
+                <p style="font-size: 0.8rem; color: var(--color-text-muted);">Validations survive container updates</p>
+            </div>
+        </div>
+        <div style="display: flex; gap: 0.75rem; align-items: flex-start;">
+            <span style="color: var(--color-success);">{{ icon('check-circle', '20') }}</span>
+            <div>
+                <strong style="color: var(--color-text);">Sync-on-Demand</strong>
+                <p style="font-size: 0.8rem; color: var(--color-text-muted);">External APIs synced periodically, not live</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Footer -->
+<div style="text-align: center; margin-top: 2rem; padding-top: 1.5rem; border-top: 1px solid var(--color-border);">
+    {% if user %}
+    <p style="color: var(--color-text-muted); font-size: 0.85rem; margin-bottom: 0.5rem;">
+        Logged in as <strong style="color: var(--color-text);">{{ user.username }}</strong>
+    </p>
+    {% endif %}
+    <p style="color: var(--color-primary); font-size: 0.8rem;">
+        TIDE v{{ settings.tide_version }}
+    </p>
+</div>
+{% endblock %}

@@ -148,10 +148,34 @@ def run_migrations(conn):
     # Migration 2: Add source column to threat_actors (v1 -> v2)
     if current_version < 2:
         try:
-            # Add source column if it doesn't exist
-            conn.execute("ALTER TABLE threat_actors ADD COLUMN IF NOT EXISTS source VARCHAR[]")
+            # Check if source column exists and has wrong type
+            cols = conn.execute("DESCRIBE threat_actors").fetchall()
+            source_col = next((c for c in cols if c[0] == 'source'), None)
+            
+            if source_col and source_col[1] == 'VARCHAR':
+                # Source column exists but has wrong type - need to fix
+                log_info("🔄 Converting source column from VARCHAR to VARCHAR[]...")
+                # Create temp column, migrate data, drop old, rename new
+                conn.execute("ALTER TABLE threat_actors ADD COLUMN source_new VARCHAR[]")
+                # Convert existing string values to single-element arrays
+                conn.execute("""
+                    UPDATE threat_actors 
+                    SET source_new = CASE 
+                        WHEN source IS NOT NULL AND source != '' THEN [source]
+                        ELSE []
+                    END
+                """)
+                conn.execute("ALTER TABLE threat_actors DROP COLUMN source")
+                conn.execute("ALTER TABLE threat_actors RENAME COLUMN source_new TO source")
+                log_info("✅ Migration 2: Converted source column to VARCHAR[]")
+            elif source_col is None:
+                # Add source column if it doesn't exist
+                conn.execute("ALTER TABLE threat_actors ADD COLUMN source VARCHAR[]")
+                log_info("✅ Migration 2: Added source column to threat_actors")
+            else:
+                log_info("✅ Migration 2: Source column already correct type")
+            
             set_schema_version(conn, 2)
-            log_info("✅ Migration 2 completed: Added source column to threat_actors")
         except Exception as e:
             log_error(f"Migration 2 failed: {e}")
             raise
@@ -228,6 +252,8 @@ def ensure_columns(df, required_cols):
                 df[col] = 0
             elif col == 'ttps' or col == 'mitre_ids':
                 df[col] = [[] for _ in range(len(df))]
+            elif col == 'source':
+                df[col] = [[] for _ in range(len(df))]
             else:
                 df[col] = None
     return df[required_cols]
@@ -251,7 +277,15 @@ def save_threat_data(df):
         df_final = ensure_columns(df, target_cols)
         
         # Ensure source is a list
-        df_final.loc[:, 'source'] = df_final['source'].apply(lambda x: [x] if isinstance(x, str) else x)
+        def to_source_list(x):
+            if x is None:
+                return []
+            if isinstance(x, str):
+                return [x] if x else []
+            if isinstance(x, list):
+                return x
+            return []
+        df_final.loc[:, 'source'] = df_final['source'].apply(to_source_list)
         
         # Merge sources with existing
         conn_read = get_connection(read_only=True)

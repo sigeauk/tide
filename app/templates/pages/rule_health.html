@@ -1,0 +1,157 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Rule Health | TIDE{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/heatmap.css?v={{ cache_bust }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        Rule Health
+    </h1>
+    <p class="page-subtitle">Assess the quality and validation status of your detection rules.</p>
+</div>
+
+<!-- Metrics Row -->
+<div class="metrics-grid" id="metrics-container"
+     hx-get="/api/rules/metrics"
+     hx-trigger="refreshRules from:body"
+     hx-swap="innerHTML">
+    {% include "partials/metrics_row.html" %}
+</div>
+
+<div class="divider"></div>
+
+<!-- Filters Bar -->
+<div class="filters-bar">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input 
+            type="text" 
+            name="search"
+            class="form-input" 
+            placeholder="Rule name, Author, ID, MITRE (T1078)..."
+            hx-get="/api/rules"
+            hx-trigger="keyup changed delay:300ms"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='space'], [name='enabled'], [name='sort_by']">
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Environment</label>
+        <select 
+            name="space" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='enabled'], [name='sort_by']">
+            <option value="">All Spaces</option>
+            {% for space in spaces %}
+            <option value="{{ space }}">{{ space | capitalize }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Status</label>
+        <select 
+            name="enabled" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='space'], [name='sort_by']">
+            <option value="">All</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Sort By</label>
+        <select 
+            name="sort_by" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='space'], [name='enabled']">
+            <option value="score_asc">Score (Low → High)</option>
+            <option value="score_desc">Score (High → Low)</option>
+            <option value="name_asc">Name (A → Z)</option>
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button 
+            class="btn btn-primary sync-btn"
+            hx-post="/api/rules/sync"
+            hx-target="#toast-container"
+            hx-swap="beforeend"
+            hx-disabled-elt="this"
+            hx-indicator=".sync-btn">
+            <span class="htmx-indicator">
+                {{ icon('loader', '16') }}
+                <span>Syncing...</span>
+            </span>
+            <span class="sync-default">
+                {{ icon('refresh-cw', '16') }}
+                <span>Sync Rules</span>
+            </span>
+        </button>
+    </div>
+</div>
+
+<!-- Rules Grid - Load on page load via HTMX -->
+<div id="rules-grid"
+     hx-get="/api/rules"
+     hx-trigger="load, refreshRules from:body"
+     hx-swap="innerHTML">
+    <div class="empty-state">
+        <div class="loading-spinner"></div>
+        <p>Loading rules...</p>
+    </div>
+</div>
+
+<!-- Slide Panel Container for MITRE technique details -->
+<div id="slide-panel-container"></div>
+
+<!-- Modal Container -->
+<div id="modal-container"></div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'rules-grid' || 
+            event.target.classList.contains('rule-card')) {
+            htmx.ajax('GET', '/api/rules/metrics', {target: '#metrics-container', swap: 'innerHTML'});
+        }
+    });
+    
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'toast-container') {
+            const toasts = event.detail.target.querySelectorAll('.toast');
+            toasts.forEach(function(toast) {
+                setTimeout(function() {
+                    toast.style.opacity = '0';
+                    setTimeout(function() { toast.remove(); }, 300);
+                }, 5000);
+            });
+        }
+    });
+</script>
+{% endblock %}

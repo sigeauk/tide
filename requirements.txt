@@ -1,21 +1,38 @@
-streamlit==1.36.0
-pandas==2.1.0
-requests==2.31.0
-gitpython==3.1.40
-pyjwt[crypto]==2.8.0
-python-dotenv==1.0.0
-schedule==1.2.1
-plotly==5.17.0
-watchdog==3.0.0
-elasticsearch
-pycti
-PyYAML
-numpy<2
-duckdb>=1.0.0
-python-keycloak>=4.0.0
-pysigma>=0.11.0
-pysigma-backend-elasticsearch>=1.1.0
+# TIDE v2 - FastAPI + HTMX Stack
+# Core dependencies
+
+# --- FastAPI Stack ---
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+python-multipart>=0.0.6
+
+# --- Templates ---
+jinja2>=3.1.2
+
+# --- Authentication ---
+pyjwt[crypto]>=2.8.0
+httpx>=0.26.0
+
+# --- Database ---
+duckdb>=0.9.0
+pandas>=2.0.0
+
+# --- Background Tasks ---
+apscheduler>=3.10.0
+
+# --- Integrations (from original) ---
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# --- Sigma/MITRE ---
+pysigma>=0.10.0
+pysigma-backend-elasticsearch>=1.0.0
 pysigma-backend-splunk>=1.0.0
 pysigma-backend-microsoft365defender>=0.2.0
-pysigma-pipeline-sysmon>=1.0.0
 pysigma-pipeline-windows>=1.0.0
+pysigma-pipeline-sysmon>=1.0.0
+
+# --- Optional: Development ---
+watchfiles>=0.21.0

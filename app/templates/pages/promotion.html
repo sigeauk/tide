@@ -1,0 +1,240 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Promotion | TIDE{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/heatmap.css?v={{ cache_bust }}">
+<style>
+/* Modal Overlay Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: oklch(0% 0 0 / 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.modal-content {
+    background: var(--color-bg-light);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    padding: 1.5rem;
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    box-shadow: 0 20px 60px oklch(0% 0 0 / 0.5);
+    animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+    from { 
+        opacity: 0; 
+        transform: translateY(20px); 
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0); 
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        Rule Promotion
+    </h1>
+    <p class="page-subtitle">Promote validated detection rules from Staging to Production.</p>
+</div>
+
+<!-- Metrics Row -->
+<div class="metrics-grid" id="promotion-metrics"
+     hx-get="/api/promotion/metrics"
+     hx-trigger="refreshPromotion from:body"
+     hx-swap="innerHTML">
+    {% include "partials/promotion_metrics.html" %}
+</div>
+
+<div class="divider"></div>
+
+<!-- Filters Bar -->
+<div class="filters-bar">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input 
+            type="text" 
+            name="search"
+            class="form-input" 
+            placeholder="Rule name, Author, ID, MITRE (T1078)..."
+            hx-get="/api/promotion"
+            hx-trigger="keyup changed delay:300ms"
+            hx-target="#promotion-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='enabled'], [name='sort_by']">
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Status</label>
+        <select 
+            name="enabled" 
+            class="form-input form-select"
+            hx-get="/api/promotion"
+            hx-trigger="change"
+            hx-target="#promotion-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='sort_by']">
+            <option value="">All</option>
+            <option value="true">Enabled</option>
+            <option value="false">Disabled</option>
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Sort By</label>
+        <select 
+            name="sort_by" 
+            class="form-input form-select"
+            hx-get="/api/promotion"
+            hx-trigger="change"
+            hx-target="#promotion-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='enabled']">
+            <option value="score_asc">Score (Low → High)</option>
+            <option value="score_desc">Score (High → Low)</option>
+            <option value="name_asc">Name (A → Z)</option>
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button 
+            class="btn btn-primary"
+            hx-post="/api/promotion/sync"
+            hx-target="#toast-container"
+            hx-swap="beforeend">
+            {{ icon_text('refresh-cw', 'Sync Rules', '16') }}
+        </button>
+    </div>
+</div>
+
+<!-- Promotion Grid - Load on page load via HTMX -->
+<div id="promotion-grid"
+     hx-get="/api/promotion"
+     hx-trigger="load, refreshPromotion from:body"
+     hx-swap="innerHTML">
+    <div class="empty-state">
+        <div class="loading-spinner"></div>
+        <p>Loading staging rules...</p>
+    </div>
+</div>
+
+<!-- Slide Panel Container for MITRE technique details -->
+<div id="slide-panel-container"></div>
+
+<!-- Modal Container -->
+<div id="modal-container"></div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Auto-refresh page after promotion sync
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'promotion-grid') {
+            htmx.ajax('GET', '/api/promotion/metrics', {target: '#promotion-metrics', swap: 'innerHTML'});
+        }
+    });
+    
+    // Toast auto-dismiss
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'toast-container') {
+            const toasts = event.detail.target.querySelectorAll('.toast');
+            toasts.forEach(function(toast) {
+                setTimeout(function() {
+                    toast.style.opacity = '0';
+                    setTimeout(function() { toast.remove(); }, 300);
+                }, 5000);
+            });
+        }
+    });
+    
+    // Handle promotion confirmation modals
+    function showPromoteConfirm(ruleId, ruleName) {
+        const modal = document.createElement('div');
+        modal.className = 'modal-overlay';
+        modal.onclick = function(e) {
+            if (e.target === modal) modal.remove();
+        };
+        modal.innerHTML = `
+            <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 500px;">
+                <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Promote to Production</h2>
+                <p style="color: var(--color-text-secondary); margin-bottom: 1.5rem;">
+                    Are you sure you want to promote <strong>${ruleName}</strong> to the Production environment?
+                </p>
+                <div style="background: var(--color-warning-bg); border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: 0.75rem; margin-bottom: 1.5rem;">
+                    <p style="color: var(--color-warning); font-size: 0.85rem;">
+                        ⚠️ This will move the rule from Staging to Production and delete it from Staging.
+                    </p>
+                </div>
+                <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                    <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">
+                        Cancel
+                    </button>
+                    <button 
+                        class="btn btn-primary"
+                        onclick="promoteRule('${ruleId}', this)">
+                        🚀 Promote
+                    </button>
+                </div>
+            </div>
+        `;
+        document.getElementById('modal-container').appendChild(modal);
+    }
+    
+    // Actually perform the promotion via fetch
+    function promoteRule(ruleId, btn) {
+        btn.disabled = true;
+        btn.innerHTML = '⏳ Promoting...';
+        
+        fetch('/api/promotion/' + ruleId + '/promote', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => response.text())
+        .then(html => {
+            // Close modal
+            const modal = btn.closest('.modal-overlay');
+            if (modal) modal.remove();
+            
+            // Add toast
+            document.getElementById('toast-container').insertAdjacentHTML('beforeend', html);
+            
+            // Trigger refresh
+            htmx.trigger(document.body, 'refreshPromotion');
+        })
+        .catch(err => {
+            btn.disabled = false;
+            btn.innerHTML = '🚀 Promote';
+            document.getElementById('toast-container').insertAdjacentHTML('beforeend', 
+                '<div class="toast toast-danger" onclick="this.remove()">❌ Error: ' + err.message + '</div>');
+        });
+    }
+</script>
+{% endblock %}

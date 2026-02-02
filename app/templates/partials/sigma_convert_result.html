@@ -1,0 +1,105 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Sigma Convert Result Partial -->
+
+{% if success %}
+<!-- Info note for NDJSON format -->
+{% if 'kibana_ndjson' in request.url.path or code_lang == 'json' %}
+<div class="info-banner">
+    {{ icon('info', '14') }}
+    <span>JSON is formatted for readability. For import, use Download which preserves NDJSON format.</span>
+</div>
+{% endif %}
+
+<!-- Query output box with syntax highlighting -->
+<div class="query-output-box">
+    <pre><code class="language-{% if code_lang == 'json' %}json{% else %}text{% endif %}" id="query-code">{{ result }}</code></pre>
+</div>
+
+<!-- Store raw query for deployment (original NDJSON) -->
+<input type="hidden" id="raw-query-store" value="{{ raw_query | e }}">
+<input type="hidden" id="original-result" value="{{ result | e }}">
+
+<script>
+// Format JSON for display if applicable
+(function() {
+    const codeEl = document.getElementById('query-code');
+    if (codeEl && codeEl.classList.contains('language-json')) {
+        try {
+            const text = codeEl.textContent.trim();
+            let formatted = '';
+            
+            const lines = text.split('\n').filter(l => l.trim());
+            
+            if (lines.length > 1) {
+                formatted = lines.map(line => {
+                    try {
+                        const obj = JSON.parse(line.trim());
+                        return JSON.stringify(obj, null, 2);
+                    } catch(e) {
+                        return line;
+                    }
+                }).join('\n\n');
+            } else if (text.includes('}{')) {
+                const parts = text.split(/\}\s*\{/).map((part, i, arr) => {
+                    if (i === 0) return part + '}';
+                    if (i === arr.length - 1) return '{' + part;
+                    return '{' + part + '}';
+                });
+                formatted = parts.map(part => {
+                    try {
+                        return JSON.stringify(JSON.parse(part), null, 2);
+                    } catch(e) {
+                        return part;
+                    }
+                }).join('\n\n');
+            } else {
+                const obj = JSON.parse(text);
+                formatted = JSON.stringify(obj, null, 2);
+            }
+            
+            codeEl.textContent = formatted;
+        } catch(e) {
+            // Not valid JSON, leave as-is
+        }
+    }
+    
+    if (typeof Prism !== 'undefined') {
+        Prism.highlightAll();
+    }
+})();
+
+function downloadQuery() {
+    const original = document.getElementById('original-result')?.value || document.getElementById('query-code')?.textContent || '';
+    const blob = new Blob([original], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'sigma_query.ndjson';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+function prepareDeployForm() {
+    const yaml = document.getElementById('yaml-editor')?.value || '';
+    const rawQuery = document.getElementById('raw-query-store')?.value || '';
+    const deployYaml = document.getElementById('deploy-yaml');
+    const deployQuery = document.getElementById('deploy-query');
+    if (deployYaml) deployYaml.value = yaml;
+    if (deployQuery) deployQuery.value = rawQuery;
+}
+
+// Expose globally
+window.downloadQuery = downloadQuery;
+window.prepareDeployForm = prepareDeployForm;
+</script>
+
+{% else %}
+<div class="query-output-box" style="padding: 1rem;">
+    <div class="alert alert-danger" style="margin: 0;">
+        <strong>Conversion Error:</strong><br>
+        {{ result }}
+    </div>
+</div>
+{% endif %}

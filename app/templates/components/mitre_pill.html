@@ -1,0 +1,90 @@
+{#
+MITRE Pill Component
+====================
+A standardized MITRE technique pill with coverage-based glow effects.
+Uses OKLCH color system from heatmap.css for consistent status visualization.
+
+Usage:
+{% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
+
+Single pill:
+{{ mitre_pill("T1059.001", covered=true, rule_count=3) }}
+
+Row of pills (wrapping, no truncation):
+{{ mitre_pills_row(mitre_ids, coverage_map, clickable=true) }}
+
+Parameters:
+- technique_id: MITRE ATT&CK technique ID (e.g., "T1059.001")
+- covered: Boolean - whether this technique is covered by rules
+- rule_count: Optional int - number of rules covering this technique
+- defense_in_depth: Boolean - show defense status instead of covered
+- clickable: Boolean - whether pill opens slide panel on click
+- size: 'sm' | 'md' | 'lg' - pill size variant
+#}
+
+{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, clickable=true, size='sm') %}
+{# Determine status class based on coverage #}
+{% if defense_in_depth %}
+    {% set status_class = 'mitre-defense' %}
+{% elif covered %}
+    {% set status_class = 'mitre-covered' %}
+{% else %}
+    {% set status_class = 'mitre-gap' %}
+{% endif %}
+
+{% set size_class = 'mitre-' ~ size %}
+
+<span 
+    class="mitre-pill {{ status_class }} {{ size_class }}"
+    {% if clickable %}
+    hx-get="/api/heatmap/technique/{{ technique_id }}"
+    hx-target="#slide-panel-container"
+    hx-swap="innerHTML"
+    style="cursor: pointer;"
+    {% endif %}
+    title="{{ technique_id }}{% if covered %} ✓ Covered{% else %} ✗ Gap{% endif %}{% if rule_count > 0 %} • {{ rule_count }} rule{{ 's' if rule_count > 1 else '' }}{% endif %}">
+    {{ technique_id }}{% if rule_count > 0 %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
+</span>
+{% endmacro %}
+
+
+{% macro mitre_pills_row(mitre_ids, coverage_map=none, clickable=true, size='sm', show_empty=true, assume_covered=false) %}
+{#
+Render a row of MITRE pills, all displayed with wrapping (no truncation).
+- mitre_ids: List of technique IDs
+- coverage_map: Optional dict mapping technique_id -> {covered: bool, rule_count: int}
+- clickable: Whether pills link to technique detail panel
+- size: Pill size variant
+- show_empty: Whether to show "No MITRE" pill when list is empty
+- assume_covered: If true and no coverage_map, assume all pills are covered (for rule cards)
+#}
+<div class="mitre-pills-wrap">
+{% if mitre_ids and mitre_ids | length > 0 %}
+    {% for mid in mitre_ids %}
+        {% if coverage_map and coverage_map[mid] %}
+            {{ mitre_pill(mid, covered=coverage_map[mid].covered, rule_count=coverage_map[mid].rule_count, clickable=clickable, size=size) }}
+        {% elif assume_covered %}
+            {# Rule card context - pill is covered by this rule #}
+            {{ mitre_pill(mid, covered=true, clickable=clickable, size=size) }}
+        {% else %}
+            {# No coverage data - render neutral pill #}
+            <span 
+                class="mitre-pill mitre-neutral mitre-{{ size }}"
+                {% if clickable %}
+                hx-get="/api/heatmap/technique/{{ mid }}"
+                hx-target="#slide-panel-container"
+                hx-swap="innerHTML"
+                style="cursor: pointer;"
+                {% endif %}
+                title="{{ mid }}">
+                {{ mid }}
+            </span>
+        {% endif %}
+    {% endfor %}
+{% elif show_empty %}
+    <span class="mitre-pill mitre-none">No MITRE</span>
+{% endif %}
+</div>
+{% endmacro %}
+
+{# Styles are now in tailwind.css for consistency across all pages #}

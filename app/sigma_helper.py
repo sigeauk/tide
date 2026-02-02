@@ -3,12 +3,20 @@ import yaml
 import re
 import subprocess
 import uuid
+import logging
+import json
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-from log import log_info, log_error, log_debug
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+def log_info(msg): logger.info(msg)
+def log_error(msg): logger.error(msg)
+def log_debug(msg): logger.debug(msg)
 
 # Sigma repository paths - check /opt/repos first (Docker), then fallback locations
 SIGMA_REPO_PATH = os.getenv('SIGMA_REPO_PATH', '/opt/repos/sigma')
@@ -222,10 +230,11 @@ def get_available_backends() -> Dict[str, str]:
 
 def get_output_formats(backend: str) -> Dict[str, str]:
     """Get available output formats for a specific backend."""
+    # Note: Order matters - first item is default
     formats = {
         'elasticsearch': {
-            'default': 'Default Query',
             'kibana_ndjson': 'Kibana NDJSON',
+            'default': 'Default Query',
             'dsl_lucene': 'DSL Query (Lucene)',
         },
         'eql': {
@@ -338,7 +347,16 @@ def convert_sigma_rule(
             result = sigma_backend.convert(collection)
         
         if isinstance(result, list):
-            result = '\n\n'.join(str(r) for r in result)
+            # Convert each item properly - use json.dumps for dicts
+            formatted_items = []
+            for r in result:
+                if isinstance(r, dict):
+                    formatted_items.append(json.dumps(r))
+                else:
+                    formatted_items.append(str(r))
+            result = '\n'.join(formatted_items) if len(formatted_items) > 1 else (formatted_items[0] if formatted_items else '')
+        elif isinstance(result, dict):
+            result = json.dumps(result)
         
         return True, str(result)
         
@@ -461,27 +479,94 @@ def send_rule_to_siem(
         "threat": []
     }
     
-    # Build MITRE threat mapping
+    # MITRE ATT&CK Tactic mapping
+    tactic_map = {
+        'reconnaissance': {'id': 'TA0043', 'name': 'Reconnaissance'},
+        'resource_development': {'id': 'TA0042', 'name': 'Resource Development'},
+        'resource-development': {'id': 'TA0042', 'name': 'Resource Development'},
+        'initial_access': {'id': 'TA0001', 'name': 'Initial Access'},
+        'initial-access': {'id': 'TA0001', 'name': 'Initial Access'},
+        'execution': {'id': 'TA0002', 'name': 'Execution'},
+        'persistence': {'id': 'TA0003', 'name': 'Persistence'},
+        'privilege_escalation': {'id': 'TA0004', 'name': 'Privilege Escalation'},
+        'privilege-escalation': {'id': 'TA0004', 'name': 'Privilege Escalation'},
+        'defense_evasion': {'id': 'TA0005', 'name': 'Defense Evasion'},
+        'defense-evasion': {'id': 'TA0005', 'name': 'Defense Evasion'},
+        'credential_access': {'id': 'TA0006', 'name': 'Credential Access'},
+        'credential-access': {'id': 'TA0006', 'name': 'Credential Access'},
+        'discovery': {'id': 'TA0007', 'name': 'Discovery'},
+        'lateral_movement': {'id': 'TA0008', 'name': 'Lateral Movement'},
+        'lateral-movement': {'id': 'TA0008', 'name': 'Lateral Movement'},
+        'collection': {'id': 'TA0009', 'name': 'Collection'},
+        'command_and_control': {'id': 'TA0011', 'name': 'Command and Control'},
+        'command-and-control': {'id': 'TA0011', 'name': 'Command and Control'},
+        'exfiltration': {'id': 'TA0010', 'name': 'Exfiltration'},
+        'impact': {'id': 'TA0040', 'name': 'Impact'},
+    }
+    
+    # Extract tactics from tags
+    tactics_found = []
+    techniques_found = []
+    
     for tag in tags:
-        if isinstance(tag, str) and tag.startswith('attack.t'):
-            # Extract technique ID
-            import re
+        if not isinstance(tag, str):
+            continue
+        tag_lower = tag.lower()
+        
+        # Check for technique (attack.t1234 or attack.t1234.001)
+        if tag_lower.startswith('attack.t'):
             match = re.search(r'attack\.t(\d+(?:\.\d+)?)', tag, re.IGNORECASE)
             if match:
-                tech_id = f"T{match.group(1)}"
-                payload["threat"].append({
-                    "framework": "MITRE ATT&CK",
-                    "tactic": {
-                        "id": "TA0001",  # Default tactic
-                        "name": "Unknown",
-                        "reference": "https://attack.mitre.org/tactics/TA0001/"
-                    },
-                    "technique": [{
-                        "id": tech_id,
-                        "name": title,
-                        "reference": f"https://attack.mitre.org/techniques/{tech_id}/"
-                    }]
-                })
+                tech_id = f"T{match.group(1).upper()}"
+                if tech_id not in techniques_found:
+                    techniques_found.append(tech_id)
+        # Check for tactic (attack.execution, attack.command-and-control, etc)
+        elif tag_lower.startswith('attack.'):
+            tactic_name = tag_lower.replace('attack.', '')
+            if tactic_name in tactic_map:
+                tactic_info = tactic_map[tactic_name]
+                if tactic_info not in tactics_found:
+                    tactics_found.append(tactic_info)
+    
+    # Build MITRE threat mapping - group techniques under their tactics
+    for tactic in tactics_found:
+        threat_entry = {
+            "framework": "MITRE ATT&CK",
+            "tactic": {
+                "id": tactic['id'],
+                "name": tactic['name'],
+                "reference": f"https://attack.mitre.org/tactics/{tactic['id']}/"
+            },
+            "technique": []
+        }
+        
+        # Add all techniques to each tactic (since we can't determine technique-to-tactic mapping without external data)
+        for tech_id in techniques_found:
+            threat_entry["technique"].append({
+                "id": tech_id,
+                "name": tech_id,  # Use ID as name since we don't have technique names
+                "reference": f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/"
+            })
+        
+        if threat_entry["technique"]:  # Only add if there are techniques
+            payload["threat"].append(threat_entry)
+    
+    # If we have techniques but no tactics, add them under Unknown
+    if techniques_found and not tactics_found:
+        for tech_id in techniques_found:
+            payload["threat"].append({
+                "framework": "MITRE ATT&CK",
+                "tactic": {
+                    "id": "TA0002",
+                    "name": "Execution",
+                    "reference": "https://attack.mitre.org/tactics/TA0002/"
+                },
+                "technique": [{
+                    "id": tech_id,
+                    "name": tech_id,
+                    "reference": f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/"
+                }]
+            })
     
     # Send to Kibana
     headers = {

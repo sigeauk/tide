@@ -1,0 +1,44 @@
+<!-- Technique Rules List Partial -->
+{% if rules %}
+<div class="rules-list">
+    {% for rule in rules %}
+    <div class="rule-item">
+        <div class="rule-header">
+            <span class="rule-name">{{ rule.name }}</span>
+            <span class="severity-badge severity-{{ rule.severity.value | lower }}">
+                {{ rule.severity.value | capitalize }}
+            </span>
+        </div>
+        <div class="rule-meta">
+            <span class="rule-score" title="Quality Score">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+                </svg>
+                {{ rule.score }}
+            </span>
+            <span class="rule-author" title="Author">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                </svg>
+                {{ rule.author or 'Unknown' }}
+            </span>
+            <span class="rule-status {{ 'enabled' if rule.enabled else 'disabled' }}" title="Status">
+                {{ '✓ Enabled' if rule.enabled else '✗ Disabled' }}
+            </span>
+        </div>
+        {% if rule.mitre_ids | length > 1 %}
+        <div class="rule-mitre-ids">
+            {% for mid in rule.mitre_ids %}
+            <span class="mitre-tag">{{ mid }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-rules">
+    <p>No detection rules found for this technique.</p>
+</div>
+{% endif %}

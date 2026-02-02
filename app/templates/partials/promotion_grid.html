@@ -1,0 +1,61 @@
+<!-- Promotion Grid Partial -->
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% if rules and rules | length > 0 %}
+<div class="promotion-list">
+    {% for rule in rules %}
+        {% include "components/promotion_card.html" %}
+    {% endfor %}
+</div>
+
+<div class="pagination">
+    {% if page > 1 %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/promotion?page={{ page - 1 }}&search={{ search }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-target="#promotion-grid"
+        hx-swap="innerHTML">
+        ← Previous
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    {% endif %}
+    
+    <span class="pagination-info">
+        Page {{ page }} of {{ total_pages }} ({{ total }} staging rules)
+    </span>
+    
+    {% if page < total_pages %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/promotion?page={{ page + 1 }}&search={{ search }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-target="#promotion-grid"
+        hx-swap="innerHTML">
+        Next →
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>Next →</button>
+    {% endif %}
+</div>
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">{{ icon('construction', '48') }}</div>
+    <div class="empty-state-title">No staging rules found</div>
+    <p class="empty-state-text">
+        {% if search or enabled %}
+            No rules match your current filters. Try adjusting your search criteria.
+        {% else %}
+            Rules in the Staging environment will appear here ready for promotion to Production.
+        {% endif %}
+    </p>
+    <button 
+        class="btn btn-primary" 
+        style="margin-top: 1rem;"
+        hx-post="/api/promotion/sync"
+        hx-target="#toast-container"
+        hx-swap="beforeend">
+        {{ icon_text('refresh-cw', 'Sync from Elastic', '16') }}
+    </button>
+</div>
+{% endif %}

@@ -1,0 +1,129 @@
+<!-- Threats Grid Partial -->
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{% if actors and actors | length > 0 %}
+<div class="threats-grid">
+    {% for actor in actors %}
+    {% set cov_color = 'var(--color-success)' if actor.coverage_pct >= 75 else ('var(--color-warning)' if actor.coverage_pct >= 25 else 'var(--color-danger)') %}
+    <div class="threat-card" id="actor-{{ loop.index }}">
+        <!-- Header: Flag + Name + Pills on right -->
+        <div class="threat-header">
+            <div class="threat-header-left">
+                {% if actor.iso_code %}
+                <img src="/static/flags/4x3/{{ actor.iso_code }}.svg" alt="{{ actor.iso_code }}" class="actor-flag-icon">
+                {% endif %}
+                <span class="actor-name" title="{{ actor.name }}">{{ actor.name }}</span>
+            </div>
+            <!-- Source Pills - right aligned -->
+            <div class="source-pills">
+                {% if actor.source %}
+                {% for src in actor.source %}
+                    {% set src_lower = src | lower %}
+                    {% if 'enterprise' in src_lower %}
+                    <span class="source-pill src-enterprise" title="MITRE ATT&CK Enterprise">ENT</span>
+                    {% elif 'ics' in src_lower %}
+                    <span class="source-pill src-ics" title="MITRE ATT&CK ICS">ICS</span>
+                    {% elif 'mobile' in src_lower %}
+                    <span class="source-pill src-mobile" title="MITRE ATT&CK Mobile">MOB</span>
+                    {% elif 'pre' in src_lower %}
+                    <span class="source-pill src-pre" title="MITRE ATT&CK PRE">PRE</span>
+                    {% elif 'opencti' in src_lower %}
+                    <span class="source-pill src-opencti" title="OpenCTI">CTI</span>
+                    {% else %}
+                    <span class="source-pill">{{ src[:3] | upper }}</span>
+                    {% endif %}
+                {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- Aliases -->
+        <p class="threat-aliases" title="{{ actor.aliases or 'No known aliases' }}">
+            {{ actor.aliases[:60] + '...' if actor.aliases and actor.aliases | length > 60 else actor.aliases or 'No known aliases' }}
+        </p>
+        
+        <!-- Description -->
+        <p class="threat-desc">
+            {{ actor.description[:100] + '...' if actor.description and actor.description | length > 100 else actor.description or 'No description available.' }}
+        </p>
+        
+        <!-- Coverage Section -->
+        <div class="threat-coverage">
+            <div class="coverage-meta">
+                <span>Coverage</span>
+                <span class="coverage-value" style="color: {{ cov_color }};">{{ actor.covered_count }}/{{ actor.ttp_count }} ({{ actor.coverage_pct }}%)</span>
+            </div>
+            <div class="coverage-track">
+                <div class="coverage-fill" style="width: {{ actor.coverage_pct }}%; background-color: {{ cov_color }};"></div>
+            </div>
+        </div>
+        
+        <!-- Expandable TTPs with MITRE Pills -->
+        <details class="ttp-expander">
+            <summary class="ttp-summary">
+                <span>View {{ actor.ttp_count }} TTPs</span>
+                <svg class="expand-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m9 18 6-6-6-6"/>
+                </svg>
+            </summary>
+            <div class="ttp-list">
+                {% for ttp in actor.ttps_with_coverage %}
+                {{ mitre_pill(ttp.id, covered=ttp.covered, rule_count=ttp.rule_count, clickable=true, size='sm') }}
+                {% endfor %}
+            </div>
+        </details>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Pagination -->
+<div class="pagination">
+    {% if page > 1 %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/threats?page={{ page - 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
+        hx-target="#threats-grid"
+        hx-swap="innerHTML">
+        ← Previous
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    {% endif %}
+    
+    <span class="pagination-info">
+        Page {{ page }} of {{ total_pages }} ({{ total }} actors)
+    </span>
+    
+    {% if page < total_pages %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/threats?page={{ page + 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
+        hx-target="#threats-grid"
+        hx-swap="innerHTML">
+        Next →
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>Next →</button>
+    {% endif %}
+</div>
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-title">No threat actors found</div>
+    <p class="empty-state-text">
+        {% if search or origin or source %}
+            No actors match your current filters. Try adjusting your search criteria.
+        {% else %}
+            Sync threat intelligence from OpenCTI or MITRE to populate this page.
+        {% endif %}
+    </p>
+    <button 
+        class="btn btn-primary" 
+        style="margin-top: 1rem;"
+        hx-post="/api/threats/sync"
+        hx-target="#toast-container"
+        hx-swap="beforeend">
+        Sync Threat Intel
+    </button>
+</div>
+{% endif %}

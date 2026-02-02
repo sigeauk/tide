@@ -1,0 +1,36 @@
+<!-- Threat Landscape Metrics Row -->
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.total_actors }}</p>
+    <p class="metric-label">Tracked Actors</p>
+    <p class="metric-sub">{{ metrics.origin_breakdown | length }} origins</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.unique_ttps }}</p>
+    <p class="metric-label">Unique TTPs</p>
+    <p class="metric-sub">{{ metrics.total_ttps }} total instances</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.global_coverage_pct >= 70 %}success{% elif metrics.global_coverage_pct >= 40 %}warning{% else %}danger{% endif %}">{{ metrics.global_coverage_pct }}%</p>
+    <p class="metric-label">Global Coverage</p>
+    <p class="metric-sub">{{ metrics.covered_ttps }} covered</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.uncovered_ttps < 20 %}success{% elif metrics.uncovered_ttps < 50 %}warning{% else %}danger{% endif %}">{{ metrics.uncovered_ttps }}</p>
+    <p class="metric-label">Coverage Gaps</p>
+    <p class="metric-sub">TTPs without rules</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.fully_covered_actors > metrics.uncovered_actors %}success{% else %}warning{% endif %}">{{ metrics.fully_covered_actors }}</p>
+    <p class="metric-label">Fully Covered</p>
+    <p class="metric-sub">{{ metrics.partially_covered_actors }} partial</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.avg_ttps_per_actor }}</p>
+    <p class="metric-label">Avg TTPs/Actor</p>
+    <p class="metric-sub">Average techniques</p>
+</div>

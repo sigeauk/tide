@@ -1,0 +1,19 @@
+<!-- 
+Metric Card Component
+
+Usage:
+{% include "components/metric_card.html" with context %}
+
+Required context:
+- value: The main metric value
+- label: Label below the value
+- sublabel: Secondary text (optional)
+- color: success|warning|danger|none (optional, default: none)
+-->
+<div class="metric-card">
+    <p class="metric-value {% if color %}{{ color }}{% endif %}">{{ value }}</p>
+    <p class="metric-label">{{ label }}</p>
+    {% if sublabel %}
+    <p class="metric-sub">{{ sublabel }}</p>
+    {% endif %}
+</div>

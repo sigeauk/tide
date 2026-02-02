@@ -1,0 +1,61 @@
+<!-- Rules Grid Partial -->
+
+{% from "macros/icons.html" import icon, icon_text %}
+{% if rules and rules | length > 0 %}
+<div class="rules-grid">
+    {% for rule in rules %}
+        {% include "components/rule_card.html" %}
+    {% endfor %}
+</div>
+
+<div class="pagination">
+    {% if page > 1 %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/rules?page={{ page - 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-target="#rules-grid"
+        hx-swap="innerHTML">
+        ← Previous
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    {% endif %}
+    
+    <span class="pagination-info">
+        Page {{ page }} of {{ total_pages }} ({{ total }} rules)
+    </span>
+    
+    {% if page < total_pages %}
+    <button 
+        class="btn btn-secondary btn-sm"
+        hx-get="/api/rules?page={{ page + 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-target="#rules-grid"
+        hx-swap="innerHTML">
+        Next →
+    </button>
+    {% else %}
+    <button class="btn btn-secondary btn-sm" disabled>Next →</button>
+    {% endif %}
+</div>
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">{{ icon('clipboard-list', '48') }}</div>
+    <div class="empty-state-title">No rules found in database</div>
+    <p class="empty-state-text">
+        {% if search or space or enabled %}
+            No rules match your current filters. Try adjusting your search criteria.
+        {% else %}
+            Sync detection rules from Elastic Security to see them here.
+        {% endif %}
+    </p>
+    <button 
+        class="btn btn-primary" 
+        style="margin-top: 1rem;"
+        hx-post="/api/rules/sync"
+        hx-target="#toast-container"
+        hx-swap="beforeend">
+        {{ icon_text('refresh-cw', 'Sync from Elastic', '16') }}
+    </button>
+</div>
+{% endif %}

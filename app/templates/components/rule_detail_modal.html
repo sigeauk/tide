@@ -1,0 +1,152 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!--
+Rule Detail Modal Component
+Shows full rule information including query, field mappings, and scores.
+-->
+<div class="modal-overlay" onclick="this.remove()">
+    <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 800px;">
+        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1rem;">
+            <h2 style="font-size: 1.25rem; font-weight: 600;">{{ rule.name }}</h2>
+            <button 
+                class="btn btn-secondary btn-sm" 
+                onclick="this.closest('.modal-overlay').remove()"
+                style="flex-shrink: 0;">
+                ✕ Close
+            </button>
+        </div>
+        
+        <!-- Query -->
+        <div style="margin-bottom: 1.5rem;">
+            <h3 style="font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 0.5rem;">
+                Query ({{ rule.language }})
+            </h3>
+            <pre class="query-display" style="background: var(--color-bg-dark); padding: 1rem; border-radius: var(--radius-md); font-size: 0.8rem; line-height: 1.6; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: break-word; max-height: 300px; overflow-y: auto;">{{ rule.query | highlight_query(rule.language) }}</pre>
+        </div>
+        <style>
+            .query-display { color: var(--color-text-secondary); }
+            .query-display .hl-kw { color: var(--color-warning); font-weight: 600; }
+            .query-display .hl-str { color: var(--color-success); }
+            .query-display .hl-field { color: var(--color-info); }
+            .query-display .hl-op { color: var(--color-text-muted); }
+        </style>
+        
+        <!-- Field Mappings -->
+        {% if rule.field_mappings %}
+        <div style="margin-bottom: 1.5rem;">
+            <h3 style="font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 0.5rem;">
+                Field Mappings ({{ rule.field_mappings | length }})
+            </h3>
+            <div style="max-height: 200px; overflow-y: auto;">
+                <table style="width: 100%; font-size: 0.8rem; border-collapse: collapse;">
+                    <thead>
+                        <tr style="background: var(--color-bg-dark);">
+                            <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--color-border);">Index</th>
+                            <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--color-border);">Field</th>
+                            <th style="padding: 0.5rem; text-align: center; border-bottom: 1px solid var(--color-border);">Valid</th>
+                            <th style="padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--color-border);">Type</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for mapping in rule.field_mappings %}
+                        <tr>
+                            <td style="padding: 0.5rem; border-bottom: 1px solid var(--color-border-muted);">{{ mapping[0] }}</td>
+                            <td style="padding: 0.5rem; border-bottom: 1px solid var(--color-border-muted);">{{ mapping[1] }}</td>
+                            <td style="padding: 0.5rem; text-align: center; border-bottom: 1px solid var(--color-border-muted);">
+                                {% if mapping[2] == 'Yes' or mapping[2] == True %}
+                                <span style="color: var(--color-success);">✓</span>
+                                {% else %}
+                                <span style="color: var(--color-danger);">✗</span>
+                                {% endif %}
+                            </td>
+                            <td style="padding: 0.5rem; border-bottom: 1px solid var(--color-border-muted);">{{ mapping[3] or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% elif rule.score_mapping == 0 %}
+        <div style="background: var(--color-danger-bg); border: 1px solid var(--color-danger); border-radius: var(--radius-md); padding: 0.75rem; margin-bottom: 1.5rem;">
+            <p style="color: var(--color-danger-text); font-size: 0.85rem;">
+                {{ icon_text('triangle-alert', 'Field Mapping Issues: Index fields missing or not checked.', '16', 'text-danger') }}
+            </p>
+        </div>
+        {% endif %}
+        
+        <!-- Quality Scores -->
+        <div style="margin-bottom: 1rem;">
+            <h3 style="font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">Quality Scores</h3>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem;">
+                <div class="metric-card" style="padding: 0.75rem;">
+                    <div style="font-size: 1.25rem; font-weight: 600;">{{ rule.score_mapping }}/20</div>
+                    <div style="font-size: 0.75rem; color: var(--color-text-muted);">Mapping</div>
+                </div>
+                <div class="metric-card" style="padding: 0.75rem;">
+                    <div style="font-size: 1.25rem; font-weight: 600;">{{ rule.score_field_type }}/11</div>
+                    <div style="font-size: 0.75rem; color: var(--color-text-muted);">Field Type</div>
+                </div>
+                <div class="metric-card" style="padding: 0.75rem;">
+                    <div style="font-size: 1.25rem; font-weight: 600;">{{ rule.score_search_time }}/10</div>
+                    <div style="font-size: 0.75rem; color: var(--color-text-muted);">Search Time</div>
+                </div>
+                <div class="metric-card" style="padding: 0.75rem;">
+                    <div style="font-size: 1.25rem; font-weight: 600;">{{ rule.score_language }}/9</div>
+                    <div style="font-size: 0.75rem; color: var(--color-text-muted);">Language</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Meta Scores -->
+        <div>
+            <h3 style="font-size: 0.9rem; color: var(--color-text-muted); margin-bottom: 0.75rem;">Meta Scores</h3>
+            <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.5rem;">
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_note }}/20</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Note</div>
+                </div>
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_override }}/5</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Override</div>
+                </div>
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_tactics }}/3</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Tactics</div>
+                </div>
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_techniques }}/7</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Techniques</div>
+                </div>
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_author }}/5</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Author</div>
+                </div>
+                <div class="metric-card" style="padding: 0.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600;">{{ rule.score_highlights }}/10</div>
+                    <div style="font-size: 0.7rem; color: var(--color-text-muted);">Highlights</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: var(--color-overlay);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        padding: 1rem;
+    }
+    .modal-content {
+        background: var(--color-bg-light);
+        border: 1px solid var(--color-border);
+        border-radius: var(--radius-lg);
+        padding: 1.5rem;
+        width: 100%;
+        max-height: 90vh;
+        overflow-y: auto;
+    }
+</style>

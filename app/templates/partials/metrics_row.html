@@ -1,0 +1,48 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Metrics Row Partial - swappable via HTMX -->
+<div class="metric-card">
+    <p class="metric-value {% if metrics.avg_score >= 70 %}success{% elif metrics.avg_score >= 50 %}warning{% else %}danger{% endif %}">
+        {{ metrics.avg_score }}
+    </p>
+    <p class="metric-label">Avg Quality Score</p>
+    <p class="metric-sub">Range: {{ metrics.min_score }} - {{ metrics.max_score }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.total_rules }}</p>
+    <p class="metric-label">Total Rules</p>
+    <p class="metric-sub">{{ icon_text('check', metrics.enabled_rules ~ ' enabled', '14', 'text-success') }}</p>
+</div>
+
+{% set validated_pct = (metrics.validated_count / metrics.total_rules * 100) | round(1) if metrics.total_rules > 0 else 0 %}
+<div class="metric-card">
+    <p class="metric-value {% if validated_pct >= 80 %}success{% elif validated_pct >= 50 %}warning{% else %}danger{% endif %}">
+        {{ metrics.validated_count }}
+    </p>
+    <p class="metric-label">Validated (12wk)</p>
+    <p class="metric-sub">{{ validated_pct }}% of total</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.validation_expired_count == 0 %}success{% elif metrics.validation_expired_count < 10 %}warning{% else %}danger{% endif %}">
+        {{ metrics.validation_expired_count }}
+    </p>
+    <p class="metric-label">Validation Expired</p>
+    <p class="metric-sub">{{ icon_text('triangle-alert', metrics.never_validated_count ~ ' never checked', '14', 'text-warning') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.low_quality_count == 0 %}success{% elif metrics.low_quality_count < 20 %}warning{% else %}danger{% endif %}">
+        {{ metrics.low_quality_count }}
+    </p>
+    <p class="metric-label">Low Quality (&lt;50)</p>
+    <p class="metric-sub">{{ icon_text('star', metrics.high_quality_count ~ ' high quality', '14', 'text-warning') }}</p>
+</div>
+
+<div class="metric-card">
+    {% set spaces_list = metrics.rules_by_space.items() | list %}
+    {% set spaces_str = spaces_list[:3] | map('join', ': ') | join(' | ') %}
+    <p class="metric-value">{{ metrics.rules_by_space | length }}</p>
+    <p class="metric-label">Spaces</p>
+    <p class="metric-sub">{{ spaces_str if spaces_str else 'No spaces' }}</p>
+</div>

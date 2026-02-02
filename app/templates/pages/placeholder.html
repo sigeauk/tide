@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}{{ page_title }} | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        {{ page_title }}
+    </h1>
+    <p class="page-subtitle">{{ page_subtitle }}</p>
+</div>
+
+<div class="empty-state" style="margin-top: 3rem;">
+    <div class="empty-state-icon">{{ icon('construction', '48') }}</div>
+    <div class="empty-state-title">Coming Soon</div>
+    <p>This page is being migrated from Streamlit to FastAPI.</p>
+    <p style="margin-top: 1rem;">
+        <a href="/" class="btn btn-primary">HOME →</a>
+    </p>
+</div>
+{% endblock %}

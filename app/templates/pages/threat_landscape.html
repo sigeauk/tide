@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Threat Landscape | TIDE{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/heatmap.css?v={{ cache_bust }}">
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        Threat Landscape
+    </h1>
+    <p class="page-subtitle">Analyze tracked threat actors, their TTPs, and your coverage gaps.</p>
+</div>
+
+<!-- Metrics Row -->
+<div class="metrics-grid" id="metrics-container">
+    {% include "partials/threat_metrics.html" %}
+</div>
+
+<!-- Filters Bar -->
+<div class="filters-bar">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input 
+            type="text" 
+            name="search"
+            class="form-input" 
+            placeholder="Actor name, alias, description..."
+            hx-get="/api/threats"
+            hx-trigger="keyup changed delay:300ms"
+            hx-target="#threats-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='origin'], [name='source'], [name='sort_by']">
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Origin</label>
+        <select 
+            name="origin" 
+            class="form-input form-select"
+            hx-get="/api/threats"
+            hx-trigger="change"
+            hx-target="#threats-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='source'], [name='sort_by']">
+            <option value="">All Origins</option>
+            {% for origin in origins %}
+            <option value="{{ origin }}">{{ origin }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select 
+            name="source" 
+            class="form-input form-select"
+            hx-get="/api/threats"
+            hx-trigger="change"
+            hx-target="#threats-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='origin'], [name='sort_by']">
+            <option value="">All Sources</option>
+            {% for source in sources %}
+            <option value="{{ source }}">{{ source }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">Sort By</label>
+        <select 
+            name="sort_by" 
+            class="form-input form-select"
+            hx-get="/api/threats"
+            hx-trigger="change"
+            hx-target="#threats-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='origin'], [name='source']">
+            <option value="ttp_desc">TTPs (High → Low)</option>
+            <option value="ttp_asc">TTPs (Low → High)</option>
+            <option value="name_asc">Name (A → Z)</option>
+            <option value="coverage_desc">Coverage (High → Low)</option>
+            <option value="coverage_asc">Coverage (Low → High)</option>
+        </select>
+    </div>
+    
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button 
+            class="btn btn-primary"
+            hx-post="/api/threats/sync"
+            hx-target="#toast-container"
+            hx-swap="beforeend">
+            {{ icon_text('refresh-cw', 'Sync Threats', '16') }}
+        </button>
+    </div>
+</div>
+
+<!-- Threats Grid - Load on page load via HTMX -->
+<div id="threats-grid"
+     hx-get="/api/threats"
+     hx-trigger="load, refreshThreats from:body"
+     hx-swap="innerHTML">
+    <div class="empty-state">
+        <div class="loading-spinner"></div>
+        <p>Loading threat actors...</p>
+    </div>
+</div>
+
+<!-- Slide Panel Container (for TTP detail popups) -->
+<div id="slide-panel-container"></div>
+
+<!-- Modal Container -->
+<div id="modal-container"></div>
+
+<!-- Toast Container -->
+<div id="toast-container" class="toast-container"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'threats-grid') {
+            htmx.ajax('GET', '/api/threats/metrics', {target: '#metrics-container', swap: 'innerHTML'});
+        }
+    });
+    
+    document.body.addEventListener('htmx:afterSwap', function(event) {
+        if (event.detail.target.id === 'toast-container') {
+            const toasts = event.detail.target.querySelectorAll('.toast');
+            toasts.forEach(function(toast) {
+                setTimeout(function() {
+                    toast.style.opacity = '0';
+                    setTimeout(function() { toast.remove(); }, 300);
+                }, 5000);
+            });
+        }
+    });
+</script>
+{% endblock %}

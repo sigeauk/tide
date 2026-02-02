@@ -1,0 +1,58 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Promotion Metrics Row Partial - swappable via HTMX -->
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.staging_total }}</p>
+    <p class="metric-label">Staging Rules</p>
+    <p class="metric-sub">{{ icon_text('check', (metrics.staging_enabled | string) ~ ' enabled', '14', 'text-success') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.staging_avg_score >= 70 %}success{% elif metrics.staging_avg_score >= 50 %}warning{% else %}danger{% endif %}">
+        {{ metrics.staging_avg_score | round(1) }}
+    </p>
+    <p class="metric-label">Avg Quality Score</p>
+    <p class="metric-sub">Range: {{ metrics.staging_min_score }} - {{ metrics.staging_max_score }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.staging_low_quality == 0 %}success{% elif metrics.staging_low_quality < 10 %}warning{% else %}danger{% endif %}">
+        {{ metrics.staging_low_quality }}
+    </p>
+    <p class="metric-label">Low Quality (&lt;50)</p>
+    <p class="metric-sub">{{ icon_text('star', (metrics.staging_high_quality | string) ~ ' high quality', '14', 'text-warning') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ metrics.production_total }}</p>
+    <p class="metric-label">Production Rules</p>
+    <p class="metric-sub">{{ icon_text('shield', 'Target environment', '14', 'text-info') }}</p>
+</div>
+
+<div class="metric-card">
+    {% set severity_list = [] %}
+    {% if metrics.staging_severity.get('critical', 0) > 0 %}{% set _ = severity_list.append('C: ' ~ metrics.staging_severity.critical) %}{% endif %}
+    {% if metrics.staging_severity.get('high', 0) > 0 %}{% set _ = severity_list.append('H: ' ~ metrics.staging_severity.high) %}{% endif %}
+    {% if metrics.staging_severity.get('medium', 0) > 0 %}{% set _ = severity_list.append('M: ' ~ metrics.staging_severity.medium) %}{% endif %}
+    {% if metrics.staging_severity.get('low', 0) > 0 %}{% set _ = severity_list.append('L: ' ~ metrics.staging_severity.low) %}{% endif %}
+    <p class="metric-value">{{ metrics.staging_severity | length }}</p>
+    <p class="metric-label">Severity Levels</p>
+    <p class="metric-sub">
+        {% if metrics.staging_severity.get('critical', 0) > 0 %}
+        <span style="color: #f87171;">C:{{ metrics.staging_severity.get('critical', 0) }}</span>
+        {% endif %}
+        {% if metrics.staging_severity.get('high', 0) > 0 %}
+        <span style="color: #fb923c;">H:{{ metrics.staging_severity.get('high', 0) }}</span>
+        {% endif %}
+        {% if metrics.staging_severity.get('medium', 0) > 0 %}
+        <span style="color: #facc15;">M:{{ metrics.staging_severity.get('medium', 0) }}</span>
+        {% endif %}
+    </p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if metrics.last_sync_status == 'success' %}success{% elif metrics.last_sync_status == 'pending' %}warning{% else %}danger{% endif %}">
+        {{ icon('activity', '28') }}
+    </p>
+    <p class="metric-label">Sync Status</p>
+    <p class="metric-sub">{{ metrics.last_sync_time or 'Not synced yet' }}</p>
+</div>

@@ -1,0 +1,109 @@
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
+<!-- Rule Card Component -->
+
+{% set severity_colors = {
+    'critical': '#f87171',
+    'high': '#fb923c', 
+    'medium': '#facc15',
+    'low': '#4ade80',
+    'informational': '#60a5fa'
+} %}
+
+{% set rule_score = rule.score | default(0) %}
+{% set score_color = 'var(--color-success)' if rule_score >= 80 else ('var(--color-warning)' if rule_score >= 50 else 'var(--color-danger)') %}
+{% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
+{% set sev_color = severity_colors.get(sev_value, '#94a3b8') %}
+{% set val_status = rule.validation_status | default('never') %}
+{% set val_color = 'var(--color-success)' if val_status == 'valid' else ('var(--color-warning)' if val_status == 'expired' else 'var(--color-danger)') %}
+
+<div class="rule-card" id="rule-{{ rule.rule_id }}">
+    <div class="rule-header">
+        <div class="rule-name" title="{{ rule.name }}">{{ rule.name }}</div>
+        <div class="rule-pills-stack">
+            <div class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
+                {% if rule.enabled %}
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                {% else %}
+                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
+                </svg>
+                {% endif %}
+                {{ (rule.space | default('default')) | capitalize }}
+            </div>
+            <div class="sev-pill" style="background-color: {{ sev_color }};">
+                {{ sev_value | upper }}
+            </div>
+            {# MITRE Pills - covered if rule is enabled #}
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', assume_covered=rule.enabled) }}
+        </div>
+    </div>
+    
+    <div class="rule-body">
+        
+        <div class="score-section">
+            <div class="score-meta">
+                <span>Quality Score</span>
+                <span class="score-value" style="color: {{ score_color }};">{{ rule_score }}/100</span>
+            </div>
+            <div class="score-track">
+                <div class="score-fill" style="width: {{ rule_score }}%; background-color: {{ score_color }};"></div>
+            </div>
+        </div>
+        
+        <div class="meta-grid">
+            <div class="meta-left">
+                <div class="meta-row">
+                    <span class="meta-label">Validated:</span>
+                    <span class="meta-val" style="color: {{ val_color }};">
+                        {% if rule.validation_date %}
+                            {{ rule.validation_date.strftime('%Y-%m-%d') }}
+                        {% else %}
+                            Never
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="meta-row">
+                    <span class="meta-label">By:</span>
+                    <span class="meta-val">{{ rule.validated_by | default('-') }}</span>
+                </div>
+            </div>
+            <div class="meta-right">
+                <div class="meta-item">
+                    <span class="meta-label">Author:</span>
+                    <span class="meta-val">
+                        {% if rule.author and rule.author | length > 16 %}
+                            {{ rule.author[:16] }}...
+                        {% else %}
+                            {{ rule.author | default('-') }}
+                        {% endif %}
+                    </span>
+                </div>
+                <div class="meta-item">
+                    <span class="meta-label">Lang:</span>
+                    <span class="meta-val">{{ rule.language | default('kuery') }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="rule-footer">
+        <button 
+            class="btn btn-validate btn-sm"
+            hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}"
+            hx-target="#rule-{{ rule.rule_id }}"
+            hx-swap="outerHTML">
+            <span class="btn-text">{{ icon_text('circle-check', 'Validate', '14') }}</span>
+            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
+        </button>
+        <button 
+            class="btn btn-logic btn-sm"
+            hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
+            hx-target="#modal-container"
+            hx-swap="innerHTML">
+            {{ icon_text('clipboard-list', 'Logic', '14') }}
+        </button>
+    </div>
+</div>

@@ -1,0 +1,58 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Heatmap Matrix Partial - CSS Grid MITRE ATT&CK Matrix -->
+
+<!-- OOB Swap for Metrics Cards - only show when actors are selected -->
+<div id="heatmap-metrics" class="metrics-grid" hx-swap-oob="outerHTML">
+{% if data.selected_actors %}
+{% include "partials/heatmap_metrics.html" %}
+{% endif %}
+</div>
+
+{% if data.tactics %}
+<div class="matrix-container" style="grid-template-columns: repeat({{ data.tactics | length }}, minmax(120px, 1fr));">
+    {% for tactic in data.tactics %}
+    <div class="tactic-column">
+        <div class="tactic-header">{{ tactic | upper }}</div>
+        
+        {% for cell in data.matrix.get(tactic, []) | sort(attribute='id') %}
+        <div 
+            class="ttp-card {{ cell.css_class }}" 
+            data-tech-id="{{ cell.id }}"
+            data-tech-name="{{ cell.name | default('') }}"
+            title="{{ cell.tooltip | e }}"
+            hx-get="/api/heatmap/technique/{{ cell.id }}"
+            hx-target="#slide-panel-container"
+            hx-swap="innerHTML">
+            <span class="ttp-id">{{ cell.id }}</span>
+            {% if cell.rule_count > 0 %}
+            <span class="ttp-rule-count">({{ cell.rule_count }})</span>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Legend -->
+<div style="display: flex; gap: 1.5rem; margin-top: 1rem; justify-content: center;">
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="ttp-card status-gap" style="padding: 0.25rem 0.5rem; cursor: default;">GAP</div>
+        <span style="font-size: 0.8rem; color: var(--color-text-muted);">No Detection</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="ttp-card status-covered" style="padding: 0.25rem 0.5rem; cursor: default;">COV</div>
+        <span style="font-size: 0.8rem; color: var(--color-text-muted);">Covered</span>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <div class="ttp-card status-defense" style="padding: 0.25rem 0.5rem; cursor: default;">DEF</div>
+        <span style="font-size: 0.8rem; color: var(--color-text-muted);">Defense in Depth</span>
+    </div>
+</div>
+
+{% else %}
+<div class="empty-state">
+    <div class="empty-state-icon">{{ icon('target', '48') }}</div>
+    <div class="empty-state-title">Select Threat Actors</div>
+    <p>Choose one or more adversaries from the dropdown above to generate the coverage matrix.</p>
+</div>
+{% endif %}

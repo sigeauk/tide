@@ -1,0 +1,814 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Sigma Convert | TIDE{% endblock %}
+
+{% block head %}
+<!-- CodeMirror for YAML editing with syntax highlighting -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
+<!-- Prism.js for JSON output highlighting -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+<style>
+/* Sigma page - Symmetric Mirror Layout */
+.sigma-header-row {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-end;
+    margin-bottom: 1.5rem;
+    flex-wrap: wrap;
+}
+
+.sigma-select-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.sigma-select-group label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--color-primary);
+    letter-spacing: 0.05em;
+}
+
+.sigma-select {
+    min-width: 140px;
+    padding: 0.4rem 0.6rem;
+    font-size: 0.8rem;
+    background: var(--color-bg-light);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+    cursor: pointer;
+}
+
+.sigma-select:hover {
+    border-color: var(--color-border-strong);
+}
+
+.sigma-select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+/* ========================================
+ * SYMMETRIC TWO-COLUMN LAYOUT
+ * Both panels are mirror images in structure
+ * Fixed height ensures pixel-perfect alignment
+ * ======================================== */
+.sigma-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    height: calc(100vh - 280px);
+    min-height: 500px;
+    max-height: 700px;
+}
+
+@media (max-width: 900px) {
+    .sigma-main {
+        grid-template-columns: 1fr;
+        height: auto;
+        max-height: none;
+    }
+}
+
+/* Unified card structure for both sides */
+.sigma-panel {
+    background: var(--layer-1);
+    border: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-highlight);
+    border-radius: var(--radius-lg);
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    box-shadow: var(--shadow);
+}
+
+.sigma-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text);
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border-muted);
+    flex-shrink: 0;
+}
+
+/* Code area: fills available space */
+.sigma-panel-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
+}
+
+/* CodeMirror and output box fill the body */
+.code-editor-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.CodeMirror {
+    flex: 1 !important;
+    height: auto !important;
+    min-height: 280px !important;
+    background: var(--layer-0) !important;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+}
+
+.CodeMirror-focused {
+    border-color: var(--color-primary) !important;
+}
+
+.CodeMirror-gutters {
+    background: var(--layer-0) !important;
+    border-right: 1px solid var(--color-border-muted) !important;
+}
+
+.CodeMirror-linenumber {
+    color: var(--color-text-muted) !important;
+}
+
+/* Query output matches CodeMirror sizing */
+#query-output-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.query-output-box {
+    flex: 1;
+    background: var(--layer-0);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    overflow: auto;
+    min-height: 280px;
+}
+
+.query-output-box pre {
+    margin: 0;
+    padding: 0.75rem;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    word-break: break-word !important;
+    overflow-wrap: break-word !important;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    color: var(--color-text);
+    background: transparent !important;
+}
+
+.query-output-box pre code {
+    background: transparent !important;
+    font-size: inherit;
+    font-family: inherit;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    display: block;
+}
+
+.query-output-box code[class*="language-"],
+.query-output-box pre[class*="language-"] {
+    background: transparent !important;
+    text-shadow: none;
+    white-space: pre-wrap !important;
+}
+
+.empty-output {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 200px;
+    color: var(--color-text-muted);
+    text-align: center;
+    gap: 0.5rem;
+    padding: 1rem;
+}
+
+/* ========================================
+ * UNIFIED FOOTER (Action Row)
+ * Single-line layout with proper alignment
+ * ======================================== */
+.sigma-panel-footer {
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--color-border-muted);
+    margin-top: auto;
+    min-height: 48px;
+}
+
+/* Right footer aligns to end */
+.sigma-panel-footer.footer-right {
+    justify-content: flex-end;
+}
+
+.sigma-panel-footer .btn {
+    flex-shrink: 0;
+    height: 32px;
+}
+
+.sigma-panel-footer .filter-group {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.sigma-panel-footer .filter-group label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    white-space: nowrap;
+}
+
+.sigma-panel-footer .filter-group select {
+    width: 120px;
+    height: 32px;
+    padding: 0 0.5rem;
+    font-size: 0.75rem;
+    background: var(--color-bg-light);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+}
+
+.sigma-panel-footer .filter-group select option {
+    background: var(--color-bg-light);
+    color: var(--color-text);
+}
+
+.sigma-panel-footer .checkbox-group {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.75rem;
+    color: var(--color-text);
+    height: 32px;
+}
+
+/* Validation result inline */
+#validation-result {
+    margin-top: 0.5rem;
+}
+
+.alert {
+    padding: 0.5rem 0.75rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.75rem;
+}
+
+.alert-success {
+    background: var(--color-success-bg);
+    color: var(--color-success-text);
+    border: 1px solid var(--color-success);
+}
+
+.alert-danger {
+    background: var(--color-danger-bg);
+    color: var(--color-danger-text);
+    border: 1px solid var(--color-danger);
+}
+
+/* Info banner */
+.info-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--color-info-bg);
+    border: 1px solid var(--color-info);
+    border-radius: var(--radius-sm);
+    margin-bottom: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--color-info-text);
+}
+
+/* Rule Browser - collapsible section */
+.rule-browser {
+    background: var(--layer-1);
+    border: 1px solid var(--color-border);
+    border-top: 1px solid var(--color-highlight);
+    border-radius: var(--radius-md);
+    margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+}
+
+.rule-browser-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.75rem 1rem;
+    cursor: pointer;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--color-text);
+}
+
+.rule-browser-header:hover {
+    background: var(--color-bg-lighter);
+}
+
+.rule-browser-content {
+    padding: 0 1rem 1rem;
+    display: none;
+}
+
+.rule-browser.open .rule-browser-content {
+    display: block;
+}
+
+.rule-browser-chevron {
+    transition: transform 0.15s ease;
+}
+
+.rule-browser.open .rule-browser-chevron {
+    transform: rotate(180deg);
+}
+
+.browser-filters {
+    display: flex;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.browser-filter {
+    flex: 1;
+    min-width: 120px;
+}
+
+.browser-filter label {
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    margin-bottom: 0.25rem;
+}
+
+.browser-filter input,
+.browser-filter select {
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.75rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-sm);
+    color: var(--color-text);
+}
+
+.browser-filter input:focus,
+.browser-filter select:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.rules-list-container {
+    max-height: 180px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.rule-item-btn {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.4rem 0.6rem;
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    text-align: left;
+    transition: all var(--transition-fast);
+    width: 100%;
+    font-size: 0.75rem;
+}
+
+.rule-item-btn:hover {
+    background: var(--color-bg-lighter);
+    border-color: var(--color-border);
+}
+
+.rule-item-title {
+    color: var(--color-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+.rule-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    font-size: 0.65rem;
+    color: var(--color-text-muted);
+}
+
+.level-badge {
+    font-size: 0.55rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    padding: 0.1rem 0.3rem;
+    border-radius: var(--radius-sm);
+}
+
+.level-critical { background: oklch(25% 0.1 25); color: oklch(75% 0.2 25); }
+.level-high { background: oklch(28% 0.08 45); color: oklch(80% 0.18 45); }
+.level-medium { background: oklch(30% 0.06 85); color: oklch(85% 0.15 85); }
+.level-low { background: oklch(28% 0.06 145); color: oklch(80% 0.15 145); }
+.level-informational { background: oklch(28% 0.05 220); color: oklch(80% 0.12 220); }
+
+.rules-count {
+    font-size: 0.7rem;
+    color: var(--color-text-muted);
+    margin-bottom: 0.5rem;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.25rem;">
+        Sigma Converter
+    </h1>
+    <p class="page-subtitle" style="font-size: 0.85rem;">Convert Sigma detection rules into SIEM-specific queries for deployment.</p>
+</div>
+
+<!-- Compact horizontal selects -->
+<div class="sigma-header-row">
+    <div class="sigma-select-group">
+        <label>Target</label>
+        <select id="backend-select" class="sigma-select">
+            {% for key, label in backends.items() %}
+            <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    
+    <div class="sigma-select-group">
+        <label>Format</label>
+        <select id="format-select" class="sigma-select">
+            {% for key, label in formats.items() %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    
+    <div class="sigma-select-group">
+        <label>Pipeline</label>
+        <select id="pipeline-select" class="sigma-select" style="min-width: 180px;">
+            {% for key, label in pipelines.items() %}
+            <option value="{{ key }}">{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
+<!-- Collapsible Rule Browser -->
+<div class="rule-browser" id="rule-browser">
+    <div class="rule-browser-header" onclick="toggleRuleBrowser()">
+        <span>{{ icon('search', '16') }} Rule Browser</span>
+        <svg class="rule-browser-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+    </div>
+    <div class="rule-browser-content">
+        <div class="browser-filters">
+            <div class="browser-filter" style="flex: 2;">
+                <label>Search</label>
+                <input type="text" id="rule-search" 
+                       placeholder="Title, description, technique..."
+                       hx-get="/api/sigma/rules"
+                       hx-trigger="keyup changed delay:300ms"
+                       hx-target="#rules-list"
+                       hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                       name="q">
+            </div>
+            <div class="browser-filter">
+                <label>MITRE Technique</label>
+                <input type="text" id="technique-filter" 
+                       placeholder="e.g., T1059"
+                       hx-get="/api/sigma/rules"
+                       hx-trigger="keyup changed delay:300ms"
+                       hx-target="#rules-list"
+                       hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                       name="technique"
+                       value="{{ technique_filter }}">
+            </div>
+            <div class="browser-filter">
+                <label>Category</label>
+                <select id="category-filter"
+                        hx-get="/api/sigma/rules"
+                        hx-trigger="change"
+                        hx-target="#rules-list"
+                        hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                        name="category">
+                    <option value="">All</option>
+                    {% for cat in categories %}
+                    <option value="{{ cat }}">{{ cat | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="browser-filter">
+                <label>Level</label>
+                <select id="level-filter"
+                        hx-get="/api/sigma/rules"
+                        hx-trigger="change"
+                        hx-target="#rules-list"
+                        hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                        name="level">
+                    <option value="">All</option>
+                    <option value="critical">Critical</option>
+                    <option value="high">High</option>
+                    <option value="medium">Medium</option>
+                    <option value="low">Low</option>
+                    <option value="informational">Info</option>
+                </select>
+            </div>
+        </div>
+        <div id="rules-list">
+            {% include "partials/sigma_rules_list.html" %}
+        </div>
+    </div>
+</div>
+
+<!-- Main two-column layout (Symmetric Mirror) -->
+<div class="sigma-main">
+    <!-- Left: YAML Editor Panel -->
+    <div class="sigma-panel">
+        <div class="sigma-panel-header">
+            {{ icon('file-text', '16') }} rule.yml
+        </div>
+        
+        <!-- Panel Body: Code Area -->
+        <div class="sigma-panel-body">
+            <form id="convert-form" hx-post="/api/sigma/convert" hx-target="#query-output-container" hx-swap="innerHTML" style="display: flex; flex-direction: column; flex: 1; min-height: 0;">
+                <div class="code-editor-container">
+                    <textarea 
+                        id="yaml-editor" 
+                        name="yaml_content"
+                        class="yaml-editor"
+                        spellcheck="false"
+                        placeholder="title: Example Rule
+id: 12345678-1234-1234-1234-123456789abc
+status: experimental
+logsource:
+    category: process_creation
+    product: windows
+detection:
+    selection:
+        CommandLine|contains: 'suspicious'
+    condition: selection
+level: medium"></textarea>
+                </div>
+                
+                <!-- Hidden fields for form submission -->
+                <input type="hidden" id="form-backend" name="backend" value="elasticsearch">
+                <input type="hidden" id="form-pipeline" name="pipeline" value="none">
+                <input type="hidden" id="form-format" name="output_format" value="kibana_ndjson">
+            </form>
+            <div id="validation-result"></div>
+        </div>
+        
+        <!-- Left Footer: Action Buttons -->
+        <div class="sigma-panel-footer">
+            <button type="submit" form="convert-form" class="btn btn-primary btn-sm">
+                {{ icon_text('refresh-cw', 'Convert', '14') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" 
+                    hx-post="/api/sigma/validate"
+                    hx-target="#validation-result"
+                    hx-include="#yaml-editor">
+                {{ icon_text('check-circle', 'Validate', '14') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="clearYamlEditor()">
+                {{ icon_text('trash-2', 'Clear', '14') }}
+            </button>
+        </div>
+    </div>
+    
+    <!-- Right: Query Output Panel (Mirror of Left) -->
+    <div class="sigma-panel">
+        <div class="sigma-panel-header">
+            {{ icon('zap', '16') }} Query Output
+        </div>
+        
+        <!-- Panel Body: Output Area -->
+        <div class="sigma-panel-body">
+            <div id="query-output-container">
+                <div class="query-output-box">
+                    <div class="empty-output">
+                        {{ icon('terminal', '32') }}
+                        <p>Select a rule or paste YAML, then click Convert</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Right Footer: Deploy Controls (Single Line, Right-Aligned) -->
+        <div class="sigma-panel-footer footer-right" id="deploy-footer">
+            <form id="deploy-form" hx-post="/api/sigma/deploy" hx-target="#deploy-result" hx-swap="innerHTML" style="display: flex; flex-direction: row; align-items: center; gap: 0.75rem; width: 100%; justify-content: flex-end;">
+                <input type="hidden" name="yaml_content" id="deploy-yaml">
+                <input type="hidden" name="raw_query" id="deploy-query">
+                
+                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadQuery()">
+                    {{ icon_text('download', 'Download', '14') }}
+                </button>
+                
+                <div class="filter-group">
+                    <label>Space</label>
+                    <select name="space">
+                        <option value="staging">Staging</option>
+                        <option value="production">Production</option>
+                    </select>
+                </div>
+                
+                <label class="checkbox-group">
+                    <input type="checkbox" name="enabled" value="true">
+                    <span>Enable</span>
+                </label>
+                
+                <button type="submit" class="btn btn-primary btn-sm" onclick="prepareDeployForm()">
+                    {{ icon_text('rocket', 'Deploy', '14') }}
+                </button>
+            </form>
+        </div>
+        <div id="deploy-result"></div>
+    </div>
+</div>
+
+<script>
+// Initialize Sigma page components - exposed globally for HTMX re-initialization
+window.initSigmaPage = function() {
+    // Check if CodeMirror is loaded
+    if (typeof CodeMirror === 'undefined') {
+        console.warn('CodeMirror not loaded yet, retrying...');
+        setTimeout(window.initSigmaPage, 100);
+        return;
+    }
+    
+    // Check if we already initialized (prevent double-init)
+    const yamlTextarea = document.getElementById('yaml-editor');
+    if (!yamlTextarea) return;
+    
+    // If already initialized, just refresh the editor
+    if (yamlTextarea._codeMirrorInitialized && window.sigmaYamlEditor) {
+        setTimeout(() => window.sigmaYamlEditor.refresh(), 50);
+        return;
+    }
+    
+    // Mark as initialized
+    yamlTextarea._codeMirrorInitialized = true;
+    
+    // Initialize CodeMirror
+    const yamlEditor = CodeMirror.fromTextArea(yamlTextarea, {
+        mode: 'yaml',
+        theme: 'material-darker',
+        lineNumbers: true,
+        lineWrapping: true,
+        tabSize: 2,
+        indentWithTabs: false,
+        autofocus: false
+    });
+    
+    // Store reference for global access
+    window.sigmaYamlEditor = yamlEditor;
+    
+    // Force initial refresh to ensure syntax highlighting is applied
+    setTimeout(() => yamlEditor.refresh(), 50);
+    
+    // Sync CodeMirror content to textarea on change (for form submission)
+    yamlEditor.on('change', function() {
+        yamlTextarea.value = yamlEditor.getValue();
+    });
+    
+    // Auto-open if there's a technique filter
+    {% if technique_filter %}
+    const ruleBrowser = document.getElementById('rule-browser');
+    if (ruleBrowser) ruleBrowser.classList.add('open');
+    {% endif %}
+    
+    // Sync select values to hidden form fields
+    const backendSelect = document.getElementById('backend-select');
+    const formatSelect = document.getElementById('format-select');
+    const pipelineSelect = document.getElementById('pipeline-select');
+    
+    if (backendSelect) {
+        backendSelect.addEventListener('change', function() {
+            const backend = this.value;
+            document.getElementById('form-backend').value = backend;
+            
+            // Fetch new format options for this backend
+            fetch(`/api/sigma/formats/${backend}`)
+                .then(response => response.text())
+                .then(html => {
+                    const formatSelect = document.getElementById('format-select');
+                    formatSelect.innerHTML = html;
+                    const firstOption = formatSelect.options[0];
+                    if (firstOption) {
+                        document.getElementById('form-format').value = firstOption.value;
+                    }
+                })
+                .catch(err => console.error('Failed to load formats:', err));
+        });
+    }
+    
+    if (formatSelect) {
+        formatSelect.addEventListener('change', function() {
+            document.getElementById('form-format').value = this.value;
+        });
+    }
+    
+    if (pipelineSelect) {
+        pipelineSelect.addEventListener('change', function() {
+            document.getElementById('form-pipeline').value = this.value;
+        });
+    }
+    
+    console.log('Sigma page initialized');
+};
+
+// Initialize immediately on page load
+window.initSigmaPage();
+
+// Toggle rule browser (global for onclick)
+window.toggleRuleBrowser = function() {
+    document.getElementById('rule-browser').classList.toggle('open');
+};
+
+// Load rule YAML into editor (global for onclick)
+window.loadRuleYaml = function(ruleId) {
+    const editor = window.sigmaYamlEditor;
+    if (!editor) {
+        console.error('YAML editor not initialized');
+        return;
+    }
+    
+    fetch(`/api/sigma/rule/${ruleId}`)
+        .then(response => response.text())
+        .then(yaml => {
+            editor.setValue(yaml);
+            // Force refresh to ensure syntax highlighting is applied
+            setTimeout(() => editor.refresh(), 10);
+            document.getElementById('query-output-container').innerHTML = `
+                <div class="query-output-box">
+                    <div class="empty-output">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+                        <p>Click Convert to generate the query</p>
+                    </div>
+                </div>
+            `;
+            document.getElementById('validation-result').innerHTML = '';
+        })
+        .catch(err => console.error('Failed to load rule:', err));
+};
+
+// Clear YAML editor (global for onclick)
+window.clearYamlEditor = function() {
+    const editor = window.sigmaYamlEditor;
+    if (!editor) return;
+    
+    editor.setValue('');
+    document.getElementById('query-output-container').innerHTML = `
+        <div class="query-output-box">
+            <div class="empty-output">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
+                <p>Select a rule or paste YAML, then click Convert</p>
+            </div>
+        </div>
+    `;
+    document.getElementById('validation-result').innerHTML = '';
+};
+</script>
+{% endblock %}

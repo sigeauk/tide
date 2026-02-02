@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Dashboard | TIDE{% endblock %}
+
+{% block head %}
+<style>
+.module-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+}
+
+.module-card {
+    background: var(--color-bg);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    transition: all var(--transition-fast);
+    text-decoration: none;
+    display: block;
+}
+
+.module-card:hover {
+    border-color: var(--color-primary);
+    background: var(--color-bg-lighter);
+    transform: translateY(-2px);
+}
+
+.module-title {
+    font-weight: 600;
+    font-size: 0.9rem;
+    color: var(--color-text);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.module-title svg {
+    color: var(--color-primary);
+}
+
+.module-desc {
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+    line-height: 1.5;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+        Dashboard
+    </h1>
+    <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
+</div>
+
+<!-- Rule Health Metrics Row -->
+<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+    {{ icon('shield-check', '18') }} Rule Health
+</h3>
+<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.total_rules }}</p>
+        <p class="metric-label">Total Rules</p>
+        <p class="metric-sub">All detection rules</p>
+    </div>
+    
+    <div class="metric-card">
+        <p class="metric-value {% if metrics.avg_quality_score >= 70 %}success{% elif metrics.avg_quality_score >= 50 %}warning{% else %}danger{% endif %}">
+            {{ metrics.avg_quality_score | round(1) }}
+        </p>
+        <p class="metric-label">Avg Quality Score</p>
+        <p class="metric-sub">Rule health metric</p>
+    </div>
+    
+    <div class="metric-card">
+        <p class="metric-value {% if metrics.low_quality_count == 0 %}success{% elif metrics.low_quality_count < 20 %}warning{% else %}danger{% endif %}">
+            {{ metrics.low_quality_count }}
+        </p>
+        <p class="metric-label">Low Quality Rules</p>
+        <p class="metric-sub">Score &lt; 50</p>
+    </div>
+</div>
+
+<!-- Promotion Metrics Row -->
+<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+    {{ icon('circle-arrow-up', '18') }} Promotion
+</h3>
+<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.staging_rules }}</p>
+        <p class="metric-label">Staging Rules</p>
+        <p class="metric-sub">Ready for review</p>
+    </div>
+    
+    <div class="metric-card">
+        <p class="metric-value success">{{ metrics.production_rules }}</p>
+        <p class="metric-label">Production Rules</p>
+        <p class="metric-sub">Active in SIEM</p>
+    </div>
+</div>
+
+<!-- Threat Landscape Metrics Row -->
+<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+    {{ icon('target', '18') }} Threat Landscape
+</h3>
+<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.threat_actors }}</p>
+        <p class="metric-label">Threat Actors</p>
+        <p class="metric-sub">Tracked adversaries</p>
+    </div>
+    
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.total_ttps }}</p>
+        <p class="metric-label">Unique TTPs</p>
+        <p class="metric-sub">Techniques tracked</p>
+    </div>
+    
+    <div class="metric-card">
+        <p class="metric-value {% if metrics.coverage_pct >= 70 %}success{% elif metrics.coverage_pct >= 40 %}warning{% else %}danger{% endif %}">
+            {{ metrics.coverage_pct | round(1) }}%
+        </p>
+        <p class="metric-label">TTP Coverage</p>
+        <p class="metric-sub">Detection coverage</p>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+    {{ icon('layout-grid', '18') }} Quick Actions
+</h3>
+<div class="module-grid">
+    <a href="/rules" class="module-card">
+        <div class="module-title">{{ icon('shield-check', '18') }} Rule Health</div>
+        <div class="module-desc">Assess quality and validation status</div>
+    </a>
+    
+    <a href="/promotion" class="module-card">
+        <div class="module-title">{{ icon('circle-arrow-up', '18') }} Promotion</div>
+        <div class="module-desc">Promote staging rules to production</div>
+    </a>
+    
+    <a href="/threats" class="module-card">
+        <div class="module-title">{{ icon('target', '18') }} Threat Landscape</div>
+        <div class="module-desc">Track actors and TTP coverage</div>
+    </a>
+    
+    <a href="/heatmap" class="module-card">
+        <div class="module-title">{{ icon('grid-3x3', '18') }} MITRE Heatmap</div>
+        <div class="module-desc">Visualize coverage gaps</div>
+    </a>
+    
+    <a href="/sigma" class="module-card">
+        <div class="module-title">{{ icon('sigma', '18') }} Sigma Converter</div>
+        <div class="module-desc">Convert rules to SIEM queries</div>
+    </a>
+    
+    <a href="/settings" class="module-card">
+        <div class="module-title">{{ icon('settings', '18') }} Settings</div>
+        <div class="module-desc">Configure integrations</div>
+    </a>
+</div>
+
+{% endblock %}

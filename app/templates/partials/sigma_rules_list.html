@@ -1,0 +1,40 @@
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+<!-- Sigma Rules List Partial -->
+<div class="rules-count">
+    {% if filtered_count != total_count %}
+    Showing {{ filtered_count }} of {{ total_count }} rules
+    {% else %}
+    {{ total_count }} rules
+    {% endif %}
+</div>
+
+<div class="rules-list-container">
+    {% if rules %}
+        {% for rule in rules %}
+        <button class="rule-item-btn" onclick="loadRuleYaml('{{ rule.id }}')">
+            <span class="rule-item-title" title="{{ rule.title }}">
+                {{ rule.title[:45] }}{% if rule.title|length > 45 %}...{% endif %}
+            </span>
+            <span class="rule-item-meta">
+                {% if rule._techniques %}
+                    {% for tech in rule._techniques[:2] %}
+                    <span class="mitre-pill mitre-neutral mitre-sm">{{ tech }}</span>
+                    {% endfor %}
+                    {% if rule._techniques|length > 2 %}
+                    <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule._techniques|length - 2 }}</span>
+                    {% endif %}
+                {% endif %}
+                <span class="level-badge level-{{ rule.level | default('medium') }}">
+                    {{ rule.level | default('medium') | upper }}
+                </span>
+            </span>
+        </button>
+        {% endfor %}
+    {% else %}
+        <div class="empty-output" style="min-height: 100px;">
+            {{ icon('search-x', '24') }}
+            <p style="font-size: 0.8rem;">No rules found</p>
+        </div>
+    {% endif %}
+</div>

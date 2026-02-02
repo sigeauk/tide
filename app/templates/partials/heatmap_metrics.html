@@ -1,0 +1,43 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Heatmap Metrics Partial -->
+<div class="metric-card">
+    <p class="metric-value">{{ data.selected_actors | length }}</p>
+    <p class="metric-label">Selected Actors</p>
+    <p class="metric-sub">{{ icon_text('target', 'Focus group', '14') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ data.total_ttps }}</p>
+    <p class="metric-label">Adversary TTPs</p>
+    <p class="metric-sub">{{ icon_text('chart-column', 'Techniques used', '14') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if data.gap_count == 0 %}success{% elif data.gap_count < 10 %}warning{% else %}danger{% endif %}">
+        {{ data.gap_count }}
+    </p>
+    <p class="metric-label">Critical Gaps</p>
+    <p class="metric-sub">{{ icon_text('triangle-alert', 'No detection', '14', 'text-warning') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if data.covered_count == data.total_ttps %}success{% elif data.covered_count > 0 %}warning{% else %}danger{% endif %}">
+        {{ data.covered_count }}
+    </p>
+    <p class="metric-label">Covered TTPs</p>
+    <p class="metric-sub">{{ icon_text('check', 'Rules exist', '14', 'text-success') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if data.coverage_pct >= 80 %}success{% elif data.coverage_pct >= 50 %}warning{% else %}danger{% endif %}">
+        {{ data.coverage_pct }}%
+    </p>
+    <p class="metric-label">Coverage</p>
+    <p class="metric-sub">{{ icon_text('shield', 'Protection rate', '14') }}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ data.defense_count }}</p>
+    <p class="metric-label">Defense Depth</p>
+    <p class="metric-sub">{{ icon_text('dumbbell', 'Extra rules', '14') }}</p>
+</div>

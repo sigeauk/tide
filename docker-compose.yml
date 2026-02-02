@@ -1,33 +1,55 @@
-name: TIDE
-services:
-  tide-ui:
-    image: 047741/tide-core:${TIDE_VERSION}
-    container_name: tide-ui
-    ports:
-      - "8501:8501"
-    env_file:
-      - .env
-    environment:
-      - ENV_FILE_LOCATION=.env
-      - AUTH_DISABLED=${AUTH_DISABLED:-false}
-      - STREAMLIT_SERVER_FOLDER_WATCH_BLACKLIST=['data', 'logs', '.git', '__pycache__']
-      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=poll
-      - STREAMLIT_SERVER_RUN_ON_SAVE=true
-    volumes:
-      - tide_data:/app/data
-    command: streamlit run app/Home.py --server.runOnSave=true --server.fileWatcherType=poll
+# TIDE v2 - FastAPI + HTMX + Tailwind
+# Production Docker Compose
 
-  tide-worker:
-    image: 047741/tide-core:${TIDE_VERSION}
-    container_name: tide-worker
+name: tide
+
+services:
+  # FastAPI Application
+  tide-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: production
+    image: 047741/tide-core:${TIDE_VERSION:-2.0.0}
+    container_name: tide-app
     env_file:
       - .env
-    volumes:
-      - tide_data:/app/data
-    command: python app/worker.py
     environment:
       - PYTHONPATH=/app
+      - DB_PATH=/app/data/tide.duckdb
+      - TRIGGER_DIR=/app/data/triggers
+      - VALIDATION_FILE=/app/data/checkedRule.json
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+    networks:
+      - tide-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    user: "1000:1000"
 
-volumes:
-  tide_data:
-    driver: local
+  # Nginx Reverse Proxy
+  tide-nginx:
+    image: nginx:alpine
+    container_name: tide-nginx
+    ports:
+      - "8501:80"  # Keep same port as Streamlit for compatibility
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./app/static:/app/static:ro
+    networks:
+      - tide-network
+    depends_on:
+      tide-app:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  tide-network:
+    driver: bridge

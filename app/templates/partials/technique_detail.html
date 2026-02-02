@@ -1,0 +1,102 @@
+<!-- Technique Detail Slide-Over Panel -->
+<div class="slide-panel-overlay" onclick="this.remove()">
+    
+    <div class="slide-panel" onclick="event.stopPropagation()">
+        <!-- Panel Header -->
+        <div class="slide-panel-header">
+            <div>
+                <span class="technique-id">{{ technique.id }}</span>
+                <h2 class="technique-name">{{ technique.name }}</h2>
+            </div>
+            <button class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </button>
+        </div>
+        
+        <!-- Panel Content -->
+        <div class="slide-panel-content">
+            <!-- Status Badge -->
+            <div class="technique-status {{ 'status-covered' if is_covered else 'status-gap' }}">
+                {% if is_covered %}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+                        <polyline points="22 4 12 14.01 9 11.01"/>
+                    </svg>
+                    Covered by {{ rule_count }} rule{{ 's' if rule_count != 1 else '' }}
+                {% else %}
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    Coverage Gap - No Detection Rules
+                {% endif %}
+            </div>
+            
+            <!-- Metadata -->
+            <div class="technique-meta">
+                <div class="meta-item">
+                    <span class="meta-label">Tactic</span>
+                    <span class="meta-value">{{ tactic }}</span>
+                </div>
+                {% if actors %}
+                <div class="meta-item">
+                    <span class="meta-label">Used By</span>
+                    <span class="meta-value">{{ actors | join(', ') }}</span>
+                </div>
+                {% endif %}
+            </div>
+            
+            <!-- Action Buttons -->
+            <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                <a href="https://attack.mitre.org/techniques/{{ technique.id.replace('.', '/') }}" 
+                   target="_blank" 
+                   rel="noopener noreferrer" 
+                   class="btn btn-secondary btn-sm" style="flex: 1;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+                        <polyline points="15 3 21 3 21 9"/>
+                        <line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                    MITRE
+                </a>
+                <a href="/sigma?technique={{ technique.id }}" 
+                   class="btn btn-primary btn-sm" style="flex: 1;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <path d="m21 21-4.3-4.3"/>
+                    </svg>
+                    Sigma
+                </a>
+            </div>
+            
+            <!-- Detection Rules Section -->
+            {% if is_covered %}
+            <div class="rules-section">
+                <h3 class="rules-title">Detection Rules</h3>
+                <div id="technique-rules" 
+                     hx-get="/api/heatmap/technique/{{ technique.id }}/rules"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                    <div class="loading-spinner">
+                        <div class="spinner"></div>
+                        <span>Loading rules...</span>
+                    </div>
+                </div>
+            </div>
+            {% else %}
+            <div class="gap-recommendations">
+                <h3 class="rules-title">Recommendations</h3>
+                <ul class="recommendations-list">
+                    <li>Search for Sigma rules covering {{ technique.id }}</li>
+                    <li>Check vendor detection content for this technique</li>
+                    <li>Consider creating custom detection logic</li>
+                    <li>Review sub-techniques for alternative coverage</li>
+                </ul>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
