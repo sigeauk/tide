@@ -48,19 +48,25 @@ async def auth_callback(
     code: Optional[str] = Query(None),
     state: Optional[str] = Query("/"),
     error: Optional[str] = Query(None),
+    error_description: Optional[str] = Query(None),
 ):
     """
     Handle Keycloak callback after authentication.
     """
+    logger.info(f"Auth callback received - code={'present' if code else 'missing'}, state={state}, error={error}")
+    
     if error:
-        logger.error(f"Auth callback error: {error}")
-        return HTMLResponse(f"<h1>Authentication Error</h1><p>{error}</p>", status_code=400)
+        logger.error(f"Auth callback error: {error} - {error_description}")
+        return HTMLResponse(f"<h1>Authentication Error</h1><p>{error}: {error_description}</p>", status_code=400)
     
     if not code:
+        logger.error("Auth callback missing authorization code")
         return HTMLResponse("<h1>Missing authorization code</h1>", status_code=400)
     
     # Exchange code for tokens - must use same redirect_uri as login
     redirect_uri = f"{settings.app_url}/auth/callback"
+    logger.info(f"Exchanging code with redirect_uri: {redirect_uri}")
+    
     tokens = await auth.exchange_code(code, redirect_uri)
     
     if not tokens:
@@ -69,11 +75,16 @@ async def auth_callback(
     # Set tokens in cookies
     response = RedirectResponse(url=state or "/", status_code=302)
     
+    # Only set secure=True if using HTTPS (check APP_URL scheme)
+    use_secure = settings.app_url.startswith("https://")
+    
+    logger.info(f"Setting auth cookies - secure={use_secure}, samesite=lax")
+    
     response.set_cookie(
         key="access_token",
         value=tokens["access_token"],
         httponly=True,
-        secure=not settings.debug,
+        secure=use_secure,
         samesite="lax",
         max_age=tokens.get("expires_in", 3600),
     )
@@ -83,7 +94,7 @@ async def auth_callback(
             key="refresh_token",
             value=tokens["refresh_token"],
             httponly=True,
-            secure=not settings.debug,
+            secure=use_secure,
             samesite="lax",
             max_age=tokens.get("refresh_expires_in", 86400),
         )

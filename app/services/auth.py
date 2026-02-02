@@ -74,15 +74,24 @@ class AuthService:
             "redirect_uri": redirect_uri,
         }
         
+        token_url = self.settings.oidc_token_url
+        logger.info(f"Exchanging auth code at: {token_url}")
+        logger.debug(f"Exchange data: client_id={data['client_id']}, redirect_uri={redirect_uri}")
+        
         async with httpx.AsyncClient() as client:
             try:
                 response = await client.post(
-                    self.settings.oidc_token_url,
+                    token_url,
                     data=data,
                     timeout=10.0
                 )
                 response.raise_for_status()
+                logger.info("Token exchange successful")
                 return response.json()
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Token exchange HTTP error: {e.response.status_code}")
+                logger.error(f"Response body: {e.response.text}")
+                return None
             except httpx.HTTPError as e:
                 logger.error(f"Token exchange failed: {e}")
                 return None
@@ -115,6 +124,8 @@ class AuthService:
         Uses Keycloak's JWKS for signature verification.
         """
         try:
+            logger.debug(f"Validating token, expected issuer: {self.settings.oidc_issuer}")
+            
             # Get the signing key from JWKS
             signing_key = self.jwks_client.get_signing_key_from_jwt(token)
             
@@ -133,6 +144,8 @@ class AuthService:
                 }
             )
             
+            logger.info(f"Token validated successfully for user: {payload.get('preferred_username', 'unknown')}")
+            
             # Verify authorized party (azp) matches our client
             azp = payload.get("azp")
             if azp and azp != self.settings.keycloak_client_id:
@@ -142,13 +155,14 @@ class AuthService:
             return TokenData(**payload)
         
         except jwt.ExpiredSignatureError:
-            logger.warning("Token expired")
+            logger.error("Token validation failed: Token expired")
             return None
         except jwt.InvalidTokenError as e:
-            logger.warning(f"Invalid token: {e}")
+            logger.error(f"Token validation failed - Invalid token: {e}")
             return None
         except Exception as e:
-            logger.error(f"Token validation error: {e}")
+            logger.error(f"Token validation error: {type(e).__name__}: {e}")
+            return None
             return None
     
     def get_user_from_token(self, token: str) -> Optional[User]:
