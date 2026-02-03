@@ -8,23 +8,23 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                         NGINX                                │
-│              (Reverse Proxy + SSL Termination)               │
-│                      Port 80/443                             │
+│                         NGINX                               │
+│              (Reverse Proxy + SSL Termination)              │
+│                      Port 80/443                            │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                        FASTAPI                               │
-│                (REST API + HTMX Endpoints)                   │
-│                       Port 8000                              │
+│                        FASTAPI                              │
+│                (REST API + HTMX Endpoints)                  │
+│                       Port 8000                             │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                        DUCKDB                                │
-│              (Embedded Analytics Database)                   │
-│                   /app/data/tide.duckdb                      │
+│                        DUCKDB                               │
+│              (Embedded Analytics Database)                  │
+│                   /app/data/tide.duckdb                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -83,15 +83,15 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    CLIENT ENVIRONMENT                        │
-│                                                              │
-│  ┌─────────────────┐         ┌─────────────────┐           │
+│                    CLIENT ENVIRONMENT                       │
+│                                                             │
+│  ┌─────────────────┐          ┌─────────────────┐           │
 │  │  TIDE Container │ ◀─────▶ │  Elastic SIEM   │           │
-│  │ (GitHub Image)  │  Sync   │  (Detections)   │           │
-│  └─────────────────┘         └─────────────────┘           │
-│           │                                                  │
-│           │ Reports                                          │
-│           ▼                                                  │
+│  │ (GitHub Image)  │  Sync    │  (Detections)   │           │
+│  └─────────────────┘          └─────────────────┘           │
+│           │                                                 │
+│           │ Reports                                         │
+│           ▼                                                 │
 │  ┌─────────────────┐                                        │
 │  │  Internal GitLab│  ◀── Reports dispatched here          │
 │  │  (Client-owned) │                                        │
