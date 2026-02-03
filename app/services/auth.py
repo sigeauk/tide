@@ -123,8 +123,26 @@ class AuthService:
         Validate JWT token and return decoded data.
         Uses Keycloak's JWKS for signature verification.
         """
+        import time
         try:
             logger.debug(f"Validating token, expected issuer: {self.settings.oidc_issuer}")
+            
+            # First, decode without verification to check expiration time
+            try:
+                unverified = jwt.decode(token, options={"verify_signature": False})
+                exp_time = unverified.get("exp", 0)
+                current_time = int(time.time())
+                time_left = exp_time - current_time
+                username = unverified.get("preferred_username", "unknown")
+                
+                if time_left < 0:
+                    logger.warning(f"Token for {username} expired {abs(time_left)}s ago")
+                elif time_left < 60:
+                    logger.warning(f"Token for {username} expires in {time_left}s (nearly expired)")
+                elif time_left < 300:
+                    logger.debug(f"Token for {username} expires in {time_left}s")
+            except Exception as e:
+                logger.debug(f"Could not pre-decode token: {e}")
             
             # Get the signing key from JWKS
             signing_key = self.jwks_client.get_signing_key_from_jwt(token)
@@ -163,7 +181,6 @@ class AuthService:
         except Exception as e:
             logger.error(f"Token validation error: {type(e).__name__}: {e}")
             return None
-            return None
     
     def get_user_from_token(self, token: str) -> Optional[User]:
         """Validate token and return User model."""
@@ -171,6 +188,21 @@ class AuthService:
         if token_data:
             return User.from_token(token_data)
         return None
+    
+    def token_expires_soon(self, token: str, threshold_seconds: int = 60) -> bool:
+        """
+        Check if token expires within threshold_seconds.
+        Returns True if token will expire soon (should proactively refresh).
+        """
+        import time
+        try:
+            unverified = jwt.decode(token, options={"verify_signature": False})
+            exp_time = unverified.get("exp", 0)
+            current_time = int(time.time())
+            time_left = exp_time - current_time
+            return time_left > 0 and time_left < threshold_seconds
+        except Exception:
+            return False
     
     def get_dev_user(self) -> User:
         """Get mock user for development mode."""

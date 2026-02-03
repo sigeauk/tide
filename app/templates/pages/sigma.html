@@ -41,7 +41,7 @@
     min-width: 140px;
     padding: 0.4rem 0.6rem;
     font-size: 0.8rem;
-    background: var(--color-bg-light);
+    background: var(--surface-2);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     color: var(--color-text);
@@ -81,9 +81,9 @@
 
 /* Unified card structure for both sides */
 .sigma-panel {
-    background: var(--layer-1);
+    background: var(--surface-1);
     border: 1px solid var(--color-border);
-    border-top: 1px solid var(--color-highlight);
+    border-top: 1px solid var(--highlight-1);
     border-radius: var(--radius-lg);
     padding: 1rem;
     display: flex;
@@ -125,7 +125,7 @@
     flex: 1 !important;
     height: auto !important;
     min-height: 280px !important;
-    background: var(--layer-0) !important;
+    background: var(--surface-base) !important;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
@@ -138,7 +138,7 @@
 }
 
 .CodeMirror-gutters {
-    background: var(--layer-0) !important;
+    background: var(--surface-base) !important;
     border-right: 1px solid var(--color-border-muted) !important;
 }
 
@@ -156,7 +156,7 @@
 
 .query-output-box {
     flex: 1;
-    background: var(--layer-0);
+    background: var(--surface-base);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     overflow: auto;
@@ -253,14 +253,14 @@
     height: 32px;
     padding: 0 0.5rem;
     font-size: 0.75rem;
-    background: var(--color-bg-light);
+    background: var(--surface-2);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
     color: var(--color-text);
 }
 
 .sigma-panel-footer .filter-group select option {
-    background: var(--color-bg-light);
+    background: var(--surface-2);
     color: var(--color-text);
 }
 
@@ -312,9 +312,9 @@
 
 /* Rule Browser - collapsible section */
 .rule-browser {
-    background: var(--layer-1);
+    background: var(--surface-1);
     border: 1px solid var(--color-border);
-    border-top: 1px solid var(--color-highlight);
+    border-top: 1px solid var(--highlight-1);
     border-radius: var(--radius-md);
     margin-bottom: 1rem;
     box-shadow: var(--shadow-sm);
@@ -332,7 +332,7 @@
 }
 
 .rule-browser-header:hover {
-    background: var(--color-bg-lighter);
+    background: var(--surface-2);
 }
 
 .rule-browser-content {
@@ -378,7 +378,7 @@
     width: 100%;
     padding: 0.35rem 0.5rem;
     font-size: 0.75rem;
-    background: var(--color-bg);
+    background: var(--surface-2);
     border: 1px solid var(--color-border-muted);
     border-radius: var(--radius-sm);
     color: var(--color-text);
@@ -403,8 +403,9 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.4rem 0.6rem;
-    background: var(--color-bg);
-    border: 1px solid var(--color-border-muted);
+    background: var(--surface-2);
+    border: none;
+    border-top: 1px solid var(--highlight-1);
     border-radius: var(--radius-sm);
     cursor: pointer;
     text-align: left;
@@ -414,8 +415,7 @@
 }
 
 .rule-item-btn:hover {
-    background: var(--color-bg-lighter);
-    border-color: var(--color-border);
+    background: var(--surface-2-hover);
 }
 
 .rule-item-title {
@@ -669,27 +669,72 @@ level: medium"></textarea>
 </div>
 
 <script>
+// Clean up any stale state from previous page visits
+// HTMX navigation means the old DOM is gone but window.sigmaYamlEditor may still reference it
+if (window.sigmaYamlEditor) {
+    console.log('[Sigma] Cleaning up stale CodeMirror reference');
+    window.sigmaYamlEditor = null;
+}
+
 // Initialize Sigma page components - exposed globally for HTMX re-initialization
-window.initSigmaPage = function() {
+window.initSigmaPage = function(retryCount = 0) {
+    const maxRetries = 50;  // Up to 5 seconds of retrying
+    
     // Check if CodeMirror is loaded
     if (typeof CodeMirror === 'undefined') {
-        console.warn('CodeMirror not loaded yet, retrying...');
-        setTimeout(window.initSigmaPage, 100);
+        if (retryCount < maxRetries) {
+            console.debug(`[Sigma] CodeMirror not loaded yet, retry ${retryCount + 1}/${maxRetries}...`);
+            setTimeout(() => window.initSigmaPage(retryCount + 1), 100);
+        } else {
+            console.error('[Sigma] CodeMirror failed to load after multiple retries');
+        }
         return;
     }
     
-    // Check if we already initialized (prevent double-init)
     const yamlTextarea = document.getElementById('yaml-editor');
-    if (!yamlTextarea) return;
-    
-    // If already initialized, just refresh the editor
-    if (yamlTextarea._codeMirrorInitialized && window.sigmaYamlEditor) {
-        setTimeout(() => window.sigmaYamlEditor.refresh(), 50);
+    if (!yamlTextarea) {
+        console.debug('[Sigma] yaml-editor not found, page may not be ready');
         return;
     }
     
-    // Mark as initialized
-    yamlTextarea._codeMirrorInitialized = true;
+    // Check if there's already a CodeMirror wrapper adjacent to the textarea
+    // This can happen if the script ran multiple times
+    const existingWrapper = yamlTextarea.nextElementSibling;
+    if (existingWrapper && existingWrapper.classList.contains('CodeMirror')) {
+        console.log('[Sigma] Found existing CodeMirror wrapper, extracting instance...');
+        const cm = existingWrapper.CodeMirror;
+        if (cm) {
+            window.sigmaYamlEditor = cm;
+            cm.refresh();
+            setTimeout(() => cm.refresh(), 100);
+            console.log('[Sigma] Reused existing CodeMirror instance');
+            return;
+        } else {
+            // Orphaned wrapper without a CodeMirror instance - remove it
+            console.warn('[Sigma] Found orphaned CodeMirror wrapper, removing...');
+            existingWrapper.remove();
+        }
+    }
+    
+    // If we still have a reference to an old editor, check if it's valid
+    if (window.sigmaYamlEditor) {
+        try {
+            const oldWrapper = window.sigmaYamlEditor.getWrapperElement();
+            if (oldWrapper && document.body.contains(oldWrapper)) {
+                // Old editor is still valid
+                console.debug('[Sigma] CodeMirror editor still in DOM, refreshing...');
+                window.sigmaYamlEditor.refresh();
+                setTimeout(() => window.sigmaYamlEditor.refresh(), 100);
+                return;
+            }
+        } catch(e) {
+            console.debug('[Sigma] Error checking old editor:', e);
+        }
+        // Clear stale reference
+        window.sigmaYamlEditor = null;
+    }
+    
+    console.log('[Sigma] Creating NEW CodeMirror instance...');
     
     // Initialize CodeMirror
     const yamlEditor = CodeMirror.fromTextArea(yamlTextarea, {
@@ -705,13 +750,18 @@ window.initSigmaPage = function() {
     // Store reference for global access
     window.sigmaYamlEditor = yamlEditor;
     
-    // Force initial refresh to ensure syntax highlighting is applied
+    // Force multiple refreshes to ensure syntax highlighting is applied
+    // This handles race conditions with CSS loading
     setTimeout(() => yamlEditor.refresh(), 50);
+    setTimeout(() => yamlEditor.refresh(), 200);
+    setTimeout(() => yamlEditor.refresh(), 500);
     
     // Sync CodeMirror content to textarea on change (for form submission)
     yamlEditor.on('change', function() {
         yamlTextarea.value = yamlEditor.getValue();
     });
+    
+    console.log('[Sigma] CodeMirror initialized successfully');
     
     // Auto-open if there's a technique filter
     {% if technique_filter %}
@@ -756,10 +806,11 @@ window.initSigmaPage = function() {
         });
     }
     
-    console.log('Sigma page initialized');
+    console.log('[Sigma] Sigma page initialized');
 };
 
 // Initialize immediately on page load
+console.log('[Sigma] Script block executing, calling initSigmaPage...');
 window.initSigmaPage();
 
 // Toggle rule browser (global for onclick)

@@ -65,6 +65,15 @@ async def lifespan(app: FastAPI):
     db = get_database_service()
     logger.info("🦆 Database initialized")
     
+    # Pre-load Sigma rules cache to avoid slow first page load
+    # This takes ~6 seconds but happens during startup, not during user request
+    try:
+        from app import sigma_helper
+        rules_count = len(sigma_helper.load_all_rules())
+        logger.info(f"📜 Sigma rules pre-loaded: {rules_count} rules cached")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to pre-load Sigma rules: {e}")
+    
     # Run initial sync on startup (in background to not block startup)
     asyncio.create_task(scheduled_sync())
     
@@ -91,6 +100,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
     Middleware to enforce authentication on protected routes.
     Redirects to /login if not authenticated.
     Also adds cache-control headers for HTML pages.
+    
+    For HTMX requests:
+    - Uses HX-Trigger to signal auth state changes
+    - Avoids full page redirects that break partial swaps
     """
     
     # Routes that don't require authentication
@@ -101,6 +114,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/auth/login",
         "/auth/callback",
         "/auth/logout",
+        "/auth/refresh",
         "/static",
         "/api/docs",
         "/api/redoc",
@@ -110,6 +124,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         settings = get_settings()
         path = request.url.path
+        is_htmx = request.headers.get("HX-Request") == "true"
         
         # Helper to add cache headers for HTML responses
         async def add_cache_headers(response):
@@ -132,6 +147,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         # Check for access token in cookie
         access_token = request.cookies.get("access_token")
+        refresh_token = request.cookies.get("refresh_token")
         
         # Build login URL for redirects
         return_url = str(request.url.path)
@@ -141,7 +157,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         if not access_token:
             # No token - redirect to login
-            if request.headers.get("HX-Request"):
+            logger.info(f"No access token for path: {path}, redirecting to login (is_htmx={is_htmx})")
+            if is_htmx:
                 from fastapi.responses import Response
                 response = Response(content="", status_code=200)
                 response.headers["HX-Redirect"] = login_url
@@ -152,13 +169,37 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Token exists - validate it
         from app.services.auth import get_auth_service
         auth_service = get_auth_service()
+        
+        logger.debug(f"Validating token for path: {path}, is_htmx: {is_htmx}")
         user = auth_service.get_user_from_token(access_token)
         
+        # If token is invalid/expired, or about to expire soon, try to refresh
+        new_tokens = None
+        should_refresh = (user is None) or (user and refresh_token and auth_service.token_expires_soon(access_token, 60))
+        
+        if should_refresh and refresh_token:
+            reason = "expired/invalid" if user is None else "expiring soon"
+            logger.info(f"Access token {reason} for path: {path}, attempting refresh...")
+            new_tokens = await auth_service.refresh_token(refresh_token)
+            
+            if new_tokens:
+                # Validate the new access token
+                new_access_token = new_tokens.get("access_token")
+                user = auth_service.get_user_from_token(new_access_token)
+                if user:
+                    logger.info(f"Token refresh successful for user: {user.username}")
+                else:
+                    logger.warning("Refreshed token also failed validation")
+                    new_tokens = None
+        
         if user is None:
-            # Token is invalid or expired - clear cookies and redirect to login
-            if request.headers.get("HX-Request"):
+            logger.warning(f"Token validation FAILED for path: {path}, is_htmx: {is_htmx}, redirecting to login")
+            
+            # Token invalid - redirect to login
+            if is_htmx:
                 from fastapi.responses import Response
                 response = Response(content="", status_code=200)
+                # Use HX-Redirect for clean navigation
                 response.headers["HX-Redirect"] = login_url
                 # Clear invalid cookies
                 response.delete_cookie("access_token")
@@ -170,9 +211,35 @@ class AuthMiddleware(BaseHTTPMiddleware):
             response.delete_cookie("refresh_token")
             return response
         
+        logger.debug(f"Token valid for user: {user.username}, path: {path}")
+        
         # Token is valid, proceed
         response = await call_next(request)
-        return await add_cache_headers(response)
+        response = await add_cache_headers(response)
+        
+        # If we refreshed the token, update cookies on the response
+        if new_tokens:
+            use_secure = settings.app_url.startswith("https://")
+            response.set_cookie(
+                key="access_token",
+                value=new_tokens["access_token"],
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+                max_age=new_tokens.get("expires_in", 3600),
+            )
+            if "refresh_token" in new_tokens:
+                response.set_cookie(
+                    key="refresh_token",
+                    value=new_tokens["refresh_token"],
+                    httponly=True,
+                    secure=use_secure,
+                    samesite="lax",
+                    max_age=new_tokens.get("refresh_expires_in", 86400),
+                )
+            logger.info(f"Updated cookies with refreshed tokens for {user.username}")
+        
+        return response
 
 
 def create_app() -> FastAPI:

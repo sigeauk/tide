@@ -29,7 +29,7 @@
     <div class="promo-header">
         <div class="promo-name" title="{{ rule.name }}">{{ rule.name }}</div>
         <div class="promo-pills">
-            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', assume_covered=rule.enabled) }}
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true) }}
             <span class="sev-pill" style="background-color: {{ sev_color }};">{{ sev_value | upper }}</span>
             <span class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
                 {% if rule.enabled %}

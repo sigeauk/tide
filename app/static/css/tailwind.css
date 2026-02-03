@@ -1,112 +1,112 @@
-/*
- * TIDE - Tailwind CSS v4 Theme with HSL Depth & Elevation System
- * 
- * "Sajid-Style" Design System implementing:
- * - HSL Variable Engine with calculated depth layers
- * - Simulated light source via border-top highlights
- * - Semantic pill system with glow effects
- * - Perceptually uniform color relationships
- * 
- * Change --hue (0-360) to restyle the entire application.
- * Adjust --chroma (0-0.2) to control color saturation.
- * 
- * Default: 220 (Blue)
- * Alternatives: 0 (Red), 30 (Orange), 145 (Green), 264 (Purple)
- */
-
 @import "tailwindcss";
 
 @theme {
   /* ========================================
-   * HSL VARIABLE ENGINE
-   * Core hue and chroma for entire theme
+   * CYBER THEME - OKLCH Color Engine
+   * "Elevation = Lightness" Principle
+   * 
+   * Core Design:
+   * - Hue: 240 (Cyber blue-grey)
+   * - Chroma: Very low for surfaces (blue-tinted grey)
+   * - Lightness increases with elevation
    * ======================================== */
-  --hue: var(--brand-hue, 220);
+  --hue: var(--brand-hue, 240);
   --hue-secondary: calc(var(--hue) + 180);
-  --chroma: 0.05;
+  --chroma: 0.04;
   
   /* Calculated chroma values for different contexts */
-  --chroma-bg: calc(var(--chroma) * 0.5);
-  --chroma-text: min(var(--chroma), 0.1);
-  --chroma-action: max(var(--chroma), 0.12);
-  --chroma-alert: max(var(--chroma), 0.15);
+  --chroma-surface: calc(var(--chroma) * 0.6);  /* Surfaces: subtle blue tint */
+  --chroma-text: 0.02;                          /* Text: near-neutral */
+  --chroma-action: 0.14;                        /* Actions: more saturated */
+  --chroma-alert: 0.16;                         /* Alerts: high visibility */
 
   /* ========================================
-   * ELEVATION LAYERS (Depth System)
-   * Layer 0 = Base/Body (darkest)
-   * Layer 1 = Card surfaces
-   * Layer 2 = Raised elements (inputs, buttons)
-   * Layer 3 = Modal/Popup (brightest)
+   * ELEVATION SYSTEM (Depth = Lightness)
    * 
-   * Each layer is progressively lighter to simulate
-   * elements "rising" toward a top-left light source
+   * Level 0 (Base):    Body/background - deepest
+   * Level 1 (Surface): Cards, containers
+   * Level 2 (Raised):  Inputs, buttons, interactive
+   * Level 3 (Overlay): Modals, tooltips, popovers
+   * 
+   * Each level is progressively lighter to simulate
+   * elements rising toward the viewer
    * ======================================== */
   
-  /* Layer 0: Base/Body Background (Deep Grey-Blue) */
-  --layer-0: oklch(0.08 var(--chroma-bg) var(--hue));
-  --layer-0-alt: oklch(0.10 var(--chroma-bg) var(--hue));
+  /* Level 0: Base/Body - The deepest layer (page background) */
+  --surface-base: oklch(0.16 var(--chroma-surface) var(--hue));
+  --surface-base-alt: oklch(0.18 var(--chroma-surface) var(--hue));
   
-  /* Layer 1: Card Surfaces (Noticeably Lighter) */
-  --layer-1: oklch(0.14 var(--chroma-bg) var(--hue));
-  --layer-1-hover: oklch(0.16 var(--chroma-bg) var(--hue));
+  /* Level 1: Section Containers (Key Modules, Tech Stack boxes) */
+  --surface-1: oklch(0.20 var(--chroma-surface) var(--hue));
+  --surface-1-hover: oklch(0.22 var(--chroma-surface) var(--hue));
   
-  /* Layer 2: Raised Elements (inputs, buttons) */
-  --layer-2: oklch(0.20 var(--chroma-bg) var(--hue));
-  --layer-2-hover: oklch(0.24 var(--chroma-bg) var(--hue));
+  /* Level 2: Raised Cards (Dashboard, Rule Health individual cards) */
+  --surface-2: oklch(0.24 var(--chroma-surface) var(--hue));
+  --surface-2-hover: oklch(0.28 var(--chroma-surface) var(--hue));
   
-  /* Layer 3: Modal/Popup Surfaces */
-  --layer-3: oklch(0.26 var(--chroma-bg) var(--hue));
-  --layer-3-hover: oklch(0.30 var(--chroma-bg) var(--hue));
+  /* Level 3: Overlay/Modal/Tooltip (highest elevation) */
+  --surface-3: oklch(0.28 var(--chroma-surface) var(--hue));
+  --surface-3-hover: oklch(0.32 var(--chroma-surface) var(--hue));
 
-  /* Legacy mappings for backwards compatibility */
-  --color-bg-darkest: var(--layer-0);
-  --color-bg-dark: var(--layer-0-alt);
-  --color-bg: var(--layer-1);
-  --color-bg-light: var(--layer-1-hover);
-  --color-bg-lighter: var(--layer-2);
-  --color-bg-elevated: var(--layer-3);
+  /* Legacy layer mappings (for backwards compatibility) */
+  --layer-0: var(--surface-base);
+  --layer-0-alt: var(--surface-base-alt);
+  --layer-1: var(--surface-1);
+  --layer-1-hover: var(--surface-1-hover);
+  --layer-2: var(--surface-2);
+  --layer-2-hover: var(--surface-2-hover);
+  --layer-3: var(--surface-3);
+  --layer-3-hover: var(--surface-3-hover);
+
+  /* Legacy --color-bg-X mappings */
+  --color-bg-darkest: var(--surface-base);
+  --color-bg-dark: var(--surface-base-alt);
+  --color-bg: var(--surface-1);
+  --color-bg-light: var(--surface-1-hover);
+  --color-bg-lighter: var(--surface-2);
+  --color-bg-elevated: var(--surface-3);
   
   /* ========================================
-   * DEPTH SIMULATION: Top Border Highlights
-   * 15-20% lighter than background to simulate
-   * light source from top-left
+   * DEPTH HIGHLIGHTS (Top Edge Simulation)
+   * Lighter top border simulates light source from above
    * ======================================== */
-  --highlight-layer-1: oklch(0.32 var(--chroma-bg) var(--hue));
-  --highlight-layer-2: oklch(0.38 var(--chroma-bg) var(--hue));
-  --highlight-layer-3: oklch(0.44 var(--chroma-bg) var(--hue));
+  --highlight-1: oklch(0.36 var(--chroma-surface) var(--hue));
+  --highlight-2: oklch(0.42 var(--chroma-surface) var(--hue));
+  --highlight-3: oklch(0.48 var(--chroma-surface) var(--hue));
   
-  /* Unified highlight for most components */
-  --color-highlight: var(--highlight-layer-1);
+  /* Legacy highlight mappings */
+  --highlight-layer-1: var(--highlight-1);
+  --highlight-layer-2: var(--highlight-2);
+  --highlight-layer-3: var(--highlight-3);
+  --color-highlight: var(--highlight-1);
 
   /* ========================================
-   * SOFT SHADOWS (Depth Enhancement)
+   * SHADOWS (Depth Enhancement)
    * ======================================== */
-  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.15);
-  --shadow: 0 2px 4px oklch(0 0 0 / 0.2), 0 4px 8px oklch(0 0 0 / 0.1);
-  --shadow-lg: 0 4px 8px oklch(0 0 0 / 0.25), 0 12px 24px oklch(0 0 0 / 0.15);
-  --shadow-modal: 0 8px 16px oklch(0 0 0 / 0.3), 0 24px 48px oklch(0 0 0 / 0.2);
-  --color-overlay: oklch(0 0 0 / 0.7);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.20);
+  --shadow: 0 2px 4px oklch(0 0 0 / 0.25), 0 4px 8px oklch(0 0 0 / 0.15);
+  --shadow-lg: 0 4px 8px oklch(0 0 0 / 0.30), 0 12px 24px oklch(0 0 0 / 0.20);
+  --shadow-modal: 0 8px 16px oklch(0 0 0 / 0.35), 0 24px 48px oklch(0 0 0 / 0.25);
+  --color-overlay: oklch(0 0 0 / 0.75);
 
   /* Gradients with depth */
-  --gradient: linear-gradient(180deg, var(--layer-1-hover) 0%, var(--layer-1) 100%);
-  --gradient-hover: linear-gradient(180deg, var(--layer-2) 0%, var(--layer-1-hover) 100%);
+  --gradient: linear-gradient(180deg, var(--surface-1-hover) 0%, var(--surface-1) 100%);
+  --gradient-hover: linear-gradient(180deg, var(--surface-2) 0%, var(--surface-1-hover) 100%);
 
   /* ========================================
    * TYPOGRAPHY (Manrope/System-UI)
-   * Base: 14px (0.875rem)
-   * Titles: 100% lightness
-   * Secondary: 60% lightness (Law of Proximity)
+   * High contrast text (L > 0.90 for readability)
    * ======================================== */
   --ff: "Manrope", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   
-  /* Title text: 100% lightness (full white) */
-  --color-text: oklch(0.98 var(--chroma-text) var(--hue));
+  /* Primary text: High lightness for contrast (L=0.96) */
+  --color-text: oklch(0.96 var(--chroma-text) var(--hue));
   
-  /* Secondary text: ~75% lightness */
-  --color-text-secondary: oklch(0.75 var(--chroma-text) var(--hue));
+  /* Secondary text: Good contrast (L=0.78) */
+  --color-text-secondary: oklch(0.78 var(--chroma-text) var(--hue));
   
-  /* Muted text: 60% lightness (Law of Proximity) */
-  --color-text-muted: oklch(0.55 var(--chroma-text) var(--hue));
+  /* Muted text: Reduced prominence (L=0.58) */
+  --color-text-muted: oklch(0.58 var(--chroma-text) var(--hue));
 
   /* Font definitions - Base 14px */
   --h1: 700 1.5rem/1.2 var(--ff);
@@ -117,52 +117,47 @@
   --small: 400 0.75rem/1.6 var(--ff);
 
   /* ========================================
-   * PRIMARY BRAND COLORS
+   * PRIMARY BRAND COLORS (Cyber Blue)
    * ======================================== */
-  --color-primary: oklch(0.70 var(--chroma-action) var(--hue));
-  --color-primary-hover: oklch(0.78 var(--chroma-action) var(--hue));
-  --color-primary-muted: oklch(0.40 calc(var(--chroma-action) * 0.6) var(--hue));
+  --color-primary: oklch(0.72 var(--chroma-action) var(--hue));
+  --color-primary-hover: oklch(0.80 var(--chroma-action) var(--hue));
+  --color-primary-muted: oklch(0.42 calc(var(--chroma-action) * 0.5) var(--hue));
 
   /* ========================================
-   * SECONDARY COLORS (Offset hue by 180°)
+   * SECONDARY COLORS (Complementary hue +180°)
    * ======================================== */
-  --color-secondary: oklch(0.70 var(--chroma-action) var(--hue-secondary));
-  --color-secondary-hover: oklch(0.78 var(--chroma-action) var(--hue-secondary));
+  --color-secondary: oklch(0.72 var(--chroma-action) var(--hue-secondary));
+  --color-secondary-hover: oklch(0.80 var(--chroma-action) var(--hue-secondary));
 
   /* ========================================
-   * SEMANTIC COLORS - SEVERITY PILL SYSTEM
-   * Using HSL offsets for consistent styling
-   * 
-   * Hue Offsets:
-   * - Danger/Critical: 30 (red-orange)
-   * - Warning/High: 45 (orange-yellow)
-   * - Info/Medium: 220 (blue)
-   * - Success/Low: 145 (green)
+   * SEMANTIC COLORS - High Visibility
+   * Using fixed hues for consistency
+   * Text colors: L > 0.90 for readability
    * ======================================== */
   
-  /* Danger (Hue: 30) */
-  --color-danger: oklch(0.65 var(--chroma-alert) 30);
-  --color-danger-bg: oklch(0.18 calc(var(--chroma-alert) * 0.4) 30);
-  --color-danger-text: oklch(0.85 var(--chroma-alert) 30);
-  --color-danger-glow: oklch(0.65 var(--chroma-alert) 30 / 0.15);
+  /* Danger (Hue: 28 - Red-Orange) */
+  --color-danger: oklch(0.68 var(--chroma-alert) 28);
+  --color-danger-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 28);
+  --color-danger-text: oklch(0.92 var(--chroma-alert) 28);
+  --color-danger-glow: oklch(0.68 var(--chroma-alert) 28 / 0.18);
 
-  /* Warning (Hue: 45) */
-  --color-warning: oklch(0.72 var(--chroma-alert) 45);
-  --color-warning-bg: oklch(0.18 calc(var(--chroma-alert) * 0.4) 45);
-  --color-warning-text: oklch(0.88 var(--chroma-alert) 45);
-  --color-warning-glow: oklch(0.72 var(--chroma-alert) 45 / 0.15);
+  /* Warning (Hue: 55 - Amber) */
+  --color-warning: oklch(0.78 var(--chroma-alert) 55);
+  --color-warning-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 55);
+  --color-warning-text: oklch(0.94 var(--chroma-alert) 55);
+  --color-warning-glow: oklch(0.78 var(--chroma-alert) 55 / 0.18);
 
-  /* Info (Hue: 220) */
-  --color-info: oklch(0.68 var(--chroma-alert) 220);
-  --color-info-bg: oklch(0.18 calc(var(--chroma-alert) * 0.4) 220);
-  --color-info-text: oklch(0.85 var(--chroma-alert) 220);
-  --color-info-glow: oklch(0.68 var(--chroma-alert) 220 / 0.15);
+  /* Info (Hue: 230 - Blue) */
+  --color-info: oklch(0.72 var(--chroma-alert) 230);
+  --color-info-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 230);
+  --color-info-text: oklch(0.92 var(--chroma-alert) 230);
+  --color-info-glow: oklch(0.72 var(--chroma-alert) 230 / 0.18);
 
-  /* Success (Hue: 145) */
-  --color-success: oklch(0.68 var(--chroma-alert) 145);
-  --color-success-bg: oklch(0.18 calc(var(--chroma-alert) * 0.4) 145);
-  --color-success-text: oklch(0.85 var(--chroma-alert) 145);
-  --color-success-glow: oklch(0.68 var(--chroma-alert) 145 / 0.15);
+  /* Success (Hue: 150 - Teal-Green) */
+  --color-success: oklch(0.72 var(--chroma-alert) 150);
+  --color-success-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 150);
+  --color-success-text: oklch(0.92 var(--chroma-alert) 150);
+  --color-success-glow: oklch(0.72 var(--chroma-alert) 150 / 0.18);
 
   /* ========================================
    * SEVERITY PILLS (Rule Severity Levels)
@@ -2158,49 +2153,64 @@ a:hover {
 
 /* ========================================
  * LIGHT MODE SUPPORT
+ * Inverted elevation: Darker = more elevated
  * ======================================== */
 body.light {
-  /* Elevation Layers - Inverted for light mode */
-  --layer-0: oklch(0.96 var(--chroma-bg) var(--hue));
-  --layer-0-alt: oklch(0.94 var(--chroma-bg) var(--hue));
-  --layer-1: oklch(0.99 var(--chroma-bg) var(--hue));
-  --layer-1-hover: oklch(0.97 var(--chroma-bg) var(--hue));
-  --layer-2: oklch(1 var(--chroma-bg) var(--hue));
-  --layer-2-hover: oklch(0.98 var(--chroma-bg) var(--hue));
-  --layer-3: oklch(1 var(--chroma-bg) var(--hue));
+  /* Elevation Surfaces - Inverted for light mode */
+  --surface-base: oklch(0.96 var(--chroma-surface) var(--hue));
+  --surface-base-alt: oklch(0.94 var(--chroma-surface) var(--hue));
+  --surface-1: oklch(0.99 var(--chroma-surface) var(--hue));
+  --surface-1-hover: oklch(0.97 var(--chroma-surface) var(--hue));
+  --surface-2: oklch(1.00 var(--chroma-surface) var(--hue));
+  --surface-2-hover: oklch(0.98 var(--chroma-surface) var(--hue));
+  --surface-3: oklch(1.00 var(--chroma-surface) var(--hue));
+  --surface-3-hover: oklch(0.98 var(--chroma-surface) var(--hue));
+
+  /* Legacy layer mappings */
+  --layer-0: var(--surface-base);
+  --layer-0-alt: var(--surface-base-alt);
+  --layer-1: var(--surface-1);
+  --layer-1-hover: var(--surface-1-hover);
+  --layer-2: var(--surface-2);
+  --layer-2-hover: var(--surface-2-hover);
+  --layer-3: var(--surface-3);
   
-  /* Highlights for light mode (subtle shadows instead) */
-  --highlight-layer-1: oklch(1 var(--chroma-bg) var(--hue));
-  --highlight-layer-2: oklch(1 var(--chroma-bg) var(--hue));
-  --highlight-layer-3: oklch(1 var(--chroma-bg) var(--hue));
+  /* Highlights for light mode (subtle) */
+  --highlight-1: oklch(1.00 var(--chroma-surface) var(--hue));
+  --highlight-2: oklch(1.00 var(--chroma-surface) var(--hue));
+  --highlight-3: oklch(1.00 var(--chroma-surface) var(--hue));
+  --highlight-layer-1: var(--highlight-1);
+  --highlight-layer-2: var(--highlight-2);
+  --highlight-layer-3: var(--highlight-3);
   
-  /* Legacy mappings */
-  --color-bg-darkest: var(--layer-0);
-  --color-bg-dark: var(--layer-0-alt);
-  --color-bg: var(--layer-1);
-  --color-bg-light: var(--layer-1-hover);
-  --color-bg-lighter: var(--layer-2);
-  --color-bg-elevated: var(--layer-3);
+  /* Legacy --color-bg-X mappings */
+  --color-bg-darkest: var(--surface-base);
+  --color-bg-dark: var(--surface-base-alt);
+  --color-bg: var(--surface-1);
+  --color-bg-light: var(--surface-1-hover);
+  --color-bg-lighter: var(--surface-2);
+  --color-bg-elevated: var(--surface-3);
   
   /* Text colors - dark on light */
-  --color-text: oklch(0.15 var(--chroma) var(--hue));
-  --color-text-secondary: oklch(0.35 var(--chroma) var(--hue));
-  --color-text-muted: oklch(0.50 var(--chroma) var(--hue));
+  --color-text: oklch(0.15 var(--chroma-text) var(--hue));
+  --color-text-secondary: oklch(0.35 var(--chroma-text) var(--hue));
+  --color-text-muted: oklch(0.50 var(--chroma-text) var(--hue));
   
   /* Border */
   --color-border: oklch(0.85 var(--chroma) var(--hue));
   --color-border-muted: oklch(0.90 var(--chroma) var(--hue));
   --border-card: solid 1px var(--color-border-muted);
   
-  /* Actions */
-  --color-primary: oklch(0.45 var(--chroma-action) var(--hue));
-  --color-secondary: oklch(0.45 var(--chroma-action) var(--hue-secondary));
+  /* Actions - darker for light mode */
+  --color-primary: oklch(0.48 var(--chroma-action) var(--hue));
+  --color-primary-hover: oklch(0.40 var(--chroma-action) var(--hue));
+  --color-secondary: oklch(0.48 var(--chroma-action) var(--hue-secondary));
   
   /* Semantic - darker for contrast on light bg */
-  --color-danger: oklch(0.50 var(--chroma-alert) 30);
-  --color-warning: oklch(0.55 var(--chroma-alert) 45);
-  --color-success: oklch(0.45 var(--chroma-alert) 145);
-  --color-info: oklch(0.50 var(--chroma-alert) 220);
+  --color-danger: oklch(0.52 var(--chroma-alert) 28);
+  --color-warning: oklch(0.58 var(--chroma-alert) 55);
+  --color-success: oklch(0.48 var(--chroma-alert) 150);
+  --color-info: oklch(0.52 var(--chroma-alert) 230);
 }
 
 /* ========================================

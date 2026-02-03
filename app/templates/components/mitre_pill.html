@@ -18,13 +18,17 @@ Parameters:
 - covered: Boolean - whether this technique is covered by rules
 - rule_count: Optional int - number of rules covering this technique
 - defense_in_depth: Boolean - show defense status instead of covered
+- neutral: Boolean - always show blue/neutral style (for rule cards)
 - clickable: Boolean - whether pill opens slide panel on click
 - size: 'sm' | 'md' | 'lg' - pill size variant
+- search_filter: Optional string - current search filter to pass to sidebar API
 #}
 
-{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, clickable=true, size='sm') %}
-{# Determine status class based on coverage #}
-{% if defense_in_depth %}
+{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, neutral=false, clickable=true, size='sm', search_filter='') %}
+{# Determine status class based on coverage or neutral override #}
+{% if neutral %}
+    {% set status_class = 'mitre-neutral' %}
+{% elif defense_in_depth %}
     {% set status_class = 'mitre-defense' %}
 {% elif covered %}
     {% set status_class = 'mitre-covered' %}
@@ -37,7 +41,7 @@ Parameters:
 <span 
     class="mitre-pill {{ status_class }} {{ size_class }}"
     {% if clickable %}
-    hx-get="/api/heatmap/technique/{{ technique_id }}"
+    hx-get="/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
     hx-target="#slide-panel-container"
     hx-swap="innerHTML"
     style="cursor: pointer;"
@@ -48,7 +52,7 @@ Parameters:
 {% endmacro %}
 
 
-{% macro mitre_pills_row(mitre_ids, coverage_map=none, clickable=true, size='sm', show_empty=true, assume_covered=false) %}
+{% macro mitre_pills_row(mitre_ids, coverage_map=none, clickable=true, size='sm', show_empty=true, assume_covered=false, neutral=false, search_filter='') %}
 {#
 Render a row of MITRE pills, all displayed with wrapping (no truncation).
 - mitre_ids: List of technique IDs
@@ -57,21 +61,26 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
 - size: Pill size variant
 - show_empty: Whether to show "No MITRE" pill when list is empty
 - assume_covered: If true and no coverage_map, assume all pills are covered (for rule cards)
+- neutral: If true, all pills use blue/neutral style (for Rule Health cards)
+- search_filter: Optional current search filter to pass to sidebar API
 #}
 <div class="mitre-pills-wrap">
 {% if mitre_ids and mitre_ids | length > 0 %}
     {% for mid in mitre_ids %}
-        {% if coverage_map and coverage_map[mid] %}
-            {{ mitre_pill(mid, covered=coverage_map[mid].covered, rule_count=coverage_map[mid].rule_count, clickable=clickable, size=size) }}
+        {% if neutral %}
+            {# Rule Health context - always use neutral blue pills #}
+            {{ mitre_pill(mid, neutral=true, clickable=clickable, size=size, search_filter=search_filter) }}
+        {% elif coverage_map and coverage_map[mid] %}
+            {{ mitre_pill(mid, covered=coverage_map[mid].covered, rule_count=coverage_map[mid].rule_count, clickable=clickable, size=size, search_filter=search_filter) }}
         {% elif assume_covered %}
             {# Rule card context - pill is covered by this rule #}
-            {{ mitre_pill(mid, covered=true, clickable=clickable, size=size) }}
+            {{ mitre_pill(mid, covered=true, clickable=clickable, size=size, search_filter=search_filter) }}
         {% else %}
             {# No coverage data - render neutral pill #}
             <span 
                 class="mitre-pill mitre-neutral mitre-{{ size }}"
                 {% if clickable %}
-                hx-get="/api/heatmap/technique/{{ mid }}"
+                hx-get="/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
                 hx-target="#slide-panel-container"
                 hx-swap="innerHTML"
                 style="cursor: pointer;"

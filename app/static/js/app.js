@@ -184,23 +184,72 @@
      * This is called after HTMX settles to reinitialize page components
      */
     function executePageInitializers() {
-        // Check for Sigma page initializer
-        if (typeof window.initSigmaPage === 'function') {
-            const yamlTextarea = document.getElementById('yaml-editor');
-            if (yamlTextarea && !yamlTextarea._codeMirrorInitialized) {
-                window.initSigmaPage();
-            }
+        // Check for Sigma page initializer - force reinit after HTMX navigation
+        const yamlTextarea = document.getElementById('yaml-editor');
+        if (yamlTextarea) {
+            // Wait a moment for scripts to load, then initialize
+            // The initSigmaPage function handles CodeMirror loading checks
+            setTimeout(() => {
+                if (typeof window.initSigmaPage === 'function') {
+                    console.debug('Triggering Sigma page initialization after HTMX swap');
+                    window.initSigmaPage(0);
+                }
+            }, 50);
+        }
+        
+        // Re-highlight any code blocks (Prism.js)
+        if (typeof Prism !== 'undefined') {
+            setTimeout(() => Prism.highlightAll(), 100);
         }
         
         // Dispatch custom event for other pages to listen to
         document.dispatchEvent(new CustomEvent('tide:pageReady'));
     }
+    
+    // ========================================
+    // HTMX NAVIGATION EVENTS
+    // ========================================
 
+    // After HTMX swaps content (page navigation or partial updates)
+    document.body.addEventListener('htmx:afterSettle', function(event) {
+        // Only reinitialize for full page navigations (boosted links)
+        // Check if this is a full page swap by looking at the target
+        const target = event.detail.target;
+        
+        // For full page loads (body or main content area)
+        if (target === document.body || 
+            target.classList.contains('main-content') ||
+            target.tagName === 'MAIN') {
+            initializePage();
+            
+            // Execute any page-specific initializers
+            executePageInitializers();
+        }
+        
+        // Also check for partial swaps that need Prism highlighting
+        if (typeof Prism !== 'undefined') {
+            setTimeout(() => Prism.highlightAll(), 50);
+        }
+    });
+    
+    // Also listen for htmx:load which fires for each new element loaded via HTMX
+    document.body.addEventListener('htmx:load', function(event) {
+        // Re-highlight code blocks in newly loaded content
+        if (typeof Prism !== 'undefined') {
+            setTimeout(() => {
+                if (event.detail.elt) {
+                    Prism.highlightAllUnder(event.detail.elt);
+                }
+            }, 50);
+        }
+    });
+    
     // Handle browser back/forward navigation with bfcache
     window.addEventListener('pageshow', function(event) {
         if (event.persisted) {
             // Page was restored from bfcache - reinitialize
             initializePage();
+            executePageInitializers();
         }
     });
 

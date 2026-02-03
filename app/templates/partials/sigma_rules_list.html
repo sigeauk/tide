@@ -19,10 +19,10 @@
             <span class="rule-item-meta">
                 {% if rule._techniques %}
                     {% for tech in rule._techniques[:2] %}
-                    <span class="mitre-pill mitre-neutral mitre-sm">{{ tech }}</span>
+                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
                     {% endfor %}
                     {% if rule._techniques|length > 2 %}
-                    <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule._techniques|length - 2 }}</span>
+                    <span class="mitre-pill mitre-more mitre-sm">+{{ rule._techniques|length - 2 }}</span>
                     {% endif %}
                 {% endif %}
                 <span class="level-badge level-{{ rule.level | default('medium') }}">

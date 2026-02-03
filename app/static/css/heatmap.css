@@ -21,7 +21,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.5rem 0.75rem;
-    background: var(--color-bg-dark);
+    background: var(--surface-2);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -61,7 +61,7 @@
     top: calc(100% + 4px);
     left: 0;
     right: 0;
-    background: var(--color-bg-dark);
+    background: var(--surface-3);
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
@@ -79,7 +79,7 @@
 .actor-search-input {
     width: 100%;
     padding: 0.5rem 0.75rem;
-    background: var(--color-bg-light);
+    background: var(--surface-2);
     border: none;
     border-bottom: 1px solid var(--color-border);
     color: var(--color-text);
@@ -88,7 +88,7 @@
 
 .actor-search-input:focus {
     outline: none;
-    background: var(--color-bg-lighter);
+    background: var(--surface-2-hover);
 }
 
 .actor-checkbox-list {
@@ -110,7 +110,7 @@
 }
 
 .actor-checkbox-item:hover {
-    background: var(--color-bg-light);
+    background: var(--surface-2);
 }
 
 .actor-checkbox-item input[type="checkbox"] {
@@ -195,7 +195,7 @@
 }
 
 .tactic-header {
-    background-color: var(--color-bg-light);
+    background-color: var(--surface-1);
     color: var(--color-text-secondary);
     font-size: 0.6rem;
     font-weight: 600;
@@ -273,7 +273,7 @@
     width: 100%;
     max-width: 480px;
     height: 100vh;
-    background-color: var(--color-bg-dark);
+    background-color: var(--surface-1);
     border-left: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
@@ -327,7 +327,7 @@
 }
 
 .btn-icon:hover {
-    background-color: var(--color-bg-lighter);
+    background-color: var(--surface-2);
     color: var(--color-text);
 }
 
@@ -420,8 +420,9 @@
 }
 
 .rule-item {
-    background-color: var(--color-bg-light);
-    border: 1px solid var(--color-border);
+    background-color: var(--surface-2);
+    border: none;
+    border-top: 1px solid var(--highlight-1);
     border-radius: var(--radius-md);
     padding: 1rem;
 }
@@ -505,7 +506,7 @@
 
 .mitre-tag {
     font-size: 0.625rem;
-    background-color: var(--color-bg-lighter);
+    background-color: var(--surface-2);
     color: var(--color-text-muted);
     padding: 0.125rem 0.375rem;
     border-radius: var(--radius-sm);

@@ -20,92 +20,113 @@
     <!-- Additional overrides -->
     <style>
         /* ========================================
-         * COLOR SYSTEM - Dark Theme (default)
-         * Lighter = comes forward (cards, buttons on cards)
-         * L values: page=0.12, sidebar=0.16, card=0.20, elevated=0.24, button=0.28
+         * CYBER THEME - Elevation = Lightness
+         * Hue: 240 (Cyber blue-grey)
+         * L values: base=0.16, surface=0.20, raised=0.24, overlay=0.28
          * ======================================== */
         :root {
             --hue: var(--brand-hue, 240);
             --hue-secondary: calc(var(--hue) + 180);
+            --chroma: 0.04;
+            --chroma-surface: calc(var(--chroma) * 0.6);
+            --chroma-text: 0.02;
+            --chroma-action: 0.14;
+            --chroma-alert: 0.16;
             
-            /* Backgrounds - lighter = more elevated/forward */
-            --color-bg-darkest: oklch(0.10 0.005 var(--hue));
-            --color-bg-dark: oklch(0.12 0.005 var(--hue));
-            --color-bg: oklch(0.16 0.005 var(--hue));
-            --color-bg-light: oklch(0.20 0.005 var(--hue));
-            --color-bg-lighter: oklch(0.24 0.005 var(--hue));
-            --color-bg-elevated: oklch(0.28 0.005 var(--hue));
+            /* Elevation Surfaces (Lightness increases with elevation) */
+            --surface-base: oklch(0.16 var(--chroma-surface) var(--hue));
+            --surface-base-alt: oklch(0.18 var(--chroma-surface) var(--hue));
+            --surface-1: oklch(0.20 var(--chroma-surface) var(--hue));
+            --surface-1-hover: oklch(0.22 var(--chroma-surface) var(--hue));
+            --surface-2: oklch(0.24 var(--chroma-surface) var(--hue));
+            --surface-2-hover: oklch(0.28 var(--chroma-surface) var(--hue));
+            --surface-3: oklch(0.28 var(--chroma-surface) var(--hue));
             
-            /* Text */
-            --color-text: oklch(0.96 0.01 var(--hue));
-            --color-text-secondary: oklch(0.76 0.01 var(--hue));
-            --color-text-muted: oklch(0.55 0.01 var(--hue));
+            /* Legacy mappings for compatibility */
+            --color-bg-darkest: var(--surface-base);
+            --color-bg-dark: var(--surface-base-alt);
+            --color-bg: var(--surface-1);
+            --color-bg-light: var(--surface-1-hover);
+            --color-bg-lighter: var(--surface-2);
+            --color-bg-elevated: var(--surface-3);
+            
+            /* Text - High contrast (L > 0.90 for primary) */
+            --color-text: oklch(0.96 var(--chroma-text) var(--hue));
+            --color-text-secondary: oklch(0.78 var(--chroma-text) var(--hue));
+            --color-text-muted: oklch(0.58 var(--chroma-text) var(--hue));
             
             /* Borders */
-            --color-border: oklch(0.35 0.01 var(--hue));
-            --color-border-muted: oklch(0.28 0.01 var(--hue));
-            --color-border-strong: oklch(0.45 0.01 var(--hue));
-            --color-highlight: oklch(0.40 0.01 var(--hue));
+            --color-border: oklch(0.35 var(--chroma) var(--hue));
+            --color-border-muted: oklch(0.28 var(--chroma) var(--hue));
+            --color-border-strong: oklch(0.45 var(--chroma) var(--hue));
+            --color-highlight: oklch(0.40 var(--chroma) var(--hue));
             
             /* Primary/Secondary */
-            --color-primary: oklch(0.76 0.1 var(--hue));
-            --color-primary-hover: oklch(0.82 0.1 var(--hue));
-            --color-primary-muted: oklch(0.50 0.08 var(--hue));
-            --color-secondary: oklch(0.76 0.1 var(--hue-secondary));
+            --color-primary: oklch(0.72 var(--chroma-action) var(--hue));
+            --color-primary-hover: oklch(0.80 var(--chroma-action) var(--hue));
+            --color-primary-muted: oklch(0.42 calc(var(--chroma-action) * 0.5) var(--hue));
+            --color-secondary: oklch(0.72 var(--chroma-action) var(--hue-secondary));
             
-            /* Semantic */
-            --color-success: oklch(0.7 0.08 160);
-            --color-success-bg: oklch(0.22 0.03 160);
-            --color-success-text: oklch(0.80 0.08 160);
-            --color-warning: oklch(0.7 0.08 85);
-            --color-warning-bg: oklch(0.22 0.03 85);
-            --color-warning-text: oklch(0.80 0.08 85);
-            --color-danger: oklch(0.7 0.08 25);
-            --color-danger-bg: oklch(0.22 0.03 25);
-            --color-danger-text: oklch(0.80 0.08 25);
-            --color-info: oklch(0.7 0.08 250);
-            --color-info-bg: oklch(0.22 0.03 250);
-            --color-info-text: oklch(0.80 0.08 250);
+            /* Semantic colors - High visibility */
+            --color-success: oklch(0.72 var(--chroma-alert) 150);
+            --color-success-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 150);
+            --color-success-text: oklch(0.92 var(--chroma-alert) 150);
+            --color-warning: oklch(0.78 var(--chroma-alert) 55);
+            --color-warning-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 55);
+            --color-warning-text: oklch(0.94 var(--chroma-alert) 55);
+            --color-danger: oklch(0.68 var(--chroma-alert) 28);
+            --color-danger-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 28);
+            --color-danger-text: oklch(0.92 var(--chroma-alert) 28);
+            --color-info: oklch(0.72 var(--chroma-alert) 230);
+            --color-info-bg: oklch(0.20 calc(var(--chroma-alert) * 0.5) 230);
+            --color-info-text: oklch(0.92 var(--chroma-alert) 230);
             
-            /* Gradients (now subtle, using adjacent layers) */
-            --gradient: linear-gradient(180deg, var(--color-bg-light), var(--color-bg));
-            --gradient-hover: linear-gradient(180deg, var(--color-bg-lighter), var(--color-bg-light));
+            /* Gradients */
+            --gradient: linear-gradient(180deg, var(--surface-1-hover), var(--surface-1));
+            --gradient-hover: linear-gradient(180deg, var(--surface-2), var(--surface-1-hover));
         }
         
         /* ========================================
-         * COLOR SYSTEM - Light Theme
-         * Darker = more elevated/forward (opposite of dark mode)
+         * LIGHT THEME - Inverted Elevation
          * ======================================== */
         body.light {
-            --color-bg-darkest: oklch(0.98 0.005 var(--hue));
-            --color-bg-dark: oklch(0.96 0.005 var(--hue));
-            --color-bg: oklch(0.94 0.005 var(--hue));
-            --color-bg-light: oklch(0.99 0.005 var(--hue));
-            --color-bg-lighter: oklch(1 0.005 var(--hue));
-            --color-bg-elevated: oklch(1 0.005 var(--hue));
+            --surface-base: oklch(0.96 var(--chroma-surface) var(--hue));
+            --surface-base-alt: oklch(0.94 var(--chroma-surface) var(--hue));
+            --surface-1: oklch(0.99 var(--chroma-surface) var(--hue));
+            --surface-1-hover: oklch(0.97 var(--chroma-surface) var(--hue));
+            --surface-2: oklch(1.00 var(--chroma-surface) var(--hue));
+            --surface-2-hover: oklch(0.98 var(--chroma-surface) var(--hue));
+            --surface-3: oklch(1.00 var(--chroma-surface) var(--hue));
             
-            --color-text: oklch(0.15 0.01 var(--hue));
-            --color-text-secondary: oklch(0.35 0.01 var(--hue));
-            --color-text-muted: oklch(0.50 0.01 var(--hue));
+            --color-bg-darkest: var(--surface-base);
+            --color-bg-dark: var(--surface-base-alt);
+            --color-bg: var(--surface-1);
+            --color-bg-light: var(--surface-1-hover);
+            --color-bg-lighter: var(--surface-2);
+            --color-bg-elevated: var(--surface-3);
             
-            --color-border: oklch(0.80 0.01 var(--hue));
-            --color-border-muted: oklch(0.85 0.01 var(--hue));
-            --color-border-strong: oklch(0.5 0.01 var(--hue));
-            --color-highlight: oklch(1 0.01 var(--hue));
+            --color-text: oklch(0.15 var(--chroma-text) var(--hue));
+            --color-text-secondary: oklch(0.35 var(--chroma-text) var(--hue));
+            --color-text-muted: oklch(0.50 var(--chroma-text) var(--hue));
             
-            --color-primary: oklch(0.4 0.1 var(--hue));
-            --color-primary-hover: oklch(0.35 0.1 var(--hue));
-            --color-primary-muted: oklch(0.7 0.08 var(--hue));
-            --color-secondary: oklch(0.4 0.1 var(--hue-secondary));
+            --color-border: oklch(0.80 var(--chroma) var(--hue));
+            --color-border-muted: oklch(0.85 var(--chroma) var(--hue));
+            --color-border-strong: oklch(0.5 var(--chroma) var(--hue));
+            --color-highlight: oklch(1.00 var(--chroma) var(--hue));
             
-            --color-success: oklch(0.5 0.05 160);
-            --color-success-bg: oklch(0.9 0.025 160);
-            --color-warning: oklch(0.5 0.05 100);
-            --color-warning-bg: oklch(0.9 0.025 100);
-            --color-danger: oklch(0.5 0.05 30);
-            --color-danger-bg: oklch(0.9 0.025 30);
-            --color-info: oklch(0.5 0.05 260);
-            --color-info-bg: oklch(0.9 0.025 260);
+            --color-primary: oklch(0.48 var(--chroma-action) var(--hue));
+            --color-primary-hover: oklch(0.40 var(--chroma-action) var(--hue));
+            --color-primary-muted: oklch(0.70 calc(var(--chroma-action) * 0.5) var(--hue));
+            --color-secondary: oklch(0.48 var(--chroma-action) var(--hue-secondary));
+            
+            --color-success: oklch(0.48 var(--chroma-alert) 150);
+            --color-success-bg: oklch(0.90 calc(var(--chroma-alert) * 0.3) 150);
+            --color-warning: oklch(0.58 var(--chroma-alert) 55);
+            --color-warning-bg: oklch(0.90 calc(var(--chroma-alert) * 0.3) 55);
+            --color-danger: oklch(0.52 var(--chroma-alert) 28);
+            --color-danger-bg: oklch(0.90 calc(var(--chroma-alert) * 0.3) 28);
+            --color-info: oklch(0.52 var(--chroma-alert) 230);
+            --color-info-bg: oklch(0.90 calc(var(--chroma-alert) * 0.3) 230);
         }
         
         /* ========================================
@@ -200,7 +221,7 @@
             bottom: 100%;
             left: 0;
             right: 0;
-            background: var(--color-bg-light);
+            background: var(--surface-3);
             border: 1px solid var(--color-border);
             border-radius: var(--radius-md);
             box-shadow: var(--shadow-lg);
@@ -230,7 +251,7 @@
             text-align: left;
         }
         .user-menu-item:hover {
-            background: var(--color-bg-lighter);
+            background: var(--surface-2);
             color: var(--color-text);
         }
         .user-menu-item svg {
@@ -268,7 +289,7 @@
             left: calc(100% + 10px) !important;
             top: 50% !important;
             transform: translateY(-50%) !important;
-            background: var(--color-bg-light) !important;
+            background: var(--surface-3) !important;
             border: 1px solid var(--color-border) !important;
             color: var(--color-text) !important;
             padding: 0.5rem 0.75rem !important;
@@ -373,7 +394,7 @@
             font-size: 0.6rem;
             padding: 0.1rem 0.25rem;
             border-radius: var(--radius-sm);
-            background: var(--color-bg-lighter);
+            background: var(--surface-2);
             color: var(--color-text-muted);
             border: 1px solid var(--color-border-muted);
             font-weight: 600;
@@ -446,7 +467,7 @@
         }
         .coverage-track {
             height: 5px;
-            background: var(--color-bg-lighter);
+            background: var(--surface-base);
             border-radius: 999px;
             overflow: hidden;
         }
@@ -524,7 +545,7 @@
             border: 1px solid var(--color-success);
         }
         .status-pill.status-disabled {
-            background-color: var(--color-bg-lighter);
+            background-color: var(--surface-2);
             color: var(--color-text-muted);
             border: 1px solid var(--color-border-muted);
         }
@@ -537,7 +558,7 @@
             display: inline-flex !important;
             align-items: center !important;
             justify-content: center !important;
-            color: var(--color-bg-dark) !important;
+            color: var(--surface-base) !important;
             text-transform: uppercase;
             align-self: flex-start;
             border: 1px solid rgba(0,0,0,0.2) !important;
@@ -548,12 +569,12 @@
             box-sizing: border-box !important;
         }
         .mitre-pill {
-            background-color: var(--color-bg-lighter);
+            background-color: var(--surface-2);
             color: var(--color-text-muted);
             border: 1px solid var(--color-border-muted);
         }
         .mitre-more, .mitre-none {
-            background-color: var(--color-bg-lighter);
+            background-color: var(--surface-2);
             color: var(--color-text-muted);
             border: 1px solid var(--color-border-muted);
         }
@@ -599,7 +620,7 @@
         .ttp-expander[open] {
             position: relative;
             z-index: 10;
-            background: var(--color-bg-light);
+            background: var(--surface-1);
             margin: 0.75rem -1rem -1rem -1rem;
             padding: 0.5rem 1rem 1rem 1rem;
             border-radius: 0 0 var(--radius-md) var(--radius-md);
@@ -631,7 +652,7 @@
             width: 4px;
         }
         .ttp-list::-webkit-scrollbar-track {
-            background: var(--color-bg-light);
+            background: var(--surface-1);
             border-radius: 2px;
         }
         .ttp-list::-webkit-scrollbar-thumb {
@@ -694,7 +715,7 @@
             gap: 0.5rem;
         }
         .toast {
-            background: var(--color-bg-light);
+            background: var(--surface-3);
             border: 1px solid var(--color-border);
             border-radius: var(--radius-md);
             padding: 0.75rem 1rem;

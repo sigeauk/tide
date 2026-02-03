@@ -1,6 +1,8 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
 <!-- Rule Card Component -->
+{# search variable is passed from rules_grid.html context for filtering sidebar #}
+{% set current_search = search | default('') %}
 
 {% set severity_colors = {
     'critical': '#f87171',
@@ -36,8 +38,8 @@
             <div class="sev-pill" style="background-color: {{ sev_color }};">
                 {{ sev_value | upper }}
             </div>
-            {# MITRE Pills - covered if rule is enabled #}
-            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', assume_covered=rule.enabled) }}
+            {# MITRE Pills - use neutral blue style for Rule Health cards #}
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search) }}
         </div>
     </div>
     

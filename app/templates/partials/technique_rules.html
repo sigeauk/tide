@@ -1,4 +1,5 @@
 <!-- Technique Rules List Partial -->
+{% from "components/mitre_pill.html" import mitre_pill %}
 {% if rules %}
 <div class="rules-list">
     {% for rule in rules %}
@@ -30,7 +31,7 @@
         {% if rule.mitre_ids | length > 1 %}
         <div class="rule-mitre-ids">
             {% for mid in rule.mitre_ids %}
-            <span class="mitre-tag">{{ mid }}</span>
+            {{ mitre_pill(mid, neutral=true, clickable=true, size='sm') }}
             {% endfor %}
         </div>
         {% endif %}

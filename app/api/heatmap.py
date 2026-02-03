@@ -186,10 +186,15 @@ async def get_technique_detail(
     technique_id: str,
     db: DbDep,
     user: CurrentUser,
+    search: Optional[str] = Query(None),
 ):
     """
     Get technique detail slide-over panel.
     Returns HTML partial for slide-over display.
+    
+    Args:
+        technique_id: MITRE technique ID
+        search: Optional search filter to apply to rules (matches name, author, rule_id, mitre_ids)
     """
     ttp_names = db.get_technique_names()
     ttp_map = db.get_technique_map()
@@ -201,8 +206,8 @@ async def get_technique_detail(
     tactic = get_tactic_display(raw_tactic)
     is_covered = ttp_upper in covered_ttps
     
-    # Get rules covering this technique
-    rules = db.get_rules_for_technique(technique_id)
+    # Get rules covering this technique with optional search filter
+    rules = db.get_rules_for_technique(technique_id, search=search)
     
     # Build technique object for template
     from app.models.threats import MITRETechnique
@@ -223,6 +228,7 @@ async def get_technique_detail(
             "is_covered": is_covered,
             "rule_count": len(rules),
             "actors": [],  # TODO: Get actors using this TTP
+            "search": search or "",  # Pass search to template for rules endpoint
         }
     )
 
@@ -233,12 +239,17 @@ async def get_technique_rules(
     technique_id: str,
     db: DbDep,
     user: CurrentUser,
+    search: Optional[str] = Query(None),
 ):
     """
     Get detection rules for a specific technique.
     Returns HTML partial for rules list.
+    
+    Args:
+        technique_id: MITRE technique ID
+        search: Optional search filter to apply to rules (matches name, author, rule_id, mitre_ids)
     """
-    rules = db.get_rules_for_technique(technique_id)
+    rules = db.get_rules_for_technique(technique_id, search=search)
     
     templates = request.app.state.templates
     return templates.TemplateResponse(

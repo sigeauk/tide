@@ -376,6 +376,17 @@ class DatabaseService:
                 query += " AND score <= ?"
                 params.append(filters.max_score)
             
+            # Apply search filter IN SQL (not post-fetch) so pagination works correctly
+            if filters.search:
+                search_term = f"%{filters.search}%"
+                query += """ AND (
+                    LOWER(name) LIKE LOWER(?) 
+                    OR LOWER(author) LIKE LOWER(?) 
+                    OR LOWER(rule_id) LIKE LOWER(?)
+                    OR LOWER(array_to_string(mitre_ids, ',')) LIKE LOWER(?)
+                )"""
+                params.extend([search_term, search_term, search_term, search_term])
+            
             # Get total count before pagination
             count_query = query.replace("SELECT *", "SELECT COUNT(*)")
             total = conn.execute(count_query, params).fetchone()[0]
@@ -402,20 +413,12 @@ class DatabaseService:
             except:
                 last_sync = "Never"
         
-        # Convert to models and apply search filter (complex filter done in Python)
+        # Convert to models (search already applied in SQL)
         validation_data = self._load_validation_data()
         rules = []
         
         for _, row in df.iterrows():
             rule = self._row_to_rule(row.to_dict(), validation_data)
-            
-            # Apply search filter
-            if filters.search:
-                search_term = filters.search.lower()
-                searchable = f"{rule.name} {rule.rule_id} {rule.author} {' '.join(rule.mitre_ids)}".lower()
-                if search_term not in searchable:
-                    continue
-            
             rules.append(rule)
         
         return rules, total, last_sync
@@ -890,8 +893,14 @@ class DatabaseService:
             ).fetchall()
             return {row[0]: row[1] for row in result if row[0] and row[1]}
     
-    def get_rules_for_technique(self, technique_id: str) -> List[DetectionRule]:
-        """Get all detection rules that cover a specific MITRE technique."""
+    def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True, search: str = None) -> List[DetectionRule]:
+        """Get all detection rules that cover a specific MITRE technique.
+        
+        Args:
+            technique_id: MITRE technique ID (e.g., T1059)
+            enabled_only: If True, only return enabled rules (default). Matches heatmap coverage logic.
+            search: Optional search filter to further restrict rules (matches name, author, rule_id, mitre_ids)
+        """
         with self.get_connection() as conn:
             try:
                 conn.execute("CHECKPOINT")
@@ -900,12 +909,33 @@ class DatabaseService:
             
             # Query rules where the technique ID is in the mitre_ids array
             ttp_upper = technique_id.upper()
-            result = conn.execute("""
+            
+            # Build query with search filter if provided
+            base_conditions = "(array_contains(mitre_ids, ?) OR array_contains(mitre_ids, ?))"
+            params = [ttp_upper, technique_id]
+            
+            if enabled_only:
+                base_conditions += " AND enabled = 1"
+            
+            if search:
+                # Apply same search logic as grid - match name, author, rule_id, OR mitre_ids
+                # This ensures sidebar shows rules from the same result set as the grid
+                search_term = f"%{search}%"
+                base_conditions += """ AND (
+                    LOWER(name) LIKE LOWER(?) 
+                    OR LOWER(author) LIKE LOWER(?) 
+                    OR LOWER(rule_id) LIKE LOWER(?)
+                    OR LOWER(array_to_string(mitre_ids, ',')) LIKE LOWER(?)
+                )"""
+                params.extend([search_term, search_term, search_term, search_term])
+            
+            query = f"""
                 SELECT * FROM detection_rules 
-                WHERE array_contains(mitre_ids, ?)
-                   OR array_contains(mitre_ids, ?)
+                WHERE {base_conditions}
                 ORDER BY score DESC
-            """, [ttp_upper, technique_id]).fetchall()
+            """
+            
+            result = conn.execute(query, params).fetchall()
             
             if not result:
                 return []

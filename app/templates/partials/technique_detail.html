@@ -5,7 +5,7 @@
         <!-- Panel Header -->
         <div class="slide-panel-header">
             <div>
-                <span class="technique-id">{{ technique.id }}</span>
+                <span class="technique-id">{{ technique.id }}{% if rule_count > 0 %} <span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}</span>
                 <h2 class="technique-name">{{ technique.name }}</h2>
             </div>
             <button class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close">
@@ -24,7 +24,11 @@
                         <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
                         <polyline points="22 4 12 14.01 9 11.01"/>
                     </svg>
-                    Covered by {{ rule_count }} rule{{ 's' if rule_count != 1 else '' }}
+                    {% if search %}
+                        {{ rule_count }} rule{{ 's' if rule_count != 1 else '' }} matching "{{ search }}"
+                    {% else %}
+                        Covered by {{ rule_count }} enabled rule{{ 's' if rule_count != 1 else '' }}
+                    {% endif %}
                 {% else %}
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10"/>
@@ -75,9 +79,9 @@
             <!-- Detection Rules Section -->
             {% if is_covered %}
             <div class="rules-section">
-                <h3 class="rules-title">Detection Rules</h3>
+                <h3 class="rules-title">Detection Rules {% if search %}<span style="font-weight: normal; font-size: 0.75rem; color: var(--color-primary);">(filtered by "{{ search }}")</span>{% else %}<span style="font-weight: normal; font-size: 0.75rem; color: var(--color-text-muted);">(all enabled)</span>{% endif %}</h3>
                 <div id="technique-rules" 
-                     hx-get="/api/heatmap/technique/{{ technique.id }}/rules"
+                     hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
                      hx-trigger="load"
                      hx-swap="innerHTML">
                     <div class="loading-spinner">
