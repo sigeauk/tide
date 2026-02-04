@@ -43,7 +43,9 @@ RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubuserc
 # Create non-root user FIRST
 RUN useradd -m -u 1000 tide
 
+# Copy application code and VERSION file
 COPY app/ /app/app/
+COPY VERSION /app/VERSION
 
 ENV PYTHONPATH="/app"
 

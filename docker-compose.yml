@@ -40,8 +40,6 @@ services:
     container_name: tide-nginx
     ports:
       - "8501:443"
-      # optionally expose HTTP on host if you want access via port 80
-      # - "80:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./app/static:/app/static:ro

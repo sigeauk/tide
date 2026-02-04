@@ -4,17 +4,40 @@ Uses Pydantic Settings for type-safe environment variable loading.
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
 from functools import lru_cache
 from typing import Optional, List
+from pathlib import Path
 import os
+
+
+def _read_version_file() -> Optional[str]:
+    """
+    Read version from VERSION file. Checked in order:
+    1. /app/VERSION (Docker production path)
+    2. ./VERSION (relative to working directory)
+    3. VERSION file next to this config.py
+    """
+    search_paths = [
+        Path("/app/VERSION"),
+        Path("VERSION"),
+        Path(__file__).parent.parent / "VERSION",
+    ]
+    for path in search_paths:
+        if path.exists():
+            try:
+                return path.read_text().strip()
+            except Exception:
+                continue
+    return None
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # --- APPLICATION ---
-    tide_version: str = Field(default="2.0.0", alias="TIDE_VERSION")
+    # Version is loaded from VERSION file first, .env second, default third
+    tide_version: str = Field(default="0.0.0", alias="TIDE_VERSION")
     app_url: str = Field(default="http://localhost:8000", alias="APP_URL")
     sync_interval_minutes: int = Field(default=60, alias="SYNC_INTERVAL_MINUTES")
     debug: bool = Field(default=False, alias="DEBUG")
@@ -94,6 +117,17 @@ class Settings(BaseSettings):
     def kibana_space_list(self) -> List[str]:
         """Parse comma-separated Kibana spaces."""
         return [s.strip() for s in self.kibana_spaces.split(",") if s.strip()]
+    
+    @model_validator(mode='after')
+    def override_version_from_file(self) -> 'Settings':
+        """
+        Override tide_version with VERSION file if it exists.
+        VERSION file takes priority over .env to ensure version is baked into Docker image.
+        """
+        file_version = _read_version_file()
+        if file_version:
+            object.__setattr__(self, 'tide_version', file_version)
+        return self
     
     class Config:
         env_file = ".env"
