@@ -109,12 +109,35 @@ async def logout(
     settings: SettingsDep,
 ):
     """
-    Logout - clear cookies and redirect to login page.
+    Logout - clear cookies and redirect to Keycloak for SSO logout.
+    This ensures the user is logged out of both TIDE and Keycloak.
     """
-    # Clear cookies and redirect to login
-    response = RedirectResponse(url="/login", status_code=302)
-    response.delete_cookie("access_token")
-    response.delete_cookie("refresh_token")
+    # Build the post-logout redirect URI (where Keycloak will redirect after logout)
+    post_logout_uri = f"{settings.app_url}/login?logout=1"
+    
+    # Get Keycloak logout URL
+    keycloak_logout_url = auth.get_logout_url(post_logout_uri)
+    
+    # Redirect to Keycloak logout
+    response = RedirectResponse(url=keycloak_logout_url, status_code=302)
+    
+    # Also clear our cookies (belt and suspenders)
+    use_secure = settings.app_url.startswith("https://")
+    
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+    )
     
     return response
 

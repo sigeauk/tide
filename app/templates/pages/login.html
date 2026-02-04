@@ -22,7 +22,7 @@
         </a>
         
         <div class="login-footer">
-            <p>TIDE v{{ settings.tide_version }}</p>
+            <p style="color: var(--color-primary); font-size: 0.8rem;">TIDE v{{ settings.tide_version }}</p>
             {% if settings.auth_disabled %}
             <p class="auth-disabled-notice">
                 {{ icon_text('triangle-alert', 'Authentication is disabled', '14', 'text-warning') }}
@@ -60,6 +60,9 @@
     
     .login-logo {
         margin-bottom: 1.5rem;
+        display: flex;
+        justify-content: center;
+        justify-items: center;
     }
     
     .login-logo img {

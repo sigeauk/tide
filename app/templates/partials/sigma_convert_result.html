@@ -2,14 +2,6 @@
 <!-- Sigma Convert Result Partial -->
 
 {% if success %}
-<!-- Info note for NDJSON format -->
-{% if 'kibana_ndjson' in request.url.path or code_lang == 'json' %}
-<div class="info-banner">
-    {{ icon('info', '14') }}
-    <span>JSON is formatted for readability. Import, will preserves NDJSON format.</span>
-</div>
-{% endif %}
-
 <!-- Query output box with syntax highlighting -->
 <div class="query-output-box">
     <pre><code class="language-{% if code_lang == 'json' %}json{% else %}text{% endif %}" id="query-code">{{ result }}</code></pre>
@@ -18,6 +10,10 @@
 <!-- Store raw query for deployment (original NDJSON) -->
 <input type="hidden" id="raw-query-store" value="{{ raw_query | e }}">
 <input type="hidden" id="original-result" value="{{ result | e }}">
+<!-- Flag for showing info in header -->
+{% if 'kibana_ndjson' in request.url.path or code_lang == 'json' %}
+<input type="hidden" id="show-json-info" value="true">
+{% endif %}
 
 <script>
 // Format JSON for display if applicable
@@ -28,9 +24,11 @@
             const text = codeEl.textContent.trim();
             let formatted = '';
             
+            // Handle NDJSON (multiple JSON objects on separate lines or concatenated)
             const lines = text.split('\n').filter(l => l.trim());
             
             if (lines.length > 1) {
+                // Multiple lines - treat each as separate JSON object
                 formatted = lines.map(line => {
                     try {
                         const obj = JSON.parse(line.trim());
@@ -40,6 +38,7 @@
                     }
                 }).join('\n\n');
             } else if (text.includes('}{')) {
+                // Single line with concatenated JSON objects
                 const parts = text.split(/\}\s*\{/).map((part, i, arr) => {
                     if (i === 0) return part + '}';
                     if (i === arr.length - 1) return '{' + part;
@@ -53,16 +52,32 @@
                     }
                 }).join('\n\n');
             } else {
+                // Single JSON object
                 const obj = JSON.parse(text);
                 formatted = JSON.stringify(obj, null, 2);
             }
             
-            codeEl.textContent = formatted;
+            if (formatted) {
+                codeEl.textContent = formatted;
+            }
         } catch(e) {
-            // Not valid JSON, leave as-is
+            console.error('[Sigma] JSON formatting error:', e);
+            // Leave as-is if parsing fails
         }
     }
     
+    // Show info in header if JSON format
+    const showJsonInfo = document.getElementById('show-json-info');
+    const outputInfo = document.getElementById('output-info');
+    const outputInfoText = document.getElementById('output-info-text');
+    if (showJsonInfo && outputInfo && outputInfoText) {
+        outputInfoText.textContent = 'Formatted for readability. Import preserves NDJSON.';
+        outputInfo.style.display = 'flex';
+    } else if (outputInfo) {
+        outputInfo.style.display = 'none';
+    }
+    
+    // Apply Prism syntax highlighting
     if (typeof Prism !== 'undefined') {
         Prism.highlightAll();
     }

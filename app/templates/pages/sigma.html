@@ -95,13 +95,32 @@
 .sigma-panel-header {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 0.5rem;
     font-size: 0.8rem;
     font-weight: 600;
     color: var(--color-text);
     padding-bottom: 0.5rem;
-    border-bottom: 1px solid var(--color-border-muted);
     flex-shrink: 0;
+}
+
+.sigma-panel-header .header-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.sigma-panel-header .header-info {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    font-weight: 400;
+    color: var(--color-info-text);
+    background: var(--color-info-bg);
+    border: 1px solid var(--color-info);
+    border-radius: var(--radius-sm);
+    padding: 0.25rem 0.6rem;
 }
 
 /* Code area: fills available space */
@@ -218,7 +237,6 @@
     justify-content: flex-start;
     gap: 0.75rem;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--color-border-muted);
     margin-top: auto;
     min-height: 48px;
 }
@@ -568,7 +586,7 @@
     <!-- Left: YAML Editor Panel -->
     <div class="sigma-panel">
         <div class="sigma-panel-header">
-            {{ icon('file-text', '16') }} rule.yml
+            <span class="header-title">{{ icon('file-text', '16') }} rule.yml</span>
         </div>
         
         <!-- Panel Body: Code Area -->
@@ -621,7 +639,11 @@ level: medium"></textarea>
     <!-- Right: Query Output Panel (Mirror of Left) -->
     <div class="sigma-panel">
         <div class="sigma-panel-header">
-            {{ icon('zap', '16') }} Query Output
+            <span class="header-title">{{ icon('zap', '16') }} Query Output</span>
+            <span class="header-info" id="output-info" style="display: none;">
+                {{ icon('info', '12') }}
+                <span id="output-info-text"></span>
+            </span>
         </div>
         
         <!-- Panel Body: Output Area -->
@@ -680,10 +702,10 @@ if (window.sigmaYamlEditor) {
 window.initSigmaPage = function(retryCount = 0) {
     const maxRetries = 50;  // Up to 5 seconds of retrying
     
-    // Check if CodeMirror is loaded
-    if (typeof CodeMirror === 'undefined') {
+    // Check if CodeMirror AND yaml mode are both loaded
+    if (typeof CodeMirror === 'undefined' || !CodeMirror.modes || !CodeMirror.modes.yaml) {
         if (retryCount < maxRetries) {
-            console.debug(`[Sigma] CodeMirror not loaded yet, retry ${retryCount + 1}/${maxRetries}...`);
+            console.debug(`[Sigma] CodeMirror/YAML mode not loaded yet, retry ${retryCount + 1}/${maxRetries}...`);
             setTimeout(() => window.initSigmaPage(retryCount + 1), 100);
         } else {
             console.error('[Sigma] CodeMirror failed to load after multiple retries');
@@ -697,41 +719,28 @@ window.initSigmaPage = function(retryCount = 0) {
         return;
     }
     
-    // Check if there's already a CodeMirror wrapper adjacent to the textarea
-    // This can happen if the script ran multiple times
-    const existingWrapper = yamlTextarea.nextElementSibling;
-    if (existingWrapper && existingWrapper.classList.contains('CodeMirror')) {
-        console.log('[Sigma] Found existing CodeMirror wrapper, extracting instance...');
-        const cm = existingWrapper.CodeMirror;
-        if (cm) {
-            window.sigmaYamlEditor = cm;
-            cm.refresh();
-            setTimeout(() => cm.refresh(), 100);
-            console.log('[Sigma] Reused existing CodeMirror instance');
-            return;
-        } else {
-            // Orphaned wrapper without a CodeMirror instance - remove it
-            console.warn('[Sigma] Found orphaned CodeMirror wrapper, removing...');
-            existingWrapper.remove();
-        }
-    }
-    
-    // If we still have a reference to an old editor, check if it's valid
-    if (window.sigmaYamlEditor) {
-        try {
-            const oldWrapper = window.sigmaYamlEditor.getWrapperElement();
-            if (oldWrapper && document.body.contains(oldWrapper)) {
-                // Old editor is still valid
-                console.debug('[Sigma] CodeMirror editor still in DOM, refreshing...');
-                window.sigmaYamlEditor.refresh();
-                setTimeout(() => window.sigmaYamlEditor.refresh(), 100);
+    // ALWAYS create fresh CodeMirror for HTMX navigations
+    // Check if textarea is hidden (CodeMirror already attached)
+    if (yamlTextarea.style.display === 'none' || yamlTextarea.nextElementSibling?.classList.contains('CodeMirror')) {
+        const existingWrapper = yamlTextarea.nextElementSibling;
+        if (existingWrapper && existingWrapper.classList.contains('CodeMirror')) {
+            const cm = existingWrapper.CodeMirror;
+            if (cm) {
+                window.sigmaYamlEditor = cm;
+                // Force mode refresh
+                cm.setOption('mode', 'yaml');
+                cm.refresh();
+                setTimeout(() => cm.refresh(), 100);
+                setTimeout(() => cm.refresh(), 300);
+                console.log('[Sigma] Reused existing CodeMirror instance, forced mode refresh');
                 return;
+            } else {
+                // Orphaned wrapper - remove it
+                console.warn('[Sigma] Found orphaned CodeMirror wrapper, removing...');
+                existingWrapper.remove();
+                yamlTextarea.style.display = '';
             }
-        } catch(e) {
-            console.debug('[Sigma] Error checking old editor:', e);
         }
-        // Clear stale reference
-        window.sigmaYamlEditor = null;
     }
     
     console.log('[Sigma] Creating NEW CodeMirror instance...');

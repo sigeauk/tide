@@ -196,19 +196,46 @@ class AuthMiddleware(BaseHTTPMiddleware):
             logger.warning(f"Token validation FAILED for path: {path}, is_htmx: {is_htmx}, redirecting to login")
             
             # Token invalid - redirect to login
+            # Must use same attributes as when setting the cookies for proper deletion
+            use_secure = settings.app_url.startswith("https://")
+            
             if is_htmx:
                 from fastapi.responses import Response
                 response = Response(content="", status_code=200)
                 # Use HX-Redirect for clean navigation
                 response.headers["HX-Redirect"] = login_url
-                # Clear invalid cookies
-                response.delete_cookie("access_token")
-                response.delete_cookie("refresh_token")
+                # Clear invalid cookies with proper attributes
+                response.delete_cookie(
+                    key="access_token",
+                    path="/",
+                    httponly=True,
+                    secure=use_secure,
+                    samesite="lax",
+                )
+                response.delete_cookie(
+                    key="refresh_token",
+                    path="/",
+                    httponly=True,
+                    secure=use_secure,
+                    samesite="lax",
+                )
                 return response
             
             response = RedirectResponse(url=login_url, status_code=302)
-            response.delete_cookie("access_token")
-            response.delete_cookie("refresh_token")
+            response.delete_cookie(
+                key="access_token",
+                path="/",
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+            )
+            response.delete_cookie(
+                key="refresh_token",
+                path="/",
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+            )
             return response
         
         logger.debug(f"Token valid for user: {user.username}, path: {path}")
@@ -354,7 +381,7 @@ def create_app() -> FastAPI:
     # --- LOGIN PAGE (public) ---
     
     @app.get("/login", response_class=HTMLResponse, name="login_page")
-    async def login_page(request: Request, next: str = "/"):
+    async def login_page(request: Request, next: str = "/", logout: bool = False):
         """
         Login page - shows login button that redirects to Keycloak.
         This is a public route (no auth required).
@@ -362,6 +389,35 @@ def create_app() -> FastAPI:
         # If auth is disabled, redirect to home
         if settings.auth_disabled:
             return RedirectResponse(url=next, status_code=302)
+        
+        # If coming from logout, force clear cookies and show login page
+        # This handles the race condition where cookies aren't deleted yet
+        if logout:
+            use_secure = settings.app_url.startswith("https://")
+            response = render_template(
+                "pages/login.html",
+                request,
+                {
+                    "next": next,
+                    "user": None,
+                }
+            )
+            # Ensure cookies are deleted on this response too
+            response.delete_cookie(
+                key="access_token",
+                path="/",
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+            )
+            response.delete_cookie(
+                key="refresh_token",
+                path="/",
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+            )
+            return response
         
         # Check if user is already logged in with a valid token
         access_token = request.cookies.get("access_token")

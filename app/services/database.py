@@ -981,7 +981,10 @@ class DatabaseService:
             return count
     
     def save_audit_results(self, audit_list: List[Dict[str, Any]]) -> int:
-        """Save detection rules from Elastic sync to database."""
+        """
+        Save detection rules from Elastic sync to database.
+        This replaces rules for each synced space to ensure live/accurate data.
+        """
         if not audit_list:
             return 0
         
@@ -1004,6 +1007,10 @@ class DatabaseService:
         df['space'] = df['space_id'].fillna('default') if 'space_id' in df.columns else 'default'
         df['last_updated'] = datetime.now()
         df['mitre_ids'] = df['mitre_ids'].apply(lambda x: x if isinstance(x, list) else [])
+        
+        # Get unique spaces being synced - we'll delete all rules from these spaces first
+        synced_spaces = df['space'].unique().tolist()
+        logger.info(f"🔄 Syncing rules for spaces: {synced_spaces}")
         
         # Build raw_data to include both the original rule AND the field mapping results
         def build_raw_data(row):
@@ -1047,39 +1054,27 @@ class DatabaseService:
             try:
                 conn.execute("BEGIN TRANSACTION")
                 
-                # Upsert rules without deletion to prevent UI flicker
+                # Delete existing rules from synced spaces to ensure live data
+                # This ensures removed rules don't persist in the database
+                for space in synced_spaces:
+                    deleted = conn.execute(
+                        "DELETE FROM detection_rules WHERE space = ?",
+                        [space]
+                    ).fetchone()
+                    logger.debug(f"🗑️ Cleared rules from space '{space}'")
+                
+                # Insert fresh rules
                 conn.register('rules_source', df_final)
                 conn.execute("""
                     INSERT INTO detection_rules 
                     SELECT * FROM rules_source
-                    ON CONFLICT (rule_id, space) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        severity = EXCLUDED.severity,
-                        author = EXCLUDED.author,
-                        enabled = EXCLUDED.enabled,
-                        score = EXCLUDED.score,
-                        quality_score = EXCLUDED.quality_score,
-                        meta_score = EXCLUDED.meta_score,
-                        score_mapping = EXCLUDED.score_mapping,
-                        score_field_type = EXCLUDED.score_field_type,
-                        score_search_time = EXCLUDED.score_search_time,
-                        score_language = EXCLUDED.score_language,
-                        score_note = EXCLUDED.score_note,
-                        score_override = EXCLUDED.score_override,
-                        score_tactics = EXCLUDED.score_tactics,
-                        score_techniques = EXCLUDED.score_techniques,
-                        score_author = EXCLUDED.score_author,
-                        score_highlights = EXCLUDED.score_highlights,
-                        last_updated = EXCLUDED.last_updated,
-                        mitre_ids = EXCLUDED.mitre_ids,
-                        raw_data = EXCLUDED.raw_data
                 """)
                 
                 conn.execute("COMMIT")
                 conn.execute("CHECKPOINT")
                 
                 count = len(df_final)
-                logger.info(f"✅ Upserted {count} detection rules to database")
+                logger.info(f"✅ Synced {count} detection rules to database (replaced rules in spaces: {synced_spaces})")
                 return count
                 
             except Exception as e:
