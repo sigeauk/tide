@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 - Logout via Keycloak. Users would stay logged in.
-- Sidebar links not also 
+- Sidebar links not always working.
+- sync to staging space only from promotion page.
 
 ## [2.0.7] - 2026-02-04
 
