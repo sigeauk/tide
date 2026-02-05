@@ -1,15 +1,15 @@
 # TIDE v2 - FastAPI + HTMX Stack
-# Core dependencies
+# Core dependencies - PATCHED 2026-02-05
 
-# --- FastAPI Stack ---
-fastapi>=0.109.0
+# --- FastAPI Stack --
+fastapi>=0.109.1
 uvicorn[standard]>=0.27.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
-python-multipart>=0.0.6
+python-multipart>=0.0.18
 
 # --- Templates ---
-jinja2>=3.1.2
+jinja2>=3.1.6
 
 # --- Authentication ---
 pyjwt[crypto]>=2.8.0
@@ -17,22 +17,25 @@ httpx>=0.26.0
 
 # --- Database ---
 duckdb>=0.9.0
-pandas>=2.0.0
+pandas>=2.2.0
 
 # --- Background Tasks ---
 apscheduler>=3.10.0
 
-# --- Integrations (from original) ---
-requests>=2.31.0
+# --- Integrations ---
+requests>=2.32.4
 python-dotenv>=1.0.0
 
 # --- Sigma/MITRE ---
-pysigma>=0.10.0
+pysigma>=0.11.0
 pysigma-backend-elasticsearch>=1.0.0
 pysigma-backend-splunk>=1.0.0
 pysigma-backend-microsoft365defender>=0.2.0
 pysigma-pipeline-windows>=1.0.0
 pysigma-pipeline-sysmon>=1.0.0
+
+# --- Build Tools ---
+wheel>=0.46.2
 
 # --- Optional: Development ---
 watchfiles>=0.21.0

@@ -2,7 +2,7 @@
 # base -> builder -> production -> development
 
 # Stage 1: Base
-FROM python:3.11-slim-bookworm AS base
+FROM python:3.14.3-slim-bookworm AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -18,7 +18,7 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt ./
-RUN pip install --no-cache-dir --upgrade pip && \
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
 # Stage 3: Production
