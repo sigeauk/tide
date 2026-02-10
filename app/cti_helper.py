@@ -203,6 +203,7 @@ def process_mitre_definitions(bundle_data):
 def get_threat_landscape(api_url, api_token):
     """
     Fetches Intrusion Sets and their TTPs from OpenCTI via GraphQL.
+    Paginates through all results.
     Returns a DataFrame compatible with database.save_threat_data().
     """
     if not api_url or not api_token:
@@ -214,10 +215,10 @@ def get_threat_landscape(api_url, api_token):
         "Content-Type": "application/json"
     }
 
-    # Query for Actors AND their 'uses' relationships to Attack Patterns
+    # Paginated query for Actors AND their 'uses' relationships to Attack Patterns
     query = """
-    query ThreatActors {
-      intrusionSets(first: 200) {
+    query ThreatActors($cursor: ID, $count: Int!) {
+      intrusionSets(first: $count, after: $cursor) {
         edges {
           node {
             name
@@ -226,7 +227,7 @@ def get_threat_landscape(api_url, api_token):
             stixCoreRelationships(
               relationship_type: "uses"
               toTypes: ["Attack-Pattern"]
-              first: 100
+              first: 500
             ) {
               edges {
                 node {
@@ -239,52 +240,80 @@ def get_threat_landscape(api_url, api_token):
               }
             }
           }
+          cursor
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
         }
       }
     }
     """
 
     try:
-        log_info(f"Connecting to OpenCTI at {api_url}...")
-        response = requests.post(f"{api_url}/graphql", json={'query': query}, headers=headers, timeout=30)
+        base_url = api_url.rstrip('/')
+        log_info(f"Connecting to OpenCTI at {base_url}...")
         
-        if response.status_code != 200:
-            log_error(f"OpenCTI API Error {response.status_code}: {response.text}")
-            return pd.DataFrame()
-
-        data = response.json()
-        if "errors" in data:
-            log_error(f"GraphQL Error: {data['errors']}")
-            return pd.DataFrame()
-
         actors = []
-        # Parse the nested GraphQL response
-        edges = data.get("data", {}).get("intrusionSets", {}).get("edges", [])
+        cursor = None
+        page_size = 200
         
-        for edge in edges:
-            node = edge.get("node", {})
-            name = node.get("name")
-            desc = node.get("description") or ""
-            aliases = ", ".join(node.get("aliases") or [])
+        while True:
+            variables = {"count": page_size, "cursor": cursor}
+            response = requests.post(
+                f"{base_url}/graphql",
+                json={'query': query, 'variables': variables},
+                headers=headers,
+                timeout=60
+            )
             
-            # Extract TTPs from nested relationships
-            ttps = []
-            rel_edges = node.get("stixCoreRelationships", {}).get("edges", [])
-            for rel in rel_edges:
-                target = rel.get("node", {}).get("to", {})
-                mitre_id = target.get("x_mitre_id")
-                if mitre_id:
-                    ttps.append(mitre_id)
+            if response.status_code != 200:
+                log_error(f"OpenCTI API Error {response.status_code}: {response.text}")
+                break
 
-            actors.append({
-                "name": name,
-                "description": desc,
-                "aliases": aliases,
-                "origin": get_iso_code(desc) or get_iso_code(name) or "unknown",
-                "ttps": list(set(ttps)), # Unique IDs
-                "ttp_count": len(set(ttps)),
-                "source": "OpenCTI"
-            })
+            data = response.json()
+            if "errors" in data:
+                log_error(f"GraphQL Error: {data['errors']}")
+                break
+
+            intrusion_data = data.get("data", {}).get("intrusionSets", {})
+            edges = intrusion_data.get("edges", [])
+            
+            if not edges:
+                break
+            
+            for edge in edges:
+                node = edge.get("node", {})
+                name = node.get("name")
+                desc = node.get("description") or ""
+                aliases = ", ".join(node.get("aliases") or [])
+                
+                # Extract TTPs from nested relationships
+                ttps = []
+                rel_edges = node.get("stixCoreRelationships", {}).get("edges", [])
+                for rel in rel_edges:
+                    target = rel.get("node", {}).get("to", {})
+                    mitre_id = target.get("x_mitre_id")
+                    if mitre_id:
+                        ttps.append(mitre_id)
+
+                actors.append({
+                    "name": name,
+                    "description": desc,
+                    "aliases": aliases,
+                    "origin": get_iso_code(desc) or get_iso_code(name) or "unknown",
+                    "ttps": list(set(ttps)),
+                    "ttp_count": len(set(ttps)),
+                    "source": "OCTI"
+                })
+            
+            # Check for next page
+            page_info = intrusion_data.get("pageInfo", {})
+            if page_info.get("hasNextPage") and page_info.get("endCursor"):
+                cursor = page_info["endCursor"]
+                log_debug(f"  Fetched {len(actors)} actors so far, getting next page...")
+            else:
+                break
 
         log_info(f"✅ Fetched {len(actors)} Threat Actors from OpenCTI")
         return pd.DataFrame(actors)

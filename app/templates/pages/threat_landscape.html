@@ -65,7 +65,7 @@
             hx-include="[name='search'], [name='origin'], [name='sort_by']">
             <option value="">All Sources</option>
             {% for source in sources %}
-            <option value="{{ source }}">{{ source }}</option>
+            <option value="{{ source }}">{{ 'OpenCTI' if source == 'OCTI' else source }}</option>
             {% endfor %}
         </select>
     </div>

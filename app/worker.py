@@ -154,7 +154,7 @@ def run_scheduled_job():
     log_info("⏰ WORKER: Running Scheduled Full Sync...")
     run_elastic_sync()
     run_mitre_sync() 
-    # run_opencti_sync() 
+    run_opencti_sync() 
 
 # ==========================================
 # --- MAIN LOOP ---

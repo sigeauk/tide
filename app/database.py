@@ -260,6 +260,20 @@ def ensure_columns(df, required_cols):
 
 # --- INGESTION (Worker Only) ---
 
+def clear_threat_actors():
+    """Clear all threat actors for a fresh live sync."""
+    conn = get_connection(read_only=False)
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM threat_actors").fetchone()[0]
+        conn.execute("DELETE FROM threat_actors WHERE 1=1")
+        log_info(f"Cleared {count} threat actors")
+        return count
+    except Exception as e:
+        log_error(f"Clear threat actors failed: {e}")
+        return 0
+    finally:
+        conn.close()
+
 def save_threat_data(df):
     if df.empty: return 0
     conn = get_connection(read_only=False)
@@ -272,7 +286,7 @@ def save_threat_data(df):
         if 'ttp_count' not in df.columns and 'ttps' in df.columns:
             df['ttp_count'] = df['ttps'].apply(lambda x: len(x) if isinstance(x, list) else 0)
 
-        target_cols = ['name', 'description', 'ttps', 'ttp_count', 'aliases', 'origin', 'source', 'last_updated']  # Added 'source'
+        target_cols = ['name', 'description', 'ttps', 'ttp_count', 'aliases', 'origin', 'source', 'last_updated']
         df['last_updated'] = datetime.now()
         df_final = ensure_columns(df, target_cols)
         
@@ -285,30 +299,127 @@ def save_threat_data(df):
             if isinstance(x, list):
                 return x
             return []
-        df_final.loc[:, 'source'] = df_final['source'].apply(to_source_list)
         
-        # Merge sources with existing
+        # Build a lookup of existing actors by name and aliases for merge matching
         conn_read = get_connection(read_only=True)
-        for index, row in df_final.iterrows():
-            actor_name = row['name']
-            existing = conn_read.execute("SELECT source FROM threat_actors WHERE name = ?", [actor_name]).fetchone()
-            if existing and existing[0]:
-                current_sources = existing[0]
-                new_sources = list(set(current_sources + row['source']))
-                df_final.at[index, 'source'] = new_sources
-        conn_read.close()
+        existing_rows = conn_read.execute(
+            "SELECT name, aliases, ttps, source FROM threat_actors"
+        ).fetchall()
         
-        conn.register('df_source', df_final)
-        conn.execute("""
-            INSERT INTO threat_actors (name, description, ttps, ttp_count, aliases, origin, source, last_updated)
-            SELECT name, description, ttps, ttp_count, aliases, origin, source, last_updated FROM df_source
-            ON CONFLICT (name) DO UPDATE SET
-                ttps = EXCLUDED.ttps,
-                ttp_count = EXCLUDED.ttp_count,
-                source = EXCLUDED.source,
-                last_updated = EXCLUDED.last_updated
-        """)
-        return len(df)
+        # Map: lowercase alias/name -> canonical DB name
+        alias_to_name = {}
+        # Map: canonical name -> existing data
+        existing_data = {}
+        for row in existing_rows:
+            db_name = row[0]
+            db_aliases = row[1] or ""
+            db_ttps = row[2] or []
+            db_source = row[3] or []
+            existing_data[db_name] = {
+                'aliases': db_aliases,
+                'ttps': db_ttps,
+                'source': db_source
+            }
+            # Index by lowercase name
+            alias_to_name[db_name.lower()] = db_name
+            # Index by each alias
+            for a in [x.strip() for x in db_aliases.split(",") if x.strip()]:
+                alias_to_name[a.lower()] = db_name
+        
+        saved = 0
+        for _, row in df_final.iterrows():
+            actor_name = row['name']
+            source_list = to_source_list(row['source'])
+            ttps_list = row['ttps'] if isinstance(row['ttps'], list) else []
+            incoming_aliases = row['aliases'] or ""
+            
+            # --- Alias-based matching ---
+            # Check if this incoming actor matches an existing actor by name or alias
+            match_name = None
+            
+            # 1. Direct name match (case-insensitive)
+            if actor_name.lower() in alias_to_name:
+                match_name = alias_to_name[actor_name.lower()]
+            
+            # 2. Check if any of the incoming actor's aliases match an existing name/alias
+            if not match_name:
+                for a in [x.strip() for x in incoming_aliases.split(",") if x.strip()]:
+                    if a.lower() in alias_to_name:
+                        match_name = alias_to_name[a.lower()]
+                        break
+            
+            if match_name and match_name != actor_name:
+                # This incoming actor is an alias of an existing actor - MERGE into existing
+                ex = existing_data[match_name]
+                merged_ttps = list(set((ex['ttps'] or []) + ttps_list))
+                merged_source = list(set((ex['source'] or []) + source_list))
+                # Merge aliases: combine existing + incoming name + incoming aliases
+                existing_alias_set = set(x.strip() for x in (ex['aliases'] or "").split(",") if x.strip())
+                incoming_alias_set = set(x.strip() for x in incoming_aliases.split(",") if x.strip())
+                existing_alias_set |= incoming_alias_set
+                existing_alias_set.add(actor_name)  # The incoming name becomes an alias of the canonical
+                existing_alias_set.discard(match_name)  # Don't list canonical name as its own alias
+                merged_aliases = ", ".join(sorted(existing_alias_set))
+                
+                # Use longer description if incoming has one
+                desc = row['description'] if row['description'] and len(str(row['description'])) > len(str(ex.get('desc', '') or '')) else None
+                
+                conn.execute("""
+                    UPDATE threat_actors 
+                    SET ttps = ?, ttp_count = ?, source = ?, aliases = ?, last_updated = ?
+                    WHERE name = ?
+                """, [merged_ttps, len(merged_ttps), merged_source, merged_aliases, row['last_updated'], match_name])
+                
+                # Update in-memory lookup
+                existing_data[match_name]['ttps'] = merged_ttps
+                existing_data[match_name]['source'] = merged_source
+                existing_data[match_name]['aliases'] = merged_aliases
+                # Register the incoming name as an alias too
+                alias_to_name[actor_name.lower()] = match_name
+                
+                log_debug(f"  Merged '{actor_name}' into existing '{match_name}' (alias match)")
+                saved += 1
+                continue
+            
+            # --- Normal upsert with TTP merging ---
+            if match_name:
+                # Same name exists - merge TTPs and sources
+                ex = existing_data[match_name]
+                merged_ttps = list(set((ex['ttps'] or []) + ttps_list))
+                merged_source = list(set((ex['source'] or []) + source_list))
+                # Merge aliases
+                existing_alias_set = set(x.strip() for x in (ex['aliases'] or "").split(",") if x.strip())
+                incoming_alias_set = set(x.strip() for x in incoming_aliases.split(",") if x.strip())
+                merged_aliases = ", ".join(sorted(existing_alias_set | incoming_alias_set))
+            else:
+                merged_ttps = ttps_list
+                merged_source = source_list
+                merged_aliases = incoming_aliases
+            
+            conn.execute("""
+                INSERT INTO threat_actors (name, description, ttps, ttp_count, aliases, origin, source, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (name) DO UPDATE SET
+                    ttps = EXCLUDED.ttps,
+                    ttp_count = EXCLUDED.ttp_count,
+                    source = EXCLUDED.source,
+                    aliases = EXCLUDED.aliases,
+                    last_updated = EXCLUDED.last_updated
+            """, [actor_name, row['description'], merged_ttps, len(merged_ttps), merged_aliases, row['origin'], merged_source, row['last_updated']])
+            
+            # Update in-memory lookup for subsequent rows in this batch
+            existing_data[actor_name] = {
+                'aliases': merged_aliases,
+                'ttps': merged_ttps,
+                'source': merged_source
+            }
+            alias_to_name[actor_name.lower()] = actor_name
+            for a in [x.strip() for x in merged_aliases.split(",") if x.strip()]:
+                alias_to_name[a.lower()] = actor_name
+            
+            saved += 1
+        conn_read.close()
+        return saved
     except Exception as e:
         log_error(f"Save Threat Data Failed: {e}")
         return 0

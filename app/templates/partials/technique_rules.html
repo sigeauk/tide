@@ -28,7 +28,7 @@
                 {{ '✓ Enabled' if rule.enabled else '✗ Disabled' }}
             </span>
         </div>
-        {% if rule.mitre_ids | length > 1 %}
+        {% if rule.mitre_ids %}
         <div class="rule-mitre-ids">
             {% for mid in rule.mitre_ids %}
             {{ mitre_pill(mid, neutral=true, clickable=true, size='sm') }}

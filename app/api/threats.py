@@ -237,7 +237,7 @@ async def sync_threats(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
 ):
-    """Trigger a sync of threat intel from MITRE ATT&CK files."""
+    """Trigger a sync of threat intel from MITRE ATT&CK files and OpenCTI."""
     import asyncio
     from app.services.sync import run_mitre_sync
     
@@ -248,13 +248,13 @@ async def sync_threats(
         if count > 0:
             return HTMLResponse(
                 f'<div class="toast toast-success" onclick="this.remove()">'
-                f'✅ Synced {count} threat actors from MITRE ATT&CK.'
+                f'✅ Synced {count} threat actors from MITRE ATT&CK and OpenCTI.'
                 f'</div>'
             )
         elif count == 0:
             return HTMLResponse(
                 '<div class="toast toast-warning" onclick="this.remove()">'
-                '⚠️ No MITRE data found. Check /opt/repos/mitre directory.'
+                '⚠️ No threat data found. Check /opt/repos/mitre directory and OpenCTI connection.'
                 '</div>'
             )
         else:
