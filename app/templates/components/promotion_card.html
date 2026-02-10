@@ -2,14 +2,6 @@
 {% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
 <!-- Promotion Card Component - Full Width -->
 
-{% set severity_colors = {
-    'critical': '#f87171',
-    'high': '#fb923c', 
-    'medium': '#facc15',
-    'low': '#4ade80',
-    'informational': '#60a5fa'
-} %}
-
 {% set rule_score = rule.score | default(0) %}
 {% set quality_score = rule.quality_score | default(0) %}
 {% set meta_score = rule.meta_score | default(0) %}
@@ -18,11 +10,10 @@
 {% set quality_pct = ((quality_score / quality_max) * 100) | round(1) if quality_max > 0 else 0 %}
 {% set meta_pct = ((meta_score / meta_max) * 100) | round(1) if meta_max > 0 else 0 %}
 
-{% set score_color = 'var(--color-success)' if rule_score >= 80 else ('var(--color-warning)' if rule_score >= 50 else 'var(--color-danger)') %}
-{% set quality_color = 'var(--color-success)' if quality_pct >= 80 else ('var(--color-warning)' if quality_pct >= 50 else 'var(--color-danger)') %}
-{% set meta_color = 'var(--color-success)' if meta_pct >= 80 else ('var(--color-warning)' if meta_pct >= 50 else 'var(--color-danger)') %}
+{% set score_class = 'success' if rule_score >= 80 else ('warning' if rule_score >= 50 else 'danger') %}
+{% set quality_class = 'success' if quality_pct >= 80 else ('warning' if quality_pct >= 50 else 'danger') %}
+{% set meta_class = 'success' if meta_pct >= 80 else ('warning' if meta_pct >= 50 else 'danger') %}
 {% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
-{% set sev_color = severity_colors.get(sev_value, '#94a3b8') %}
 
 <div class="promo-card" id="promo-{{ rule.rule_id }}">
     <!-- Header Row -->
@@ -30,7 +21,7 @@
         <div class="promo-name" title="{{ rule.name }}">{{ rule.name }}</div>
         <div class="promo-pills">
             {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true) }}
-            <span class="sev-pill" style="background-color: {{ sev_color }};">{{ sev_value | upper }}</span>
+            <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
             <span class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
                 {% if rule.enabled %}
                 <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -52,10 +43,10 @@
         <div class="score-card">
             <div class="score-card-header">
                 <span class="score-card-title">Quality Scores</span>
-                <span class="score-card-value" style="color: {{ quality_color }};">{{ quality_score }}/{{ quality_max }}</span>
+                <span class="score-card-value text-{{ quality_class }}">{{ quality_score }}/{{ quality_max }}</span>
             </div>
             <div class="score-track">
-                <div class="score-fill" style="width: {{ quality_pct }}%; background-color: {{ quality_color }};"></div>
+                <div class="score-fill fill-{{ quality_class }}" style="width: {{ quality_pct }}%;"></div>
             </div>
             <div class="score-grid quality">
                 <div class="score-item">
@@ -81,10 +72,10 @@
         <div class="score-card">
             <div class="score-card-header">
                 <span class="score-card-title">Meta Scores</span>
-                <span class="score-card-value" style="color: {{ meta_color }};">{{ meta_score }}/{{ meta_max }}</span>
+                <span class="score-card-value text-{{ meta_class }}">{{ meta_score }}/{{ meta_max }}</span>
             </div>
             <div class="score-track">
-                <div class="score-fill" style="width: {{ meta_pct }}%; background-color: {{ meta_color }};"></div>
+                <div class="score-fill fill-{{ meta_class }}" style="width: {{ meta_pct }}%;"></div>
             </div>
             <div class="score-grid meta">
                 <div class="score-item">
@@ -117,7 +108,7 @@
         <!-- Total Score Card -->
         <div class="score-card total">
             <div class="total-label">Rule Score</div>
-            <div class="total-value" style="color: {{ score_color }};">{{ rule_score }}</div>
+            <div class="total-value text-{{ score_class }}">{{ rule_score }}</div>
         </div>
     </div>
     

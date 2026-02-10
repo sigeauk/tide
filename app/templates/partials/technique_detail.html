@@ -54,11 +54,11 @@
             </div>
             
             <!-- Action Buttons -->
-            <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+            <div class="technique-actions">
                 <a href="https://attack.mitre.org/techniques/{{ technique.id.replace('.', '/') }}" 
                    target="_blank" 
                    rel="noopener noreferrer" 
-                   class="btn btn-secondary btn-sm" style="flex: 1;">
+                   class="btn btn-secondary btn-sm grow">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
                         <polyline points="15 3 21 3 21 9"/>
@@ -67,7 +67,7 @@
                     MITRE
                 </a>
                 <a href="/sigma?technique={{ technique.id }}" 
-                   class="btn btn-primary btn-sm" style="flex: 1;">
+                   class="btn btn-primary btn-sm grow">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="11" cy="11" r="8"/>
                         <path d="m21 21-4.3-4.3"/>
@@ -79,7 +79,7 @@
             <!-- Detection Rules Section -->
             {% if is_covered %}
             <div class="rules-section">
-                <h3 class="rules-title">Detection Rules {% if search %}<span style="font-weight: normal; font-size: 0.75rem; color: var(--color-primary);">(filtered by "{{ search }}")</span>{% else %}<span style="font-weight: normal; font-size: 0.75rem; color: var(--color-text-muted);">(all enabled)</span>{% endif %}</h3>
+                <h3 class="rules-title">Detection Rules {% if search %}<span class="rules-title-filter text-primary">(filtered by "{{ search }}")</span>{% else %}<span class="rules-title-filter text-muted">(all enabled)</span>{% endif %}</h3>
                 <div id="technique-rules" 
                      hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
                      hx-trigger="load"

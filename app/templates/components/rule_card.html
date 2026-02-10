@@ -4,20 +4,11 @@
 {# search variable is passed from rules_grid.html context for filtering sidebar #}
 {% set current_search = search | default('') %}
 
-{% set severity_colors = {
-    'critical': '#f87171',
-    'high': '#fb923c', 
-    'medium': '#facc15',
-    'low': '#4ade80',
-    'informational': '#60a5fa'
-} %}
-
 {% set rule_score = rule.score | default(0) %}
-{% set score_color = 'var(--color-success)' if rule_score >= 80 else ('var(--color-warning)' if rule_score >= 50 else 'var(--color-danger)') %}
+{% set score_class = 'success' if rule_score >= 80 else ('warning' if rule_score >= 50 else 'danger') %}
 {% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
-{% set sev_color = severity_colors.get(sev_value, '#94a3b8') %}
 {% set val_status = rule.validation_status | default('never') %}
-{% set val_color = 'var(--color-success)' if val_status == 'valid' else ('var(--color-warning)' if val_status == 'expired' else 'var(--color-danger)') %}
+{% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'expired' else 'danger') %}
 
 <div class="rule-card" id="rule-{{ rule.rule_id }}">
     <div class="rule-header">
@@ -35,7 +26,7 @@
                 {% endif %}
                 {{ (rule.space | default('default')) | capitalize }}
             </div>
-            <div class="sev-pill" style="background-color: {{ sev_color }};">
+            <div class="sev-pill sev-{{ sev_value }}">
                 {{ sev_value | upper }}
             </div>
             {# MITRE Pills - use neutral blue style for Rule Health cards #}
@@ -48,10 +39,10 @@
         <div class="score-section">
             <div class="score-meta">
                 <span>Quality Score</span>
-                <span class="score-value" style="color: {{ score_color }};">{{ rule_score }}/100</span>
+                <span class="score-value text-{{ score_class }}">{{ rule_score }}/100</span>
             </div>
             <div class="score-track">
-                <div class="score-fill" style="width: {{ rule_score }}%; background-color: {{ score_color }};"></div>
+                <div class="score-fill fill-{{ score_class }}" style="width: {{ rule_score }}%;"></div>
             </div>
         </div>
         
@@ -59,7 +50,7 @@
             <div class="meta-left">
                 <div class="meta-row">
                     <span class="meta-label">Validated:</span>
-                    <span class="meta-val" style="color: {{ val_color }};">
+                    <span class="meta-val text-{{ val_class }}">
                         {% if rule.validation_date %}
                             {{ rule.validation_date.strftime('%Y-%m-%d') }}
                         {% else %}

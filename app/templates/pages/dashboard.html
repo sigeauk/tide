@@ -4,66 +4,19 @@
 {% block title %}Dashboard | TIDE{% endblock %}
 
 {% block head %}
-<style>
-.module-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
-}
-
-.module-card {
-    background: var(--surface-2);
-    border: none;
-    border-top: 1px solid var(--highlight-2);
-    border-radius: var(--radius-md);
-    padding: 1rem;
-    transition: all var(--transition-fast);
-    text-decoration: none;
-    display: block;
-    box-shadow: var(--shadow-sm);
-}
-
-.module-card:hover {
-    background: var(--surface-2-hover);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow);
-}
-
-.module-title {
-    font-weight: 600;
-    font-size: 0.9rem;
-    color: var(--color-text);
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-bottom: 0.5rem;
-}
-
-.module-title svg {
-    color: var(--color-primary);
-}
-
-.module-desc {
-    font-size: 0.75rem;
-    color: var(--color-text-muted);
-    line-height: 1.5;
-}
-</style>
 {% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
-        Dashboard
-    </h1>
+    <h1 class="page-title-hero">Dashboard</h1>
     <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
 </div>
 
 <!-- Rule Health Metrics Row -->
-<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+<h3 class="section-title">
     {{ icon('shield-check', '18') }} Rule Health
 </h3>
-<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+<div class="metrics-grid mb-lg">
     <div class="metric-card">
         <p class="metric-value">{{ metrics.total_rules }}</p>
         <p class="metric-label">Total Rules</p>
@@ -88,10 +41,10 @@
 </div>
 
 <!-- Promotion Metrics Row -->
-<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+<h3 class="section-title">
     {{ icon('circle-arrow-up', '18') }} Promotion
 </h3>
-<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+<div class="metrics-grid mb-lg">
     <div class="metric-card">
         <p class="metric-value">{{ metrics.staging_rules }}</p>
         <p class="metric-label">Staging Rules</p>
@@ -106,10 +59,10 @@
 </div>
 
 <!-- Threat Landscape Metrics Row -->
-<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+<h3 class="section-title">
     {{ icon('target', '18') }} Threat Landscape
 </h3>
-<div class="metrics-grid" style="margin-bottom: 1.5rem;">
+<div class="metrics-grid mb-lg">
     <div class="metric-card">
         <p class="metric-value">{{ metrics.threat_actors }}</p>
         <p class="metric-label">Threat Actors</p>
@@ -132,7 +85,7 @@
 </div>
 
 <!-- Quick Actions -->
-<h3 style="font-size: 0.9rem; color: var(--color-primary); margin-bottom: 0.75rem; display: flex; align-items: center; gap: 0.5rem;">
+<h3 class="section-title">
     {{ icon('layout-grid', '18') }} Quick Actions
 </h3>
 <div class="module-grid">

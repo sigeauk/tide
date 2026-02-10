@@ -5,56 +5,11 @@
 
 {% block head %}
 <link rel="stylesheet" href="/static/css/heatmap.css?v={{ cache_bust }}">
-<style>
-/* Modal Overlay Styles */
-.modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: oklch(0% 0 0 / 0.7);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9999;
-    animation: fadeIn 0.2s ease-out;
-}
-
-@keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
-}
-
-.modal-content {
-    background: var(--surface-1);
-    border: 1px solid var(--color-border);
-    border-top: 1px solid var(--highlight-1);
-    border-radius: var(--radius-lg);
-    padding: 1.5rem;
-    max-width: 90vw;
-    max-height: 90vh;
-    overflow-y: auto;
-    box-shadow: 0 20px 60px oklch(0% 0 0 / 0.5);
-    animation: slideUp 0.2s ease-out;
-}
-
-@keyframes slideUp {
-    from { 
-        opacity: 0; 
-        transform: translateY(20px); 
-    }
-    to { 
-        opacity: 1; 
-        transform: translateY(0); 
-    }
-}
-</style>
 {% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1 style="font-size: 2.5rem; color: var(--color-primary); font-weight: 700; margin-bottom: 0.5rem;">
+    <h1 class="page-title-hero">
         Rule Promotion
     </h1>
     <p class="page-subtitle">Promote validated detection rules from Staging to Production.</p>
@@ -182,17 +137,17 @@
             if (e.target === modal) modal.remove();
         };
         modal.innerHTML = `
-            <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 500px;">
-                <h2 style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1rem;">Promote to Production</h2>
-                <p style="color: var(--color-text-secondary); margin-bottom: 1.5rem;">
+            <div class="modal-content modal-sm" onclick="event.stopPropagation()">
+                <h2 class="modal-section-title">Promote to Production</h2>
+                <p class="text-secondary mb-md">
                     Are you sure you want to promote <strong>${ruleName}</strong> to the Production environment?
                 </p>
-                <div style="background: var(--color-warning-bg); border: 1px solid var(--color-warning); border-radius: var(--radius-md); padding: 0.75rem; margin-bottom: 1.5rem;">
-                    <p style="color: var(--color-warning); font-size: 0.85rem;">
+                <div class="alert alert-warning mb-md">
+                    <p>
                         ⚠️ This will move the rule from Staging to Production and delete it from Staging.
                     </p>
                 </div>
-                <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <div class="modal-actions">
                     <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">
                         Cancel
                     </button>

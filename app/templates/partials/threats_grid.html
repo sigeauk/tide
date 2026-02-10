@@ -4,7 +4,7 @@
 {% if actors and actors | length > 0 %}
 <div class="threats-grid">
     {% for actor in actors %}
-    {% set cov_color = 'var(--color-success)' if actor.coverage_pct >= 75 else ('var(--color-warning)' if actor.coverage_pct >= 25 else 'var(--color-danger)') %}
+    {% set cov_class = 'success' if actor.coverage_pct >= 75 else ('warning' if actor.coverage_pct >= 25 else 'danger') %}
     <div class="threat-card" id="actor-{{ loop.index }}">
         <!-- Header: Flag + Name + Pills on right -->
         <div class="threat-header">
@@ -51,10 +51,10 @@
         <div class="threat-coverage">
             <div class="coverage-meta">
                 <span>Coverage</span>
-                <span class="coverage-value" style="color: {{ cov_color }};">{{ actor.covered_count }}/{{ actor.ttp_count }} ({{ actor.coverage_pct }}%)</span>
+                <span class="coverage-value text-{{ cov_class }}">{{ actor.covered_count }}/{{ actor.ttp_count }} ({{ actor.coverage_pct }}%)</span>
             </div>
             <div class="coverage-track">
-                <div class="coverage-fill" style="width: {{ actor.coverage_pct }}%; background-color: {{ cov_color }};"></div>
+                <div class="coverage-fill fill-{{ cov_class }}" style="width: {{ actor.coverage_pct }}%;"></div>
             </div>
         </div>
         
@@ -118,8 +118,7 @@
         {% endif %}
     </p>
     <button 
-        class="btn btn-primary" 
-        style="margin-top: 1rem;"
+        class="btn btn-primary mt-md"
         hx-post="/api/threats/sync"
         hx-target="#toast-container"
         hx-swap="beforeend">

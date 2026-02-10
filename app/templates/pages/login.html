@@ -4,7 +4,7 @@
 {% block title %}Login | TIDE{% endblock %}
 
 {% block content %}
-<div class="login-container">
+<div class="login-container login-page">
     <div class="login-card">
         <div class="login-logo">
             <img src="/static/icons/tide.png" alt="TIDE" width="80" height="80">
@@ -22,7 +22,7 @@
         </a>
         
         <div class="login-footer">
-            <p style="color: var(--color-primary); font-size: 0.8rem;">TIDE v{{ settings.tide_version }}</p>
+            <p class="text-primary text-sm">TIDE v{{ settings.tide_version }}</p>
             {% if settings.auth_disabled %}
             <p class="auth-disabled-notice">
                 {{ icon_text('triangle-alert', 'Authentication is disabled', '14', 'text-warning') }}
@@ -31,85 +31,4 @@
         </div>
     </div>
 </div>
-
-<style>
-    /* Hide sidebar on login page */
-    .sidebar { display: none !important; }
-    .main-content { margin-left: 0 !important; }
-    
-    .login-container {
-        min-height: 100vh;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        padding: 2rem;
-        background: var(--surface-base);
-    }
-    
-    .login-card {
-        background: var(--surface-1);
-        border: var(--border-card);
-        border-top: 1px solid var(--highlight-1);
-        border-radius: var(--radius-xl);
-        padding: 3rem;
-        text-align: center;
-        max-width: 400px;
-        width: 100%;
-        box-shadow: var(--shadow-lg);
-    }
-    
-    .login-logo {
-        margin-bottom: 1.5rem;
-        display: flex;
-        justify-content: center;
-        justify-items: center;
-    }
-    
-    .login-logo img {
-        border-radius: var(--radius-lg);
-    }
-    
-    .login-title {
-        font-size: 1.75rem;
-        font-weight: 700;
-        color: var(--color-text);
-        margin-bottom: 0.5rem;
-    }
-    
-    .login-subtitle {
-        font-size: 0.9rem;
-        color: var(--color-text-muted);
-        margin-bottom: 2rem;
-    }
-    
-    .login-description {
-        font-size: 0.95rem;
-        color: var(--color-text-secondary);
-        margin-bottom: 2rem;
-        line-height: 1.6;
-    }
-    
-    .btn-login {
-        width: 100%;
-        padding: 0.875rem 1.5rem;
-        font-size: 1rem;
-        justify-content: center;
-    }
-    
-    .login-footer {
-        margin-top: 2rem;
-        padding-top: 1.5rem;
-        border-top: 1px solid var(--color-border-muted);
-        color: var(--color-text-muted);
-        font-size: 0.8rem;
-    }
-    
-    .auth-disabled-notice {
-        margin-top: 0.5rem;
-        padding: 0.5rem;
-        background: var(--color-warning-bg);
-        border-radius: var(--radius-md);
-        color: var(--color-warning-text);
-    }
-</style>
 {% endblock %}

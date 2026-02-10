@@ -38,13 +38,13 @@
     <p class="metric-label">Severity Levels</p>
     <p class="metric-sub">
         {% if metrics.staging_severity.get('critical', 0) > 0 %}
-        <span style="color: #f87171;">C:{{ metrics.staging_severity.get('critical', 0) }}</span>
+        <span class="text-danger">C:{{ metrics.staging_severity.get('critical', 0) }}</span>
         {% endif %}
         {% if metrics.staging_severity.get('high', 0) > 0 %}
-        <span style="color: #fb923c;">H:{{ metrics.staging_severity.get('high', 0) }}</span>
+        <span class="text-warning">H:{{ metrics.staging_severity.get('high', 0) }}</span>
         {% endif %}
         {% if metrics.staging_severity.get('medium', 0) > 0 %}
-        <span style="color: #facc15;">M:{{ metrics.staging_severity.get('medium', 0) }}</span>
+        <span class="text-sev-medium">M:{{ metrics.staging_severity.get('medium', 0) }}</span>
         {% endif %}
     </p>
 </div>
