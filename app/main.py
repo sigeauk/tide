@@ -16,8 +16,8 @@ import os
 import time
 
 from app.config import get_settings
-from app.api.deps import get_db, get_current_user, CurrentUser, RequireUser
-from app.api import auth, rules, heatmap, threats, promotion, sigma
+from app.api.deps import get_db, get_current_user, CurrentUser, RequireUser, DbDep
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api
 
 # Configure logging
 logging.basicConfig(
@@ -85,6 +85,10 @@ async def lifespan(app: FastAPI):
         id="elastic_sync",
         replace_existing=True,
     )
+    
+    # Schedule rule log export job
+    _schedule_rule_log_job(db)
+    
     scheduler.start()
     logger.info(f"⏰ Scheduler started (sync every {settings.sync_interval_minutes}m)")
     
@@ -93,6 +97,59 @@ async def lifespan(app: FastAPI):
     # Shutdown
     scheduler.shutdown()
     logger.info("🛑 TIDE shutdown complete")
+
+
+def _schedule_rule_log_job(db=None):
+    """Schedule or reschedule the daily rule log export based on app_settings."""
+    try:
+        if db is None:
+            from app.services.database import get_database_service
+            db = get_database_service()
+        
+        app_settings = db.get_all_settings()
+        enabled = app_settings.get("rule_log_enabled", "false").lower() == "true"
+        schedule_time = app_settings.get("rule_log_schedule", "00:00")
+        
+        # Remove existing job if present
+        try:
+            scheduler.remove_job("rule_log_export")
+        except Exception:
+            pass
+        
+        if enabled:
+            parts = schedule_time.split(":")
+            hour = int(parts[0]) if len(parts) > 0 else 0
+            minute = int(parts[1]) if len(parts) > 1 else 0
+            
+            scheduler.add_job(
+                _run_rule_log_export,
+                "cron",
+                hour=hour,
+                minute=minute,
+                id="rule_log_export",
+                replace_existing=True,
+            )
+            logger.info(f"📝 Rule log export scheduled at {schedule_time}")
+        else:
+            logger.info("📝 Rule log export disabled")
+    except Exception as e:
+        logger.warning(f"Could not schedule rule log job: {e}")
+
+
+def _run_rule_log_export():
+    """Synchronous wrapper for rule log export (called by scheduler)."""
+    try:
+        from app.services.database import get_database_service
+        from app.services.rule_logger import run_rule_log_export
+        db = get_database_service()
+        run_rule_log_export(db)
+    except Exception as e:
+        logger.error(f"Rule log export failed: {e}")
+
+
+def reschedule_rule_log_job():
+    """Public function to reschedule rule log job (called from settings API)."""
+    _schedule_rule_log_job()
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -156,8 +213,45 @@ class AuthMiddleware(BaseHTTPMiddleware):
         login_url = f"/login?next={return_url}"
         
         if not access_token:
-            # No token - redirect to login
-            logger.info(f"No access token for path: {path}, redirecting to login (is_htmx={is_htmx})")
+            # No access_token cookie — try refresh before redirecting to login
+            if refresh_token:
+                logger.info(f"No access token but refresh token exists for path: {path}, attempting refresh...")
+                from app.services.auth import get_auth_service
+                auth_service = get_auth_service()
+                new_tokens = await auth_service.refresh_token(refresh_token)
+                if new_tokens:
+                    new_access_token = new_tokens.get("access_token")
+                    user = auth_service.get_user_from_token(new_access_token)
+                    if user:
+                        logger.info(f"Silent refresh successful for {user.username}, continuing to {path}")
+                        response = await call_next(request)
+                        response = await add_cache_headers(response)
+                        use_secure = settings.app_url.startswith("https://")
+                        response.set_cookie(
+                            key="access_token",
+                            value=new_tokens["access_token"],
+                            httponly=True,
+                            secure=use_secure,
+                            samesite="lax",
+                            max_age=new_tokens.get("expires_in", 3600),
+                        )
+                        if "refresh_token" in new_tokens:
+                            response.set_cookie(
+                                key="refresh_token",
+                                value=new_tokens["refresh_token"],
+                                httponly=True,
+                                secure=use_secure,
+                                samesite="lax",
+                                max_age=new_tokens.get("refresh_expires_in", 86400),
+                            )
+                        return response
+                    else:
+                        logger.warning("Refresh succeeded but new token failed validation")
+                else:
+                    logger.warning(f"Refresh token also failed for path: {path}")
+            
+            # No token and no valid refresh - redirect to login
+            logger.info(f"No valid tokens for path: {path}, redirecting to login (is_htmx={is_htmx})")
             if is_htmx:
                 from fastapi.responses import Response
                 response = Response(content="", status_code=200)
@@ -370,6 +464,7 @@ def create_app() -> FastAPI:
     app.include_router(threats.router)
     app.include_router(promotion.router)
     app.include_router(sigma.router)
+    app.include_router(settings_api.router)
     
     # --- HEALTH CHECK ---
     
@@ -670,16 +765,18 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/settings", response_class=HTMLResponse)
-    async def settings_page(request: Request, user: CurrentUser):
-        """Settings page (placeholder)."""
+    async def settings_page(request: Request, user: CurrentUser, db: DbDep):
+        """Settings page - configure integrations and logging."""
+        app_settings = db.get_all_settings()
+        env_settings = get_settings()
         return render_template(
-            "pages/placeholder.html",
+            "pages/settings.html",
             request,
             {
                 "user": user,
                 "active_page": "settings",
-                "page_title": "Settings",
-                "page_subtitle": "Configure integrations and sync settings.",
+                "app_settings": app_settings,
+                "env": env_settings,
             }
         )
     

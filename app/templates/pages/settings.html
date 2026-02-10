@@ -1,0 +1,718 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title-hero">Settings</h1>
+    <p class="page-subtitle">Configure logging, integrations, and user preferences.</p>
+</div>
+
+<!-- Tab Navigation -->
+<div class="settings-tabs">
+    <button class="settings-tab active" data-tab="logging" onclick="switchTab('logging')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="16" x2="8" y1="13" y2="13"/>
+            <line x1="16" x2="8" y1="17" y2="17"/>
+        </svg>
+        Logging
+    </button>
+    <button class="settings-tab" data-tab="integrations" onclick="switchTab('integrations')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+            <circle cx="12" cy="12" r="3"/>
+        </svg>
+        Integrations
+    </button>
+    <button class="settings-tab" data-tab="preferences" onclick="switchTab('preferences')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2"/><path d="M12 20v2"/>
+            <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
+            <path d="M2 12h2"/><path d="M20 12h2"/>
+            <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+        </svg>
+        Preferences
+    </button>
+</div>
+
+<!-- ═══ LOGGING TAB ═══ -->
+<div class="settings-panel active" id="tab-logging">
+<form id="settings-form" hx-post="/api/settings/save" hx-swap="none">
+
+<div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
+
+    <!-- Rule Logging Config -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" x2="8" y1="13" y2="13"/>
+                <line x1="16" x2="8" y1="17" y2="17"/>
+            </svg>
+            <h2 class="preference-title">Rule Logging</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Enable Rule Logging</span>
+                    <span class="preference-desc">Export detection rule statistics as JSON lines daily for SIEM ingestion</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" name="rule_log_enabled" id="rule_log_enabled"
+                           {{ 'checked' if app_settings.get('rule_log_enabled', 'false') == 'true' else '' }}>
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Host Log Path</span>
+                    <span class="preference-desc">Where your SIEM agent reads from (set via <code style="color:var(--color-primary);">RULE_LOG_PATH</code> in .env)</span>
+                </div>
+                <input type="text" class="form-input" id="rule_log_path"
+                       value="{{ env.rule_log_host_path }}" readonly
+                       style="opacity: 0.7; cursor: default;">
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Container Path</span>
+                    <span class="preference-desc">Internal Docker path mapped via <code style="color:var(--color-primary);">./data:/app/data</code></span>
+                </div>
+                <span style="white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-text-secondary);">/app/data/log/rules</span>
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Schedule (24h)</span>
+                    <span class="preference-desc">Time of day to export rule logs (HH:MM format)</span>
+                </div>
+                <input type="time" class="form-input" name="rule_log_schedule" id="rule_log_schedule"
+                       value="{{ app_settings.get('rule_log_schedule', '00:00') }}">
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Retention (days)</span>
+                    <span class="preference-desc">Log files older than this are automatically deleted</span>
+                </div>
+                <input type="number" class="form-input" name="rule_log_retention_days" id="rule_log_retention_days"
+                       value="{{ app_settings.get('rule_log_retention_days', '7') }}"
+                       min="1" max="365" style="width: 80px;">
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">File Naming</span>
+                </div>
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-primary);">YYYY-MM-DD-rules.log</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Log Format Preview -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="16 18 22 12 16 6"/>
+                <polyline points="8 6 2 12 8 18"/>
+            </svg>
+            <h2 class="preference-title">Log Format</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="preference-info" style="margin-bottom: 0.75rem;">
+                <span class="preference-label">JSON Line Format</span>
+                <span class="preference-desc">Each rule is written as a single JSON line per day. Point your SIEM agent at the host log path to ingest.</span>
+            </div>
+            
+            <div class="code-preview">
+                <code>{
+  "date": "2026-02-10T00:00:00Z",
+  "rule_id": "abc-123",
+  "name": "Example Rule",
+  "space": "production",
+  "severity": "high",
+  "author": "Elastic",
+  "enabled": true,
+  "score_mapping": 20,
+  "score_search_time": 10,
+  "score_field_type": 11,
+  "score_language": 9,
+  "quality_score": 50,
+  "score_note": 20,
+  "score_override": 5,
+  "score_tactics": 3,
+  "score_techniques": 7,
+  "score_author": 5,
+  "score_highlights": 10,
+  "meta_score": 50,
+  "score": 100,
+  "mitre_ids": ["T1059.001"],
+  "last_checked_on": "2026-01-31T00:00:00Z",
+  "checked_by": "analyst"
+}</code>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<!-- Logging Action Bar -->
+<div class="settings-actions">
+    <button type="submit" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+            <polyline points="17 21 17 13 7 13 7 21"/>
+            <polyline points="7 3 7 8 15 8"/>
+        </svg>
+        Save Settings
+    </button>
+    
+    <button type="button" class="btn btn-secondary"
+            hx-post="/api/settings/rule-log/export"
+            hx-swap="none">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" x2="12" y1="15" y2="3"/>
+        </svg>
+        Export Now
+    </button>
+</div>
+
+</form>
+</div>
+
+<!-- ═══ INTEGRATIONS TAB ═══ -->
+<div class="settings-panel" id="tab-integrations">
+
+<div class="preferences-grid" style="grid-template-columns: 1fr;">
+
+    <!-- Connected Services -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                <circle cx="12" cy="12" r="3"/>
+            </svg>
+            <h2 class="preference-title">Connected Services</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="integrations-grid">
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Elasticsearch</span>
+                        <span class="preference-desc">{{ env.elasticsearch_url }}</span>
+                    </div>
+                    <span class="status-dot status-{{ 'active' if env.elastic_api_key else 'inactive' }}">{{ 'Connected' if env.elastic_api_key else 'No API Key' }}</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Kibana</span>
+                        <span class="preference-desc">{{ env.elastic_url }}</span>
+                    </div>
+                    <span class="status-dot status-{{ 'active' if env.elastic_api_key else 'inactive' }}">{{ 'Connected' if env.elastic_api_key else 'No API Key' }}</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">OpenCTI</span>
+                        <span class="preference-desc">{{ env.opencti_url }}</span>
+                    </div>
+                    <span class="status-dot status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Keycloak</span>
+                        <span class="preference-desc">{{ env.keycloak_url }}</span>
+                    </div>
+                    <span class="status-dot status-{{ 'inactive' if env.auth_disabled else 'active' }}">{{ 'Disabled' if env.auth_disabled else 'Active' }}</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">GitLab</span>
+                        <span class="preference-desc">{{ env.gitlab_url }}</span>
+                    </div>
+                    <span class="status-dot status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Kibana Spaces</span>
+                        <span class="preference-desc">{{ env.kibana_spaces }}</span>
+                    </div>
+                    <span class="status-dot status-active">Configured</span>
+                </div>
+
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Sync Interval</span>
+                        <span class="preference-desc">Background sync frequency</span>
+                    </div>
+                    <span class="status-dot status-active">{{ env.sync_interval_minutes }}m</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Repositories -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/>
+                <path d="M9 18c-4.51 2-5-2-7-2"/>
+            </svg>
+            <h2 class="preference-title">Repositories</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="integrations-grid">
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">MITRE Enterprise ATT&amp;CK</span>
+                        <span class="preference-desc">{{ env.mitre_source | truncate(60, True, '...') }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">MITRE Mobile ATT&amp;CK</span>
+                        <span class="preference-desc">{{ env.mitre_mobile_source | truncate(60, True, '...') }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">MITRE ICS ATT&amp;CK</span>
+                        <span class="preference-desc">{{ env.mitre_ics_source | truncate(60, True, '...') }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">MITRE PRE-ATT&amp;CK</span>
+                        <span class="preference-desc">{{ env.mitre_pre_source | truncate(60, True, '...') }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Sigma Rules</span>
+                        <span class="preference-desc">{{ env.sigma_repo_url }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+                
+                <div class="integration-row">
+                    <div class="integration-info">
+                        <span class="preference-label">Elastic Detection Rules</span>
+                        <span class="preference-desc">{{ env.elastic_repo_url }}</span>
+                    </div>
+                    <span class="status-dot status-active">Active</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div class="preference-info" style="margin-top: 1rem;">
+    <span class="preference-desc">Integration settings are configured via environment variables in the <code style="color:var(--color-primary);">.env</code> file. Restart the container after changes.</span>
+</div>
+
+</div>
+
+<!-- ═══ PREFERENCES TAB ═══ -->
+<div class="settings-panel" id="tab-preferences">
+
+<div class="preferences-grid">
+
+    <!-- Appearance -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="4"/>
+                <path d="M12 2v2"/><path d="M12 20v2"/>
+                <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
+                <path d="M2 12h2"/><path d="M20 12h2"/>
+                <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+            </svg>
+            <h2 class="preference-title">Appearance</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Theme</span>
+                    <span class="preference-desc">Choose between light and dark mode</span>
+                </div>
+                <div class="theme-toggle-group">
+                    <button type="button" class="theme-btn" id="theme-dark" onclick="setTheme('dark')">
+                        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                        Dark
+                    </button>
+                    <button type="button" class="theme-btn" id="theme-light" onclick="setTheme('light')">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                        Light
+                    </button>
+                </div>
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Brand Color</span>
+                    <span class="preference-desc">Customize the primary accent hue (0-360)</span>
+                </div>
+                <div class="hue-picker">
+                    <input type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" oninput="previewHue(this.value)">
+                    <span class="hue-value" id="hue-value">240</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notifications -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
+                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
+            </svg>
+            <h2 class="preference-title">Notifications</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Sync Alerts</span>
+                    <span class="preference-desc">Show toast notifications on sync completion</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="notify-sync" checked onchange="savePref('notify-sync', this.checked)">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Validation Reminders</span>
+                    <span class="preference-desc">Alert when rules need revalidation</span>
+                </div>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="notify-validation" checked onchange="savePref('notify-validation', this.checked)">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Display -->
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect width="7" height="9" x="3" y="3" rx="1"/>
+                <rect width="7" height="5" x="14" y="3" rx="1"/>
+                <rect width="7" height="9" x="14" y="12" rx="1"/>
+                <rect width="7" height="5" x="3" y="16" rx="1"/>
+            </svg>
+            <h2 class="preference-title">Display</h2>
+        </div>
+        
+        <div class="preference-body">
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Cards Per Row</span>
+                    <span class="preference-desc">Default grid layout for rule cards</span>
+                </div>
+                <select class="form-select" id="cards-per-row" onchange="savePref('cards-per-row', this.value)">
+                    <option value="2">2 Cards</option>
+                    <option value="3" selected>3 Cards</option>
+                    <option value="4">4 Cards</option>
+                </select>
+            </div>
+            
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Default Page Size</span>
+                    <span class="preference-desc">Items shown per page</span>
+                </div>
+                <select class="form-select" id="page-size" onchange="savePref('page-size', this.value)">
+                    <option value="12">12</option>
+                    <option value="24" selected>24</option>
+                    <option value="48">48</option>
+                </select>
+            </div>
+        </div>
+    </div>
+
+</div>
+</div>
+
+<style>
+/* Tab navigation */
+.settings-tabs {
+    display: flex;
+    gap: 0.25rem;
+    margin-bottom: 1.5rem;
+    border-bottom: 1px solid var(--color-border-muted);
+    padding-bottom: 0;
+}
+
+.settings-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.25rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+    margin-bottom: -1px;
+}
+
+.settings-tab:hover {
+    color: var(--color-text);
+    background: var(--color-bg-surface);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+}
+
+.settings-tab.active {
+    color: var(--color-primary);
+    border-bottom-color: var(--color-primary);
+}
+
+.settings-tab svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+}
+
+/* Tab panels */
+.settings-panel {
+    display: none;
+}
+
+.settings-panel.active {
+    display: block;
+}
+
+/* Fix grid overflow for all cards */
+.settings-panel .preference-card {
+    min-width: 0;
+    overflow: hidden;
+}
+
+/* Action bar */
+.settings-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1.5rem;
+    border-top: 1px solid var(--color-border-muted);
+}
+
+.settings-actions .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* Form inputs */
+.form-input {
+    background: var(--color-bg-action);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    padding: 0.5rem 0.75rem;
+    color: var(--color-text);
+    font-size: 0.875rem;
+    font-family: inherit;
+    transition: border-color var(--transition-fast);
+    width: 250px;
+}
+
+.form-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px var(--color-primary-muted);
+}
+
+.form-input[type="number"] {
+    width: 80px;
+    text-align: center;
+}
+
+.form-input[type="time"] {
+    width: 120px;
+}
+
+/* Code preview */
+.code-preview {
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    padding: 1rem;
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    color: var(--color-text-secondary);
+    white-space: pre;
+    overflow: hidden;
+}
+
+/* Integration rows */
+.integrations-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.integration-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    background: var(--color-bg-base);
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    max-width: 100%;
+}
+
+.integration-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    flex: 1;
+}
+
+/* Status dots */
+.status-dot {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.status-dot::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.status-active {
+    color: oklch(0.75 0.15 145);
+}
+
+.status-active::before {
+    background: oklch(0.75 0.15 145);
+    box-shadow: 0 0 6px oklch(0.75 0.15 145 / 0.5);
+}
+
+.status-inactive {
+    color: var(--color-text-muted);
+}
+
+.status-inactive::before {
+    background: var(--color-text-muted);
+}
+</style>
+
+<script>
+// Tab switching
+window.switchTab = function(tabName) {
+    document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+    document.querySelector('.settings-tab[data-tab="' + tabName + '"]').classList.add('active');
+    document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('tab-' + tabName).classList.add('active');
+    localStorage.setItem('settings-active-tab', tabName);
+};
+
+// Theme management
+window.setTheme = function(theme) {
+    if (theme === 'light') {
+        document.body.classList.add('light');
+    } else {
+        document.body.classList.remove('light');
+    }
+    localStorage.setItem('theme', theme);
+    updateThemeButtons(theme);
+};
+
+function updateThemeButtons(theme) {
+    var darkBtn = document.getElementById('theme-dark');
+    var lightBtn = document.getElementById('theme-light');
+    if (darkBtn) darkBtn.classList.toggle('active', theme === 'dark');
+    if (lightBtn) lightBtn.classList.toggle('active', theme === 'light');
+}
+
+// Hue preview
+window.previewHue = function(value) {
+    var el = document.getElementById('hue-value');
+    if (el) el.textContent = value;
+    document.documentElement.style.setProperty('--brand-hue', value);
+    localStorage.setItem('brand-hue', value);
+};
+
+// Save preference
+window.savePref = function(key, value) {
+    localStorage.setItem('pref-' + key, value);
+    showToast('Preference saved', 'success');
+};
+
+// Initialize settings page
+(function initSettingsPage() {
+    var urlParams = new URLSearchParams(window.location.search);
+    var tabFromUrl = urlParams.get('tab');
+    var savedTab = tabFromUrl || localStorage.getItem('settings-active-tab');
+    if (savedTab) switchTab(savedTab);
+
+    var theme = localStorage.getItem('theme') || 'dark';
+    updateThemeButtons(theme);
+
+    var hueSlider = document.getElementById('hue-slider');
+    if (hueSlider) {
+        var hue = localStorage.getItem('brand-hue') || '240';
+        hueSlider.value = hue;
+        var hueValue = document.getElementById('hue-value');
+        if (hueValue) hueValue.textContent = hue;
+    }
+
+    ['notify-sync', 'notify-validation'].forEach(function(key) {
+        var val = localStorage.getItem('pref-' + key);
+        var el = document.getElementById(key);
+        if (val !== null && el) el.checked = val === 'true';
+    });
+
+    ['cards-per-row', 'page-size'].forEach(function(key) {
+        var val = localStorage.getItem('pref-' + key);
+        var el = document.getElementById(key);
+        if (val && el) el.value = val;
+    });
+})();
+</script>
+{% endblock %}

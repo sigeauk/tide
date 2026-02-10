@@ -64,18 +64,12 @@
                 </div>
             </div>
             <div class="meta-right">
-                <div class="meta-item">
+                <div class="meta-row">
                     <span class="meta-label">Author:</span>
-                    <span class="meta-val">
-                        {% if rule.author and rule.author | length > 16 %}
-                            {{ rule.author[:16] }}...
-                        {% else %}
-                            {{ rule.author | default('-') }}
-                        {% endif %}
-                    </span>
+                    <span class="meta-val">{{ rule.author | default('-') | truncate(18, True, '...') }}</span>
                 </div>
-                <div class="meta-item">
-                    <span class="meta-label">Lang:</span>
+                <div class="meta-row">
+                    <span class="meta-label">Language:</span>
                     <span class="meta-val">{{ rule.language | default('kuery') }}</span>
                 </div>
             </div>

@@ -80,8 +80,26 @@ class Settings(BaseSettings):
         default="https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
         alias="MITRE_SOURCE"
     )
+    mitre_mobile_source: str = Field(
+        default="https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json",
+        alias="MITRE_MOBILE_SOURCE"
+    )
+    mitre_ics_source: str = Field(
+        default="https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json",
+        alias="MITRE_ICS_SOURCE"
+    )
+    mitre_pre_source: str = Field(
+        default="https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json",
+        alias="MITRE_PRE_SOURCE"
+    )
+    sigma_repo_url: str = Field(default="https://github.com/SigmaHQ/sigma.git", alias="SIGMA_REPO_URL")
+    elastic_repo_url: str = Field(default="https://github.com/elastic/detection-rules.git", alias="ELASTIC_REPO_URL")
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")
+    
+    # --- RULE LOGGING ---
+    # Host path from .env (displayed on settings page for SIEM agent reference)
+    rule_log_host_path: str = Field(default="/app/data/log/rules", alias="RULE_LOG_PATH")
     
     @property
     def keycloak_internal(self) -> str:

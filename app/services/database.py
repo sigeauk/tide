@@ -22,7 +22,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class DatabaseService:
@@ -240,6 +240,26 @@ class DatabaseService:
             self._set_schema_version(conn, 3)
             logger.info("✅ Migration 3: Composite PK for detection_rules")
         
+        # Migration 4: App settings table for runtime configuration
+        if current_version < 4:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key VARCHAR PRIMARY KEY,
+                    value VARCHAR,
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            # Insert defaults
+            conn.execute("""
+                INSERT OR IGNORE INTO app_settings (key, value) VALUES
+                    ('rule_log_enabled', 'false'),
+                    ('rule_log_path', '/app/data/log/rules'),
+                    ('rule_log_schedule', '00:00'),
+                    ('rule_log_retention_days', '7')
+            """)
+            self._set_schema_version(conn, 4)
+            logger.info("✅ Migration 4: App settings table created")
+        
         logger.info(f"✅ Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -391,21 +411,28 @@ class DatabaseService:
             count_query = query.replace("SELECT *", "SELECT COUNT(*)")
             total = conn.execute(count_query, params).fetchone()[0]
             
-            # Apply sorting
-            sort_map = {
-                "score_asc": "score ASC",
-                "score_desc": "score DESC",
-                "name_asc": "name ASC",
-                "name_desc": "name DESC",
-            }
-            order_by = sort_map.get(filters.sort_by, "score ASC")
-            query += f" ORDER BY {order_by}"
+            # Check if sorting by validation date (Python-side sort needed)
+            is_validation_sort = filters.sort_by in ("validated_asc", "validated_desc")
             
-            # Pagination
-            offset = (filters.page - 1) * filters.page_size
-            query += f" LIMIT {filters.page_size} OFFSET {offset}"
+            # Apply sorting (DB-side for DB columns)
+            if not is_validation_sort:
+                sort_map = {
+                    "score_asc": "score ASC",
+                    "score_desc": "score DESC",
+                    "name_asc": "name ASC",
+                    "name_desc": "name DESC",
+                }
+                order_by = sort_map.get(filters.sort_by, "score ASC")
+                query += f" ORDER BY {order_by}"
             
-            df = conn.execute(query, params).df()
+            if is_validation_sort:
+                # Fetch ALL matching rows for Python-side sort, then paginate
+                df = conn.execute(query, params).df()
+            else:
+                # Pagination (DB-side)
+                offset = (filters.page - 1) * filters.page_size
+                query += f" LIMIT {filters.page_size} OFFSET {offset}"
+                df = conn.execute(query, params).df()
             
             # Get last sync time
             try:
@@ -420,6 +447,17 @@ class DatabaseService:
         for _, row in df.iterrows():
             rule = self._row_to_rule(row.to_dict(), validation_data)
             rules.append(rule)
+        
+        # Python-side sort for validation date
+        if is_validation_sort:
+            reverse = filters.sort_by == "validated_desc"
+            rules.sort(
+                key=lambda r: r.validation_date or datetime.min,
+                reverse=reverse,
+            )
+            # Manual pagination
+            offset = (filters.page - 1) * filters.page_size
+            rules = rules[offset:offset + filters.page_size]
         
         return rules, total, last_sync
     
@@ -971,6 +1009,68 @@ class DatabaseService:
     
     # --- DATA MANAGEMENT ---
     
+    # --- APP SETTINGS ---
+    
+    def get_setting(self, key: str, default: str = None) -> str:
+        """Get a single app setting by key."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT value FROM app_settings WHERE key = ?", [key]
+            ).fetchone()
+            return row[0] if row else default
+    
+    def get_all_settings(self) -> Dict[str, str]:
+        """Get all app settings as a dict."""
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+            return {r[0]: r[1] for r in rows}
+    
+    def save_setting(self, key: str, value: str):
+        """Save a single app setting (upsert)."""
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, now())
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    updated_at = EXCLUDED.updated_at
+            """, [key, value])
+    
+    def save_settings(self, settings_dict: Dict[str, str]):
+        """Save multiple settings at once."""
+        with self.get_connection() as conn:
+            for key, value in settings_dict.items():
+                conn.execute("""
+                    INSERT INTO app_settings (key, value, updated_at)
+                    VALUES (?, ?, now())
+                    ON CONFLICT (key) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                """, [key, value])
+    
+    def get_all_rules_for_export(self) -> List[Dict[str, Any]]:
+        """Get all detection rules as dicts for JSON log export."""
+        with self.get_connection() as conn:
+            rows = conn.execute("""
+                SELECT rule_id, name, severity, author, enabled, space,
+                       score, quality_score, meta_score,
+                       score_mapping, score_field_type, score_search_time, score_language,
+                       score_note, score_override, score_tactics, score_techniques,
+                       score_author, score_highlights, mitre_ids
+                FROM detection_rules
+                ORDER BY name
+            """).fetchall()
+            
+            columns = ['rule_id', 'name', 'severity', 'author', 'enabled', 'space',
+                       'score', 'quality_score', 'meta_score',
+                       'score_mapping', 'score_field_type', 'score_search_time', 'score_language',
+                       'score_note', 'score_override', 'score_tactics', 'score_techniques',
+                       'score_author', 'score_highlights', 'mitre_ids']
+            
+            return [dict(zip(columns, row)) for row in rows]
+    
+    # --- EXISTING DATA MANAGEMENT ---
+    
     def clear_detection_rules(self) -> int:
         """Clear all detection rules. Returns count of deleted rows."""
         with self.get_connection() as conn:
@@ -1071,16 +1171,26 @@ class DatabaseService:
                 """)
                 
                 conn.execute("COMMIT")
-                conn.execute("CHECKPOINT")
                 
                 count = len(df_final)
                 logger.info(f"✅ Synced {count} detection rules to database (replaced rules in spaces: {synced_spaces})")
-                return count
                 
             except Exception as e:
-                conn.execute("ROLLBACK")
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
                 logger.error(f"❌ Failed to save rules: {e}")
                 raise
+        
+        # Checkpoint outside transaction context to avoid concurrency issues
+        try:
+            with self.get_connection() as conn:
+                conn.execute("CHECKPOINT")
+        except Exception:
+            pass  # Auto-checkpoint will handle it
+        
+        return count
 
 
 # Singleton accessor
