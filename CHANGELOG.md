@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [2.1.3] - 2026-02-10
 
+### FIX
+- CSS fix on setting -integration. 
+
+### Added
+- text highlighting to logging.
+
+## [2.1.3] - 2026-02-10
+
 ### ADDED
 - Added logging
 

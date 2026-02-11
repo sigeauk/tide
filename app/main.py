@@ -767,8 +767,20 @@ def create_app() -> FastAPI:
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page(request: Request, user: CurrentUser, db: DbDep):
         """Settings page - configure integrations and logging."""
+        import os
         app_settings = db.get_all_settings()
         env_settings = get_settings()
+
+        # Check actual repo/data connectivity on disk
+        repo_status = {
+            "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
+            "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
+            "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
+            "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
+            "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
+            "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
+        }
+
         return render_template(
             "pages/settings.html",
             request,
@@ -777,6 +789,7 @@ def create_app() -> FastAPI:
                 "active_page": "settings",
                 "app_settings": app_settings,
                 "env": env_settings,
+                "repo_status": repo_status,
             }
         )
     

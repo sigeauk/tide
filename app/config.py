@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     sigma_repo_url: str = Field(default="https://github.com/SigmaHQ/sigma.git", alias="SIGMA_REPO_URL")
     elastic_repo_url: str = Field(default="https://github.com/elastic/detection-rules.git", alias="ELASTIC_REPO_URL")
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")
+    elastic_repo_path: str = Field(default="/opt/repos/elastic-detection-rules", alias="ELASTIC_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")
     
     # --- RULE LOGGING ---
