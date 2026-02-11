@@ -6,10 +6,6 @@ name: tide
 services:
   # FastAPI Application
   tide-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: production
     image: 047741/tide-core:${TIDE_VERSION}
     container_name: tide-app
     env_file:
@@ -44,7 +40,7 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./app/static:/app/static:ro
-      - ./certs:/etc/nginx/certs:ro
+      - ${SSL_CERT_FOLDER:-./certs}:/etc/nginx/certs:ro
     networks:
       - tide-network
     depends_on:

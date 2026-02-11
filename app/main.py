@@ -610,26 +610,25 @@ def create_app() -> FastAPI:
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_page(request: Request, user: CurrentUser):
         """Dashboard page - Aggregated overview of detection engineering posture."""
+        import os
         from app.services.database import get_database_service
         db = get_database_service()
         
-        # Aggregate metrics from all sources
+        # Full metrics from each module (same objects used on their pages)
         rule_metrics = db.get_rule_health_metrics()
         promotion_metrics = db.get_promotion_metrics()
         threat_metrics = db.get_threat_landscape_metrics()
         
-        dashboard_data = {
-            # Rule Health highlights (RuleHealthMetrics is a Pydantic model)
-            "total_rules": rule_metrics.total_rules,
-            "avg_quality_score": rule_metrics.avg_score,
-            "low_quality_count": rule_metrics.low_quality_count,
-            # Promotion highlights (dict)
-            "staging_rules": promotion_metrics.get("staging_total", 0),
-            "production_rules": promotion_metrics.get("production_total", 0),
-            # Threat highlights (ThreatLandscapeMetrics is a Pydantic model)
-            "threat_actors": threat_metrics.total_actors,
-            "total_ttps": threat_metrics.unique_ttps,
-            "coverage_pct": threat_metrics.global_coverage_pct,
+        # Integration / repo status (same as settings page)
+        env_settings = get_settings()
+        app_settings = db.get_all_settings()
+        repo_status = {
+            "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
+            "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
+            "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
+            "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
+            "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
+            "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
         }
         
         return render_template(
@@ -638,7 +637,12 @@ def create_app() -> FastAPI:
             {
                 "user": user,
                 "active_page": "dashboard",
-                "metrics": dashboard_data,
+                "rule_metrics": rule_metrics,
+                "promotion_metrics": promotion_metrics,
+                "threat_metrics": threat_metrics,
+                "env": env_settings,
+                "app_settings": app_settings,
+                "repo_status": repo_status,
             }
         )
     
