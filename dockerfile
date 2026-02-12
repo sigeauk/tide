@@ -31,7 +31,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma
+RUN mkdir -p /app/data /app/logs /app/certs /opt/repos/mitre /opt/repos/sigma
 
 # Clone Repos (Note: These stay in the image layer)
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
@@ -50,7 +50,7 @@ COPY VERSION /app/VERSION
 ENV PYTHONPATH="/app"
 
 # CRUCIAL: Set ownership AFTER all files are in place, BEFORE switching user
-RUN chown -R 1000:1000 /app/data /app/logs /opt/repos /app/app
+RUN chown -R 1000:1000 /app/data /app/logs /app/certs /opt/repos /app/app
 
 # Switch to non-root user LAST
 USER tide

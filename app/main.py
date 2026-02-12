@@ -37,18 +37,22 @@ async def scheduled_sync():
     settings = get_settings()
     logger.info(f"⏰ Scheduled sync triggered (interval: {settings.sync_interval_minutes}m)")
     
-    # Import here to avoid circular imports
-    from app.services.database import get_database_service
-    from app.services.sync import trigger_sync
-    
-    db = get_database_service()
-    
-    # Check for manual trigger
-    if db.check_and_clear_trigger("sync_elastic"):
-        logger.info("🔄 Manual sync trigger detected")
-    
-    # Run the actual sync
-    await trigger_sync()
+    try:
+        # Import here to avoid circular imports
+        from app.services.database import get_database_service
+        from app.services.sync import trigger_sync
+        
+        db = get_database_service()
+        
+        # Check for manual trigger
+        if db.check_and_clear_trigger("sync_elastic"):
+            logger.info("🔄 Manual sync trigger detected")
+        
+        # Run the actual sync
+        await trigger_sync()
+    except Exception as e:
+        logger.warning(f"⚠️ Scheduled sync failed (Elastic may be unreachable): {e}")
+        logger.info("ℹ️ TIDE will continue running — sync will retry on next interval")
 
 
 @asynccontextmanager

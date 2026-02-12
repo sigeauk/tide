@@ -71,6 +71,30 @@ class Settings(BaseSettings):
     opencti_url: str = Field(default="http://opencti:8080", alias="OPENCTI_URL")
     opencti_token: str = Field(default="", alias="OPENCTI_TOKEN")
     
+    # --- SSL / TLS ---
+    ssl_verify: bool = Field(default=True, alias="SSL_VERIFY")
+    ca_cert_path: Optional[str] = Field(default=None, alias="CA_CERT_PATH")
+    
+    @property
+    def ssl_context(self):
+        """
+        Return the verify parameter for requests/httpx.
+        Returns:
+          False          – skip verification entirely (SSL_VERIFY=false)
+          str (filepath) – path to a CA bundle to trust
+          True           – use system default trust store
+        """
+        if not self.ssl_verify:
+            return False
+        # Check explicit CA_CERT_PATH from .env
+        if self.ca_cert_path and Path(self.ca_cert_path).exists():
+            return str(self.ca_cert_path)
+        # Check the merged bundle created by docker-compose entrypoint
+        bundle = Path("/app/certs/ca-bundle.crt")
+        if bundle.exists() and bundle.stat().st_size > 0:
+            return str(bundle)
+        return True
+    
     # --- GITLAB ---
     gitlab_url: str = Field(default="http://gitlab:8929/", alias="GITLAB_URL")
     gitlab_token: str = Field(default="", alias="GITLAB_TOKEN")

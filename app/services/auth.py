@@ -5,11 +5,13 @@ Supports stateless JWT validation with optional dev mode bypass.
 
 import httpx
 import jwt
+import ssl as _ssl
 from jwt import PyJWKClient
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode
 from functools import lru_cache
+from pathlib import Path
 
 from app.config import get_settings
 from app.models.auth import User, TokenData
@@ -34,6 +36,26 @@ class AuthService:
         """Check if auth is disabled for development."""
         return self.settings.auth_disabled
     
+    def _build_ssl_context(self) -> _ssl.SSLContext:
+        """
+        Build an ssl.SSLContext that honours SSL_VERIFY / CA_CERT_PATH.
+        Used by PyJWKClient (urllib) which needs a native SSLContext.
+        """
+        if not self.settings.ssl_verify:
+            # Disable verification entirely
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            return ctx
+        # Explicit CA_CERT_PATH
+        if self.settings.ca_cert_path and Path(self.settings.ca_cert_path).exists():
+            return _ssl.create_default_context(cafile=self.settings.ca_cert_path)
+        # Merged bundle created by entrypoint
+        bundle = Path("/app/certs/ca-bundle.crt")
+        if bundle.exists() and bundle.stat().st_size > 0:
+            return _ssl.create_default_context(cafile=str(bundle))
+        return _ssl.create_default_context()
+    
     @property
     def jwks_client(self) -> PyJWKClient:
         """Lazy-loaded JWKS client for public key retrieval."""
@@ -41,7 +63,8 @@ class AuthService:
             self._jwks_client = PyJWKClient(
                 self.settings.oidc_jwks_url,
                 cache_keys=True,
-                lifespan=3600  # Cache keys for 1 hour
+                lifespan=3600,  # Cache keys for 1 hour
+                ssl_context=self._build_ssl_context(),
             )
         return self._jwks_client
     
@@ -78,7 +101,7 @@ class AuthService:
         logger.info(f"Exchanging auth code at: {token_url}")
         logger.debug(f"Exchange data: client_id={data['client_id']}, redirect_uri={redirect_uri}")
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self.settings.ssl_context) as client:
             try:
                 response = await client.post(
                     token_url,
@@ -105,7 +128,7 @@ class AuthService:
             "refresh_token": refresh_token,
         }
         
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(verify=self.settings.ssl_context) as client:
             try:
                 response = await client.post(
                     self.settings.oidc_token_url,
