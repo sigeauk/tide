@@ -18,9 +18,9 @@
     <!-- Tailwind CSS with cache busting -->
     <link rel="stylesheet" href="/static/css/dist/styles.css?v={{ cache_bust | default(range(1, 99999) | random) }}">
     
-    <!-- HTMX Core + Head Support Extension -->
+    <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
     <script src="/static/js/htmx.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/htmx-ext-head-support@2.0.5/dist/head-support.min.js"></script>
+    <script src="/static/js/vendor/head-support.min.js"></script>
     
     <!-- TIDE Application JavaScript -->
     <script src="/static/js/app.js?v={{ cache_bust | default(range(1, 99999) | random) }}"></script>

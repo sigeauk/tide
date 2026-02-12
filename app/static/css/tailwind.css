@@ -670,14 +670,14 @@ a:hover { color: var(--color-primary); }
   transition: all var(--transition-fast);
   box-shadow: var(--shadow);
 }
-
+/*
 .metric-card:hover {
   background: var(--color-bg-surface-hover);
   border-color: var(--color-border-strong);
   transform: translateY(-2px);
   box-shadow: var(--shadow-lg);
 }
-
+*/
 /* Nested metric-cards: promote to Layer 3 so they're lighter than parent */
 .overview-section .metric-card {
   background: var(--color-bg-action);
@@ -685,14 +685,14 @@ a:hover { color: var(--color-primary); }
   border-top: 1px solid var(--color-highlight-2);
   box-shadow: var(--shadow-sm);
 }
-
+/*
 .overview-section .metric-card:hover {
   background: var(--color-bg-action-hover);
   border-color: transparent;
   border-top-color: var(--color-highlight-3);
   box-shadow: var(--shadow);
 }
-
+*/
 .metric-value {
   font: var(--h1);
   color: var(--color-text);
@@ -2225,13 +2225,13 @@ body.light {
   box-shadow: var(--shadow-sm);
   transition: all var(--transition-fast);
 }
-
+/*
 .principle-card:hover {
   background: var(--color-bg-action-hover);
   transform: translateY(-2px);
   box-shadow: var(--shadow);
 }
-
+*/
 .principle-card strong { color: var(--color-text); }
 
 .principle-card p {
@@ -2278,13 +2278,13 @@ body.light {
   min-width: 0;
   overflow: hidden;
 }
-
+/*
 .integration-card:hover {
   background: var(--color-bg-action-hover);
   transform: translateY(-2px);
   box-shadow: var(--shadow);
 }
-
+*/
 .integration-card .integration-card-name {
   font-size: 0.8rem;
   font-weight: 600;

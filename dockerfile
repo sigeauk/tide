@@ -27,21 +27,25 @@ FROM base AS production
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# System deps needed for runtime (curl for healthcheck, git for sigma)
+# System deps needed for runtime:
+#   curl           - healthcheck
+#   git            - sigma repo operations
+#   ca-certificates - update-ca-certificates for trusting corporate CAs
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git && rm -rf /var/lib/apt/lists/*
+    curl git ca-certificates && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/data /app/logs /app/certs /opt/repos/mitre /opt/repos/sigma
+RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma
 
-# Clone Repos (Note: These stay in the image layer)
+# ─── DATA REPOS (baked into image at build time) ───────────────────
+# This requires internet ONLY when building the image (docker build).
+# Once built, the container runs 100% offline / air-gapped.
+# To update: rebuild the image on an internet-connected machine,
+# then transfer the image to the standalone host.
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
 RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json && \
     curl -sSL -o /opt/repos/mitre/mobile-attack.json https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json && \
     curl -sSL -o /opt/repos/mitre/ics-attack.json https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json && \
     curl -sSL -o /opt/repos/mitre/pre-attack.json https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json
-
-# Create non-root user FIRST
-RUN useradd -m -u 1000 tide
 
 # Copy application code and VERSION file
 COPY app/ /app/app/
@@ -49,22 +53,18 @@ COPY VERSION /app/VERSION
 
 ENV PYTHONPATH="/app"
 
-# CRUCIAL: Set ownership AFTER all files are in place, BEFORE switching user
-RUN chown -R 1000:1000 /app/data /app/logs /app/certs /opt/repos /app/app
-
-# Switch to non-root user LAST
-USER tide
+# Copy entrypoint script
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 # Stage 4: Development
 FROM production AS development
-USER root
-# We are already in the venv, so this installs into /opt/venv
-RUN pip install --no-cache-dir watchfiles 
-USER tide
+RUN pip install --no-cache-dir watchfiles
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

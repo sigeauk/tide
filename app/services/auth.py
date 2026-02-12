@@ -11,7 +11,6 @@ from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode
 from functools import lru_cache
-from pathlib import Path
 
 from app.config import get_settings
 from app.models.auth import User, TokenData
@@ -38,22 +37,16 @@ class AuthService:
     
     def _build_ssl_context(self) -> _ssl.SSLContext:
         """
-        Build an ssl.SSLContext that honours SSL_VERIFY / CA_CERT_PATH.
-        Used by PyJWKClient (urllib) which needs a native SSLContext.
+        Build an ssl.SSLContext that honours SSL_VERIFY.
+        
+        When running in Docker the entrypoint installs CA certs into the
+        system trust store, so the default context trusts them automatically.
         """
         if not self.settings.ssl_verify:
-            # Disable verification entirely
             ctx = _ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = _ssl.CERT_NONE
             return ctx
-        # Explicit CA_CERT_PATH
-        if self.settings.ca_cert_path and Path(self.settings.ca_cert_path).exists():
-            return _ssl.create_default_context(cafile=self.settings.ca_cert_path)
-        # Merged bundle created by entrypoint
-        bundle = Path("/app/certs/ca-bundle.crt")
-        if bundle.exists() and bundle.stat().st_size > 0:
-            return _ssl.create_default_context(cafile=str(bundle))
         return _ssl.create_default_context()
     
     @property

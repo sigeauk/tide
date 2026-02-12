@@ -4,15 +4,15 @@
 {% block title %}Sigma Convert | TIDE{% endblock %}
 
 {% block head %}
-<!-- CodeMirror for YAML editing with syntax highlighting -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/yaml/yaml.min.js"></script>
-<!-- Prism.js for JSON output highlighting -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+<!-- CodeMirror for YAML editing with syntax highlighting (bundled locally) -->
+<link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
+<script src="/static/js/vendor/codemirror.min.js"></script>
+<script src="/static/js/vendor/codemirror-yaml.min.js"></script>
+<!-- Prism.js for JSON output highlighting (bundled locally) -->
+<link rel="stylesheet" href="/static/css/vendor/prism-tomorrow.min.css">
+<script src="/static/js/vendor/prism.min.js"></script>
+<script src="/static/js/vendor/prism-json.min.js"></script>
 {% endblock %}
 
 {% block content %}

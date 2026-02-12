@@ -73,51 +73,46 @@ class Settings(BaseSettings):
     
     # --- SSL / TLS ---
     ssl_verify: bool = Field(default=True, alias="SSL_VERIFY")
-    ca_cert_path: Optional[str] = Field(default=None, alias="CA_CERT_PATH")
     
     @property
     def ssl_context(self):
         """
         Return the verify parameter for requests/httpx.
-        Returns:
-          False          – skip verification entirely (SSL_VERIFY=false)
-          str (filepath) – path to a CA bundle to trust
-          True           – use system default trust store
+        
+        When running in Docker the entrypoint installs CA certs into the
+        system trust store via update-ca-certificates, so True (the default)
+        uses the system store and just works.
+        
+        Set SSL_VERIFY=false in .env only as a last resort to bypass
+        verification entirely.
         """
         if not self.ssl_verify:
             return False
-        # Check explicit CA_CERT_PATH from .env
-        if self.ca_cert_path and Path(self.ca_cert_path).exists():
-            return str(self.ca_cert_path)
-        # Check the merged bundle created by docker-compose entrypoint
-        bundle = Path("/app/certs/ca-bundle.crt")
-        if bundle.exists() and bundle.stat().st_size > 0:
-            return str(bundle)
         return True
     
     # --- GITLAB ---
     gitlab_url: str = Field(default="http://gitlab:8929/", alias="GITLAB_URL")
     gitlab_token: str = Field(default="", alias="GITLAB_TOKEN")
     
-    # --- MITRE DATA SOURCES ---
+    # --- MITRE DATA SOURCES (local files baked into Docker image) ---
     mitre_source: str = Field(
-        default="https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json",
+        default="/opt/repos/mitre/enterprise-attack.json",
         alias="MITRE_SOURCE"
     )
     mitre_mobile_source: str = Field(
-        default="https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json",
+        default="/opt/repos/mitre/mobile-attack.json",
         alias="MITRE_MOBILE_SOURCE"
     )
     mitre_ics_source: str = Field(
-        default="https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json",
+        default="/opt/repos/mitre/ics-attack.json",
         alias="MITRE_ICS_SOURCE"
     )
     mitre_pre_source: str = Field(
-        default="https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json",
+        default="/opt/repos/mitre/pre-attack.json",
         alias="MITRE_PRE_SOURCE"
     )
-    sigma_repo_url: str = Field(default="https://github.com/SigmaHQ/sigma.git", alias="SIGMA_REPO_URL")
-    elastic_repo_url: str = Field(default="https://github.com/elastic/detection-rules.git", alias="ELASTIC_REPO_URL")
+    sigma_repo_url: str = Field(default="(bundled in image)", alias="SIGMA_REPO_URL")
+    elastic_repo_url: str = Field(default="(bundled in image)", alias="ELASTIC_REPO_URL")
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")
     elastic_repo_path: str = Field(default="/opt/repos/elastic-detection-rules", alias="ELASTIC_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")

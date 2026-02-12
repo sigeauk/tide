@@ -1,7 +1,6 @@
 import os
 import yaml
 import re
-import subprocess
 import uuid
 import logging
 import json
@@ -20,17 +19,13 @@ def log_debug(msg): logger.debug(msg)
 
 # Sigma repository paths - check /opt/repos first (Docker), then fallback locations
 SIGMA_REPO_PATH = os.getenv('SIGMA_REPO_PATH', '/opt/repos/sigma')
-SIGMA_REPO_URL = os.getenv('SIGMA_REPO_URL', 'https://github.com/SigmaHQ/sigma.git')
 
 # Cache for loaded rules
 _rules_cache: Optional[List[Dict]] = None
-_repo_initialized: bool = False
 
 
 def ensure_sigma_repo() -> str:
-    """Ensure Sigma repo exists, clone if needed. Returns path to rules."""
-    global _repo_initialized
-    
+    """Find the local Sigma rules directory. No internet access — repo is baked into the Docker image."""
     # Check possible locations in order of preference
     possible_paths = [
         '/opt/repos/sigma',           # Docker build location
@@ -44,27 +39,7 @@ def ensure_sigma_repo() -> str:
             log_info(f"[SIGMA] Found rules at: {rules_path}")
             return rules_path
     
-    # No repo found - try to clone
-    if not _repo_initialized:
-        _repo_initialized = True
-        clone_path = '/opt/repos/sigma' if os.path.exists('/opt') else os.path.join(os.getcwd(), 'repos', 'sigma')
-        
-        try:
-            log_info(f"[SIGMA] Cloning Sigma repo to {clone_path}...")
-            os.makedirs(os.path.dirname(clone_path), exist_ok=True)
-            subprocess.run(
-                ['git', 'clone', '--depth', '1', SIGMA_REPO_URL, clone_path],
-                check=True,
-                capture_output=True,
-                timeout=300
-            )
-            rules_path = os.path.join(clone_path, 'rules')
-            if os.path.exists(rules_path):
-                log_info(f"[SIGMA] Successfully cloned repo, rules at: {rules_path}")
-                return rules_path
-        except Exception as e:
-            log_error(f"[SIGMA] Failed to clone repo: {e}")
-    
+    log_error(f"[SIGMA] No Sigma rules found in any of: {possible_paths}")
     # Return default path even if it doesn't exist
     return os.path.join(SIGMA_REPO_PATH, 'rules')
 

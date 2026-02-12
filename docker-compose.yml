@@ -1,12 +1,19 @@
 # TIDE v2 - FastAPI + HTMX + Tailwind
 # Production Docker Compose
+#
+# Quick start:  docker compose up -d
+# With rebuild: docker compose up -d --build
 
 name: tide
 
 services:
-  # FastAPI Application
+  # ── FastAPI Application ──────────────────────────────────────────
   tide-app:
     image: 047741/tide-core:${TIDE_VERSION}
+    build:
+      context: .
+      dockerfile: dockerfile
+      target: production
     container_name: tide-app
     env_file:
       - .env
@@ -15,44 +22,32 @@ services:
       - DB_PATH=/app/data/tide.duckdb
       - TRIGGER_DIR=/app/data/triggers
       - VALIDATION_FILE=/app/data/checkedRule.json
-      # ── SSL Trust ──────────────────────────────────────────────────
-      # REQUESTS_CA_BUNDLE: Tells Python 'requests' library which CA
-      #   bundle to trust for outbound HTTPS calls (Elastic, OpenCTI, etc.)
-      # SSL_CERT_FILE: Tells Python's built-in ssl module (used by
-      #   httpx, urllib, PyJWKClient) which CA bundle to trust.
-      # Both point to a merged CA bundle created by the entrypoint.
-      # When SSL_VERIFY=false in .env these are ignored in app code,
-      #   but still useful so 'curl' inside the container also works.
-      - REQUESTS_CA_BUNDLE=/app/certs/ca-bundle.crt
-      - SSL_CERT_FILE=/app/certs/ca-bundle.crt
     volumes:
-      # ── Application Data ───────────────────────────────────────────
-      # Persistent storage for DuckDB, triggers, and validation files.
-      # This directory must be writable by uid 1000 on the host.
+      # ── Application Data ─────────────────────────────────────────
+      # DuckDB database, triggers, validation files.
       - ./data:/app/data
       - ${RULE_LOG_PATH:-./data/log/rules}:/app/data/log/rules
 
-      # ── CA Certificates (Corporate PKI) ────────────────────────────
-      # Mount your organisation's CA certificates so the Python app
-      # can trust internal HTTPS services (Keycloak, Elastic, etc.).
-      # These are read-only; the app never writes to them.
+      # ── CA Certificates ──────────────────────────────────────────
+      # Mount your organisation's CA certs here so the app can trust
+      # internal HTTPS services (Keycloak, Elastic, OpenCTI, etc.).
       #
-      # Example: IPA/FreeIPA environment with two CA files:
-      #   /etc/ipa/ca.crt      -> the IPA domain CA
+      # Mount each .crt file to /usr/local/share/ca-certificates/.
+      # The entrypoint runs 'update-ca-certificates' at startup to
+      # install them into the system trust store.  Every tool inside
+      # the container (Python, curl, etc.) then trusts them.
       #
-      # Mount each host CA cert to /app/certs/ with a unique filename.
-      # The entrypoint concatenates all .crt files into ca-bundle.crt.
-      - ./certs/ca.crt:/app/certs/ca.crt:ro
-
+      # Standalone / IPA example:
+      #   - /etc/ipa/ca.crt:/usr/local/share/ca-certificates/ipa-ca.crt:ro
+      #   - /etc/ipa/vdi-ca.crt:/usr/local/share/ca-certificates/vdi-ca.crt:ro
+      #
+      # Development (self-signed) example:
+      #   - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro
+      - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro
     expose:
       - "8000"
     networks:
       - tide-network
-    # ── Entrypoint ─────────────────────────────────────────────────
-    # Concatenate all mounted CA .crt files into a single bundle
-    # that Python and curl can use.  No root required – the target
-    # file /app/certs/ca-bundle.crt is owned by uid 1000 (see Dockerfile).
-    entrypoint: ["/bin/sh", "-c", "cat /app/certs/*.crt > /app/certs/ca-bundle.crt 2>/dev/null; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -60,30 +55,26 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    user: "1000:1000"
 
-  # Nginx Reverse Proxy
+  # ── Nginx Reverse Proxy ──────────────────────────────────────────
   tide-nginx:
     image: nginx:alpine
     container_name: tide-nginx
     ports:
-      - "443:443"
+      - "8501:443"
     volumes:
-      # ── Nginx Config ─────────────────────────────────────────────
       - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-
-      # ── Static Assets ────────────────────────────────────────────
       - ./app/static:/app/static:ro
 
       # ── TLS Certificates for HTTPS frontend ──────────────────────
       # Nginx expects server.crt and server.key at /etc/nginx/certs/.
-      # Mount your host's TLS cert and key to those exact paths.
-      # These are the certs that browsers see when connecting to
-      # https://tide:8501.
+      # Mount your server certificate and private key here.
       #
-      # Example: certs signed by corporate CA stored on host at:
-      #   /etc/ssl/certs/tide.crt    -> the server certificate
-      #   /etc/ssl/private/tide.key  -> the private key
+      # Standalone example (certs issued by corporate CA):
+      #   - /etc/ssl/certs/tide.crt:/etc/nginx/certs/server.crt:ro
+      #   - /etc/ssl/private/tide.key:/etc/nginx/certs/server.key:ro
+      #
+      # Development example (self-signed in ./certs/):
       - ./certs/server.crt:/etc/nginx/certs/server.crt:ro
       - ./certs/server.key:/etc/nginx/certs/server.key:ro
     networks:
