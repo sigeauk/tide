@@ -112,6 +112,10 @@
                 {% if pm.staging_severity.get('medium', 0) > 0 %}
                 <span class="text-sev-medium">M:{{ pm.staging_severity.get('medium', 0) }}</span>
                 {% endif %}
+                {% if pm.staging_severity.get('low', 0) > 0 %}
+                <span class="text-success">L:{{ pm.staging_severity.get('low', 0) }}</span>
+                {% endif %}
+
             </p>
         </div>
 

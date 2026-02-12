@@ -46,6 +46,9 @@
         {% if metrics.staging_severity.get('medium', 0) > 0 %}
         <span class="text-sev-medium">M:{{ metrics.staging_severity.get('medium', 0) }}</span>
         {% endif %}
+        {% if metrics.staging_severity.get('low', 0) > 0 %}
+        <span class="text-success">L:{{ metrics.staging_severity.get('low', 0) }}</span>
+        {% endif %}
     </p>
 </div>
 
