@@ -1,6 +1,3 @@
-# TIDE FastAPI - Production Dockerfile
-# base -> builder -> production -> development
-
 # Stage 1: Base
 FROM python:3.14.3-slim-bookworm AS base
 WORKDIR /app
@@ -23,24 +20,16 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 
 # Stage 3: Production
 FROM base AS production
-# Copy the entire Virtual Environment
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # System deps needed for runtime:
-#   curl           - healthcheck
-#   git            - sigma repo operations
-#   ca-certificates - update-ca-certificates for trusting corporate CAs
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl git ca-certificates && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma
 
-# ─── DATA REPOS (baked into image at build time) ───────────────────
-# This requires internet ONLY when building the image (docker build).
-# Once built, the container runs 100% offline / air-gapped.
-# To update: rebuild the image on an internet-connected machine,
-# then transfer the image to the standalone host.
+# ─── DATA REPOS ───────────────────
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
 RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json && \
     curl -sSL -o /opt/repos/mitre/mobile-attack.json https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json && \
