@@ -4,9 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.5] 2026-02-16
+
+### Fixed
+- **UI Responsiveness:** Resolved significant lag during page navigation and data loading by refactoring the internal execution model to prevent event-loop blocking.
+- **Sigma Converter:** Fixed "temperamental" loading of the rule editor and syntax highlighter; improved initialization reliability across HTMX swaps.
+- **Cold Starts:** Eliminated the multi-second delay when first accessing Sigma conversion tools after system idle time.
+
+### Optimized
+- **Database I/O:** - Reduced disk write overhead by removing redundant `CHECKPOINT` commands from read operations.
+    - Improved memory efficiency by narrowing data fetching to required columns only (`SELECT *` reduction).
+- **Backend Concurrency:** Migrated heavy I/O operations to a managed threadpool, allowing the server to handle multiple concurrent HTMX requests without freezing.
+- **Engine Warm-up:** Implemented a startup "priming" routine that pre-loads Sigma rules, backends, and pipelines into memory.
+- **Asset Caching:** Switched to version-based cache busting for local JS/CSS files to ensure instant UI loads while maintaining update integrity.
+
+### Changed
+- Updated `base.html` to use non-blocking deferred script loading.
+- Refactored `main.py` lifespan to handle proactive dependency initialization.
+
 ## [2.3.1] 2026-02-13
 
-## CHANGE  
+### CHANGE  
 - Clean up of .env
 
 ## [2.3.0] - 2026-02-12

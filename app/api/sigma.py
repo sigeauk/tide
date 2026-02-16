@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/sigma", tags=["sigma"])
 
 
 @router.get("/rules", response_class=HTMLResponse)
-async def search_rules(
+def search_rules(
     request: Request,
     user: CurrentUser,
     query: str = Query("", alias="q"),
@@ -51,7 +51,7 @@ async def search_rules(
 
 
 @router.get("/rule/{rule_id}", response_class=HTMLResponse)
-async def get_rule_yaml(
+def get_rule_yaml(
     request: Request,
     user: CurrentUser,
     rule_id: str,
@@ -67,7 +67,7 @@ async def get_rule_yaml(
 
 
 @router.post("/convert", response_class=HTMLResponse)
-async def convert_rule(
+def convert_rule(
     request: Request,
     user: CurrentUser,
     yaml_content: str = Form(...),
@@ -127,7 +127,7 @@ async def convert_rule(
 
 
 @router.post("/validate", response_class=HTMLResponse)
-async def validate_rule(
+def validate_rule(
     request: Request,
     user: CurrentUser,
     yaml_content: str = Form(...),
@@ -149,7 +149,7 @@ async def validate_rule(
 
 
 @router.post("/deploy", response_class=HTMLResponse)
-async def deploy_to_siem(
+def deploy_to_siem(
     request: Request,
     user: CurrentUser,
     yaml_content: str = Form(...),
@@ -179,7 +179,7 @@ async def deploy_to_siem(
 
 
 @router.get("/backends", response_class=HTMLResponse)
-async def get_backends(request: Request, user: CurrentUser):
+def get_backends(request: Request, user: CurrentUser):
     """Get available backends as HTML options."""
     backends = sigma.get_available_backends()
     html = ""
@@ -189,7 +189,7 @@ async def get_backends(request: Request, user: CurrentUser):
 
 
 @router.get("/formats/{backend}", response_class=HTMLResponse)
-async def get_formats(request: Request, user: CurrentUser, backend: str):
+def get_formats(request: Request, user: CurrentUser, backend: str):
     """Get available output formats for a backend as HTML options."""
     formats = sigma.get_output_formats(backend)
     html = ""
@@ -199,7 +199,7 @@ async def get_formats(request: Request, user: CurrentUser, backend: str):
 
 
 @router.get("/pipelines", response_class=HTMLResponse)
-async def get_pipelines(request: Request, user: CurrentUser):
+def get_pipelines(request: Request, user: CurrentUser):
     """Get available pipelines as HTML options."""
     pipelines = sigma.get_available_pipelines()
     html = ""
@@ -209,7 +209,7 @@ async def get_pipelines(request: Request, user: CurrentUser):
 
 
 @router.get("/categories", response_class=HTMLResponse)
-async def get_categories(request: Request, user: CurrentUser):
+def get_categories(request: Request, user: CurrentUser):
     """Get rule categories as HTML options."""
     categories = sigma.get_rule_categories()
     html = '<option value="">All Categories</option>'
@@ -219,7 +219,7 @@ async def get_categories(request: Request, user: CurrentUser):
 
 
 @router.get("/spaces", response_class=HTMLResponse)
-async def get_spaces(request: Request, user: CurrentUser):
+def get_spaces(request: Request, user: CurrentUser):
     """Get Kibana spaces as HTML options."""
     spaces = sigma.get_kibana_spaces()
     html = ""

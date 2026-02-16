@@ -94,7 +94,7 @@ class ActorWithCoverage:
 
 
 @router.get("", response_class=HTMLResponse)
-async def list_threats(
+def list_threats(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -119,7 +119,30 @@ async def list_threats(
         covered_ttps = set()
         technique_rule_counts = {}
     
-    # Calculate coverage for each actor
+    # Apply text/origin/source filters FIRST on lightweight actor objects
+    # before computing coverage (which is more expensive per actor)
+    if search:
+        search_lower = search.lower()
+        actors = [
+            a for a in actors
+            if search_lower in a.name.lower() or
+               (a.aliases and search_lower in a.aliases.lower()) or
+               (a.description and search_lower in a.description.lower())
+        ]
+    
+    if origin:
+        actors = [
+            a for a in actors
+            if a.origin and origin.lower() in a.origin.lower()
+        ]
+    
+    if source:
+        actors = [
+            a for a in actors
+            if source in a.source
+        ]
+    
+    # Calculate coverage only for filtered actors
     actors_with_coverage = []
     for actor in actors:
         actor_ttps = {str(t).strip().upper() for t in actor.ttps}
@@ -157,28 +180,6 @@ async def list_threats(
             iso_code=iso_code,
         ))
     
-    # Apply filters
-    if search:
-        search_lower = search.lower()
-        actors_with_coverage = [
-            a for a in actors_with_coverage
-            if search_lower in a.name.lower() or
-               (a.aliases and search_lower in a.aliases.lower()) or
-               (a.description and search_lower in a.description.lower())
-        ]
-    
-    if origin:
-        actors_with_coverage = [
-            a for a in actors_with_coverage
-            if a.origin and origin.lower() in a.origin.lower()
-        ]
-    
-    if source:
-        actors_with_coverage = [
-            a for a in actors_with_coverage
-            if source in a.source
-        ]
-    
     # Apply sorting
     sort_map = {
         "ttp_desc": lambda x: -x.ttp_count,
@@ -215,7 +216,7 @@ async def list_threats(
 
 
 @router.get("/metrics", response_class=HTMLResponse)
-async def get_threat_metrics(
+def get_threat_metrics(
     request: Request,
     db: DbDep,
     user: CurrentUser,

@@ -19,11 +19,11 @@
     <link rel="stylesheet" href="/static/css/dist/styles.css?v={{ cache_bust | default(range(1, 99999) | random) }}">
     
     <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
-    <script src="/static/js/htmx.min.js"></script>
-    <script src="/static/js/vendor/head-support.min.js"></script>
+    <script defer src="/static/js/htmx.min.js?v={{ cache_bust | default('0') }}"></script>
+    <script defer src="/static/js/vendor/head-support.min.js?v={{ cache_bust | default('0') }}"></script>
     
     <!-- TIDE Application JavaScript -->
-    <script src="/static/js/app.js?v={{ cache_bust | default(range(1, 99999) | random) }}"></script>
+    <script defer src="/static/js/app.js?v={{ cache_bust | default(range(1, 99999) | random) }}"></script>
     
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="/static/icons/tide.png">

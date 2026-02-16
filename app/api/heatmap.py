@@ -50,7 +50,7 @@ def get_tactic_display(raw_tactic: str) -> str:
 
 
 @router.get("/matrix", response_class=HTMLResponse)
-async def get_heatmap_matrix(
+def get_heatmap_matrix(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -152,7 +152,7 @@ async def get_heatmap_matrix(
 
 
 @router.get("/actors", response_class=HTMLResponse)
-async def search_actors(
+def search_actors(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -181,7 +181,7 @@ async def search_actors(
 
 
 @router.get("/technique/{technique_id}", response_class=HTMLResponse)
-async def get_technique_detail(
+def get_technique_detail(
     request: Request,
     technique_id: str,
     db: DbDep,
@@ -234,7 +234,7 @@ async def get_technique_detail(
 
 
 @router.get("/technique/{technique_id}/rules", response_class=HTMLResponse)
-async def get_technique_rules(
+def get_technique_rules(
     request: Request,
     technique_id: str,
     db: DbDep,

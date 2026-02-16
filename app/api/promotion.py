@@ -18,7 +18,7 @@ router = APIRouter(prefix="/api/promotion", tags=["promotion"])
 
 
 @router.get("", response_class=HTMLResponse)
-async def list_staging_rules(
+def list_staging_rules(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -59,7 +59,7 @@ async def list_staging_rules(
 
 
 @router.get("/metrics", response_class=HTMLResponse)
-async def get_promotion_metrics(
+def get_promotion_metrics(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -74,7 +74,7 @@ async def get_promotion_metrics(
 
 
 @router.get("/{rule_id}/detail", response_class=HTMLResponse)
-async def get_promotion_rule_detail(
+def get_promotion_rule_detail(
     request: Request,
     rule_id: str,
     db: DbDep,

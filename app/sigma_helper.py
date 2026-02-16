@@ -17,11 +17,104 @@ def log_info(msg): logger.info(msg)
 def log_error(msg): logger.error(msg)
 def log_debug(msg): logger.debug(msg)
 
+# ─── Airgap fix: point pySigma at the local MITRE ATT&CK JSON ─────────
+# Must run BEFORE any sigma.backends.elasticsearch import, because those
+# modules trigger a lazy download of enterprise-attack.json via urllib.
+MITRE_LOCAL_PATH = os.getenv(
+    "MITRE_ATTACK_PATH", "/opt/repos/mitre/enterprise-attack.json"
+)
+if os.path.exists(MITRE_LOCAL_PATH):
+    try:
+        from sigma.data import mitre_attack as _mitre_mod
+        _mitre_mod.set_url(MITRE_LOCAL_PATH)
+        log_info(f"[SIGMA] Using local MITRE ATT&CK data: {MITRE_LOCAL_PATH}")
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to configure local MITRE data: {_e}")
+else:
+    log_info(f"[SIGMA] Local MITRE file not found at {MITRE_LOCAL_PATH}, "
+             "pySigma will attempt a remote fetch (requires internet).")
+
 # Sigma repository paths - check /opt/repos first (Docker), then fallback locations
 SIGMA_REPO_PATH = os.getenv('SIGMA_REPO_PATH', '/opt/repos/sigma')
 
 # Cache for loaded rules
 _rules_cache: Optional[List[Dict]] = None
+
+# Whether backends have been warmed up
+_backends_warmed: bool = False
+
+
+def warm_up_backends() -> None:
+    """
+    Pre-import all Sigma backends & pipelines at startup so the first
+    user conversion doesn't pay a multi-second cold-start penalty.
+    Also instantiates each backend once to trigger any internal class-level
+    initialisation (e.g. MITRE ATT&CK taxonomy loading).
+    """
+    global _backends_warmed
+    if _backends_warmed:
+        return
+
+    log_info("[SIGMA] Warming up backends and pipelines …")
+
+    # -- Backends --
+    backend_classes = []
+    try:
+        from sigma.rule import SigmaRule  # noqa: F401
+        from sigma.collection import SigmaCollection  # noqa: F401
+        log_info("[SIGMA]   ✓ sigma.rule / sigma.collection")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ sigma core: {e}")
+
+    try:
+        from sigma.backends.elasticsearch import LuceneBackend, EqlBackend, ESQLBackend
+        backend_classes.extend([LuceneBackend, EqlBackend, ESQLBackend])
+        log_info("[SIGMA]   ✓ elasticsearch backends (Lucene, EQL, ES|QL)")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ elasticsearch backends: {e}")
+
+    try:
+        from sigma.backends.splunk import SplunkBackend
+        backend_classes.append(SplunkBackend)
+        log_info("[SIGMA]   ✓ splunk backend")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ splunk backend: {e}")
+
+    try:
+        from sigma.backends.microsoft365defender import Microsoft365DefenderBackend
+        backend_classes.append(Microsoft365DefenderBackend)
+        log_info("[SIGMA]   ✓ microsoft365defender backend")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ microsoft365defender backend: {e}")
+
+    # Instantiate each backend once (forces class-level setup)
+    for cls in backend_classes:
+        try:
+            cls()
+        except Exception:
+            pass  # some may require a pipeline — that's fine
+
+    # -- Pipelines --
+    try:
+        from sigma.pipelines.sysmon import sysmon_pipeline  # noqa: F401
+        log_info("[SIGMA]   ✓ sysmon pipeline")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ sysmon pipeline: {e}")
+
+    try:
+        from sigma.pipelines.windows import windows_pipeline, windows_audit_pipeline  # noqa: F401
+        log_info("[SIGMA]   ✓ windows pipelines")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ windows pipelines: {e}")
+
+    try:
+        from sigma.pipelines.elasticsearch import ecs_windows  # noqa: F401
+        log_info("[SIGMA]   ✓ ecs_windows pipeline")
+    except Exception as e:
+        log_error(f"[SIGMA]   ✗ ecs_windows pipeline: {e}")
+
+    _backends_warmed = True
+    log_info("[SIGMA] Backend warm-up complete")
 
 
 def ensure_sigma_repo() -> str:

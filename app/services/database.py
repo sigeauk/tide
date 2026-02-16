@@ -366,11 +366,6 @@ class DatabaseService:
         Returns (rules, total_count, last_sync).
         """
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             # Base query
             query = "SELECT * FROM detection_rules WHERE 1=1"
             params = []
@@ -544,12 +539,9 @@ class DatabaseService:
     def get_rule_health_metrics(self) -> RuleHealthMetrics:
         """Calculate comprehensive rule health metrics."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
-            df = conn.execute("SELECT * FROM detection_rules").df()
+            df = conn.execute(
+                "SELECT enabled, score, space, severity, name, raw_data FROM detection_rules"
+            ).df()
             
             if df.empty:
                 return RuleHealthMetrics()
@@ -637,17 +629,33 @@ class DatabaseService:
             ).fetchall()
             return [row[0] for row in result if row[0]]
     
+    def get_threat_actor_filter_options(self) -> Tuple[List[str], List[str]]:
+        """Get unique origins and sources for filter dropdowns (lightweight query)."""
+        with self.get_connection() as conn:
+            origins = []
+            sources = []
+            try:
+                origin_rows = conn.execute(
+                    "SELECT DISTINCT origin FROM threat_actors WHERE origin IS NOT NULL ORDER BY origin"
+                ).fetchall()
+                origins = [row[0] for row in origin_rows if row[0]]
+            except Exception:
+                pass
+            try:
+                source_rows = conn.execute(
+                    "SELECT DISTINCT unnest(source) as src FROM threat_actors ORDER BY src"
+                ).fetchall()
+                sources = [row[0] for row in source_rows if row[0]]
+            except Exception:
+                pass
+            return origins, sources
+    
     def get_promotion_metrics(self) -> Dict[str, Any]:
         """Get metrics specifically for staging rules ready for promotion."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             # Get staging rules
             staging_df = conn.execute(
-                "SELECT * FROM detection_rules WHERE LOWER(space) = 'staging'"
+                "SELECT enabled, score, severity FROM detection_rules WHERE LOWER(space) = 'staging'"
             ).df()
             
             # Get production rules count
@@ -703,11 +711,6 @@ class DatabaseService:
     def get_threat_actors(self) -> List[ThreatActor]:
         """Get all threat actors ordered by TTP count."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             df = conn.execute(
                 "SELECT * FROM threat_actors ORDER BY ttp_count DESC"
             ).df()
@@ -752,11 +755,6 @@ class DatabaseService:
     def get_covered_ttps_by_space(self, space: str = "production") -> Set[str]:
         """Get TTPs covered by enabled detection rules in a specific space."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             result = conn.execute("""
                 SELECT DISTINCT unnest(mitre_ids) 
                 FROM detection_rules 
@@ -767,11 +765,6 @@ class DatabaseService:
     def get_technique_rule_counts(self, space: str = "production") -> dict:
         """Get count of enabled rules per MITRE technique in a specific space."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             try:
                 # Use CTE to unnest first, then group
                 result = conn.execute("""
@@ -795,12 +788,9 @@ class DatabaseService:
         from app.models.threats import ThreatLandscapeMetrics
         
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
-            df = conn.execute("SELECT * FROM threat_actors").df()
+            df = conn.execute(
+                "SELECT ttp_count, ttps, origin, source FROM threat_actors"
+            ).df()
             
             if df.empty:
                 return ThreatLandscapeMetrics()
@@ -886,11 +876,6 @@ class DatabaseService:
     def get_all_covered_ttps(self) -> Set[str]:
         """Get all TTPs covered by enabled detection rules."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             result = conn.execute(
                 "SELECT DISTINCT unnest(mitre_ids) FROM detection_rules WHERE enabled = 1"
             ).fetchall()
@@ -899,11 +884,6 @@ class DatabaseService:
     def get_ttp_rule_counts(self) -> Dict[str, int]:
         """Get count of enabled rules per MITRE technique ID."""
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             result = conn.execute("""
                 SELECT ttp_id, COUNT(*) as rule_count
                 FROM (
@@ -940,11 +920,6 @@ class DatabaseService:
             search: Optional search filter to further restrict rules (matches name, author, rule_id, mitre_ids)
         """
         with self.get_connection() as conn:
-            try:
-                conn.execute("CHECKPOINT")
-            except:
-                pass
-            
             # Query rules where the technique ID is in the mitre_ids array
             ttp_upper = technique_id.upper()
             

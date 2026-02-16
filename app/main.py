@@ -78,6 +78,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️ Failed to pre-load Sigma rules: {e}")
     
+    # Warm up Sigma backends / pipelines so first conversion is instant
+    try:
+        sigma_helper.warm_up_backends()
+    except Exception as e:
+        logger.warning(f"⚠️ Sigma backend warm-up failed (non-fatal): {e}")
+    
     # Run initial sync on startup (in background to not block startup)
     asyncio.create_task(scheduled_sync())
     
@@ -454,7 +460,7 @@ def create_app() -> FastAPI:
         ctx = {
             "request": request,
             "brand_hue": settings.brand_hue,
-            "cache_bust": str(int(time.time())),
+            "cache_bust": settings.tide_version,
             "settings": settings,
         }
         if context:
@@ -480,7 +486,7 @@ def create_app() -> FastAPI:
     # --- LOGIN PAGE (public) ---
     
     @app.get("/login", response_class=HTMLResponse, name="login_page")
-    async def login_page(request: Request, next: str = "/", logout: bool = False):
+    def login_page(request: Request, next: str = "/", logout: bool = False):
         """
         Login page - shows login button that redirects to Keycloak.
         This is a public route (no auth required).
@@ -541,14 +547,14 @@ def create_app() -> FastAPI:
     # --- LOGOUT REDIRECT (to clear session properly) ---
     
     @app.get("/logout", response_class=HTMLResponse, name="logout")
-    async def logout_redirect(request: Request):
+    def logout_redirect(request: Request):
         """Redirect to auth logout endpoint."""
         return RedirectResponse(url="/auth/logout", status_code=302)
     
     # --- PAGE ROUTES ---
     
     @app.get("/", response_class=HTMLResponse, name="home")
-    async def home(request: Request, user: CurrentUser):
+    def home(request: Request, user: CurrentUser):
         """Home page - redirect to dashboard or show landing."""
         return render_template(
             "pages/home.html",
@@ -560,7 +566,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/rules", response_class=HTMLResponse, name="rule_health")
-    async def rule_health_page(request: Request, user: CurrentUser):
+    def rule_health_page(request: Request, user: CurrentUser):
         """Rule Health page."""
         from app.services.database import get_database_service
         db = get_database_service()
@@ -580,7 +586,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/heatmap", response_class=HTMLResponse, name="heatmap")
-    async def heatmap_page(request: Request, user: CurrentUser):
+    def heatmap_page(request: Request, user: CurrentUser):
         """Heatmap page."""
         from app.services.database import get_database_service
         from app.models.threats import HeatmapData
@@ -612,7 +618,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_page(request: Request, user: CurrentUser):
+    def dashboard_page(request: Request, user: CurrentUser):
         """Dashboard page - Aggregated overview of detection engineering posture."""
         import os
         from app.services.database import get_database_service
@@ -651,17 +657,15 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/threats", response_class=HTMLResponse)
-    async def threats_page(request: Request, user: CurrentUser):
+    def threats_page(request: Request, user: CurrentUser):
         """Threat Landscape page."""
         from app.services.database import get_database_service
         db = get_database_service()
         
         metrics = db.get_threat_landscape_metrics()
         
-        # Get unique origins and sources for filters
-        actors = db.get_threat_actors()
-        origins = sorted(set(a.origin for a in actors if a.origin))
-        sources = sorted(set(src for a in actors for src in a.source if src))
+        # Lightweight query for filter dropdowns only (not full actor objects)
+        origins, sources = db.get_threat_actor_filter_options()
         
         return render_template(
             "pages/threat_landscape.html",
@@ -676,7 +680,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/promotion", response_class=HTMLResponse)
-    async def promotion_page(request: Request, user: CurrentUser):
+    def promotion_page(request: Request, user: CurrentUser):
         """Promotion page - Promote staging rules to production."""
         from app.services.database import get_database_service
         db = get_database_service()
@@ -694,7 +698,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/sigma", response_class=HTMLResponse)
-    async def sigma_page(request: Request, user: CurrentUser, technique: str = ""):
+    def sigma_page(request: Request, user: CurrentUser, technique: str = ""):
         """Sigma Convert page."""
         from app import sigma_helper as sigma_mod
         
@@ -731,7 +735,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/attack-tree", response_class=HTMLResponse)
-    async def attack_tree_page(request: Request, user: CurrentUser):
+    def attack_tree_page(request: Request, user: CurrentUser):
         """Attack Tree page (placeholder)."""
         return render_template(
             "pages/placeholder.html",
@@ -745,7 +749,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/presentation", response_class=HTMLResponse)
-    async def presentation_page(request: Request, user: CurrentUser):
+    def presentation_page(request: Request, user: CurrentUser):
         """Presentation page (placeholder)."""
         return render_template(
             "pages/placeholder.html",
@@ -759,7 +763,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/preferences", response_class=HTMLResponse)
-    async def preferences_page(request: Request, user: CurrentUser):
+    def preferences_page(request: Request, user: CurrentUser):
         """User preferences page."""
         return render_template(
             "pages/preferences.html",
@@ -773,7 +777,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/settings", response_class=HTMLResponse)
-    async def settings_page(request: Request, user: CurrentUser, db: DbDep):
+    def settings_page(request: Request, user: CurrentUser, db: DbDep):
         """Settings page - configure integrations and logging."""
         import os
         app_settings = db.get_all_settings()

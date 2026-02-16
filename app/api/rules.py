@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 
 @router.get("", response_class=HTMLResponse)
-async def list_rules(
+def list_rules(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -60,7 +60,7 @@ async def list_rules(
 
 
 @router.get("/metrics", response_class=HTMLResponse)
-async def get_metrics(
+def get_metrics(
     request: Request,
     db: DbDep,
     user: CurrentUser,
@@ -75,7 +75,7 @@ async def get_metrics(
 
 
 @router.get("/{rule_id}/detail", response_class=HTMLResponse)
-async def get_rule_detail(
+def get_rule_detail(
     request: Request,
     rule_id: str,
     db: DbDep,
@@ -103,7 +103,7 @@ async def get_rule_detail(
 
 
 @router.post("/{rule_id}/validate", response_class=HTMLResponse)
-async def validate_rule(
+def validate_rule(
     request: Request,
     rule_id: str,
     db: DbDep,

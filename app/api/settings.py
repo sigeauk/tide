@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 @router.get("", response_class=HTMLResponse)
-async def get_settings_data(request: Request, db: DbDep, user: CurrentUser):
+def get_settings_data(request: Request, db: DbDep, user: CurrentUser):
     """Get current app settings as JSON."""
     settings = db.get_all_settings()
     import json
@@ -68,7 +68,7 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser):
 
 
 @router.post("/rule-log/export", response_class=HTMLResponse)
-async def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
+def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
     """Manually trigger a rule log export."""
     from app.services.rule_logger import export_rule_logs, cleanup_old_logs
     
