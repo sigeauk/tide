@@ -44,9 +44,9 @@ Shows full rule information including query, field mappings, and scores.
                             <td>{{ mapping[0] }}</td>
                             <td>{{ mapping[1] }}</td>
                             <td class="text-center">
-                                {% if mapping[2] in ['✔️', 'Yes', True] %}
+                                {% if mapping[2] in ['Yes', True] %}
                                 <span class="text-success">✓</span>
-                                {% elif mapping[2] == '❓' %}
+                                {% elif mapping[2] == '?' %}
                                 <span class="text-warning">?</span>
                                 {% else %}
                                 <span class="text-danger">✗</span>

@@ -33,7 +33,7 @@ def main():
     
     all_ok = True
     
-    print("📊 MITRE ATT&CK Data:")
+    print("MITRE ATT&CK Data:")
     print("-" * 40)
     
     mitre_files = [

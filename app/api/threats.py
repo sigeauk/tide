@@ -222,11 +222,12 @@ def get_threat_metrics(
     user: CurrentUser,
 ):
     """Get threat landscape metrics."""
+    from app.main import get_last_sync_time
     metrics = db.get_threat_landscape_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "partials/threat_metrics.html",
-        {"request": request, "metrics": metrics}
+        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 
@@ -249,24 +250,24 @@ async def sync_threats(
         if count > 0:
             return HTMLResponse(
                 f'<div class="toast toast-success" onclick="this.remove()">'
-                f'✅ Synced {count} threat actors from MITRE ATT&CK and OpenCTI.'
+                f'Synced {count} threat actors from MITRE ATT&CK and OpenCTI.'
                 f'</div>'
             )
         elif count == 0:
             return HTMLResponse(
                 '<div class="toast toast-warning" onclick="this.remove()">'
-                '⚠️ No threat data found. Check /opt/repos/mitre directory and OpenCTI connection.'
+                'No threat data found. Check /opt/repos/mitre directory and OpenCTI connection.'
                 '</div>'
             )
         else:
             return HTMLResponse(
                 '<div class="toast toast-error" onclick="this.remove()">'
-                '❌ MITRE sync failed. Check logs for details.'
+                'MITRE sync failed. Check logs for details.'
                 '</div>'
             )
     except Exception as e:
         return HTMLResponse(
             f'<div class="toast toast-error" onclick="this.remove()">'
-            f'❌ Sync error: {str(e)}'
+            f'Sync error: {str(e)}'
             f'</div>'
         )

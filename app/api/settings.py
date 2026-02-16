@@ -58,11 +58,11 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser):
     except Exception as e:
         logger.warning(f"Could not reschedule rule log job: {e}")
     
-    logger.info(f"✅ Settings saved: {list(settings_to_save.keys())}")
+    logger.info(f"Settings saved: {list(settings_to_save.keys())}")
     
     return HTMLResponse("""
     <div id="settings-toast" hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">✅ Settings saved successfully</div>
+        <div class="toast toast-success">Settings saved successfully</div>
     </div>
     """)
 
@@ -82,12 +82,12 @@ def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
     if count > 0:
         return HTMLResponse(f"""
         <div id="export-toast" hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-success">📝 Exported {count} rules to {log_path}</div>
+            <div class="toast toast-success">Exported {count} rules to {log_path}</div>
         </div>
         """)
     else:
         return HTMLResponse("""
         <div id="export-toast" hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">⚠️ No rules to export. Run a sync first.</div>
+            <div class="toast toast-warning">No rules to export. Run a sync first.</div>
         </div>
         """)

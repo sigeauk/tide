@@ -4,15 +4,16 @@
 {% block title %}Sigma Convert | TIDE{% endblock %}
 
 {% block head %}
+<link rel="stylesheet" href="/static/css/heatmap.css?v={{ cache_bust }}">
 <!-- CodeMirror for YAML editing with syntax highlighting (bundled locally) -->
 <link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
-<script src="/static/js/vendor/codemirror.min.js"></script>
-<script src="/static/js/vendor/codemirror-yaml.min.js"></script>
+<script defer src="/static/js/vendor/codemirror.min.js"></script>
+<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
 <!-- Prism.js for JSON output highlighting (bundled locally) -->
 <link rel="stylesheet" href="/static/css/vendor/prism-tomorrow.min.css">
-<script src="/static/js/vendor/prism.min.js"></script>
-<script src="/static/js/vendor/prism-json.min.js"></script>
+<script defer src="/static/js/vendor/prism.min.js"></script>
+<script defer src="/static/js/vendor/prism-json.min.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -411,4 +412,7 @@ window.clearYamlEditor = function() {
     document.getElementById('validation-result').innerHTML = '';
 };
 </script>
+
+<!-- Slide panel for technique details -->
+<div id="slide-panel-container"></div>
 {% endblock %}

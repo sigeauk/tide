@@ -52,6 +52,10 @@ class DatabaseService:
         self.validation_file = self.settings.validation_file
         self._conn_lock = Lock()
         
+        # Validation data cache (avoids re-reading JSON file on every metrics call)
+        self._validation_cache: Optional[Dict] = None
+        self._validation_cache_mtime: float = 0.0
+        
         # Ensure directories exist
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         os.makedirs(self.trigger_dir, exist_ok=True)
@@ -59,7 +63,7 @@ class DatabaseService:
         # Initialize database
         self._init_db()
         self._initialized = True
-        logger.info("🦆 DuckDB Service initialized")
+        logger.info("DuckDB Service initialized")
     
     @contextmanager
     def get_connection(self, read_only: bool = False, retries: int = 5, delay: float = 0.5):
@@ -79,7 +83,7 @@ class DatabaseService:
             except duckdb.IOException as e:
                 if "lock" in str(e).lower():
                     attempt += 1
-                    logger.warning(f"⚠️ DB Locked. Retrying ({attempt}/{retries})...")
+                    logger.warning(f"DB Locked. Retrying ({attempt}/{retries})...")
                     time.sleep(delay)
                 else:
                     raise
@@ -130,7 +134,7 @@ class DatabaseService:
         if current_version >= SCHEMA_VERSION:
             return
         
-        logger.info(f"🔄 Running migrations from v{current_version} to v{SCHEMA_VERSION}...")
+        logger.info(f"Running migrations from v{current_version} to v{SCHEMA_VERSION}...")
         
         # Migration 1: Initial schema
         if current_version < 1:
@@ -180,7 +184,7 @@ class DatabaseService:
                 )
             """)
             self._set_schema_version(conn, 1)
-            logger.info("✅ Migration 1: Initial schema created")
+            logger.info("Migration 1: Initial schema created")
         
         # Migration 2: Add/fix source column to threat_actors as VARCHAR[]
         if current_version < 2:
@@ -190,7 +194,7 @@ class DatabaseService:
             
             if source_col and source_col[1] == 'VARCHAR':
                 # Source column exists but has wrong type - need to fix
-                logger.info("🔄 Converting source column from VARCHAR to VARCHAR[]...")
+                logger.info("Converting source column from VARCHAR to VARCHAR[]...")
                 conn.execute("ALTER TABLE threat_actors ADD COLUMN source_new VARCHAR[]")
                 conn.execute("""
                     UPDATE threat_actors 
@@ -205,7 +209,7 @@ class DatabaseService:
                 conn.execute("ALTER TABLE threat_actors ADD COLUMN source VARCHAR[]")
             
             self._set_schema_version(conn, 2)
-            logger.info("✅ Migration 2: Source column fixed as VARCHAR[]")
+            logger.info("Migration 2: Source column fixed as VARCHAR[]")
         
         # Migration 3: Composite PK for detection_rules
         if current_version < 3:
@@ -238,7 +242,7 @@ class DatabaseService:
                 )
             """)
             self._set_schema_version(conn, 3)
-            logger.info("✅ Migration 3: Composite PK for detection_rules")
+            logger.info("Migration 3: Composite PK for detection_rules")
         
         # Migration 4: App settings table for runtime configuration
         if current_version < 4:
@@ -258,9 +262,9 @@ class DatabaseService:
                     ('rule_log_retention_days', '7')
             """)
             self._set_schema_version(conn, 4)
-            logger.info("✅ Migration 4: App settings table created")
+            logger.info("Migration 4: App settings table created")
         
-        logger.info(f"✅ Migrations complete. Schema v{SCHEMA_VERSION}")
+        logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
         """Validate legacy tables and align schemas non-destructively."""
@@ -282,7 +286,7 @@ class DatabaseService:
                 missing = expected - col_names
                 
                 if missing:
-                    logger.warning(f"⚠️ checkedRule missing columns: {missing}")
+                    logger.warning(f"checkedRule missing columns: {missing}")
                     for col in missing:
                         try:
                             if col == 'rule_name':
@@ -291,11 +295,11 @@ class DatabaseService:
                                 conn.execute("ALTER TABLE checkedRule ADD COLUMN last_checked_on TIMESTAMP")
                             elif col == 'checked_by':
                                 conn.execute("ALTER TABLE checkedRule ADD COLUMN checked_by VARCHAR DEFAULT 'unknown'")
-                            logger.info(f"✅ Added missing column: {col}")
+                            logger.info(f"Added missing column: {col}")
                         except Exception as e:
                             logger.warning(f"Could not add column {col}: {e}")
                 else:
-                    logger.info("✅ checkedRule schema validated")
+                    logger.info("checkedRule schema validated")
                     
         except Exception as e:
             logger.warning(f"Legacy table validation skipped: {e}")
@@ -320,21 +324,27 @@ class DatabaseService:
                     last_login TIMESTAMP
                 )
             """)
-            logger.info("✅ Users table ready")
+            logger.info("Users table ready")
         except Exception as e:
             logger.warning(f"Could not create users table: {e}")
     
     # --- VALIDATION DATA ---
     
     def _load_validation_data(self) -> Dict[str, Dict[str, str]]:
-        """Load validation data from JSON file."""
-        if os.path.exists(self.validation_file):
-            try:
-                with open(self.validation_file, "r") as f:
-                    return json.load(f).get("rules", {})
-            except:
-                return {}
-        return {}
+        """Load validation data from JSON file (cached by file mtime)."""
+        if not os.path.exists(self.validation_file):
+            return {}
+        try:
+            mtime = os.path.getmtime(self.validation_file)
+            if self._validation_cache is not None and mtime == self._validation_cache_mtime:
+                return self._validation_cache
+            with open(self.validation_file, "r") as f:
+                data = json.load(f).get("rules", {})
+            self._validation_cache = data
+            self._validation_cache_mtime = mtime
+            return data
+        except:
+            return {}
     
     def save_validation(self, rule_name: str, user_name: str):
         """Save validation record for a rule."""
@@ -559,6 +569,12 @@ class DatabaseService:
             low_quality_count = len(df[df['score'] < 50])
             high_quality_count = len(df[df['score'] >= 80])
             
+            # Quality brackets
+            quality_excellent = len(df[df['score'] >= 80])
+            quality_good = len(df[(df['score'] >= 70) & (df['score'] < 80)])
+            quality_fair = len(df[(df['score'] >= 50) & (df['score'] < 70)])
+            quality_poor = len(df[df['score'] < 50])
+            
             # Rules by space
             rules_by_space = {}
             if 'space' in df.columns:
@@ -616,6 +632,10 @@ class DatabaseService:
             never_validated_count=total_rules - validated_count,
             low_quality_count=low_quality_count,
             high_quality_count=high_quality_count,
+            quality_excellent=quality_excellent,
+            quality_good=quality_good,
+            quality_fair=quality_fair,
+            quality_poor=quality_poor,
             rules_by_space=rules_by_space,
             severity_breakdown=severity_breakdown,
             language_breakdown=language_breakdown,
@@ -655,7 +675,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             # Get staging rules
             staging_df = conn.execute(
-                "SELECT enabled, score, severity FROM detection_rules WHERE LOWER(space) = 'staging'"
+                "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
             ).df()
             
             # Get production rules count
@@ -673,10 +693,15 @@ class DatabaseService:
                     'staging_max_score': 0,
                     'staging_low_quality': 0,
                     'staging_high_quality': 0,
+                    'staging_quality_excellent': 0,
+                    'staging_quality_good': 0,
+                    'staging_quality_fair': 0,
+                    'staging_quality_poor': 0,
                     'staging_severity': {},
+                    'staging_validated': 0,
+                    'staging_validation_expired': 0,
+                    'staging_never_validated': 0,
                     'production_total': production_total,
-                    'last_sync_status': 'pending',
-                    'last_sync_time': 'No staging rules',
                 }
             
             staging_total = len(staging_df)
@@ -687,10 +712,36 @@ class DatabaseService:
             staging_low_quality = len(staging_df[staging_df['score'] < 50])
             staging_high_quality = len(staging_df[staging_df['score'] >= 80])
             
+            # Quality brackets
+            staging_quality_excellent = len(staging_df[staging_df['score'] >= 80])
+            staging_quality_good = len(staging_df[(staging_df['score'] >= 70) & (staging_df['score'] < 80)])
+            staging_quality_fair = len(staging_df[(staging_df['score'] >= 50) & (staging_df['score'] < 70)])
+            staging_quality_poor = len(staging_df[staging_df['score'] < 50])
+            
             staging_severity = {}
             if 'severity' in staging_df.columns:
                 sev_counts = staging_df['severity'].value_counts().to_dict()
                 staging_severity = {str(k).lower(): int(v) for k, v in sev_counts.items()}
+            
+            # Validation stats for staging rules
+            staging_validated = 0
+            staging_validation_expired = 0
+            validation_data = self._load_validation_data()
+            if validation_data:
+                now = datetime.now()
+                for rule_name in staging_df['name'].tolist():
+                    rule_v = validation_data.get(str(rule_name), {})
+                    if rule_v:
+                        staging_validated += 1
+                        val_str = rule_v.get('last_checked_on', '')
+                        if val_str:
+                            try:
+                                val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
+                                weeks = (now - val_date).days / 7
+                                if weeks > 12:
+                                    staging_validation_expired += 1
+                            except:
+                                pass
             
             return {
                 'staging_total': staging_total,
@@ -700,10 +751,15 @@ class DatabaseService:
                 'staging_max_score': staging_max_score,
                 'staging_low_quality': staging_low_quality,
                 'staging_high_quality': staging_high_quality,
+                'staging_quality_excellent': staging_quality_excellent,
+                'staging_quality_good': staging_quality_good,
+                'staging_quality_fair': staging_quality_fair,
+                'staging_quality_poor': staging_quality_poor,
                 'staging_severity': staging_severity,
+                'staging_validated': staging_validated,
+                'staging_validation_expired': staging_validation_expired,
+                'staging_never_validated': staging_total - staging_validated,
                 'production_total': production_total,
-                'last_sync_status': 'success',  # TODO: Track actual sync status
-                'last_sync_time': 'Ready',
             }
     
     # --- THREAT ACTOR OPERATIONS ---
@@ -795,8 +851,13 @@ class DatabaseService:
             if df.empty:
                 return ThreatLandscapeMetrics()
             
-            # Get covered TTPs from enabled rules in production
-            covered_ttps = self.get_covered_ttps_by_space("production")
+            # Get covered TTPs inline (avoid nested connection)
+            covered_result = conn.execute("""
+                SELECT DISTINCT unnest(mitre_ids) 
+                FROM detection_rules 
+                WHERE enabled = 1 AND LOWER(space) = LOWER('production')
+            """).fetchall()
+            covered_ttps = {row[0].upper() for row in covered_result if row[0]}
             
             # Basic counts
             total_actors = len(df)
@@ -873,6 +934,240 @@ class DatabaseService:
                 uncovered_actors=uncovered_actors,
             )
     
+    def get_dashboard_metrics(self) -> Tuple[RuleHealthMetrics, Dict[str, Any], "ThreatLandscapeMetrics"]:
+        """
+        Get all three metric sets for the dashboard in a single DB connection.
+        Loads validation data once and reuses it across rule health + promotion.
+        Much faster than calling the three methods individually.
+        """
+        from app.models.threats import ThreatLandscapeMetrics
+        
+        # Load validation data once
+        validation_data = self._load_validation_data()
+        now = datetime.now()
+        
+        with self.get_connection() as conn:
+            # ── Rule Health Metrics ──
+            rules_df = conn.execute(
+                "SELECT enabled, score, space, severity, name FROM detection_rules"
+            ).df()
+            
+            if rules_df.empty:
+                rule_metrics = RuleHealthMetrics()
+            else:
+                total_rules = len(rules_df)
+                enabled_rules = len(rules_df[rules_df['enabled'] == 1])
+                avg_score = float(rules_df['score'].mean()) if 'score' in rules_df.columns else 0
+                min_score = int(rules_df['score'].min()) if 'score' in rules_df.columns else 0
+                max_score = int(rules_df['score'].max()) if 'score' in rules_df.columns else 0
+                low_quality_count = len(rules_df[rules_df['score'] < 50])
+                high_quality_count = len(rules_df[rules_df['score'] >= 80])
+                quality_excellent = len(rules_df[rules_df['score'] >= 80])
+                quality_good = len(rules_df[(rules_df['score'] >= 70) & (rules_df['score'] < 80)])
+                quality_fair = len(rules_df[(rules_df['score'] >= 50) & (rules_df['score'] < 70)])
+                quality_poor = len(rules_df[rules_df['score'] < 50])
+                
+                rules_by_space = {}
+                if 'space' in rules_df.columns:
+                    space_counts = rules_df['space'].value_counts().to_dict()
+                    rules_by_space = {str(k): int(v) for k, v in space_counts.items()}
+                
+                severity_breakdown = {}
+                if 'severity' in rules_df.columns:
+                    sev_counts = rules_df['severity'].value_counts().to_dict()
+                    severity_breakdown = {str(k): int(v) for k, v in sev_counts.items()}
+                
+                # Validation stats (reuse cached data)
+                validated_count = 0
+                validation_expired_count = 0
+                if validation_data:
+                    for rule_name in rules_df['name'].tolist():
+                        rule_v = validation_data.get(str(rule_name), {})
+                        if rule_v:
+                            validated_count += 1
+                            val_str = rule_v.get('last_checked_on', '')
+                            if val_str:
+                                try:
+                                    val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
+                                    if (now - val_date).days / 7 > 12:
+                                        validation_expired_count += 1
+                                except:
+                                    pass
+                
+                rule_metrics = RuleHealthMetrics(
+                    total_rules=total_rules,
+                    enabled_rules=enabled_rules,
+                    disabled_rules=total_rules - enabled_rules,
+                    avg_score=round(avg_score, 1),
+                    min_score=min_score,
+                    max_score=max_score,
+                    validated_count=validated_count,
+                    validation_expired_count=validation_expired_count,
+                    never_validated_count=total_rules - validated_count,
+                    low_quality_count=low_quality_count,
+                    high_quality_count=high_quality_count,
+                    quality_excellent=quality_excellent,
+                    quality_good=quality_good,
+                    quality_fair=quality_fair,
+                    quality_poor=quality_poor,
+                    rules_by_space=rules_by_space,
+                    severity_breakdown=severity_breakdown,
+                    language_breakdown={},  # Skip expensive JSON parsing for dashboard
+                )
+            
+            # ── Promotion Metrics ──
+            staging_df = conn.execute(
+                "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
+            ).df()
+            prod_result = conn.execute(
+                "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
+            ).fetchone()
+            production_total = prod_result[0] if prod_result else 0
+            
+            if staging_df.empty:
+                promo_metrics = {
+                    'staging_total': 0, 'staging_enabled': 0,
+                    'staging_avg_score': 0, 'staging_min_score': 0, 'staging_max_score': 0,
+                    'staging_low_quality': 0, 'staging_high_quality': 0,
+                    'staging_quality_excellent': 0, 'staging_quality_good': 0,
+                    'staging_quality_fair': 0, 'staging_quality_poor': 0,
+                    'staging_severity': {},
+                    'staging_validated': 0, 'staging_validation_expired': 0,
+                    'staging_never_validated': 0,
+                    'production_total': production_total,
+                }
+            else:
+                staging_total = len(staging_df)
+                staging_enabled = len(staging_df[staging_df['enabled'] == 1])
+                staging_avg_score = float(staging_df['score'].mean()) if 'score' in staging_df.columns else 0
+                staging_min_score = int(staging_df['score'].min()) if 'score' in staging_df.columns else 0
+                staging_max_score = int(staging_df['score'].max()) if 'score' in staging_df.columns else 0
+                staging_quality_excellent = len(staging_df[staging_df['score'] >= 80])
+                staging_quality_good = len(staging_df[(staging_df['score'] >= 70) & (staging_df['score'] < 80)])
+                staging_quality_fair = len(staging_df[(staging_df['score'] >= 50) & (staging_df['score'] < 70)])
+                staging_quality_poor = len(staging_df[staging_df['score'] < 50])
+                
+                staging_severity = {}
+                if 'severity' in staging_df.columns:
+                    sev_counts = staging_df['severity'].value_counts().to_dict()
+                    staging_severity = {str(k).lower(): int(v) for k, v in sev_counts.items()}
+                
+                staging_validated = 0
+                staging_validation_expired = 0
+                if validation_data:
+                    for rule_name in staging_df['name'].tolist():
+                        rule_v = validation_data.get(str(rule_name), {})
+                        if rule_v:
+                            staging_validated += 1
+                            val_str = rule_v.get('last_checked_on', '')
+                            if val_str:
+                                try:
+                                    val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
+                                    if (now - val_date).days / 7 > 12:
+                                        staging_validation_expired += 1
+                                except:
+                                    pass
+                
+                promo_metrics = {
+                    'staging_total': staging_total,
+                    'staging_enabled': staging_enabled,
+                    'staging_avg_score': staging_avg_score,
+                    'staging_min_score': staging_min_score,
+                    'staging_max_score': staging_max_score,
+                    'staging_low_quality': staging_quality_poor,
+                    'staging_high_quality': staging_quality_excellent,
+                    'staging_quality_excellent': staging_quality_excellent,
+                    'staging_quality_good': staging_quality_good,
+                    'staging_quality_fair': staging_quality_fair,
+                    'staging_quality_poor': staging_quality_poor,
+                    'staging_severity': staging_severity,
+                    'staging_validated': staging_validated,
+                    'staging_validation_expired': staging_validation_expired,
+                    'staging_never_validated': staging_total - staging_validated,
+                    'production_total': production_total,
+                }
+            
+            # ── Threat Landscape Metrics ──
+            threat_df = conn.execute(
+                "SELECT ttp_count, ttps, origin, source FROM threat_actors"
+            ).df()
+            
+            # Covered TTPs (reuse same connection)
+            covered_result = conn.execute("""
+                SELECT DISTINCT unnest(mitre_ids) 
+                FROM detection_rules 
+                WHERE enabled = 1 AND LOWER(space) = LOWER('production')
+            """).fetchall()
+            covered_ttps = {row[0].upper() for row in covered_result if row[0]}
+            
+            if threat_df.empty:
+                threat_metrics = ThreatLandscapeMetrics()
+            else:
+                total_actors = len(threat_df)
+                total_ttps = int(threat_df['ttp_count'].sum()) if 'ttp_count' in threat_df.columns else 0
+                
+                all_ttps = set()
+                for ttps_list in threat_df['ttps']:
+                    if ttps_list is not None and hasattr(ttps_list, '__len__') and len(ttps_list) > 0:
+                        for t in ttps_list:
+                            all_ttps.add(str(t).strip().upper())
+                
+                unique_ttps = len(all_ttps)
+                covered_unique = all_ttps.intersection(covered_ttps)
+                uncovered_unique = all_ttps - covered_ttps
+                covered_count = len(covered_unique)
+                uncovered_count = len(uncovered_unique)
+                global_coverage_pct = round((covered_count / unique_ttps * 100), 1) if unique_ttps > 0 else 0
+                avg_ttps = round(total_ttps / total_actors, 1) if total_actors > 0 else 0
+                
+                origin_breakdown = {}
+                if 'origin' in threat_df.columns:
+                    origin_counts = threat_df['origin'].value_counts().to_dict()
+                    origin_breakdown = {str(k): int(v) for k, v in origin_counts.items() if k}
+                
+                source_breakdown = {}
+                if 'source' in threat_df.columns:
+                    for source_list in threat_df['source']:
+                        if source_list is not None:
+                            if hasattr(source_list, 'tolist'):
+                                source_list = source_list.tolist()
+                            if isinstance(source_list, list):
+                                for src in source_list:
+                                    source_breakdown[src] = source_breakdown.get(src, 0) + 1
+                
+                fully_covered = 0
+                partially_covered = 0
+                uncovered_actors = 0
+                for ttps_list in threat_df['ttps']:
+                    if ttps_list is None or len(ttps_list) == 0:
+                        uncovered_actors += 1
+                        continue
+                    actor_ttps = {str(t).strip().upper() for t in ttps_list}
+                    actor_covered = actor_ttps.intersection(covered_ttps)
+                    if len(actor_covered) == len(actor_ttps):
+                        fully_covered += 1
+                    elif len(actor_covered) > 0:
+                        partially_covered += 1
+                    else:
+                        uncovered_actors += 1
+                
+                threat_metrics = ThreatLandscapeMetrics(
+                    total_actors=total_actors,
+                    total_ttps=total_ttps,
+                    unique_ttps=unique_ttps,
+                    avg_ttps_per_actor=avg_ttps,
+                    covered_ttps=covered_count,
+                    uncovered_ttps=uncovered_count,
+                    global_coverage_pct=global_coverage_pct,
+                    origin_breakdown=origin_breakdown,
+                    source_breakdown=source_breakdown,
+                    fully_covered_actors=fully_covered,
+                    partially_covered_actors=partially_covered,
+                    uncovered_actors=uncovered_actors,
+                )
+        
+        return rule_metrics, promo_metrics, threat_metrics
+    
     def get_all_covered_ttps(self) -> Set[str]:
         """Get all TTPs covered by enabled detection rules."""
         with self.get_connection() as conn:
@@ -894,6 +1189,27 @@ class DatabaseService:
                 GROUP BY ttp_id
             """).fetchall()
             return {row[0].upper(): row[1] for row in result if row[0]}
+    
+    def get_sigma_coverage_data(self) -> Tuple[Set[str], Dict[str, int]]:
+        """Get covered TTPs and rule counts in a single DB connection (for sigma page)."""
+        with self.get_connection() as conn:
+            covered_result = conn.execute(
+                "SELECT DISTINCT unnest(mitre_ids) FROM detection_rules WHERE enabled = 1"
+            ).fetchall()
+            covered_ttps = {row[0].upper() for row in covered_result if row[0]}
+            
+            count_result = conn.execute("""
+                SELECT ttp_id, COUNT(*) as rule_count
+                FROM (
+                    SELECT unnest(mitre_ids) as ttp_id
+                    FROM detection_rules 
+                    WHERE enabled = 1
+                )
+                GROUP BY ttp_id
+            """).fetchall()
+            ttp_rule_counts = {row[0].upper(): row[1] for row in count_result if row[0]}
+            
+            return covered_ttps, ttp_rule_counts
     
     def get_technique_map(self) -> Dict[str, str]:
         """Get mapping of technique IDs to tactics."""
@@ -1052,7 +1368,7 @@ class DatabaseService:
             count = conn.execute("SELECT COUNT(*) FROM detection_rules").fetchone()[0]
             conn.execute("DELETE FROM detection_rules WHERE 1=1")
             conn.execute("CHECKPOINT")
-            logger.info(f"🗑️ Cleared {count} detection rules")
+            logger.info(f"Cleared {count} detection rules")
             return count
     
     def save_audit_results(self, audit_list: List[Dict[str, Any]]) -> int:
@@ -1069,23 +1385,23 @@ class DatabaseService:
         
         # Parse author - handle list format like "['darral']" -> "darral"
         def parse_author(val):
-            if not val or val == '❌':
-                return '❌'
+            if not val or val == '-':
+                return '-'
             s = str(val).strip()
             if s.startswith('[') and s.endswith(']'):
                 inner = s[1:-1]
                 authors = [a.strip().strip("'").strip('"') for a in inner.split(',') if a.strip()]
-                return ', '.join(authors) if authors else '❌'
-            return s if s else '❌'
+                return ', '.join(authors) if authors else '-'
+            return s if s else '-'
         
-        df['author'] = df['author_str'].apply(parse_author) if 'author_str' in df.columns else '❌'
+        df['author'] = df['author_str'].apply(parse_author) if 'author_str' in df.columns else '-'
         df['space'] = df['space_id'].fillna('default') if 'space_id' in df.columns else 'default'
         df['last_updated'] = datetime.now()
         df['mitre_ids'] = df['mitre_ids'].apply(lambda x: x if isinstance(x, list) else [])
         
         # Get unique spaces being synced - we'll delete all rules from these spaces first
         synced_spaces = df['space'].unique().tolist()
-        logger.info(f"🔄 Syncing rules for spaces: {synced_spaces}")
+        logger.info(f"Syncing rules for spaces: {synced_spaces}")
         
         # Build raw_data to include both the original rule AND the field mapping results
         def build_raw_data(row):
@@ -1122,7 +1438,7 @@ class DatabaseService:
         duplicates = df_final[df_final.duplicated(subset=['rule_id', 'space'], keep='first')]
         if not duplicates.empty:
             dup_names = duplicates['name'].tolist()
-            logger.info(f"⚠️ Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
+            logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
             df_final = df_final.drop_duplicates(subset=['rule_id', 'space'], keep='first')
 
         with self.get_connection() as conn:
@@ -1136,7 +1452,7 @@ class DatabaseService:
                         "DELETE FROM detection_rules WHERE space = ?",
                         [space]
                     ).fetchone()
-                    logger.debug(f"🗑️ Cleared rules from space '{space}'")
+                    logger.debug(f"Cleared rules from space '{space}'")
                 
                 # Insert fresh rules
                 conn.register('rules_source', df_final)
@@ -1148,14 +1464,14 @@ class DatabaseService:
                 conn.execute("COMMIT")
                 
                 count = len(df_final)
-                logger.info(f"✅ Synced {count} detection rules to database (replaced rules in spaces: {synced_spaces})")
+                logger.info(f"Synced {count} detection rules to database (replaced rules in spaces: {synced_spaces})")
                 
             except Exception as e:
                 try:
                     conn.execute("ROLLBACK")
                 except Exception:
                     pass
-                logger.error(f"❌ Failed to save rules: {e}")
+                logger.error(f"Failed to save rules: {e}")
                 raise
         
         # Checkpoint outside transaction context to avoid concurrency issues

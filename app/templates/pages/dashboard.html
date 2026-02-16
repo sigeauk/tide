@@ -7,9 +7,21 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1 class="page-title-hero">Dashboard</h1>
-    <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
+<div class="page-header" style="display: flex; align-items: flex-start; justify-content: space-between;">
+    <div>
+        <h1 class="page-title-hero">Dashboard</h1>
+        <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
+    </div>
+    <div style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;">
+        <div id="sync-status"></div>
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-post="/api/sync/elastic"
+                hx-target="#sync-status"
+                hx-swap="outerHTML">
+            {{ icon('refresh-cw', '14') }}
+            Sync Elastic
+        </button>
+    </div>
 </div>
 
 <!-- ═══ Rule Health Section ═══ -->
@@ -17,52 +29,7 @@
     <h2>{{ icon('shield-check', '20') }} Rule Health</h2>
     <div class="metrics-grid">
         {% set metrics = rule_metrics %}
-        <div class="metric-card">
-            <p class="metric-value {% if metrics.avg_score >= 70 %}success{% elif metrics.avg_score >= 50 %}warning{% else %}danger{% endif %}">
-                {{ metrics.avg_score }}
-            </p>
-            <p class="metric-label">Avg Quality Score</p>
-            <p class="metric-sub">Range: {{ metrics.min_score }} - {{ metrics.max_score }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value">{{ metrics.total_rules }}</p>
-            <p class="metric-label">Total Rules</p>
-            <p class="metric-sub">{{ icon_text('check', metrics.enabled_rules ~ ' enabled', '14', 'text-success') }}</p>
-        </div>
-
-        {% set validated_pct = (metrics.validated_count / metrics.total_rules * 100) | round(1) if metrics.total_rules > 0 else 0 %}
-        <div class="metric-card">
-            <p class="metric-value {% if validated_pct >= 80 %}success{% elif validated_pct >= 50 %}warning{% else %}danger{% endif %}">
-                {{ metrics.validated_count }}
-            </p>
-            <p class="metric-label">Validated (12wk)</p>
-            <p class="metric-sub">{{ validated_pct }}% of total</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if metrics.validation_expired_count == 0 %}success{% elif metrics.validation_expired_count < 10 %}warning{% else %}danger{% endif %}">
-                {{ metrics.validation_expired_count }}
-            </p>
-            <p class="metric-label">Validation Expired</p>
-            <p class="metric-sub">{{ icon_text('triangle-alert', metrics.never_validated_count ~ ' never checked', '14', 'text-warning') }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if metrics.low_quality_count == 0 %}success{% elif metrics.low_quality_count < 20 %}warning{% else %}danger{% endif %}">
-                {{ metrics.low_quality_count }}
-            </p>
-            <p class="metric-label">Low Quality (&lt;50)</p>
-            <p class="metric-sub">{{ icon_text('star', metrics.high_quality_count ~ ' high quality', '14', 'text-warning') }}</p>
-        </div>
-
-        <div class="metric-card">
-            {% set spaces_list = metrics.rules_by_space.items() | list %}
-            {% set spaces_str = spaces_list[:3] | map('join', ': ') | join(' | ') %}
-            <p class="metric-value">{{ metrics.rules_by_space | length }}</p>
-            <p class="metric-label">Spaces</p>
-            <p class="metric-sub">{{ spaces_str if spaces_str else 'No spaces' }}</p>
-        </div>
+        {% include "partials/metrics_row.html" %}
     </div>
 </div>
 
@@ -70,62 +37,8 @@
 <div class="overview-section">
     <h2>{{ icon('circle-arrow-up', '20') }} Promotion</h2>
     <div class="metrics-grid">
-        {% set pm = promotion_metrics %}
-        <div class="metric-card">
-            <p class="metric-value">{{ pm.staging_total }}</p>
-            <p class="metric-label">Staging Rules</p>
-            <p class="metric-sub">{{ icon_text('check', (pm.staging_enabled | string) ~ ' enabled', '14', 'text-success') }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if pm.staging_avg_score >= 70 %}success{% elif pm.staging_avg_score >= 50 %}warning{% else %}danger{% endif %}">
-                {{ pm.staging_avg_score | round(1) }}
-            </p>
-            <p class="metric-label">Avg Quality Score</p>
-            <p class="metric-sub">Range: {{ pm.staging_min_score }} - {{ pm.staging_max_score }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if pm.staging_low_quality == 0 %}success{% elif pm.staging_low_quality < 10 %}warning{% else %}danger{% endif %}">
-                {{ pm.staging_low_quality }}
-            </p>
-            <p class="metric-label">Low Quality (&lt;50)</p>
-            <p class="metric-sub">{{ icon_text('star', (pm.staging_high_quality | string) ~ ' high quality', '14', 'text-warning') }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value">{{ pm.production_total }}</p>
-            <p class="metric-label">Production Rules</p>
-            <p class="metric-sub">{{ icon_text('shield', 'Target environment', '14', 'text-info') }}</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value">{{ pm.staging_severity | length }}</p>
-            <p class="metric-label">Severity Levels</p>
-            <p class="metric-sub">
-                {% if pm.staging_severity.get('critical', 0) > 0 %}
-                <span class="text-danger">C:{{ pm.staging_severity.get('critical', 0) }}</span>
-                {% endif %}
-                {% if pm.staging_severity.get('high', 0) > 0 %}
-                <span class="text-warning">H:{{ pm.staging_severity.get('high', 0) }}</span>
-                {% endif %}
-                {% if pm.staging_severity.get('medium', 0) > 0 %}
-                <span class="text-sev-medium">M:{{ pm.staging_severity.get('medium', 0) }}</span>
-                {% endif %}
-                {% if pm.staging_severity.get('low', 0) > 0 %}
-                <span class="text-success">L:{{ pm.staging_severity.get('low', 0) }}</span>
-                {% endif %}
-
-            </p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if pm.last_sync_status == 'success' %}success{% elif pm.last_sync_status == 'pending' %}warning{% else %}danger{% endif %}">
-                {{ icon('activity', '28') }}
-            </p>
-            <p class="metric-label">Sync Status</p>
-            <p class="metric-sub">{{ pm.last_sync_time or 'Not synced yet' }}</p>
-        </div>
+        {% set metrics = promotion_metrics %}
+        {% include "partials/promotion_metrics.html" %}
     </div>
 </div>
 
@@ -133,42 +46,8 @@
 <div class="overview-section">
     <h2>{{ icon('target', '20') }} Threat Landscape</h2>
     <div class="metrics-grid">
-        {% set tm = threat_metrics %}
-        <div class="metric-card">
-            <p class="metric-value">{{ tm.total_actors }}</p>
-            <p class="metric-label">Tracked Actors</p>
-            <p class="metric-sub">{{ tm.origin_breakdown | length }} origins</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value">{{ tm.unique_ttps }}</p>
-            <p class="metric-label">Unique TTPs</p>
-            <p class="metric-sub">{{ tm.total_ttps }} total instances</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if tm.global_coverage_pct >= 70 %}success{% elif tm.global_coverage_pct >= 40 %}warning{% else %}danger{% endif %}">{{ tm.global_coverage_pct }}%</p>
-            <p class="metric-label">Global Coverage</p>
-            <p class="metric-sub">{{ tm.covered_ttps }} covered</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if tm.uncovered_ttps < 20 %}success{% elif tm.uncovered_ttps < 50 %}warning{% else %}danger{% endif %}">{{ tm.uncovered_ttps }}</p>
-            <p class="metric-label">Coverage Gaps</p>
-            <p class="metric-sub">TTPs without rules</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value {% if tm.fully_covered_actors > tm.uncovered_actors %}success{% else %}warning{% endif %}">{{ tm.fully_covered_actors }}</p>
-            <p class="metric-label">Fully Covered</p>
-            <p class="metric-sub">{{ tm.partially_covered_actors }} partial</p>
-        </div>
-
-        <div class="metric-card">
-            <p class="metric-value">{{ tm.avg_ttps_per_actor }}</p>
-            <p class="metric-label">Avg TTPs/Actor</p>
-            <p class="metric-sub">Average techniques</p>
-        </div>
+        {% set metrics = threat_metrics %}
+        {% include "partials/threat_metrics.html" %}
     </div>
 </div>
 
@@ -214,41 +93,41 @@
 
 <!-- ═══ Repositories ═══ -->
 <div class="overview-section">
-    <h2>{{ icon('github', '20') }} Connected Services</h2>
+    <h2>{{ icon('github', '20') }} Repositories</h2>
     <div class="metrics-grid">
         <div class="integration-card">
             <div class="integration-card-name">MITRE Enterprise ATT&amp;CK</div>
-            <div class="integration-card-url">{{ env.mitre_source | truncate(50, True, '...') }}</div>
+            <div class="integration-card-url" title="{{ env.mitre_source }}">{{ env.mitre_source | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.mitre_enterprise else 'inactive' }}">{{ 'Active' if repo_status.mitre_enterprise else 'Missing' }}</span>
         </div>
 
         <div class="integration-card">
             <div class="integration-card-name">MITRE Mobile ATT&amp;CK</div>
-            <div class="integration-card-url">{{ env.mitre_mobile_source | truncate(50, True, '...') }}</div>
+            <div class="integration-card-url" title="{{ env.mitre_mobile_source }}">{{ env.mitre_mobile_source | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.mitre_mobile else 'inactive' }}">{{ 'Active' if repo_status.mitre_mobile else 'Missing' }}</span>
         </div>
 
         <div class="integration-card">
             <div class="integration-card-name">MITRE ICS ATT&amp;CK</div>
-            <div class="integration-card-url">{{ env.mitre_ics_source | truncate(50, True, '...') }}</div>
+            <div class="integration-card-url" title="{{ env.mitre_ics_source }}">{{ env.mitre_ics_source | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.mitre_ics else 'inactive' }}">{{ 'Active' if repo_status.mitre_ics else 'Missing' }}</span>
         </div>
 
         <div class="integration-card">
             <div class="integration-card-name">MITRE PRE-ATT&amp;CK</div>
-            <div class="integration-card-url">{{ env.mitre_pre_source | truncate(50, True, '...') }}</div>
+            <div class="integration-card-url" title="{{ env.mitre_pre_source }}">{{ env.mitre_pre_source | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.mitre_pre else 'inactive' }}">{{ 'Active' if repo_status.mitre_pre else 'Missing' }}</span>
         </div>
 
         <div class="integration-card">
             <div class="integration-card-name">Sigma Rules</div>
-            <div class="integration-card-url">{{ env.sigma_repo_url }}</div>
+            <div class="integration-card-url" title="{{ env.sigma_repo_url }}">{{ env.sigma_repo_url | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.sigma else 'inactive' }}">{{ 'Cloned' if repo_status.sigma else 'Not Found' }}</span>
         </div>
 
         <div class="integration-card">
             <div class="integration-card-name">Elastic Detection Rules</div>
-            <div class="integration-card-url">{{ env.elastic_repo_url }}</div>
+            <div class="integration-card-url" title="{{ env.elastic_repo_url }}">{{ env.elastic_repo_url | truncate(50, True, '...') }}</div>
             <span class="integration-card-status status-{{ 'active' if repo_status.elastic_detection else 'inactive' }}">{{ 'Cloned' if repo_status.elastic_detection else 'Not Found' }}</span>
         </div>
     </div>

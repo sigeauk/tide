@@ -14,19 +14,19 @@ try:
     import elastic_helper
 except ImportError:
     elastic_helper = None
-    log_error("❌ WORKER: Could not load elastic_helper")
+    log_error("WORKER: Could not load elastic_helper")
 
 try:
     import cti_helper
 except ImportError:
     cti_helper = None
-    log_error("❌ WORKER: Could not load cti_helper")
+    log_error("WORKER: Could not load cti_helper")
 
 try:
     import gitlab_helper
 except ImportError:
     gitlab_helper = None
-    log_error("❌ WORKER: Could not load gitlab_helper")
+    log_error("WORKER: Could not load gitlab_helper")
 
 # --- CONFIG ---
 load_dotenv()
@@ -46,20 +46,20 @@ def run_elastic_sync():
         try:
             importlib.reload(elastic_helper)
         except Exception as e:
-            log_error(f"⚠️ WORKER: Failed to reload elastic_helper: {e}")
+            log_error(f"WORKER: Failed to reload elastic_helper: {e}")
 
     if not elastic_helper: return
-    log_info("🔄 WORKER: Starting Elastic Sync...")
+    log_info("WORKER: Starting Elastic Sync...")
     try:
         df = elastic_helper.fetch_detection_rules(check_mappings=True)
         if not df.empty:
             audit_records = df.to_dict('records')
             count = db.save_audit_results(audit_records)
-            log_info(f"✅ WORKER: Synced {count} Elastic rules.")
+            log_info(f"WORKER: Synced {count} Elastic rules.")
         else:
-            log_error("⚠️ WORKER: No rules fetched from Elastic.")
+            log_error("WORKER: No rules fetched from Elastic.")
     except Exception as e:
-        log_error(f"❌ WORKER: Elastic Sync Failed: {e}")
+        log_error(f"WORKER: Elastic Sync Failed: {e}")
         import traceback
         log_error(traceback.format_exc())
 
@@ -71,7 +71,7 @@ def run_opencti_sync():
         except: pass
 
     if not cti_helper: return
-    log_info("🔄 WORKER: Starting OpenCTI Sync...")
+    log_info("WORKER: Starting OpenCTI Sync...")
     try:
         url = os.getenv("OPENCTI_URL")
         token = os.getenv("OPENCTI_TOKEN")
@@ -81,9 +81,9 @@ def run_opencti_sync():
         df = cti_helper.get_threat_landscape(api_url=url, api_token=token)
         if not df.empty:
             count = db.save_threat_data(df)
-            log_info(f"✅ WORKER: Saved {count} Threat Actors.")
+            log_info(f"WORKER: Saved {count} Threat Actors.")
     except Exception as e:
-        log_error(f"❌ WORKER: OpenCTI Sync Failed: {e}")
+        log_error(f"WORKER: OpenCTI Sync Failed: {e}")
 
 def run_mitre_sync():
     # Hot Reload Database and CTI Helper (Shared modules)
@@ -100,7 +100,7 @@ def run_mitre_sync():
     db.init_db()
 
     if not cti_helper: return
-    log_info("🔄 WORKER: Starting MITRE Feed Sync...")
+    log_info("WORKER: Starting MITRE Feed Sync...")
     try:
         mitre_dir = "/opt/repos/mitre"
         if not os.path.exists(mitre_dir):
@@ -126,9 +126,9 @@ def run_mitre_sync():
                     if not df_defs.empty:
                         db.save_mitre_definitions(df_defs)
 
-        log_info(f"✅ WORKER: MITRE Sync Complete. Updated {total_actors} actors.")
+        log_info(f"WORKER: MITRE Sync Complete. Updated {total_actors} actors.")
     except Exception as e:
-        log_error(f"❌ WORKER: MITRE Sync Failed: {e}")
+        log_error(f"WORKER: MITRE Sync Failed: {e}")
 
 def run_gitlab_sync():
     # Hot Reload GitLab Helper
@@ -138,20 +138,20 @@ def run_gitlab_sync():
         except: pass
 
     if not gitlab_helper: return
-    log_info("🔄 WORKER: Starting GitLab Sync...")
+    log_info("WORKER: Starting GitLab Sync...")
     try:
         url = os.getenv("GITLAB_URL")
         token = os.getenv("GITLAB_TOKEN")
         df = gitlab_helper.fetch_rules(url=url, token=token)
         if not df.empty:
             count = db.save_audit_results(df.to_dict('records'))
-            log_info(f"✅ WORKER: Saved {count} rules from GitLab.")
+            log_info(f"WORKER: Saved {count} rules from GitLab.")
     except Exception as e:
-        log_error(f"❌ WORKER: GitLab Sync Failed: {e}")
+        log_error(f"WORKER: GitLab Sync Failed: {e}")
 
 def run_scheduled_job():
     """Runs the full suite of background tasks"""
-    log_info("⏰ WORKER: Running Scheduled Full Sync...")
+    log_info("WORKER: Running Scheduled Full Sync...")
     run_elastic_sync()
     run_mitre_sync() 
     run_opencti_sync() 
@@ -161,18 +161,18 @@ def run_scheduled_job():
 # ==========================================
 
 def main():
-    log_info("🚀 WORKER: Initializing Database...")
+    log_info("WORKER: Initializing Database...")
     db.init_db()
 
     interval = get_interval()
-    log_info(f"📅 WORKER: Schedule set to run every {interval} minutes.")
+    log_info(f"WORKER: Schedule set to run every {interval} minutes.")
     
     schedule.every(interval).minutes.do(run_scheduled_job)
 
-    log_info("⚡ WORKER: Executing Initial Boot Sync (This runs immediately)...")
+    log_info("WORKER: Executing Initial Boot Sync (This runs immediately)...")
     run_scheduled_job()
 
-    log_info("👀 WORKER: Watching for triggers...")
+    log_info("WORKER: Watching for triggers...")
 
     while True:
         try:
@@ -185,10 +185,10 @@ def main():
             time.sleep(2)
 
         except KeyboardInterrupt:
-            log_info("🛑 WORKER: Stopping...")
+            log_info("WORKER: Stopping...")
             break
         except Exception as e:
-            log_error(f"❌ WORKER: Loop Error: {e}")
+            log_error(f"WORKER: Loop Error: {e}")
             time.sleep(10)
 
 if __name__ == "__main__":

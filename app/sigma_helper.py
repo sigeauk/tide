@@ -670,7 +670,7 @@ def send_rule_to_siem(
                 timeout=30
             )
             if response.status_code in [200, 201]:
-                return True, f"✅ Rule '{title}' updated in {space} space!"
+                return True, f"Rule '{title}' updated in {space} space!"
             else:
                 return False, f"Failed to update rule: {response.status_code} - {response.text}"
         else:
@@ -683,7 +683,7 @@ def send_rule_to_siem(
                 timeout=30
             )
             if response.status_code in [200, 201]:
-                return True, f"✅ Rule '{title}' created in {space} space successfully!"
+                return True, f"Rule '{title}' created in {space} space successfully!"
             elif response.status_code == 409:
                 # Rule already exists (conflict), try update
                 response = requests.put(
@@ -694,7 +694,7 @@ def send_rule_to_siem(
                     timeout=30
                 )
                 if response.status_code in [200, 201]:
-                    return True, f"✅ Rule '{title}' updated in {space} space!"
+                    return True, f"Rule '{title}' updated in {space} space!"
                 else:
                     return False, f"Failed to update rule: {response.status_code} - {response.text}"
             else:

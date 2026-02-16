@@ -37,7 +37,7 @@ def export_rule_logs(db, log_path: str, validation_data: dict = None) -> int:
         # Get all rules from DB
         rules = db.get_all_rules_for_export()
         if not rules:
-            logger.warning("⚠️ No detection rules to export")
+            logger.warning("No detection rules to export")
             return 0
         
         # Load validation data if not provided
@@ -86,11 +86,11 @@ def export_rule_logs(db, log_path: str, validation_data: dict = None) -> int:
                 f.write(json.dumps(entry) + "\n")
                 count += 1
         
-        logger.info(f"📝 Exported {count} rules to {log_file}")
+        logger.info(f"Exported {count} rules to {log_file}")
         return count
         
     except Exception as e:
-        logger.error(f"❌ Rule log export failed: {e}")
+        logger.error(f"Rule log export failed: {e}")
         import traceback
         logger.error(traceback.format_exc())
         return 0
@@ -125,10 +125,10 @@ def cleanup_old_logs(log_path: str, retention_days: int = 7) -> int:
                 removed += 1
                 logger.debug(f"  Removed old log: {filename}")
         except (ValueError, OSError) as e:
-            logger.warning(f"⚠️ Could not process {filepath}: {e}")
+            logger.warning(f"Could not process {filepath}: {e}")
     
     if removed:
-        logger.info(f"🗑️ Cleaned up {removed} old rule log files (>{retention_days} days)")
+        logger.info(f"Cleaned up {removed} old rule log files (>{retention_days} days)")
     
     return removed
 
@@ -164,5 +164,5 @@ def run_rule_log_export(db) -> int:
         return count
         
     except Exception as e:
-        logger.error(f"❌ Rule log export job failed: {e}")
+        logger.error(f"Rule log export job failed: {e}")
         return 0

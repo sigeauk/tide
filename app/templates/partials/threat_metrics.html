@@ -1,3 +1,4 @@
+{% from "macros/icons.html" import icon %}
 <!-- Threat Landscape Metrics Row -->
 <div class="metric-card">
     <p class="metric-value">{{ metrics.total_actors }}</p>
@@ -30,7 +31,9 @@
 </div>
 
 <div class="metric-card">
-    <p class="metric-value">{{ metrics.avg_ttps_per_actor }}</p>
-    <p class="metric-label">Avg TTPs/Actor</p>
-    <p class="metric-sub">Average techniques</p>
+    <p class="metric-value" style="font-size: 1.1rem;">
+        {{ icon('refresh-cw', '24') }}
+    </p>
+    <p class="metric-label">Last Synced</p>
+    <p class="metric-sub">{{ last_sync_time | default('Never') }}</p>
 </div>

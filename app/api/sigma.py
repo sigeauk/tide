@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Query, Form
 from fastapi.responses import HTMLResponse
 from typing import List, Optional
 
-from app.api.deps import CurrentUser, SettingsDep
+from app.api.deps import CurrentUser, SettingsDep, DbDep
 from app import sigma_helper as sigma
 
 import logging
@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api/sigma", tags=["sigma"])
 def search_rules(
     request: Request,
     user: CurrentUser,
+    db: DbDep,
     query: str = Query("", alias="q"),
     technique: str = Query(""),
     category: str = Query(""),
@@ -38,6 +39,10 @@ def search_rules(
         limit=limit
     )
     
+    # Coverage data for MITRE pills
+    covered_ttps = db.get_all_covered_ttps()
+    ttp_rule_counts = db.get_ttp_rule_counts()
+    
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "partials/sigma_rules_list.html",
@@ -46,6 +51,8 @@ def search_rules(
             "rules": results,
             "total_count": len(sigma.load_all_rules()),
             "filtered_count": len(results),
+            "covered_ttps": covered_ttps,
+            "ttp_rule_counts": ttp_rule_counts,
         }
     )
 

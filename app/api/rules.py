@@ -66,11 +66,12 @@ def get_metrics(
     user: CurrentUser,
 ):
     """Get rule health metrics."""
+    from app.main import get_last_sync_time
     metrics = db.get_rule_health_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "partials/metrics_row.html",
-        {"request": request, "metrics": metrics}
+        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 
@@ -137,17 +138,36 @@ async def sync_rules(
 ):
     """Trigger an immediate sync of rules from Elastic."""
     import asyncio
-    from app.services.sync import trigger_sync
+    from app.main import scheduled_sync, _sync_status, _update_sync_status
     
-    # Run the sync in background to not block the response
-    asyncio.create_task(trigger_sync())
+    # Reset status and start sync
+    _sync_status["started_at"] = None
+    _sync_status["finished_at"] = None
+    _sync_status["rule_count"] = 0
+    _update_sync_status("running", "Initialising sync...")
     
-    # Return toast with auto-refresh trigger after 10 seconds
-    # Increased delay to ensure sync completes before UI refresh
-    response = HTMLResponse(
-        '<div class="toast toast-success" onclick="this.remove()">'
-        '🔄 Sync started. Page will refresh in 10 seconds...'
+    asyncio.create_task(scheduled_sync())
+    
+    # Return live sync tracker that polls for status and refreshes grid on completion
+    return HTMLResponse(
+        '<div id="sync-status"'
+        '     hx-get="/api/sync/status"'
+        '     hx-trigger="load, every 1s"'
+        '     hx-swap="outerHTML"'
+        '     class="sync-tracker sync-running">'
+        '    <span class="sync-spinner"></span>'
+        '    <span>Sync starting...</span>'
         '</div>'
-        '<script>setTimeout(function(){ htmx.trigger(document.body, "refreshRules"); }, 10000);</script>'
+        '<script>'
+        '(function poll(){'
+        '  var iv=setInterval(function(){'
+        '    var el=document.getElementById("sync-status");'
+        '    if(el && el.classList.contains("sync-complete")){'
+        '      clearInterval(iv);'
+        '      htmx.trigger(document.body,"refreshRules");'
+        '      htmx.ajax("GET","/api/rules/metrics",{target:"#metrics-row",swap:"innerHTML"});'
+        '    }'
+        '  },1000);'
+        '})();'
+        '</script>'
     )
-    return response

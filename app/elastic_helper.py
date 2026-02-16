@@ -191,9 +191,9 @@ def get_batch_mappings(session, base_url, index_field_map):
             
             elif response.status_code == 404:
                 # If the INDEX itself returns 404, then it truly doesn't exist
-                log_debug(f"   ⚠️ Index not found (404): {target_index}")
+                log_debug(f"   Index not found (404): {target_index}")
             else:
-                log_error(f"   ❌ Failed mapping fetch for {pattern}: {response.status_code}")
+                log_error(f"   Failed mapping fetch for {pattern}: {response.status_code}")
 
             if found_mappings:
                 pass  # Mapping verification successful
@@ -201,7 +201,7 @@ def get_batch_mappings(session, base_url, index_field_map):
             global_cache[pattern] = found_mappings
 
         except Exception as e:
-            log_error(f"   ❌ Exception for {pattern}: {e}")
+            log_error(f"   Exception for {pattern}: {e}")
             global_cache[pattern] = {}
 
     return global_cache
@@ -222,7 +222,7 @@ def calculate_score(rule_data):
     # Mapping score (max 20)
     score_mapping = 0
     if results:
-        valid_lines = len([r for r in results if r[2] == "✔️"])
+        valid_lines = len([r for r in results if r[2] == "Yes"])
         score_mapping = (valid_lines / len(results)) * 20
         score += score_mapping
         quality_score += score_mapping
@@ -286,7 +286,7 @@ def calculate_score(rule_data):
     # META Data Scores
     
     # Note score (max 20)
-    score_note = 20 if rule_data.get('note_exists') == "✔️" else 0
+    score_note = 20 if rule_data.get('note_exists') == "Yes" else 0
     score += score_note
     meta_score += score_note
 
@@ -296,22 +296,22 @@ def calculate_score(rule_data):
     meta_score += score_override
 
     # Tactics score (max 3)
-    score_tactics = 3 if (rule_data.get('tactics') and rule_data.get('tactics') != "❌") else 0
+    score_tactics = 3 if (rule_data.get('tactics') and rule_data.get('tactics') != "-") else 0
     score += score_tactics
     meta_score += score_tactics
 
     # Techniques score (max 7)
-    score_techniques = 7 if (rule_data.get('techniques') and rule_data.get('techniques') != "❌") else 0
+    score_techniques = 7 if (rule_data.get('techniques') and rule_data.get('techniques') != "-") else 0
     score += score_techniques
     meta_score += score_techniques
     
     # Author score (max 5)
-    score_author = 5 if (rule_data.get('author_str') and rule_data.get('author_str') != "❌") else 0
+    score_author = 5 if (rule_data.get('author_str') and rule_data.get('author_str') != "-") else 0
     score += score_author
     meta_score += score_author
 
     # Highlights score (max 10)
-    score_highlights = 10 if (rule_data.get('highlighted_str') and rule_data.get('highlighted_str') != "❌") else 0
+    score_highlights = 10 if (rule_data.get('highlighted_str') and rule_data.get('highlighted_str') != "-") else 0
     score += score_highlights
     meta_score += score_highlights
 
@@ -419,9 +419,9 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 for idx in meta["indices"]:
                     idx_mappings = mapping_cache.get(idx, {})
                     for f in meta["fields"]:
-                        if not idx_mappings: exists, f_type = "❓", "unknown"
-                        elif f in idx_mappings: exists, f_type = "✔️", idx_mappings.get(f)
-                        else: exists, f_type = "❌", "missing"
+                        if not idx_mappings: exists, f_type = "?", "unknown"
+                        elif f in idx_mappings: exists, f_type = "Yes", idx_mappings.get(f)
+                        else: exists, f_type = "-", "missing"
                         results.append((str(idx), str(f), str(exists), str(f_type)))
 
             # Simplified extraction for brevity
@@ -448,7 +448,7 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 alert_suppression = r.get('alert_suppression', {})
                 if isinstance(alert_suppression, dict):
                     investigation_fields = alert_suppression.get('group_by', [])
-            highlighted_str = ",".join(investigation_fields) if investigation_fields else "❌"
+            highlighted_str = ",".join(investigation_fields) if investigation_fields else "-"
             
             rule_data = {
                 "rule_id": r.get('rule_id'),
@@ -457,8 +457,8 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 "author_str": str(r.get('author', [])),
                 "severity": r.get('severity'),
                 "risk_score": r.get('risk_score'),
-                "timestamp_override": r.get('timestamp_override', "❌"),
-                "note_exists": "✔️" if r.get('note') else "❌",
+                "timestamp_override": r.get('timestamp_override', "-"),
+                "note_exists": "Yes" if r.get('note') else "-",
                 "note": r.get('note', ''),
                 "tactics": ",".join(tactics),
                 "techniques": ",".join(techniques),

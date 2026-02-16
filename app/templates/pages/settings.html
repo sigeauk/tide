@@ -36,6 +36,7 @@
         </svg>
         Preferences
     </button>
+
 </div>
 
 <!-- ═══ LOGGING TAB ═══ -->
@@ -436,6 +437,8 @@
 </div>
 </div>
 
+
+
 <style>
 /* Tab navigation */
 .settings-tabs {
@@ -558,6 +561,8 @@
 .json-bool { color: oklch(0.72 0.18 310); }
 .json-brace { color: var(--color-text-muted); font-weight: 600; }
 .json-colon { color: var(--color-text-muted); }
+
+
 </style>
 
 <script>
@@ -607,7 +612,10 @@ window.savePref = function(key, value) {
     var urlParams = new URLSearchParams(window.location.search);
     var tabFromUrl = urlParams.get('tab');
     var savedTab = tabFromUrl || localStorage.getItem('settings-active-tab');
-    if (savedTab) switchTab(savedTab);
+    // Validate the saved tab still exists in the DOM
+    if (savedTab && document.getElementById('tab-' + savedTab)) {
+        switchTab(savedTab);
+    }
 
     var theme = localStorage.getItem('theme') || 'dark';
     updateThemeButtons(theme);

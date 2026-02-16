@@ -30,7 +30,7 @@ def get_connection(read_only=False, retries=5, delay=0.5):
         except duckdb.IOException as e:
             if "lock" in str(e).lower():
                 attempt += 1
-                log_info(f"⚠️ DB Locked. Retrying connection ({attempt}/{retries})...")
+                log_info(f"DB Locked. Retrying connection ({attempt}/{retries})...")
                 time.sleep(delay)
             else:
                 raise e
@@ -38,7 +38,7 @@ def get_connection(read_only=False, retries=5, delay=0.5):
             log_error(f"DB Connection failed: {e}")
             raise e
     
-    log_error("❌ DB Timeout: Could not acquire lock.")
+    log_error("DB Timeout: Could not acquire lock.")
     raise duckdb.IOException("Database locked by another process.")
 
 def get_schema_version(conn):
@@ -89,7 +89,7 @@ def run_migrations(conn):
     if current_version >= target_version:
         return  # Already up to date
     
-    log_info(f"🔄 Running database migrations from version {current_version} to {target_version}...")
+    log_info(f"Running database migrations from version {current_version} to {target_version}...")
     
     # Migration 1: Initial schema (v0 -> v1)
     if current_version < 1:
@@ -140,7 +140,7 @@ def run_migrations(conn):
             )
         """)
             set_schema_version(conn, 1)
-            log_info("✅ Migration 1 completed: Initial schema created")
+            log_info("Migration 1 completed: Initial schema created")
         except Exception as e:
             log_error(f"Migration 1 failed: {e}")
             raise
@@ -154,7 +154,7 @@ def run_migrations(conn):
             
             if source_col and source_col[1] == 'VARCHAR':
                 # Source column exists but has wrong type - need to fix
-                log_info("🔄 Converting source column from VARCHAR to VARCHAR[]...")
+                log_info("Converting source column from VARCHAR to VARCHAR[]...")
                 # Create temp column, migrate data, drop old, rename new
                 conn.execute("ALTER TABLE threat_actors ADD COLUMN source_new VARCHAR[]")
                 # Convert existing string values to single-element arrays
@@ -167,13 +167,13 @@ def run_migrations(conn):
                 """)
                 conn.execute("ALTER TABLE threat_actors DROP COLUMN source")
                 conn.execute("ALTER TABLE threat_actors RENAME COLUMN source_new TO source")
-                log_info("✅ Migration 2: Converted source column to VARCHAR[]")
+                log_info("Migration 2: Converted source column to VARCHAR[]")
             elif source_col is None:
                 # Add source column if it doesn't exist
                 conn.execute("ALTER TABLE threat_actors ADD COLUMN source VARCHAR[]")
-                log_info("✅ Migration 2: Added source column to threat_actors")
+                log_info("Migration 2: Added source column to threat_actors")
             else:
-                log_info("✅ Migration 2: Source column already correct type")
+                log_info("Migration 2: Source column already correct type")
             
             set_schema_version(conn, 2)
         except Exception as e:
@@ -185,7 +185,7 @@ def run_migrations(conn):
         try:
             # Drop and recreate detection_rules with new composite PK
             # Data is ephemeral (live feed from Elastic) so no need to preserve
-            log_info("🔄 Recreating detection_rules table with new schema...")
+            log_info("Recreating detection_rules table with new schema...")
             conn.execute("DROP TABLE IF EXISTS detection_rules")
             conn.execute("""
                 CREATE TABLE detection_rules (
@@ -215,12 +215,12 @@ def run_migrations(conn):
                 )
             """)
             set_schema_version(conn, 3)
-            log_info("✅ Migration 3 completed: Recreated detection_rules with PK (rule_id, space)")
+            log_info("Migration 3 completed: Recreated detection_rules with PK (rule_id, space)")
         except Exception as e:
             log_error(f"Migration 3 failed: {e}")
             raise
     
-    log_info(f"✅ Database migrations complete. Schema version: {target_version}")
+    log_info(f"Database migrations complete. Schema version: {target_version}")
 
 def init_db():
     """Initialize database and run migrations."""
@@ -229,7 +229,7 @@ def init_db():
     try:
         # Run migrations to ensure schema is up to date
         run_migrations(conn)
-        log_info("🦆 DuckDB Initialized.")
+        log_info("DuckDB Initialized.")
     except Exception as e:
         log_error(f"Init DB Failed: {e}")
         raise
@@ -462,16 +462,16 @@ def save_audit_results(audit_list):
     
     # Parse author - handle list format like "['darral']" -> "darral"
     def parse_author(val):
-        if not val or val == '❌':
-            return '❌'
+        if not val or val == '-':
+            return '-'
         s = str(val).strip()
         if s.startswith('[') and s.endswith(']'):
             inner = s[1:-1]
             authors = [a.strip().strip("'").strip('"') for a in inner.split(',') if a.strip()]
-            return ', '.join(authors) if authors else '❌'
-        return s if s else '❌'
+            return ', '.join(authors) if authors else '-'
+        return s if s else '-'
     
-    df['author'] = df['author_str'].apply(parse_author) if 'author_str' in df.columns else '❌'
+    df['author'] = df['author_str'].apply(parse_author) if 'author_str' in df.columns else '-'
     df['space'] = df['space_id'].fillna('default') if 'space_id' in df.columns else 'default'
     df['last_updated'] = datetime.now()
     df['mitre_ids'] = df['mitre_ids'].apply(lambda x: x if isinstance(x, list) else [])
@@ -505,7 +505,7 @@ def save_audit_results(audit_list):
     duplicates = df_final[df_final.duplicated(subset=['rule_id', 'space'], keep='first')]
     if not duplicates.empty:
         dup_names = duplicates['name'].tolist()
-        log_info(f"⚠️ Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
+        log_info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
         # Keep only first occurrence of each rule_id + space combo
         df_final = df_final.drop_duplicates(subset=['rule_id', 'space'], keep='first')
 
@@ -548,7 +548,7 @@ def save_audit_results(audit_list):
         
         # Verify insertion
         verify_count = conn.execute("SELECT COUNT(*) as cnt FROM detection_rules").fetchall()[0][0]
-        log_info(f"✅ Saved {verify_count} rules to database")
+        log_info(f"Saved {verify_count} rules to database")
         
         return len(df_final)
     except Exception as e:
@@ -623,12 +623,12 @@ def wait_for_sync(timeout=30):
                 recent_count = recent_rules[0][0]
                 # If we have at least one rule updated after trigger, sync is complete
                 if recent_count > 0:
-                    log_info(f"✓ Sync completed, {recent_count} rules updated")
+                    log_info(f"Sync completed, {recent_count} rules updated")
                     return True
             except Exception as e:
                 log_debug(f"Still waiting... {str(e)[:50]}")
         
-        log_debug(f"⚠ Timeout waiting for sync (no updates within {timeout}s)")
+        log_debug(f"Timeout waiting for sync (no updates within {timeout}s)")
         return False
     except Exception as e:
         log_error(f"Wait for sync failed: {e}")
@@ -693,7 +693,7 @@ def clear_detection_rules():
         count = conn.execute("SELECT COUNT(*) FROM detection_rules").fetchone()[0]
         conn.execute("DELETE FROM detection_rules WHERE 1=1")
         conn.execute("CHECKPOINT")
-        log_info(f"🗑️ Cleared {count} detection rules from database")
+        log_info(f"Cleared {count} detection rules from database")
         return count
     except Exception as e:
         log_error(f"Clear Detection Rules Failed: {e}")
@@ -708,7 +708,7 @@ def clear_threat_actors():
         count = conn.execute("SELECT COUNT(*) FROM threat_actors").fetchone()[0]
         conn.execute("DELETE FROM threat_actors WHERE 1=1")
         conn.execute("CHECKPOINT")
-        log_info(f"🗑️ Cleared {count} threat actors from database")
+        log_info(f"Cleared {count} threat actors from database")
         return count
     except Exception as e:
         log_error(f"Clear Threat Actors Failed: {e}")

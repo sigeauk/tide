@@ -31,11 +31,43 @@ logger = logging.getLogger(__name__)
 # Background task scheduler
 scheduler = AsyncIOScheduler()
 
+# ── Sync status tracking ──
+_sync_status = {
+    "state": "idle",       # idle | running | complete | error
+    "message": "",
+    "started_at": None,
+    "finished_at": None,
+    "rule_count": 0,
+}
+
+
+def _update_sync_status(state: str, message: str = "", rule_count: int = 0):
+    """Update the global sync status dict."""
+    _sync_status["state"] = state
+    _sync_status["message"] = message
+    if state == "running" and _sync_status["started_at"] is None:
+        _sync_status["started_at"] = time.time()
+    if state in ("complete", "error"):
+        _sync_status["finished_at"] = time.time()
+        _sync_status["rule_count"] = rule_count
+
+
+def get_last_sync_time() -> str:
+    """Return human-readable last sync time, or 'Never' if no sync completed."""
+    ts = _sync_status.get("finished_at")
+    if ts is None:
+        return "Never"
+    from datetime import datetime
+    dt = datetime.fromtimestamp(ts)
+    return dt.strftime("%d %b %H:%M")
+
 
 async def scheduled_sync():
     """Background task: Sync detection rules from Elastic every 60 minutes."""
     settings = get_settings()
-    logger.info(f"⏰ Scheduled sync triggered (interval: {settings.sync_interval_minutes}m)")
+    logger.info(f"Scheduled sync triggered (interval: {settings.sync_interval_minutes}m)")
+    
+    _update_sync_status("running", "Connecting to Elastic...")
     
     try:
         # Import here to avoid circular imports
@@ -46,13 +78,19 @@ async def scheduled_sync():
         
         # Check for manual trigger
         if db.check_and_clear_trigger("sync_elastic"):
-            logger.info("🔄 Manual sync trigger detected")
+            logger.info("Manual sync trigger detected")
+        
+        _update_sync_status("running", "Fetching detection rules...")
         
         # Run the actual sync
-        await trigger_sync()
+        result = await trigger_sync()
+        
+        count = result if isinstance(result, int) else 0
+        _update_sync_status("complete", f"Synced {count} rules from Elastic", rule_count=count)
     except Exception as e:
-        logger.warning(f"⚠️ Scheduled sync failed (Elastic may be unreachable): {e}")
-        logger.info("ℹ️ TIDE will continue running — sync will retry on next interval")
+        logger.warning(f"Scheduled sync failed (Elastic may be unreachable): {e}")
+        logger.info("TIDE will continue running — sync will retry on next interval")
+        _update_sync_status("error", str(e))
 
 
 @asynccontextmanager
@@ -62,27 +100,27 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     
     # Startup
-    logger.info(f"🌊 Starting TIDE v{settings.tide_version}")
+    logger.info(f"Starting TIDE v{settings.tide_version}")
     
     # Initialize database
     from app.services.database import get_database_service
     db = get_database_service()
-    logger.info("🦆 Database initialized")
+    logger.info("Database initialized")
     
     # Pre-load Sigma rules cache to avoid slow first page load
     # This takes ~6 seconds but happens during startup, not during user request
     try:
         from app import sigma_helper
         rules_count = len(sigma_helper.load_all_rules())
-        logger.info(f"📜 Sigma rules pre-loaded: {rules_count} rules cached")
+        logger.info(f"Sigma rules pre-loaded: {rules_count} rules cached")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to pre-load Sigma rules: {e}")
+        logger.warning(f"Failed to pre-load Sigma rules: {e}")
     
     # Warm up Sigma backends / pipelines so first conversion is instant
     try:
         sigma_helper.warm_up_backends()
     except Exception as e:
-        logger.warning(f"⚠️ Sigma backend warm-up failed (non-fatal): {e}")
+        logger.warning(f"Sigma backend warm-up failed (non-fatal): {e}")
     
     # Run initial sync on startup (in background to not block startup)
     asyncio.create_task(scheduled_sync())
@@ -100,13 +138,13 @@ async def lifespan(app: FastAPI):
     _schedule_rule_log_job(db)
     
     scheduler.start()
-    logger.info(f"⏰ Scheduler started (sync every {settings.sync_interval_minutes}m)")
+    logger.info(f"Scheduler started (sync every {settings.sync_interval_minutes}m)")
     
     yield
     
     # Shutdown
     scheduler.shutdown()
-    logger.info("🛑 TIDE shutdown complete")
+    logger.info("TIDE shutdown complete")
 
 
 def _schedule_rule_log_job(db=None):
@@ -139,9 +177,9 @@ def _schedule_rule_log_job(db=None):
                 id="rule_log_export",
                 replace_existing=True,
             )
-            logger.info(f"📝 Rule log export scheduled at {schedule_time}")
+            logger.info(f"Rule log export scheduled at {schedule_time}")
         else:
-            logger.info("📝 Rule log export disabled")
+            logger.info("Rule log export disabled")
     except Exception as e:
         logger.warning(f"Could not schedule rule log job: {e}")
 
@@ -389,6 +427,24 @@ def create_app() -> FastAPI:
     # Add authentication middleware
     app.add_middleware(AuthMiddleware)
     
+    # Request timing middleware – logs page loads and exposes Server-Timing header
+    @app.middleware("http")
+    async def timing_middleware(request: Request, call_next):
+        import time as _time
+        path = request.url.path
+        start = _time.perf_counter()
+        response = await call_next(request)
+        elapsed_ms = (_time.perf_counter() - start) * 1000
+        # Skip static assets
+        if not path.startswith("/static"):
+            # Server-Timing header visible in browser DevTools Network tab
+            response.headers["Server-Timing"] = f"total;dur={elapsed_ms:.1f}"
+            if elapsed_ms > 500:
+                logger.warning(f"Slow request: {request.method} {path} took {elapsed_ms:.0f}ms")
+            elif elapsed_ms > 200:
+                logger.info(f"Request: {request.method} {path} took {elapsed_ms:.0f}ms")
+        return response
+    
     # Exception handler for 401 errors (handle HTMX requests)
     from fastapi import HTTPException as FastAPIHTTPException
     from fastapi.exceptions import RequestValidationError
@@ -572,7 +628,8 @@ def create_app() -> FastAPI:
         db = get_database_service()
         
         metrics = db.get_rule_health_metrics()
-        spaces = db.get_unique_spaces()
+        # Derive spaces from metrics (avoids a second DB connection)
+        spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
         
         return render_template(
             "pages/rule_health.html",
@@ -582,6 +639,7 @@ def create_app() -> FastAPI:
                 "active_page": "rules",
                 "metrics": metrics,
                 "spaces": spaces,
+                "last_sync_time": get_last_sync_time(),
             }
         )
     
@@ -624,10 +682,8 @@ def create_app() -> FastAPI:
         from app.services.database import get_database_service
         db = get_database_service()
         
-        # Full metrics from each module (same objects used on their pages)
-        rule_metrics = db.get_rule_health_metrics()
-        promotion_metrics = db.get_promotion_metrics()
-        threat_metrics = db.get_threat_landscape_metrics()
+        # Single combined query for all metrics (1 connection, 1 validation load)
+        rule_metrics, promotion_metrics, threat_metrics = db.get_dashboard_metrics()
         
         # Integration / repo status (same as settings page)
         env_settings = get_settings()
@@ -650,6 +706,7 @@ def create_app() -> FastAPI:
                 "rule_metrics": rule_metrics,
                 "promotion_metrics": promotion_metrics,
                 "threat_metrics": threat_metrics,
+                "last_sync_time": get_last_sync_time(),
                 "env": env_settings,
                 "app_settings": app_settings,
                 "repo_status": repo_status,
@@ -664,8 +721,9 @@ def create_app() -> FastAPI:
         
         metrics = db.get_threat_landscape_metrics()
         
-        # Lightweight query for filter dropdowns only (not full actor objects)
-        origins, sources = db.get_threat_actor_filter_options()
+        # Derive filter options from metrics (avoids a second DB connection)
+        origins = sorted(metrics.origin_breakdown.keys()) if metrics.origin_breakdown else []
+        sources = sorted(metrics.source_breakdown.keys()) if metrics.source_breakdown else []
         
         return render_template(
             "pages/threat_landscape.html",
@@ -676,6 +734,7 @@ def create_app() -> FastAPI:
                 "metrics": metrics,
                 "origins": origins,
                 "sources": sources,
+                "last_sync_time": get_last_sync_time(),
             }
         )
     
@@ -694,11 +753,12 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "promotion",
                 "metrics": metrics,
+                "last_sync_time": get_last_sync_time(),
             }
         )
     
     @app.get("/sigma", response_class=HTMLResponse)
-    def sigma_page(request: Request, user: CurrentUser, technique: str = ""):
+    def sigma_page(request: Request, user: CurrentUser, db: DbDep, technique: str = ""):
         """Sigma Convert page."""
         from app import sigma_helper as sigma_mod
         
@@ -717,6 +777,9 @@ def create_app() -> FastAPI:
             limit=100
         )
         
+        # Coverage data for MITRE pills (single DB connection)
+        covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
+        
         return render_template(
             "pages/sigma.html",
             request,
@@ -731,6 +794,8 @@ def create_app() -> FastAPI:
                 "pipelines": pipelines,
                 "formats": formats,
                 "technique_filter": technique,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
             }
         )
     
@@ -778,7 +843,7 @@ def create_app() -> FastAPI:
     
     @app.get("/settings", response_class=HTMLResponse)
     def settings_page(request: Request, user: CurrentUser, db: DbDep):
-        """Settings page - configure integrations and logging."""
+        """Settings page - configure integrations, logging, and system health."""
         import os
         app_settings = db.get_all_settings()
         env_settings = get_settings()
@@ -812,15 +877,74 @@ def create_app() -> FastAPI:
         """Trigger manual Elastic sync."""
         import asyncio
         
-        # Run sync in background
+        # Reset status and start sync
+        _sync_status["started_at"] = None
+        _sync_status["finished_at"] = None
+        _sync_status["rule_count"] = 0
+        _update_sync_status("running", "Initialising sync...")
+        
         asyncio.create_task(scheduled_sync())
         
-        # Return toast notification
+        # Return a live sync tracker that polls for status
         return HTMLResponse("""
-        <div class="toast toast-success">
-            🔄 Sync started. Rules will refresh shortly.
+        <div id="sync-status"
+             hx-get="/api/sync/status"
+             hx-trigger="load, every 1s"
+             hx-swap="outerHTML"
+             class="sync-tracker sync-running">
+            <span class="sync-spinner"></span>
+            <span>Sync starting...</span>
         </div>
         """)
+    
+    @app.get("/api/sync/status", response_class=HTMLResponse)
+    def get_sync_status(request: Request, user: CurrentUser):
+        """Return current sync status as an HTMX partial."""
+        state = _sync_status["state"]
+        message = _sync_status["message"]
+        
+        if state == "running":
+            elapsed = ""
+            if _sync_status["started_at"]:
+                secs = int(time.time() - _sync_status["started_at"])
+                elapsed = f" ({secs}s)"
+            return HTMLResponse(f"""
+            <div id="sync-status"
+                 hx-get="/api/sync/status"
+                 hx-trigger="every 1s"
+                 hx-swap="outerHTML"
+                 class="sync-tracker sync-running">
+                <span class="sync-spinner"></span>
+                <span>{message}{elapsed}</span>
+            </div>
+            """)
+        elif state == "complete":
+            count = _sync_status["rule_count"]
+            return HTMLResponse(f"""
+            <div id="sync-status" class="sync-tracker sync-complete">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+                    <polyline points="22 4 12 14.01 9 11.01"/>
+                </svg>
+                <span>Synced {count} rules from Elastic</span>
+            </div>
+            <script>setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 4000);</script>
+            """)
+        elif state == "error":
+            return HTMLResponse(f"""
+            <div id="sync-status" class="sync-tracker sync-error">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="15" y1="9" x2="9" y2="15"/>
+                    <line x1="9" y1="9" x2="15" y2="15"/>
+                </svg>
+                <span>Sync failed: {message}</span>
+            </div>
+            <script>setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 6000);</script>
+            """)
+        else:
+            # idle
+            return HTMLResponse('<div id="sync-status"></div>')
     
     return app
 

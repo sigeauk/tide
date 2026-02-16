@@ -19,7 +19,7 @@
             <span class="rule-item-meta">
                 {% if rule._techniques %}
                     {% for tech in rule._techniques[:2] %}
-                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {{ mitre_pill(tech, covered=(tech in covered_ttps), rule_count=ttp_rule_counts.get(tech, 0), clickable=true, size='sm') }}
                     {% endfor %}
                     {% if rule._techniques|length > 2 %}
                     <span class="mitre-pill mitre-more mitre-sm">+{{ rule._techniques|length - 2 }}</span>

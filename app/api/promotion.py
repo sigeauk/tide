@@ -65,11 +65,12 @@ def get_promotion_metrics(
     user: CurrentUser,
 ):
     """Get metrics for staging rules only."""
+    from app.main import get_last_sync_time
     metrics = db.get_promotion_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "partials/promotion_metrics.html",
-        {"request": request, "metrics": metrics}
+        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 
@@ -120,7 +121,7 @@ async def promote_rule(
     if not rule:
         return HTMLResponse(
             '<div class="toast toast-danger" onclick="this.remove()">'
-            '❌ Rule not found in staging space.'
+            'Rule not found in staging space.'
             '</div>',
             status_code=404
         )
@@ -129,7 +130,7 @@ async def promote_rule(
     if not rule.raw_data:
         return HTMLResponse(
             '<div class="toast toast-danger" onclick="this.remove()">'
-            '❌ Rule data not available for promotion.'
+            'Rule data not available for promotion.'
             '</div>',
             status_code=400
         )
@@ -153,21 +154,21 @@ async def promote_rule(
             # Save validation record
             db.save_validation(rule.name, username)
             
-            logger.info(f"✅ Promoted rule '{rule.name}' to production by {username}")
+            logger.info(f"Promoted rule '{rule.name}' to production by {username}")
             
             # Return success toast with trigger to refresh
             response = HTMLResponse(
                 f'<div class="toast toast-success" onclick="this.remove()">'
-                f'🚀 Successfully promoted "{rule.name}" to Production'
+                f'Successfully promoted "{rule.name}" to Production'
                 f'</div>'
             )
             response.headers["HX-Trigger"] = "refreshPromotion"
             return response
         else:
-            logger.error(f"❌ Failed to promote rule '{rule.name}': {message}")
+            logger.error(f"Failed to promote rule '{rule.name}': {message}")
             return HTMLResponse(
                 f'<div class="toast toast-danger" onclick="this.remove()">'
-                f'❌ Promotion failed: {message}'
+                f'Promotion failed: {message}'
                 f'</div>',
                 status_code=400
             )
@@ -175,7 +176,7 @@ async def promote_rule(
         logger.exception(f"Exception promoting rule '{rule.name}'")
         return HTMLResponse(
             f'<div class="toast toast-danger" onclick="this.remove()">'
-            f'❌ Error: {str(e)}'
+            f'Error: {str(e)}'
             f'</div>',
             status_code=500
         )
@@ -191,15 +192,36 @@ async def sync_rules(
 ):
     """Trigger an immediate sync of rules from Elastic."""
     import asyncio
-    from app.services.sync import trigger_sync
+    from app.main import scheduled_sync, _sync_status, _update_sync_status
     
-    # Run the sync in background to not block the response
-    asyncio.create_task(trigger_sync())
+    # Reset status and start sync
+    _sync_status["started_at"] = None
+    _sync_status["finished_at"] = None
+    _sync_status["rule_count"] = 0
+    _update_sync_status("running", "Initialising sync...")
     
-    response = HTMLResponse(
-        '<div class="toast toast-success" onclick="this.remove()">'
-        '🔄 Sync started. Page will refresh in 5 seconds...'
+    asyncio.create_task(scheduled_sync())
+    
+    # Return live sync tracker that polls for status and refreshes grid on completion
+    return HTMLResponse(
+        '<div id="sync-status"'
+        '     hx-get="/api/sync/status"'
+        '     hx-trigger="load, every 1s"'
+        '     hx-swap="outerHTML"'
+        '     class="sync-tracker sync-running">'
+        '    <span class="sync-spinner"></span>'
+        '    <span>Sync starting...</span>'
         '</div>'
+        '<script>'
+        '(function poll(){'
+        '  var iv=setInterval(function(){'
+        '    var el=document.getElementById("sync-status");'
+        '    if(el && el.classList.contains("sync-complete")){'
+        '      clearInterval(iv);'
+        '      htmx.trigger(document.body,"refreshPromotion");'
+        '      htmx.ajax("GET","/api/promotion/metrics",{target:"#promotion-metrics",swap:"innerHTML"});'
+        '    }'
+        '  },1000);'
+        '})();'
+        '</script>'
     )
-    response.headers["HX-Trigger-After-Settle"] = '{"refreshPromotion": ""}'
-    return response

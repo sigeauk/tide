@@ -120,6 +120,12 @@ class RuleHealthMetrics(BaseModel):
     low_quality_count: int = 0   # score < 50
     high_quality_count: int = 0  # score >= 80
     
+    # Quality brackets
+    quality_excellent: int = 0   # score >= 80
+    quality_good: int = 0       # 70-79
+    quality_fair: int = 0       # 50-69
+    quality_poor: int = 0       # < 50
+    
     rules_by_space: Dict[str, int] = Field(default_factory=dict)
     severity_breakdown: Dict[str, int] = Field(default_factory=dict)
     language_breakdown: Dict[str, int] = Field(default_factory=dict)

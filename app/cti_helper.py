@@ -315,7 +315,7 @@ def get_threat_landscape(api_url, api_token):
             else:
                 break
 
-        log_info(f"✅ Fetched {len(actors)} Threat Actors from OpenCTI")
+        log_info(f"Fetched {len(actors)} Threat Actors from OpenCTI")
         return pd.DataFrame(actors)
 
     except Exception as e:

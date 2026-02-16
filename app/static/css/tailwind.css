@@ -3399,3 +3399,54 @@ body.light {
 .text-sm { font-size: 0.8rem; }
 .p-md    { padding: 1rem; }
 .mb-0    { margin-bottom: 0; }
+
+/* ============================================================
+ * SYNC TRACKER
+ * ============================================================ */
+.sync-tracker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-md);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  white-space: nowrap;
+  animation: fadeIn 0.2s ease;
+}
+
+.sync-running {
+  background: oklch(0.25 0.04 250);
+  border: 1px solid oklch(0.45 0.12 250);
+  color: oklch(0.8 0.1 250);
+}
+
+.sync-complete {
+  background: oklch(0.22 0.04 145);
+  border: 1px solid oklch(0.45 0.12 145);
+  color: oklch(0.78 0.14 145);
+}
+
+.sync-error {
+  background: oklch(0.22 0.04 25);
+  border: 1px solid oklch(0.45 0.12 25);
+  color: oklch(0.78 0.14 25);
+}
+
+.sync-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid oklch(0.45 0.12 250);
+  border-top-color: oklch(0.8 0.1 250);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

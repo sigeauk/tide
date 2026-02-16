@@ -94,22 +94,20 @@
     
     <div class="filter-group">
         <label class="form-label">&nbsp;</label>
-        <button 
-            class="btn btn-primary sync-btn"
-            hx-post="/api/rules/sync"
-            hx-target="#toast-container"
-            hx-swap="beforeend"
-            hx-disabled-elt="this"
-            hx-indicator=".sync-btn">
-            <span class="htmx-indicator">
-                {{ icon('loader', '16') }}
-                <span>Syncing...</span>
-            </span>
-            <span class="sync-default">
-                {{ icon('refresh-cw', '16') }}
-                <span>Sync Rules</span>
-            </span>
-        </button>
+        <div style="display: flex; align-items: center; gap: 0.75rem;">
+            <div id="sync-status"></div>
+            <button 
+                class="btn btn-primary sync-btn"
+                hx-post="/api/rules/sync"
+                hx-target="#sync-status"
+                hx-swap="outerHTML"
+                hx-disabled-elt="this">
+                <span class="sync-default">
+                    {{ icon('refresh-cw', '16') }}
+                    <span>Sync Rules</span>
+                </span>
+            </button>
+        </div>
     </div>
 </div>
 
