@@ -29,7 +29,12 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 # System deps needed for runtime:
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl git ca-certificates && rm -rf /var/lib/apt/lists/*
+    curl \
+    git \
+    ca-certificates \
+    nano \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma
 
