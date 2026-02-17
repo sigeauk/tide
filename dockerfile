@@ -7,8 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1
 # Stage 2: Builder
 FROM base AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential curl git && \
-    rm -rf /var/lib/apt/lists/*
+    build-essential \
+    curl \
+    git \
+    nano \
+    jq\
+    && rm -rf /var/lib/apt/lists/*
 
 # Create a Virtual Environment
 RUN python -m venv /opt/venv
