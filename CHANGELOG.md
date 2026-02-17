@@ -4,12 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.7] 2026-02-17
+## [2.3.7] - 2026-02-17
 
 ### Fixed
 - Rule log mapping.
 
-## [2.3.6] 2026-02-16
+## [2.3.6] - 2026-02-16
 
 ### Added 
 - Improve page loading.
@@ -18,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 - Update pySigma backend/pipeline in requirements.txt
 
-## [2.3.5] 2026-02-16
+## [2.3.5] - 2026-02-16
 
 ### Fixed
 - **UI Responsiveness:** Resolved significant lag during page navigation and data loading by refactoring the internal execution model to prevent event-loop blocking.
@@ -36,7 +36,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Updated `base.html` to use non-blocking deferred script loading.
 - Refactored `main.py` lifespan to handle proactive dependency initialization.
 
-## [2.3.1] 2026-02-13
+## [2.3.1] - 2026-02-13
 
 ### CHANGE  
 - Clean up of .env
