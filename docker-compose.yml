@@ -16,7 +16,7 @@ services:
       - VALIDATION_FILE=/app/data/checkedRule.json
     volumes:
       - ./data:/app/data
-      - ${RULE_LOG_PATH:-./data/log/rules}:/app/data/log/rules
+      - ${RULE_LOG_PATH:-./data/log/rules}:/mnt/rule-logs
       # - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro # Mount CA cert for internal API calls if needed
     expose:
       - "8000"

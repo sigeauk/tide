@@ -6,6 +6,8 @@ Ported from the original Streamlit database.py to a FastAPI-friendly singleton p
 import duckdb
 import json
 import os
+import shutil
+import tempfile
 import time
 import pandas as pd
 from datetime import datetime
@@ -329,7 +331,82 @@ class DatabaseService:
             logger.warning(f"Could not create users table: {e}")
     
     # --- VALIDATION DATA ---
-    
+
+    def _read_validation_file(self) -> Dict[str, Any]:
+        """
+        Safely read the validation JSON file.
+
+        Returns the parsed dict (with a ``rules`` key) or ``None`` if the file
+        does not exist.  On *any* read / parse error the **backup** file is
+        tried before giving up, so a single truncated write can never destroy
+        all client data.
+        """
+        if not os.path.exists(self.validation_file):
+            return None
+
+        # Try primary file first
+        for path in (self.validation_file, self.validation_file + ".bak"):
+            if not os.path.exists(path):
+                continue
+            try:
+                with open(path, "r") as f:
+                    content = f.read().strip()
+                if not content:
+                    logger.warning(f"Validation file is empty: {path}")
+                    continue
+                data = json.loads(content)
+                if isinstance(data, dict) and "rules" in data and data["rules"]:
+                    return data
+                logger.warning(f"Validation file has no rule data: {path}")
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.error(f"Failed to read validation file {path}: {exc}")
+
+        # Both files unreadable / empty — return empty structure but do NOT
+        # overwrite the originals (caller decides whether to write).
+        logger.error("All validation files unreadable — returning empty data")
+        return {"rules": {}}
+
+    def _atomic_write_validation(self, data: Dict[str, Any]) -> None:
+        """
+        Atomically write *data* to the validation file.
+
+        Strategy:
+        1. Create a backup of the current file (``<file>.bak``).
+        2. Write to a temporary file in the **same directory** (important so
+           ``os.replace`` is a same-filesystem atomic rename).
+        3. ``os.replace`` the temp file over the real file — this is atomic on
+           both POSIX and modern Windows/NTFS.
+
+        If anything goes wrong the original file (or its backup) survives.
+        """
+        directory = os.path.dirname(self.validation_file) or "."
+        os.makedirs(directory, exist_ok=True)
+
+        # 1. Backup current file if it exists and is non-empty
+        if os.path.exists(self.validation_file):
+            try:
+                if os.path.getsize(self.validation_file) > 2:  # not just "{}"
+                    shutil.copy2(self.validation_file, self.validation_file + ".bak")
+            except OSError as exc:
+                logger.warning(f"Could not create validation backup: {exc}")
+
+        # 2. Write to temp file in the same directory
+        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp", prefix=".validation_")
+        try:
+            with os.fdopen(fd, "w") as tmp_f:
+                json.dump(data, tmp_f, indent=4)
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            # 3. Atomic replace
+            os.replace(tmp_path, self.validation_file)
+        except BaseException:
+            # Clean up temp file on failure — original is untouched
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+
     def _load_validation_data(self) -> Dict[str, Dict[str, str]]:
         """Load validation data from JSON file (cached by file mtime)."""
         if not os.path.exists(self.validation_file):
@@ -338,35 +415,30 @@ class DatabaseService:
             mtime = os.path.getmtime(self.validation_file)
             if self._validation_cache is not None and mtime == self._validation_cache_mtime:
                 return self._validation_cache
-            with open(self.validation_file, "r") as f:
-                data = json.load(f).get("rules", {})
-            self._validation_cache = data
+            data = self._read_validation_file()
+            rules = data.get("rules", {}) if data else {}
+            self._validation_cache = rules
             self._validation_cache_mtime = mtime
-            return data
-        except:
+            return rules
+        except Exception as exc:
+            logger.error(f"Failed to load validation data: {exc}")
             return {}
-    
+
     def save_validation(self, rule_name: str, user_name: str):
-        """Save validation record for a rule."""
-        if os.path.exists(self.validation_file):
-            with open(self.validation_file, "r") as f:
-                try:
-                    data = json.load(f)
-                except:
-                    data = {"rules": {}}
-        else:
-            data = {"rules": {}}
-        
+        """Save validation record for a rule (atomic + backup)."""
+        data = self._read_validation_file() or {"rules": {}}
+
         if "rules" not in data:
             data["rules"] = {}
-        
+
         data["rules"][str(rule_name)] = {
             "last_checked_on": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
             "checked_by": user_name
         }
-        
-        with open(self.validation_file, "w") as f:
-            json.dump(data, f, indent=4)
+
+        self._atomic_write_validation(data)
+        # Invalidate cache so next read picks up the change
+        self._validation_cache = None
     
     # --- RULE OPERATIONS ---
     

@@ -819,27 +819,36 @@ def get_rule_health_metrics(validation_file="data/checkedRule.json"):
         validated_count = 0
         validation_expired_count = 0
         
-        if os.path.exists(validation_file):
+        val_data = {}
+        for path in (validation_file, validation_file + ".bak"):
+            if not os.path.exists(path):
+                continue
             try:
-                with open(validation_file, 'r') as f:
-                    val_data = json.load(f).get('rules', {})
-                
-                now = datetime.now()
-                for rule_name in df['name'].tolist():
-                    rule_v = val_data.get(str(rule_name), {})
-                    if rule_v:
-                        validated_count += 1
-                        val_str = rule_v.get('last_checked_on', '')
-                        if val_str:
-                            try:
-                                val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
-                                weeks = (now - val_date).days / 7
-                                if weeks > 12:
-                                    validation_expired_count += 1
-                            except:
-                                pass
-            except:
+                with open(path, 'r') as f:
+                    content = f.read().strip()
+                if content:
+                    parsed = json.loads(content)
+                    if isinstance(parsed, dict) and parsed.get('rules'):
+                        val_data = parsed['rules']
+                        break
+            except (json.JSONDecodeError, OSError):
                 pass
+        
+        if val_data:
+            now = datetime.now()
+            for rule_name in df['name'].tolist():
+                rule_v = val_data.get(str(rule_name), {})
+                if rule_v:
+                    validated_count += 1
+                    val_str = rule_v.get('last_checked_on', '')
+                    if val_str:
+                        try:
+                            val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
+                            weeks = (now - val_date).days / 7
+                            if weeks > 12:
+                                validation_expired_count += 1
+                        except:
+                            pass
         
         return {
             'total_rules': total_rules,

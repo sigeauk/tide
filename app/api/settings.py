@@ -69,20 +69,25 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser):
 
 @router.post("/rule-log/export", response_class=HTMLResponse)
 def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
-    """Manually trigger a rule log export."""
-    from app.services.rule_logger import export_rule_logs, cleanup_old_logs
+    """Manually trigger a rule log export to all active paths."""
+    from app.services.rule_logger import export_rule_logs, cleanup_old_logs, _get_write_paths
     
     settings = db.get_all_settings()
-    log_path = settings.get("rule_log_path", "/app/data/log/rules")
     retention_days = int(settings.get("rule_log_retention_days", "7"))
+    write_paths = _get_write_paths()
     
-    count = export_rule_logs(db, log_path)
-    cleanup_old_logs(log_path, retention_days)
+    count = 0
+    for path in write_paths:
+        n = export_rule_logs(db, path)
+        if n > count:
+            count = n
+        cleanup_old_logs(path, retention_days)
     
+    path_list = ", ".join(write_paths)
     if count > 0:
         return HTMLResponse(f"""
         <div id="export-toast" hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-success">Exported {count} rules to {log_path}</div>
+            <div class="toast toast-success">Exported {count} rules to {path_list}</div>
         </div>
         """)
     else:
@@ -91,3 +96,4 @@ def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
             <div class="toast toast-warning">No rules to export. Run a sync first.</div>
         </div>
         """)
+

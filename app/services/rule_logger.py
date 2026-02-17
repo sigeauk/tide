@@ -4,6 +4,11 @@ Rule Logger Service for TIDE - Phase 5: Historical Logging.
 Exports detection rule statistics as JSON lines for SIEM ingestion.
 Files are written daily to a configurable log directory and retained
 for a configurable number of days (default 7).
+
+Dual-write behaviour:
+- Logs are ALWAYS written to the app path  (/app/data/log/rules).
+- If a separate host mount exists at /mnt/rule-logs, logs are copied
+  there too (mount provided by RULE_LOG_PATH in docker-compose).
 """
 
 import json
@@ -11,9 +16,36 @@ import os
 import logging
 import glob
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
+
+# Canonical paths inside the container
+APP_LOG_PATH = "/app/data/log/rules"
+HOST_LOG_MOUNT = "/mnt/rule-logs"
+
+
+def _is_separate_mount(path_a: str, path_b: str) -> bool:
+    """Return True if path_b exists and is NOT the same directory as path_a."""
+    if not os.path.isdir(path_b):
+        return False
+    try:
+        return not os.path.samefile(path_a, path_b)
+    except (OSError, ValueError):
+        return True
+
+
+def _get_write_paths() -> List[str]:
+    """
+    Return the list of directories the rule logger should write to.
+    Always includes APP_LOG_PATH; includes HOST_LOG_MOUNT when it is a
+    separate mount point (i.e. RULE_LOG_PATH was set in docker-compose).
+    """
+    os.makedirs(APP_LOG_PATH, exist_ok=True)
+    paths = [APP_LOG_PATH]
+    if _is_separate_mount(APP_LOG_PATH, HOST_LOG_MOUNT):
+        paths.append(HOST_LOG_MOUNT)
+    return paths
 
 
 def export_rule_logs(db, log_path: str, validation_data: dict = None) -> int:
@@ -136,7 +168,8 @@ def cleanup_old_logs(log_path: str, retention_days: int = 7) -> int:
 def run_rule_log_export(db) -> int:
     """
     Main entry point for scheduled rule log export.
-    Reads settings from app_settings table, exports if enabled, and cleans up old files.
+    Reads settings from app_settings table, exports if enabled, and cleans up
+    old files.  Writes to ALL active paths (app data dir + host mount).
     
     Args:
         db: DatabaseService instance
@@ -152,14 +185,22 @@ def run_rule_log_export(db) -> int:
             logger.debug("Rule logging is disabled, skipping export")
             return 0
         
-        log_path = "/app/data/log/rules"
         retention_days = int(settings.get("rule_log_retention_days", "7"))
+        write_paths = _get_write_paths()
         
-        # Export current rules
-        count = export_rule_logs(db, log_path)
+        # Export current rules to every active path
+        count = 0
+        for path in write_paths:
+            n = export_rule_logs(db, path)
+            if n > count:
+                count = n
         
-        # Clean up old logs
-        cleanup_old_logs(log_path, retention_days)
+        # Clean up old logs in every active path
+        for path in write_paths:
+            cleanup_old_logs(path, retention_days)
+        
+        if len(write_paths) > 1:
+            logger.info(f"Rule logs written to {len(write_paths)} locations: {write_paths}")
         
         return count
         
