@@ -34,6 +34,7 @@ services:
     ports:
       - "443:443"
     volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
       - ./certs/server.crt:/etc/nginx/certs/server.crt:ro
       - ./certs/server.key:/etc/nginx/certs/server.key:ro
     networks:
@@ -46,6 +47,3 @@ services:
 networks:
   tide-network:
     driver: bridge
-
-volumes:
-  static-assets:
