@@ -11,6 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 - Cleaned up `docker-compose.yml` and `.env.example` for production readiness.
+- Moved `build` configuration to `docker-compose.override.yml` (development only); production users only need the image, `docker-compose.yml`, and `.env`.
+- Static assets now use a named Docker volume shared between app and nginx containers, removing the need for a local source tree.
 - CA certificates are volume-mounted and installed at container startup via `entrypoint.sh`.
 
 ## [2.4.0] - 2026-02-18

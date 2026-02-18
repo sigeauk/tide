@@ -12,11 +12,11 @@ SYS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 # If any custom CA certs were mounted, install them into the
 # system trust store so Python, curl, and everything else trusts them.
 if ls /usr/local/share/ca-certificates/*.crt >/dev/null 2>&1; then
-    echo "🔒 Installing custom CA certificates..."
+    echo "Installing custom CA certificates..."
     update-ca-certificates --fresh 2>/dev/null
-    echo "✅ CA certificates installed"
+    echo "CA certificates installed"
 else
-    echo "ℹ️  No custom CA certificates found, using defaults"
+    echo "No custom CA certificates found, using defaults"
 fi
 
 # Point Python's requests / httpx / urllib at the system CA bundle.
