@@ -14,10 +14,12 @@ services:
       - DB_PATH=/app/data/tide.duckdb
       - TRIGGER_DIR=/app/data/triggers
       - VALIDATION_FILE=/app/data/checkedRule.json
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
     volumes:
       - ./data:/app/data
       - ${RULE_LOG_PATH:-./data/log/rules}:/mnt/rule-logs
-      # - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro # Mount CA cert for internal API calls if needed
+      - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro
     expose:
       - "8000"
     networks:

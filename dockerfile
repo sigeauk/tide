@@ -51,6 +51,11 @@ COPY VERSION /app/VERSION
 
 ENV PYTHONPATH="/app"
 
+# Point Python requests / httpx / urllib at the system CA bundle
+# (entrypoint.sh re-exports these after installing any custom CAs)
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 # Copy entrypoint script
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
@@ -61,8 +66,3 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# Stage 4: Development
-FROM production AS development
-RUN pip install --no-cache-dir watchfiles
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

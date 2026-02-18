@@ -4,10 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.4.0] - 2026-02-17
+## [2.4.1] - 2026-02-18
+
+### Fixed
+- **SSL/CA Trust:** Resolved certificate verification failures when connecting to internal infrastructure (Keycloak, Elasticsearch, OpenCTI, GitLab). The `ssl_context` in `config.py` now uses the system trust store populated by the entrypoint, ensuring volume-mounted CA certificates are trusted by all Python HTTP clients.
+
+### Changed
+- Cleaned up `docker-compose.yml` and `.env.example` for production readiness.
+- CA certificates are volume-mounted and installed at container startup via `entrypoint.sh`.
+
+## [2.4.0] - 2026-02-18
 
 ### Added
-- added `nano` and `jq` to the build.
+- Added `nano` and `jq` to the Docker image.
+
 
 ## [2.3.7] - 2026-02-17
 

@@ -77,18 +77,26 @@ class Settings(BaseSettings):
     @property
     def ssl_context(self):
         """
-        Return the verify parameter for requests/httpx.
+        Return an ssl.SSLContext for httpx / requests / urllib.
         
-        When running in Docker the entrypoint installs CA certs into the
-        system trust store via update-ca-certificates, so True (the default)
-        uses the system store and just works.
+        When SSL_VERIFY=true (default), returns a context built from the
+        **system** trust store (/etc/ssl/certs/ca-certificates.crt).
+        This picks up any custom CA certs installed by the entrypoint
+        via update-ca-certificates.
         
-        Set SSL_VERIFY=false in .env only as a last resort to bypass
-        verification entirely.
+        Passing True to httpx would use certifi's bundled Mozilla CAs,
+        which do NOT include corporate/internal CAs — so we always pass
+        a real SSLContext instead.
+        
+        Set SSL_VERIFY=false in .env to bypass verification entirely.
         """
+        import ssl as _ssl
         if not self.ssl_verify:
-            return False
-        return True
+            ctx = _ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = _ssl.CERT_NONE
+            return ctx
+        return _ssl.create_default_context()
     
     # --- GITLAB ---
     gitlab_url: str = Field(default="http://gitlab:8929/", alias="GITLAB_URL")
