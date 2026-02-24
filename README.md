@@ -204,7 +204,7 @@ GITLAB_TOKEN="your-token"
 
 ---
 
-## Design System (Sajid-Style HSL)
+## Design System
 
 | Principle | Implementation |
 |-----------|----------------|

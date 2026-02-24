@@ -20,7 +20,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Added
 - Added `nano` and `jq` to the Docker image.
 
-
 ## [2.3.7] - 2026-02-17
 
 ### Fixed
@@ -123,7 +122,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 - Updated README and banner
 
-
 ## [2.0.6] - 2026-02-03
 
 ### Fixed
@@ -134,18 +132,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Automatic token refresh using refresh_token cookie
 - Proactive token refresh before expiration
 
-
 ## [2.0.5] - 2026-02-02
 
 ### Changed
 - Updated `.env.example` with latest configuration options
 
-
 ## [2.0.4] - 2026-02-02
 
 ### Fixed
 - Minor UI box styling improvements
-
 
 ## [2.0.3] - 2026-02-02
 
@@ -159,7 +154,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Summary cards standardized across Promotion and Dashboard pages
 - Sidebar navigation reordered
 
-
 ## [2.0.2] - 2026-02-01
 
 ### Fixed
@@ -169,7 +163,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Removed
 - Attack Tree and Presentation pages from sidebar
 - Legacy Streamlit files and configuration
-
 
 ## [2.0.1] - 2026-01-31
 
@@ -183,7 +176,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Changed
 - Complete UI refactor using HSL color system with depth-based elevation
-
 
 ## [2.0.0] - 2026-01-28
 
@@ -217,19 +209,16 @@ This release represents a complete rewrite of the application frontend and backe
 - All Streamlit dependencies and pages
 - Legacy Python-based UI components
 
-
 ## [1.2.4] - 2026-01-25
 
 ### Changed
 - Updated `sync.py` and `release.py` scripts
-
 
 ## [1.2.3]
 
 ### Changed
 - Updated README
     - Removed icons
-
 
 ## [1.2.2]
 
@@ -238,7 +227,6 @@ This release represents a complete rewrite of the application frontend and backe
 
 ### Fixed
 - Title uniformity
-
 
 ## [1.2.0]
 
@@ -249,13 +237,11 @@ This release represents a complete rewrite of the application frontend and backe
 - Author not displaying on some cards
 - Pills on rule health now full width
 
-
 ## [1.1.6]
 
 ### Fixed
 - Author not displaying on some cards
 - Pills on rule health now full width
-
 
 ## [1.1.0] - 2026-01-20
 
@@ -268,7 +254,6 @@ This release represents a complete rewrite of the application frontend and backe
 ### Fixed
 - Import detection rules, after primary key conflict
 
-
 ## [1.0.1] - 2026-01-19
 
 ### Changed
@@ -277,7 +262,6 @@ This release represents a complete rewrite of the application frontend and backe
 ### Fixed
 - Source of Threat Intel for OpenCTI
 - Primary Key for Elastic Detections
-
 
 ## [1.0.0] - 2025-12-01
 
