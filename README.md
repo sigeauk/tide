@@ -36,7 +36,7 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 | **Backend** | FastAPI (Python) | REST API, HTMX partials, business logic |
 | **Database** | DuckDB | Embedded analytics DB, zero external dependencies |
 | **Frontend** | HTMX + Jinja2 | Server-rendered HTML with dynamic updates |
-| **Styling** | Tailwind CSS v4 | HSL Variable Engine (hue: 220, 4-layer elevation) |
+| **Styling** | Custom Semantic CSS | Hex-based design system (GitHub dark theme palette) |
 | **Auth** | Keycloak (optional) | OIDC SSO for enterprise deployments |
 
 ---
@@ -215,12 +215,8 @@ GITLAB_TOKEN="your-token"
 | **Semantic Pills** | Severity (Critical→Low), MITRE status (covered/gap/defense) |
 | **Glow Effects** | Pill shadows matching status colors |
 
-Customize theme by changing `--brand-hue` in CSS:
-- `0` = Red
-- `30` = Orange  
-- `145` = Green
-- `220` = Blue (default)
-- `264` = Purple
+Theme uses a static hex-based palette defined in `style.css` CSS variables.
+Light/dark mode is toggled via the `body.light` class.
 
 ---
 
