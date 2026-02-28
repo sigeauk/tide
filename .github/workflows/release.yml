@@ -31,7 +31,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: 047741/tide-core
+          images: sigeauk/tide
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
