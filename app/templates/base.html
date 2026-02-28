@@ -5,8 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}TIDE{% endblock %}</title>
     
-    <!-- TIDE Semantic CSS -->
-    <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust | default(range(1, 99999) | random) }}">
+    <!-- Brand Hue Override from .env -->
+    <style>
+        :root {
+            --brand-hue: {{ brand_hue | default(240) }};
+        }
+    </style>
+    
+    <!-- Tailwind CSS with cache busting -->
+    <link rel="stylesheet" href="/static/css/dist/styles.css?v={{ cache_bust | default(range(1, 99999) | random) }}">
     
     <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
     <script defer src="/static/js/htmx.min.js?v={{ cache_bust | default('0') }}"></script>

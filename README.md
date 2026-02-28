@@ -5,6 +5,7 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 ---
 
 ## Architecture Overview
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         NGINX                               │
@@ -35,13 +36,12 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 | **Backend** | FastAPI (Python) | REST API, HTMX partials, business logic |
 | **Database** | DuckDB | Embedded analytics DB, zero external dependencies |
 | **Frontend** | HTMX + Jinja2 | Server-rendered HTML with dynamic updates |
-| **Styling** | Custom Semantic CSS | Hex-based design system (GitHub dark theme palette) |
+| **Styling** | Tailwind CSS v4 | HSL Variable Engine (hue: 220, 4-layer elevation) |
 | **Auth** | Keycloak (optional) | OIDC SSO for enterprise deployments |
 
 ---
 
 ## Key Features
-
 ### Dashboard
 - Real-time metrics for rule counts, quality scores, and validation status
 - Quick overview of detection engineering program health
@@ -214,8 +214,12 @@ GITLAB_TOKEN="your-token"
 | **Semantic Pills** | Severity (Critical→Low), MITRE status (covered/gap/defense) |
 | **Glow Effects** | Pill shadows matching status colors |
 
-Theme uses a static hex-based palette defined in `style.css` CSS variables.
-Light/dark mode is toggled via the `body.light` class.
+Customize theme by changing `--brand-hue` in CSS:
+- `0` = Red
+- `30` = Orange  
+- `145` = Green
+- `220` = Blue (default)
+- `264` = Purple
 
 ---
 
@@ -274,7 +278,3 @@ Contributions welcome! Please read the architecture documentation and submit PRs
 See [LICENSE](LICENSE) for details.
 
 ---
-
-## Support
-
-For issues and feature requests, use the GitHub issue tracker.
