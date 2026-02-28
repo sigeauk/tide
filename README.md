@@ -5,7 +5,6 @@ TIDE is a **standalone, containerized platform** for Detection Engineering lifec
 ---
 
 ## Architecture Overview
-
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                         NGINX                               │
