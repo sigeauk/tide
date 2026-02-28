@@ -1,7 +1,7 @@
 name: tide
 services:
   tide-app:
-    image: 047741/tide-core:${TIDE_VERSION}
+    image: sigeauk/tide:${TIDE_VERSION}
     container_name: tide-app
     env_file:
       - .env
