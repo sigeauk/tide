@@ -510,6 +510,9 @@ def create_app() -> FastAPI:
     
     templates.env.filters["highlight_query"] = highlight_query
     
+    # --- Add global template variables so all templates have access ---
+    templates.env.globals["env"] = settings
+    
     # --- Helper function to render templates with global context ---
     def render_template(name: str, request: Request, context: dict = None):
         """Render template with global context variables (brand_hue, cache_bust)."""

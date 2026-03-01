@@ -84,7 +84,7 @@
                      hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
                      hx-trigger="load"
                      hx-swap="innerHTML">
-                    <div class="loading-spinner">
+                    <div class="loading-spinner heatmap-spinner">
                         <div class="spinner"></div>
                         <span>Loading rules...</span>
                     </div>

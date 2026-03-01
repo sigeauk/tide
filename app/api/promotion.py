@@ -80,14 +80,15 @@ def get_promotion_rule_detail(
     rule_id: str,
     db: DbDep,
     user: CurrentUser,
+    settings: SettingsDep,
 ):
     """Get full rule details for modal display."""
     rule = db.get_rule_by_id(rule_id, "staging")
     
     if not rule:
         return HTMLResponse(
-            '<div class="modal-overlay" onclick="this.remove()">'
-            '<div class="modal-content" onclick="event.stopPropagation()">'
+            '<div class="modal-overlay" onclick="this.remove()">' 
+            '<div class="modal-content" onclick="event.stopPropagation()">' 
             '<p style="color: var(--color-danger);">Rule not found in staging</p>'
             '<button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button>'
             '</div></div>',
@@ -97,7 +98,7 @@ def get_promotion_rule_detail(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "components/rule_detail_modal.html",
-        {"request": request, "rule": rule}
+        {"request": request, "rule": rule, "env": settings}
     )
 
 

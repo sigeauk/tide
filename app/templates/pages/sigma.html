@@ -238,12 +238,53 @@ if (window.sigmaYamlEditor) {
     window.sigmaYamlEditor = null;
 }
 
+/**
+ * Dynamically load an external script via createElement('script').
+ * This is the ONLY reliable method — head-support's createContextualFragment
+ * does not guarantee script execution for <script defer> tags added after
+ * initial page parse (the defer attribute is ignored for non-parser-inserted scripts).
+ */
+function _sigmaLoadScript(src) {
+    return new Promise(function(resolve, reject) {
+        // Already loaded by us on a previous call?
+        if (document.querySelector('script[data-tide-loaded="' + src + '"]')) {
+            resolve(); return;
+        }
+        var s = document.createElement('script');
+        s.src = src;
+        s.setAttribute('data-tide-loaded', src);
+        s.onload = resolve;
+        s.onerror = function() { reject(new Error('Failed to load ' + src)); };
+        document.head.appendChild(s);
+    });
+}
+
 // Initialize Sigma page components - exposed globally for HTMX re-initialization
 window.initSigmaPage = function(retryCount = 0) {
     const maxRetries = 50;  // Up to 5 seconds of retrying
     
     // Check if CodeMirror AND yaml mode are both loaded
     if (typeof CodeMirror === 'undefined' || !CodeMirror.modes || !CodeMirror.modes.yaml) {
+        // On first attempt, proactively load scripts via createElement (reliable).
+        // On hard-refresh the <script defer> tags in <head> will have already loaded
+        // these, so the globals exist and we skip this block entirely.
+        // On HTMX navigation, head-support's createContextualFragment often fails
+        // to execute <script defer> tags, so we must load them ourselves.
+        if (retryCount === 0) {
+            if (typeof CodeMirror === 'undefined') {
+                _sigmaLoadScript('/static/js/vendor/codemirror.min.js')
+                    .then(function() { return _sigmaLoadScript('/static/js/vendor/codemirror-yaml.min.js'); })
+                    .catch(function(e) { console.error('[Sigma] CodeMirror load error:', e); });
+            } else if (!CodeMirror.modes || !CodeMirror.modes.yaml) {
+                _sigmaLoadScript('/static/js/vendor/codemirror-yaml.min.js')
+                    .catch(function(e) { console.error('[Sigma] YAML mode load error:', e); });
+            }
+            if (typeof Prism === 'undefined') {
+                _sigmaLoadScript('/static/js/vendor/prism.min.js')
+                    .then(function() { return _sigmaLoadScript('/static/js/vendor/prism-json.min.js'); })
+                    .catch(function(e) { console.error('[Sigma] Prism load error:', e); });
+            }
+        }
         if (retryCount < maxRetries) {
             console.debug(`[Sigma] CodeMirror/YAML mode not loaded yet, retry ${retryCount + 1}/${maxRetries}...`);
             setTimeout(() => window.initSigmaPage(retryCount + 1), 100);

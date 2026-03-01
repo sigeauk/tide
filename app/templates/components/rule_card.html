@@ -92,5 +92,20 @@
             hx-swap="innerHTML">
             {{ icon_text('clipboard-list', 'Logic', '14') }}
         </button>
+        {% set card_space = rule.space | default('default') %}
+        {% set kibana_obj_id = rule.raw_data.id if rule.raw_data and rule.raw_data.id else rule.rule_id %}
+        {% if card_space | lower == 'default' %}
+            {% set card_kibana_url = env.elastic_url ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+        {% else %}
+            {% set card_kibana_url = env.elastic_url ~ '/s/' ~ card_space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+        {% endif %}
+        <a href="{{ card_kibana_url }}"
+           target="_blank"
+           rel="noopener noreferrer"
+           class="btn btn-secondary btn-sm"
+           data-kibana-link
+           title="Open in Kibana ({{ card_space | capitalize }})">
+            {{ icon_text('external-link', 'Kibana', '14') }}
+        </a>
     </div>
 </div>

@@ -1555,6 +1555,31 @@ class DatabaseService:
         
         return count
 
+    def delete_rules_for_spaces(self, spaces: List[str]) -> int:
+        """
+        Delete all rules belonging to the given spaces (subtractive sync).
+        Used to remove ghost rules when a space returns 0 rules from Elastic.
+        """
+        if not spaces:
+            return 0
+        
+        total_deleted = 0
+        with self.get_connection() as conn:
+            try:
+                for space in spaces:
+                    before = conn.execute(
+                        "SELECT COUNT(*) FROM detection_rules WHERE space = ?", [space]
+                    ).fetchone()[0]
+                    if before > 0:
+                        conn.execute("DELETE FROM detection_rules WHERE space = ?", [space])
+                        logger.info(f"Subtractive sync: deleted {before} ghost rules from space '{space}'")
+                        total_deleted += before
+                conn.execute("CHECKPOINT")
+            except Exception as e:
+                logger.error(f"Failed to delete ghost rules: {e}")
+        
+        return total_deleted
+
 
 # Singleton accessor
 def get_database_service() -> DatabaseService:

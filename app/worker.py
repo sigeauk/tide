@@ -57,7 +57,9 @@ def run_elastic_sync():
             count = db.save_audit_results(audit_records)
             log_info(f"WORKER: Synced {count} Elastic rules.")
         else:
-            log_error("WORKER: No rules fetched from Elastic.")
+            # No rules returned from any space — clear the DB to remove ghost rules
+            log_info("WORKER: No rules fetched from Elastic. Clearing stale rules from database.")
+            db.clear_all_rules()
     except Exception as e:
         log_error(f"WORKER: Elastic Sync Failed: {e}")
         import traceback

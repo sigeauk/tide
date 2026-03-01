@@ -81,6 +81,7 @@ def get_rule_detail(
     rule_id: str,
     db: DbDep,
     user: CurrentUser,
+    settings: SettingsDep,
     space: str = Query("default"),
 ):
     """Get full rule details for modal display."""
@@ -88,8 +89,8 @@ def get_rule_detail(
     
     if not rule:
         return HTMLResponse(
-            '<div class="modal-overlay" onclick="this.remove()">'
-            '<div class="modal-content" onclick="event.stopPropagation()">'
+            '<div class="modal-overlay" onclick="this.remove()">' 
+            '<div class="modal-content" onclick="event.stopPropagation()">' 
             '<p style="color: var(--color-danger);">Rule not found</p>'
             '<button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button>'
             '</div></div>',
@@ -99,7 +100,7 @@ def get_rule_detail(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "components/rule_detail_modal.html",
-        {"request": request, "rule": rule}
+        {"request": request, "rule": rule, "env": settings}
     )
 
 

@@ -559,6 +559,19 @@ def save_audit_results(audit_list):
     finally:
         conn.close()
 
+
+def clear_all_rules():
+    """Remove all detection rules from the database (used when Elastic returns no rules)."""
+    conn = get_connection(read_only=False)
+    try:
+        conn.execute("DELETE FROM detection_rules WHERE 1=1")
+        conn.execute("CHECKPOINT")
+        log_info("Cleared all rules from database (subtractive sync)")
+    except Exception as e:
+        log_error(f"Clear Rules Failed: {e}")
+    finally:
+        conn.close()
+
 # --- ANALYTICS ---
 
 def get_latest_rules():

@@ -139,10 +139,27 @@ def run_elastic_sync():
             if df is not None and not df.empty:
                 audit_records = df.to_dict('records')
                 count = db.save_audit_results(audit_records)
+                
+                # --- Subtractive sync: remove ghost rules from empty spaces ---
+                # Determine which configured spaces were NOT in the fetched data
+                from app.config import get_settings
+                settings = get_settings()
+                configured_spaces = settings.kibana_space_list
+                synced_spaces = set(df['space_id'].dropna().unique()) if 'space_id' in df.columns else set()
+                empty_spaces = [s for s in configured_spaces if s not in synced_spaces]
+                
+                if empty_spaces:
+                    logger.info(f"Subtractive sync: clearing ghost rules from empty spaces: {empty_spaces}")
+                    db.delete_rules_for_spaces(empty_spaces)
+                
                 logger.info(f"Synced {count} rules from Elastic")
                 return count
             else:
-                logger.warning("No rules fetched from Elastic - check connection settings")
+                # No rules from any space — clear everything (subtractive sync)
+                logger.warning("No rules fetched from Elastic — clearing all rules from database")
+                from app.config import get_settings
+                settings = get_settings()
+                db.delete_rules_for_spaces(settings.kibana_space_list)
                 return 0
         finally:
             os.chdir(original_cwd)
