@@ -2,7 +2,7 @@
 API routes for Rule Promotion (Staging → Production).
 """
 
-from fastapi import APIRouter, Request, Query, BackgroundTasks, Form
+from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from typing import Optional
 
@@ -10,7 +10,6 @@ from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep
 from app.models.rules import RuleFilters
 
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 

@@ -334,7 +334,9 @@ a:hover { color: var(--color-primary); }
 
 .mitre-pill {
   font-family: "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 0.7rem;
   font-weight: 500;
+  padding: 0.2rem 0.5rem;
   border-radius: var(--radius-md);
   white-space: nowrap;
   display: inline-flex;
@@ -739,7 +741,8 @@ a:hover { color: var(--color-primary); }
   box-shadow: var(--shadow);
 }
 
-.rule-card:hover {
+.rule-card:hover,
+.threat-card:hover {
   background: var(--color-bg-surface-hover);
   border-color: var(--color-border-strong);
   transform: translateY(-2px);
@@ -823,37 +826,12 @@ a:hover { color: var(--color-primary); }
   flex-shrink: 0;
 }
 
-.sev-pill {
-  font-size: 0.7rem;
-  font-weight: 600;
-  padding: 0.2rem 0.6rem;
-  border-radius: var(--radius-md);
-  text-transform: uppercase;
-}
+/* .sev-pill, .mitre-pill, .mitre-more, .mitre-none → canonical defs above (PILL SYSTEM / MITRE PILLS) */
 
 .mitre-row {
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
-}
-
-.mitre-pill {
-  font-size: 0.7rem;
-  padding: 0.2rem 0.5rem;
-  border-radius: var(--radius-md);
-  background-color: var(--color-primary-muted);
-  color: var(--color-primary);
-}
-
-.mitre-more {
-  background-color: var(--color-bg-action);
-  color: var(--color-text-muted);
-}
-
-.mitre-none {
-  background-color: var(--color-bg-base);
-  color: var(--color-text-muted);
-  font-style: italic;
 }
 
 .score-section { flex-shrink: 0; }
@@ -869,14 +847,17 @@ a:hover { color: var(--color-primary); }
 
 .score-value { font-weight: 600; }
 
-.score-track {
+.score-track,
+.coverage-track {
   height: 5px;
   background-color: var(--color-bg-base);
   border-radius: var(--radius-full);
   overflow: hidden;
 }
 
-.score-fill {
+.score-fill,
+.progress-fill,
+.coverage-fill {
   height: 100%;
   border-radius: var(--radius-full);
   transition: width var(--transition-normal);
@@ -1192,15 +1173,13 @@ a:hover { color: var(--color-primary); }
   border-top: 1px solid var(--color-highlight-2);
 }
 
-.btn-secondary:hover {
-  background: var(--color-bg-action-hover);
-  border-color: var(--color-border-strong);
-}
+/* .btn-secondary:hover merged with .btn-logic:hover below */
 
 .btn-sm { padding: 0.35rem 0.75rem; font-size: 0.75rem; }
 .btn-block { width: 100%; }
 
-.btn-validate {
+.btn-validate,
+.btn-logic {
   background: var(--color-bg-action);
   color: var(--color-text-secondary);
   border: var(--border-card);
@@ -1213,13 +1192,7 @@ a:hover { color: var(--color-primary); }
   border-color: var(--color-success);
 }
 
-.btn-logic {
-  background: var(--color-bg-action);
-  color: var(--color-text-secondary);
-  border: var(--border-card);
-  border-top: 1px solid var(--color-highlight-2);
-}
-
+.btn-secondary:hover,
 .btn-logic:hover {
   background: var(--color-info-bg);
   color: var(--color-info-text);
@@ -1227,7 +1200,6 @@ a:hover { color: var(--color-primary); }
 }
 
 /* HTMX button states */
-.htmx-indicator { display: none; }
 .htmx-request .htmx-indicator { display: inline-flex; align-items: center; gap: 0.5rem; }
 .htmx-request .btn-text { display: none; }
 
@@ -1255,7 +1227,8 @@ a:hover { color: var(--color-primary); }
   box-shadow: var(--shadow-sm);
 }
 
-.form-input:focus {
+.form-input:focus,
+.form-select:focus {
   outline: none;
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px var(--color-primary-muted);
@@ -1281,11 +1254,7 @@ a:hover { color: var(--color-primary); }
 
 .form-select:hover { border-color: var(--color-border-strong); }
 
-.form-select:focus {
-  outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px var(--color-primary-muted);
-}
+/* .form-select:focus merged with .form-input:focus above */
 
 .form-select option {
   background: var(--color-bg-surface);
@@ -1421,28 +1390,20 @@ a:hover { color: var(--color-primary); }
 @media (max-width: 1200px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
 @media (max-width: 768px)  { .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
 
-.rules-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 1rem;
-}
-
-@media (max-width: 1200px) { .rules-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px)  { .rules-grid { grid-template-columns: 1fr; } }
-
-
-/* ================================================================
- * THREAT CARDS
- * ================================================================ */
+.rules-grid,
 .threats-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
 }
 
-@media (max-width: 1200px) { .threats-grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 768px)  { .threats-grid { grid-template-columns: 1fr; } }
+@media (max-width: 1200px) { .rules-grid, .threats-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 768px)  { .rules-grid, .threats-grid { grid-template-columns: 1fr; } }
 
+
+/* ================================================================
+ * THREAT CARDS
+ * ================================================================ */
 .threat-card {
   background: var(--color-bg-surface);
   border: var(--border-card);
@@ -1456,12 +1417,7 @@ a:hover { color: var(--color-primary); }
   box-shadow: var(--shadow);
 }
 
-.threat-card:hover {
-  background: var(--color-bg-surface-hover);
-  border-color: var(--color-border-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-lg);
-}
+/* .threat-card:hover merged with .rule-card:hover above */
 
 .threat-card-header {
   display: flex;
@@ -1553,11 +1509,7 @@ a:hover { color: var(--color-primary); }
   overflow: hidden;
 }
 
-.progress-fill {
-  height: 100%;
-  border-radius: var(--radius-full);
-  transition: width var(--transition-normal);
-}
+/* .progress-fill → merged with .score-fill, .coverage-fill above */
 
 .progress-good { background-color: var(--color-sev-4); }
 .progress-warn { background-color: var(--color-sev-2); }
@@ -1639,11 +1591,7 @@ a:hover { color: var(--color-primary); }
   box-shadow: 0 0 12px var(--color-gap-glow), 0 2px 8px rgba(110,54,48,0.3);
 }
 
-.ttp-rule-count {
-  font-size: 0.6rem;
-  font-weight: 600;
-  opacity: 0.8;
-}
+/* .ttp-rule-count → canonical definition in HEATMAP section above */
 
 /* TTP list scrollbar */
 .ttp-list::-webkit-scrollbar { width: 4px; }
@@ -1749,6 +1697,7 @@ a:hover { color: var(--color-primary); }
 .empty-state-icon {
   width: 48px;
   height: 48px;
+  font-size: 3rem;
   opacity: 0.5;
   margin: 0 auto 1rem;
 }
@@ -1797,21 +1746,12 @@ a:hover { color: var(--color-primary); }
 
 .coverage-value { font-weight: 600; }
 
-.coverage-track {
-  height: 5px;
-  background: var(--color-bg-base);
-  border-radius: var(--radius-full);
-  overflow: hidden;
-}
+/* .coverage-track merged with .score-track above */
 
-.coverage-fill {
-  height: 100%;
-  border-radius: var(--radius-full);
-  transition: width var(--transition-normal);
-}
-.coverage-fill.fill-success { background-color: var(--color-success); }
-.coverage-fill.fill-warning { background-color: var(--color-warning); }
-.coverage-fill.fill-danger  { background-color: var(--color-danger); }
+/* .coverage-fill merged with .score-fill, .progress-fill above */
+.score-fill.fill-success, .coverage-fill.fill-success { background-color: var(--color-success); }
+.score-fill.fill-warning, .coverage-fill.fill-warning { background-color: var(--color-warning); }
+.score-fill.fill-danger,  .coverage-fill.fill-danger  { background-color: var(--color-danger); }
 
 .status-icon {
   width: 11px;
@@ -1949,13 +1889,15 @@ a:hover { color: var(--color-primary); }
   animation: slideIn var(--transition-normal);
 }
 
-.toast-success {
+.toast-success,
+.alert-success {
   background: var(--color-success-bg);
   border: 1px solid var(--color-success);
   color: var(--color-success-text);
 }
 
-.toast-error {
+.toast-error,
+.alert-danger {
   background: var(--color-danger-bg);
   border: 1px solid var(--color-danger);
   color: var(--color-danger-text);
@@ -1985,7 +1927,7 @@ a:hover { color: var(--color-primary); }
   color: var(--color-text-muted);
 }
 
-.empty-state-icon { font-size: 3rem; margin-bottom: 1rem; }
+/* .empty-state-icon canonical def in THREAT CARD LAYOUT section above */
 
 .empty-state-title {
   font: var(--h3);
@@ -2116,7 +2058,8 @@ body.light {
   color: var(--color-text);
 }
 
-.user-menu-item svg {
+.user-menu-item svg,
+.theme-btn svg {
   width: 18px;
   height: 18px;
   stroke: currentColor;
@@ -2352,22 +2295,7 @@ body.light {
   flex-shrink: 0;
 }
 
-.integration-card .integration-card-status.status-active {
-  color: #3fb950;
-}
-
-.integration-card .integration-card-status.status-active::before {
-  background: #3fb950;
-  box-shadow: 0 0 6px rgba(63,185,80,0.5);
-}
-
-.integration-card .integration-card-status.status-inactive {
-  color: var(--color-text-muted);
-}
-
-.integration-card .integration-card-status.status-inactive::before {
-  background: var(--color-text-muted);
-}
+/* .integration-card .status-active/inactive → use generic .status-active/.status-inactive below */
 
 
 /* ================================================================
@@ -2617,13 +2545,7 @@ body.light {
   color: var(--color-primary);
 }
 
-.theme-btn svg {
-  width: 18px;
-  height: 18px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2;
-}
+/* .theme-btn svg merged with .user-menu-item svg above */
 
 .hue-picker {
   display: flex;
@@ -2860,17 +2782,7 @@ body.light {
   font-size: 0.75rem;
 }
 
-.alert-success {
-  background: var(--color-success-bg);
-  color: var(--color-success-text);
-  border: 1px solid var(--color-success);
-}
-
-.alert-danger {
-  background: var(--color-danger-bg);
-  color: var(--color-danger-text);
-  border: 1px solid var(--color-danger);
-}
+/* .alert-success, .alert-danger merged with .toast-success, .toast-error above */
 
 .alert-warning {
   background: var(--color-warning-bg);
@@ -2884,10 +2796,7 @@ body.light {
   border: 1px solid var(--color-info);
 }
 
-/* Score fill color variants */
-.score-fill.fill-success { background-color: var(--color-success); }
-.score-fill.fill-warning { background-color: var(--color-warning); }
-.score-fill.fill-danger  { background-color: var(--color-danger); }
+/* .score-fill.fill-* merged with .coverage-fill.fill-* in THREAT CARD LAYOUT section */
 
 /* Metric card compact variants for modals */
 .metric-card.metric-compact    { padding: 0.75rem; }

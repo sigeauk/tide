@@ -5,7 +5,6 @@ Provides endpoints for rule browsing, conversion, validation, and SIEM deploymen
 
 from fastapi import APIRouter, Request, Query, Form
 from fastapi.responses import HTMLResponse
-from typing import List, Optional
 
 from app.api.deps import CurrentUser, SettingsDep, DbDep
 from app import sigma_helper as sigma

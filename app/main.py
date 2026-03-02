@@ -5,7 +5,7 @@ FastAPI Application Entry Point.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks, Depends
+from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -16,7 +16,7 @@ import os
 import time
 
 from app.config import get_settings
-from app.api.deps import get_db, get_current_user, CurrentUser, RequireUser, DbDep
+from app.api.deps import CurrentUser, DbDep
 from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api
 
 # Configure logging

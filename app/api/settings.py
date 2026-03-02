@@ -4,7 +4,7 @@ Handles reading/writing app settings and triggering rule log exports.
 """
 
 import logging
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import DbDep, CurrentUser

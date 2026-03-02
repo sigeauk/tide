@@ -4,11 +4,10 @@ Uses Pydantic Settings for type-safe environment variable loading.
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, model_validator
 from functools import lru_cache
 from typing import Optional, List
 from pathlib import Path
-import os
 
 
 def _read_version_file() -> Optional[str]:
