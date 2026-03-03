@@ -9,6 +9,8 @@ python-multipart>=0.0.18
 # --- Templates ---
 jinja2>=3.1.6
 
+weasyprint>=62.0
+
 # --- Authentication ---
 pyjwt[crypto]>=2.8.0
 httpx>=0.26.0

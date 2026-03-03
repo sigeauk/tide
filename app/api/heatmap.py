@@ -1,11 +1,14 @@
 """
 API routes for Heatmap (MITRE ATT&CK coverage matrix).
 Returns HTML partials for HTMX swapping.
+Export endpoints return downloadable PDF or Markdown files.
 """
 
-from fastapi import APIRouter, Request, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request, Query, HTTPException
+from fastapi.responses import HTMLResponse, Response
 from typing import List, Optional, Set, Dict
+import io
+import os
 
 from app.api.deps import DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
@@ -250,7 +253,7 @@ def get_technique_rules(
         search: Optional search filter to apply to rules (matches name, author, rule_id, mitre_ids)
     """
     rules = db.get_rules_for_technique(technique_id, search=search)
-    
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         "partials/technique_rules.html",
@@ -258,4 +261,96 @@ def get_technique_rules(
             "request": request,
             "rules": rules,
         }
+    )
+
+
+# ─── REPORT EXPORT ────────────────────────────────────────────────────────────
+
+@router.get("/export")
+def export_threat_report(
+    request: Request,
+    db: DbDep,
+    user: CurrentUser,
+    actors: List[str] = Query(default=[]),
+    format: str = Query("pdf", pattern="^(pdf|markdown)$"),
+    show_defense: bool = Query(False),
+):
+    """
+    Generate and download a Threat Coverage Report for selected actors.
+
+    Formats
+    -------
+    pdf      — Professional A4 PDF rendered by WeasyPrint (CSS Grid matrix +
+               executive summary + per-tactic detail tables).
+    markdown — Plain-text Markdown report (no extra dependencies).
+
+    The endpoint is synchronous and runs inside FastAPI's threadpool, so
+    WeasyPrint's blocking PDF generation does not stall the event loop.
+    """
+    if not actors:
+        raise HTTPException(
+            status_code=400,
+            detail="No actors selected. Pass ?actors=ActorName one or more times.",
+        )
+
+    from app.services.report_generator import (
+        build_report_data,
+        generate_markdown,
+        generate_pdf_bytes,
+    )
+
+    report_data = build_report_data(db, actors, show_defense=show_defense)
+    if report_data is None:
+        raise HTTPException(
+            status_code=404,
+            detail="None of the requested actors were found in the database.",
+        )
+
+    # ── Sanitise actor names for filename ────────────────────────────────
+    safe_actors = "_".join(
+        a.replace(" ", "-").replace("/", "-")[:20]
+        for a in actors[:3]
+    )
+    if len(actors) > 3:
+        safe_actors += f"_and_{len(actors) - 3}_more"
+
+    from datetime import datetime
+    date_str = datetime.utcnow().strftime("%Y%m%d")
+
+    if format == "markdown":
+        md_text = generate_markdown(report_data)
+        filename = f"TIDE_ThreatReport_{safe_actors}_{date_str}.md"
+        return Response(
+            content=md_text.encode("utf-8"),
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(md_text.encode("utf-8"))),
+            },
+        )
+
+    # ── PDF (default) ─────────────────────────────────────────────────────
+    templates_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "templates"
+    )
+    try:
+        pdf_bytes = generate_pdf_bytes(report_data, templates_dir)
+    except RuntimeError as exc:
+        logger.error(f"PDF generation failed: {exc}")
+        raise HTTPException(status_code=500, detail=str(exc))
+    except Exception as exc:
+        logger.exception(f"Unexpected error during PDF generation: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail="PDF generation failed. Check server logs for details.",
+        )
+
+    filename = f"TIDE_ThreatReport_{safe_actors}_{date_str}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
     )

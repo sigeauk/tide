@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<!--
+    TIDE Threat Report — PDF Template  (v2)
+    ───────────────────────────────────────
+    Fixes over v1:
+      • Cover page no longer clips — removed min-height: 297mm, content is
+        naturally centred inside a zero-margin page.
+      • All body pages switched to WHITE background with dark-navy accents so
+        text is readable and tables don't overflow; dark theme only on the cover.
+      • Detail tables use table-layout: fixed + explicit mm widths so the rules
+        column never overflows the page edge.
+      • Matrix page margins tightened so the full grid fits in landscape.
+      • Alternating table rows, tighter padding, larger base font for readability.
+
+    Airgap-safe: NO external fonts, images or URLs. Uses Liberation Sans which
+    is installed via fonts-liberation in the Dockerfile.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>TIDE Threat Report — {{ generated_at }}</title>
+<style>
+/* ══════════════════════════════════════════════════════
+   PAGE RULES
+   ══════════════════════════════════════════════════════ */
+
+/* Cover: full bleed, no margin, no footer */
+@page cover {
+    size: A4 portrait;
+    margin: 0;
+}
+
+/* Matrix: landscape, slim margins so grid has maximum real estate */
+@page matrix-page {
+    size: A4 landscape;
+    margin: 12mm 8mm 18mm 8mm;
+    @bottom-center {
+        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  CONFIDENTIAL";
+        font-family: "Liberation Sans", Arial, sans-serif;
+        font-size: 6.5pt;
+        color: #6e7681;
+    }
+}
+
+/* All other pages: portrait */
+@page {
+    size: A4 portrait;
+    margin: 14mm 14mm 20mm 14mm;
+    @bottom-center {
+        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  CONFIDENTIAL";
+        font-family: "Liberation Sans", Arial, sans-serif;
+        font-size: 6.5pt;
+        color: #6e7681;
+    }
+}
+
+/* ══════════════════════════════════════════════════════
+   TOKENS
+   ══════════════════════════════════════════════════════ */
+:root {
+    /* Brand (TIDE palette) */
+    --navy:      #0d1117;
+    --navy-2:    #161b22;
+    --navy-3:    #1c2128;
+    --primary:   #58a6ff;
+    --primary-d: #1a3a5c;
+
+    /* Body text (on white) */
+    --text:      #1a1f2e;
+    --text-2:    #3b4252;
+    --text-3:    #6e7681;
+
+    /* Page chrome */
+    --border:    #d0d7de;
+    --row-alt:   #f6f8fa;
+
+    /* Status — light variants for white background (badges) */
+    --gap-bg:      #fff0ee;  --gap-bd:  #e67e74;  --gap-tx:  #c0392b;
+    --cov-bg:      #eefaf1;  --cov-bd:  #52c87b;  --cov-tx:  #1a7f37;
+    --def-bg:      #eef4ff;  --def-bd:  #70a8e8;  --def-tx:  #1a4fa3;
+
+    /* Status — dark variants for matrix cells on dark background */
+    --gap-cell-bg: #3d1414;  --gap-cell-bd: #8b322c;  --gap-cell-tx: #ffa198;
+    --cov-cell-bg: #1a3224;  --cov-cell-bd: #265c38;  --cov-cell-tx: #7ee787;
+    --def-cell-bg: #1a2332;  --def-cell-bd: #234d85;  --def-cell-tx: #79c0ff;
+
+    --ff:      "Liberation Sans", Arial, Helvetica, sans-serif;
+    --ff-mono: "Liberation Mono", "Courier New", monospace;
+}
+
+/* ══════════════════════════════════════════════════════
+   GLOBAL RESET
+   ══════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+    font-family: var(--ff);
+    font-size: 8.5pt;
+    line-height: 1.55;
+    background: #ffffff;
+    color: var(--text);
+}
+
+/* ══════════════════════════════════════════════════════
+   COVER PAGE  (dark)
+   ══════════════════════════════════════════════════════ */
+.cover {
+    page: cover;
+    page-break-after: always;
+    background: var(--navy);
+    /* Do NOT use min-height — WeasyPrint will expand the element beyond
+       the page boundary.  Let the content sit naturally; the Navy background
+       covers the full cover page via the @page rule background. */
+    display: block;
+    padding: 0;
+    text-align: center;
+    color: #c9d1d9;
+}
+
+/* Top accent bar */
+.cover-topbar {
+    width: 100%;
+    height: 12mm;
+    background: var(--primary);
+}
+
+/* Centered content block — designed to fit well inside 297mm page */
+.cover-body {
+    padding: 28mm 20mm 20mm 20mm;
+}
+
+.cover-logo {
+    font-size: 42pt;
+    font-weight: 700;
+    color: var(--primary);
+    letter-spacing: 0.12em;
+    display: block;
+    margin-bottom: 2mm;
+}
+
+.cover-tagline {
+    font-size: 8pt;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    margin-bottom: 18mm;
+}
+
+.cover-rule {
+    border: none;
+    border-top: 1px solid #3b434d;
+    width: 80mm;
+    margin: 0 auto 16mm auto;
+}
+
+.cover-title {
+    font-size: 24pt;
+    font-weight: 700;
+    color: #e6edf3;
+    margin-bottom: 3mm;
+    line-height: 1.2;
+}
+
+.cover-subtitle {
+    font-size: 10pt;
+    color: #8b949e;
+    margin-bottom: 18mm;
+}
+
+/* Actor pills */
+.cover-actors {
+    margin: 0 auto;
+    max-width: 150mm;
+}
+
+.cover-actor-pill {
+    display: inline-block;
+    background: var(--primary-d);
+    color: var(--primary);
+    font-size: 7.5pt;
+    font-weight: 600;
+    padding: 1.5mm 4mm;
+    border-radius: 3mm;
+    margin: 1mm 1.5mm;
+    border: 1px solid #1e4d82;
+}
+
+.cover-meta {
+    margin-top: 28mm;
+    font-size: 7.5pt;
+    color: #6e7681;
+    border-top: 1px solid #21262d;
+    padding-top: 6mm;
+}
+
+/* Bottom accent bar */
+.cover-bottombar {
+    width: 100%;
+    height: 8mm;
+    background: #1c2128;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+}
+
+/* ══════════════════════════════════════════════════════
+   SECTION-HEADER BANNER  (used on body pages)
+   ══════════════════════════════════════════════════════ */
+.section-banner {
+    background: var(--navy);
+    color: #e6edf3;
+    padding: 4mm 6mm;
+    border-radius: 2mm;
+    margin-bottom: 6mm;
+    page-break-inside: avoid;
+}
+
+.section-banner-title {
+    font-size: 13pt;
+    font-weight: 700;
+    color: #e6edf3;
+    line-height: 1.1;
+}
+
+.section-banner-sub {
+    font-size: 7pt;
+    color: #8b949e;
+    margin-top: 1mm;
+    letter-spacing: 0.04em;
+}
+
+/* ══════════════════════════════════════════════════════
+   EXECUTIVE SUMMARY — STAT CARDS
+   ══════════════════════════════════════════════════════ */
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 3mm;
+    margin-bottom: 7mm;
+}
+
+.stat-card {
+    background: #ffffff;
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--primary);
+    border-radius: 2mm;
+    padding: 3.5mm 2.5mm;
+    text-align: center;
+    page-break-inside: avoid;
+}
+
+.stat-value {
+    font-size: 20pt;
+    font-weight: 700;
+    color: #1a4fa3;
+    line-height: 1;
+    display: block;
+    margin-bottom: 1.5mm;
+}
+.stat-value.danger  { color: #c0392b; }
+.stat-value.success { color: #1a7f37; }
+.stat-value.warning { color: #9a6700; }
+
+.stat-label {
+    font-size: 5.5pt;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    display: block;
+}
+
+/* ══════════════════════════════════════════════════════
+   ADVERSARIES TABLE
+   ══════════════════════════════════════════════════════ */
+.actor-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 8pt;
+    table-layout: fixed;
+}
+
+.actor-table th {
+    background: var(--navy-3);
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-size: 6pt;
+    font-weight: 600;
+    padding: 2.5mm 3mm;
+    text-align: left;
+    border: 1px solid var(--navy-2);
+}
+
+.actor-table td {
+    padding: 2.5mm 3mm;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    color: var(--text-2);
+    word-break: break-word;
+}
+
+.actor-table tbody tr:nth-child(even) td { background: var(--row-alt); }
+.actor-table tr:last-child td { border-bottom: none; }
+
+.actor-name { font-weight: 700; color: var(--text); }
+
+.source-pill {
+    display: inline-block;
+    background: #e8f1ff;
+    color: #1a4fa3;
+    font-size: 6pt;
+    font-weight: 600;
+    padding: 0.5mm 2mm;
+    border-radius: 2mm;
+    margin: 0.3mm;
+    border: 1px solid #aac5f0;
+}
+
+/* ══════════════════════════════════════════════════════
+   MITRE MATRIX — CSS GRID  (dark background, landscape)
+   Numbers below assume A4 landscape with 8mm side margins:
+     content-width  = 297 - 8 - 8  = 281mm
+     content-height = 210 - 12 - 18 = 180mm (incl. header)
+   ══════════════════════════════════════════════════════ */
+.matrix-section {
+    page: matrix-page;
+    page-break-before: always;
+    background: var(--navy);
+    color: #c9d1d9;
+    /* Negative margin trick so dark bg fills to edge of @page content area */
+    margin: -12mm -8mm 0 -8mm;
+    padding: 12mm 8mm 0 8mm;
+}
+
+.matrix-section-inner {
+    /* Actual usable area within the section */
+}
+
+.matrix-heading {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #e6edf3;
+    border-bottom: 1px solid #3b434d;
+    padding-bottom: 2mm;
+    margin-bottom: 2mm;
+}
+
+.matrix-desc {
+    font-size: 6.5pt;
+    color: #8b949e;
+    margin-bottom: 4mm;
+}
+
+/* The grid — column count is set inline via Jinja2 */
+.matrix-container {
+    display: grid;
+    gap: 1.5mm;
+    width: 100%;
+}
+
+.tactic-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8mm;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.tactic-header {
+    background: #21262d;
+    color: #8b949e;
+    font-size: 5pt;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 1.5mm 0.8mm;
+    border-radius: 1.5mm;
+    text-align: center;
+    line-height: 1.2;
+    word-break: break-word;
+    min-height: 9mm;
+    border: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ttp-cell {
+    font-size: 4.5pt;
+    font-weight: 700;
+    padding: 0.8mm 0.5mm;
+    border-radius: 1mm;
+    border: 1px solid transparent;
+    text-align: center;
+    line-height: 1.1;
+    overflow: hidden;
+}
+
+.ttp-cell.status-gap     { background: var(--gap-cell-bg); border-color: var(--gap-cell-bd); color: var(--gap-cell-tx); }
+.ttp-cell.status-covered { background: var(--cov-cell-bg); border-color: var(--cov-cell-bd); color: var(--cov-cell-tx); }
+.ttp-cell.status-defense { background: var(--def-cell-bg); border-color: var(--def-cell-bd); color: var(--def-cell-tx); }
+
+.ttp-rule-indicator {
+    font-size: 3.5pt;
+    opacity: 0.75;
+    display: block;
+}
+
+/* Matrix legend */
+.matrix-legend {
+    display: flex;
+    gap: 8mm;
+    margin-top: 4mm;
+    font-size: 7pt;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 2mm;
+    color: #b1bac4;
+}
+
+.legend-swatch {
+    display: inline-block;
+    width: 12mm;
+    height: 4.5mm;
+    border-radius: 1mm;
+    border: 1px solid transparent;
+    flex-shrink: 0;
+}
+
+.legend-swatch.gap     { background: var(--gap-cell-bg); border-color: var(--gap-cell-bd); }
+.legend-swatch.covered { background: var(--cov-cell-bg); border-color: var(--cov-cell-bd); }
+.legend-swatch.defense { background: var(--def-cell-bg); border-color: var(--def-cell-bd); }
+
+/* ══════════════════════════════════════════════════════
+   DETAIL TABLES — fixed layout, portrait, white bg
+   Portrait content width = 210 - 14 - 14 = 182mm
+   Column widths designed to sum to ≤182mm:
+     ID:       18mm
+     Name:     50mm
+     Status:   22mm
+     Source:   22mm
+     Rules:    70mm   (remaining)
+   Total:     182mm  ✓
+   ══════════════════════════════════════════════════════ */
+.detail-section {
+    page-break-before: always;
+}
+
+.tactic-block {
+    page-break-inside: avoid;
+    margin-bottom: 6mm;
+}
+
+/* Tactic group header */
+.tactic-header-row {
+    display: flex;
+    align-items: center;
+    background: var(--navy-2);
+    border-left: 4px solid var(--primary);
+    border-radius: 2mm;
+    padding: 3mm 4mm;
+    margin-bottom: 2mm;
+    page-break-inside: avoid;
+    page-break-after: avoid;
+}
+
+.tactic-header-title {
+    font-size: 9.5pt;
+    font-weight: 700;
+    color: #e6edf3;
+}
+
+.tactic-header-stats {
+    margin-left: auto;
+    display: flex;
+    gap: 5mm;
+}
+
+.ths {
+    text-align: center;
+    min-width: 10mm;
+}
+.ths-val {
+    font-size: 10pt;
+    font-weight: 700;
+    display: block;
+    line-height: 1;
+}
+.ths-val.gap     { color: #ffa198; }
+.ths-val.covered { color: #7ee787; }
+.ths-val.defense { color: #79c0ff; }
+.ths-lab {
+    font-size: 5pt;
+    text-transform: uppercase;
+    color: #6e7681;
+    letter-spacing: 0.06em;
+}
+
+/* Detail table */
+.detail-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 7.5pt;
+    table-layout: fixed;   /* ← CRITICAL: prevents overflow */
+}
+
+.detail-table col.col-id     { width: 18mm; }
+.detail-table col.col-name   { width: 50mm; }
+.detail-table col.col-status { width: 22mm; }
+.detail-table col.col-source { width: 22mm; }
+.detail-table col.col-rules  { width: 70mm; }
+
+.detail-table th {
+    background: #f6f8fa;
+    color: var(--text-3);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    font-size: 5.5pt;
+    font-weight: 700;
+    padding: 2mm 3mm;
+    text-align: left;
+    border-top: 1px solid var(--border);
+    border-bottom: 2px solid #d0d7de;
+}
+
+.detail-table td {
+    padding: 2mm 3mm;
+    border-bottom: 1px solid #eaecef;
+    vertical-align: top;
+    color: var(--text-2);
+    line-height: 1.5;
+    word-break: break-word;   /* ← prevents content escaping fixed column */
+    overflow-wrap: break-word;
+}
+
+.detail-table tbody tr:nth-child(even) td { background: var(--row-alt); }
+.detail-table tr:last-child td { border-bottom: none; }
+
+/* Cell content helpers */
+.tech-id {
+    font-family: var(--ff-mono);
+    font-size: 7pt;
+    font-weight: 700;
+    color: var(--primary);
+    white-space: nowrap;
+}
+
+.tech-name {
+    font-weight: 600;
+    color: var(--text);
+    font-size: 7.5pt;
+}
+
+.src-label {
+    font-size: 6.5pt;
+    color: var(--text-3);
+}
+
+/* Status badge (light, for white background) */
+.status-badge {
+    display: inline-block;
+    font-size: 6pt;
+    font-weight: 700;
+    padding: 0.8mm 2.5mm;
+    border-radius: 10mm;
+    border: 1px solid transparent;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.status-badge.gap     { background: var(--gap-bg); border-color: var(--gap-bd); color: var(--gap-tx); }
+.status-badge.covered { background: var(--cov-bg); border-color: var(--cov-bd); color: var(--cov-tx); }
+.status-badge.defense { background: var(--def-bg); border-color: var(--def-bd); color: var(--def-tx); }
+
+/* Rules column */
+.rule-item {
+    font-size: 6.5pt;
+    color: var(--text-2);
+    padding-left: 3mm;
+    position: relative;
+    line-height: 1.5;
+    word-break: break-word;
+}
+
+.rule-item::before {
+    content: "›";
+    position: absolute;
+    left: 0;
+    color: var(--primary);
+    font-weight: 700;
+}
+
+.no-rules {
+    color: var(--text-3);
+    font-style: italic;
+    font-size: 6.5pt;
+}
+
+/* ══════════════════════════════════════════════════════
+   REPORT FOOTER NOTE
+   ══════════════════════════════════════════════════════ */
+.report-footer {
+    margin-top: 10mm;
+    padding-top: 4mm;
+    border-top: 1px solid var(--border);
+    font-size: 6.5pt;
+    color: var(--text-3);
+    text-align: center;
+}
+
+/* ══════════════════════════════════════════════════════
+   UTILITY
+   ══════════════════════════════════════════════════════ */
+.avoid-break { page-break-inside: avoid; }
+.pb-before   { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════════════════
+     COVER PAGE
+     ══════════════════════════════════════════════════════ -->
+<div class="cover">
+    <div class="cover-topbar"></div>
+    <div class="cover-body">
+        <span class="cover-logo">TIDE</span>
+        <div class="cover-tagline">Threat Intelligence Detection Engineering</div>
+        <hr class="cover-rule"/>
+        <div class="cover-title">Threat Coverage Report</div>
+        <div class="cover-subtitle">MITRE ATT&amp;CK Detection Coverage Analysis</div>
+        <div class="cover-actors">
+            {% for actor in selected_actors %}
+            <span class="cover-actor-pill">{{ actor }}</span>
+            {% endfor %}
+        </div>
+        <div class="cover-meta">
+            Generated: {{ generated_at }}
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 1 — EXECUTIVE SUMMARY
+     ══════════════════════════════════════════════════════ -->
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">Executive Summary</div>
+    <div class="section-banner-sub">Detection coverage analysis for selected adversary profiles</div>
+</div>
+
+<!-- Six top-line metrics -->
+<div class="summary-grid avoid-break">
+    <div class="stat-card">
+        <span class="stat-value">{{ selected_actors | length }}</span>
+        <span class="stat-label">Actors Analysed</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ total_ttps }}</span>
+        <span class="stat-label">Adversary TTPs</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if coverage_pct >= 80 %}success{% elif coverage_pct >= 50 %}warning{% else %}danger{% endif %}">{{ coverage_pct }}%</span>
+        <span class="stat-label">Detection Coverage</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value success">{{ covered_count }}</span>
+        <span class="stat-label">Covered TTPs</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if gap_count == 0 %}success{% elif gap_count < 10 %}warning{% else %}danger{% endif %}">{{ gap_count }}</span>
+        <span class="stat-label">Critical Gaps</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value">{{ total_elastic_rules }}</span>
+        <span class="stat-label">Elastic Rules</span>
+    </div>
+</div>
+
+<!-- Adversaries detail -->
+<div style="font-size:8pt; font-weight:700; color:var(--text); border-bottom:1px solid var(--border); padding-bottom:2mm; margin-bottom:3mm;">
+    Selected Adversaries
+</div>
+
+<table class="actor-table avoid-break">
+    <colgroup>
+        <col style="width:30%"/>
+        <col style="width:12%"/>
+        <col style="width:8%"/>
+        <col style="width:16%"/>
+        <col/>
+    </colgroup>
+    <thead>
+        <tr>
+            <th>Actor</th>
+            <th>Origin</th>
+            <th style="text-align:center">TTPs</th>
+            <th>Intel Sources</th>
+            <th>Aliases</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for actor in actor_details %}
+        <tr>
+            <td><span class="actor-name">{{ actor.name }}</span></td>
+            <td>{{ actor.origin }}</td>
+            <td style="text-align:center; font-weight:700; color:#1a4fa3;">{{ actor.ttp_count }}</td>
+            <td>
+                {% for src in actor.sources %}
+                <span class="source-pill">{{ src }}</span>
+                {% else %}
+                <span class="source-pill">MITRE</span>
+                {% endfor %}
+            </td>
+            <td style="font-size:6.5pt; color:var(--text-3);">{{ actor.aliases or "—" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 2 — MITRE ATT&CK MATRIX  (dark landscape page)
+     ══════════════════════════════════════════════════════ -->
+<div class="matrix-section">
+    <div class="matrix-section-inner">
+        <div class="matrix-heading">MITRE ATT&amp;CK Coverage Matrix</div>
+        <p class="matrix-desc">
+            Each cell is a MITRE ATT&amp;CK technique used by at least one selected adversary.
+            Colour indicates detection status across enabled Elastic rules.
+        </p>
+
+        <!-- CSS Grid — column count driven dynamically by number of active tactics -->
+        <div class="matrix-container"
+             style="grid-template-columns: repeat({{ tactics | length }}, 1fr);">
+            {% for tactic in tactics %}
+            <div class="tactic-column">
+                <div class="tactic-header">{{ tactic }}</div>
+                {% for cell in matrix[tactic] | sort(attribute='id') %}
+                <div class="ttp-cell status-{{ cell.status }}">
+                    {{ cell.id }}
+                    {% if cell.rule_count %}
+                    <span class="ttp-rule-indicator">▸{{ cell.rule_count }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Legend -->
+        <div class="matrix-legend">
+            <div class="legend-item"><span class="legend-swatch gap"></span> GAP — No detection</div>
+            <div class="legend-item"><span class="legend-swatch covered"></span> COVERED — Rule exists</div>
+            {% if show_defense %}
+            <div class="legend-item"><span class="legend-swatch defense"></span> DEFENSE IN DEPTH</div>
+            {% endif %}
+            <div class="legend-item" style="margin-left:auto; color:#6e7681;">▸N = number of rules</div>
+        </div>
+    </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 3 — DETAILED TABLES BY TACTIC
+     ══════════════════════════════════════════════════════ -->
+<div class="detail-section pb-before">
+
+    <div class="section-banner avoid-break">
+        <div class="section-banner-title">Detailed Coverage by Tactic</div>
+        <div class="section-banner-sub">
+            Source = MITRE framework (Enterprise / ICS) or OpenCTI.
+            Rules = all enabled Elastic detection rules providing coverage.
+        </div>
+    </div>
+
+    {% for tactic in tactics %}
+    {% set cells = matrix[tactic] %}
+    {% if cells %}
+    {% set gap_n = cells | selectattr('status','equalto','gap') | list | length %}
+    {% set cov_n = cells | selectattr('status','equalto','covered') | list | length %}
+    {% set def_n = cells | selectattr('status','equalto','defense') | list | length %}
+
+    <div class="tactic-block">
+        <!-- Tactic header row -->
+        <div class="tactic-header-row">
+            <div class="tactic-header-title">{{ tactic }}</div>
+            <div class="tactic-header-stats">
+                {% if gap_n %}
+                <div class="ths">
+                    <span class="ths-val gap">{{ gap_n }}</span>
+                    <span class="ths-lab">Gap</span>
+                </div>
+                {% endif %}
+                {% if cov_n %}
+                <div class="ths">
+                    <span class="ths-val covered">{{ cov_n }}</span>
+                    <span class="ths-lab">Covered</span>
+                </div>
+                {% endif %}
+                {% if show_defense and def_n %}
+                <div class="ths">
+                    <span class="ths-val defense">{{ def_n }}</span>
+                    <span class="ths-lab">Defense</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <table class="detail-table">
+            <colgroup>
+                <col class="col-id"/>
+                <col class="col-name"/>
+                <col class="col-status"/>
+                <col class="col-source"/>
+                <col class="col-rules"/>
+            </colgroup>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Technique</th>
+                    <th>Status</th>
+                    <th>Source</th>
+                    <th>Elastic Detection Rules</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for cell in cells | sort(attribute='id') %}
+                <tr>
+                    <td><span class="tech-id">{{ cell.id }}</span></td>
+                    <td><span class="tech-name">{{ cell.name }}</span></td>
+                    <td>
+                        <span class="status-badge {{ cell.status }}">
+                            {%- if cell.status == 'gap' -%}GAP
+                            {%- elif cell.status == 'covered' -%}COVERED
+                            {%- else -%}DEFENSE{%- endif -%}
+                        </span>
+                    </td>
+                    <td><span class="src-label">{{ cell.source }}</span></td>
+                    <td>
+                        {% if cell.rule_names %}
+                        {% for rule in cell.rule_names %}
+                        <div class="rule-item">{{ rule }}</div>
+                        {% endfor %}
+                        {% else %}
+                        <span class="no-rules">No coverage</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+
+    <div class="report-footer">
+        Report generated by TIDE — Threat Intelligence Detection Engineering
+        &nbsp;|&nbsp; {{ generated_at }}
+        &nbsp;|&nbsp; CONFIDENTIAL — INTERNAL USE ONLY
+    </div>
+</div>
+
+</body>
+</html>
