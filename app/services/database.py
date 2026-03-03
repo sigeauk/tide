@@ -17,7 +17,7 @@ from threading import Lock
 
 from app.config import get_settings
 from app.models.rules import DetectionRule, RuleHealthMetrics, RuleFilters
-from app.models.threats import ThreatActor, MITRETechnique, ThreatLandscapeMetrics
+from app.models.threats import ThreatActor, ThreatLandscapeMetrics
 
 import logging
 

@@ -5,7 +5,6 @@ Sync service for TIDE - handles synchronization with Elastic and MITRE.
 import logging
 import os
 import sys
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 

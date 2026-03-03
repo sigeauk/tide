@@ -11,7 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     git \
     nano \
-    jq\
+    jq \
+    # WeasyPrint compile-time dependencies (Pango/Cairo headers + libffi)
+    libpango1.0-dev \
+    libcairo2-dev \
+    libgdk-pixbuf2.0-dev \
+    libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a Virtual Environment
@@ -34,6 +39,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     nano \
     jq \
+    # WeasyPrint runtime — Pango/Cairo rendering stack + fonts
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libcairo2 \
+    libgdk-pixbuf2.0-0 \
+    libffi8 \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma

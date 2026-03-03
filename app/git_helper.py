@@ -1,7 +1,6 @@
 import requests
 import yaml
 import pandas as pd
-import base64
 import os
 import uuid
 from log import log_info, log_error
