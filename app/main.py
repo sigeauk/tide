@@ -651,10 +651,11 @@ def create_app() -> FastAPI:
         """Heatmap page."""
         from app.services.database import get_database_service
         from app.models.threats import HeatmapData
-        
+        from app.services.report_generator import CLASSIFICATION_OPTIONS
+
         db = get_database_service()
         actors = db.get_threat_actors()
-        
+
         # Empty initial data
         empty_data = HeatmapData(
             tactics=[],
@@ -666,7 +667,7 @@ def create_app() -> FastAPI:
             defense_count=0,
             coverage_pct=0,
         )
-        
+
         return render_template(
             "pages/heatmap.html",
             request,
@@ -675,6 +676,7 @@ def create_app() -> FastAPI:
                 "active_page": "heatmap",
                 "actors": actors,
                 "data": empty_data,
+                "classification_options": CLASSIFICATION_OPTIONS,
             }
         )
     
