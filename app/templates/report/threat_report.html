@@ -318,7 +318,6 @@ html, body {
     border: 1px solid var(--border);
     vertical-align: top;
     color: var(--text-2);
-    word-break: break-word;
     word-wrap: break-word;
     overflow-wrap: break-word;
     hyphens: auto;
@@ -402,7 +401,6 @@ html, body {
     border: 1px solid var(--border);
     vertical-align: top;
     color: var(--text-2);
-    word-break: break-word;
     word-wrap: break-word;
     overflow-wrap: break-word;
     hyphens: auto;
@@ -499,7 +497,7 @@ html, body {
     border-bottom: 1px solid #3b434d;
     text-align: center;
     line-height: 1.2;
-    word-break: break-word;
+    overflow-wrap: break-word;
     min-height: 9mm;
     display: flex;
     align-items: flex-end;
@@ -620,7 +618,6 @@ html, body {
     vertical-align: top;
     color: var(--text-2);
     line-height: 1.4;
-    word-break: break-word;
     word-wrap: break-word;
     overflow-wrap: break-word;
     hyphens: auto;
@@ -652,7 +649,6 @@ html, body {
     padding-left: 3mm;
     position: relative;
     line-height: 1.4;
-    word-break: break-word;
     white-space: normal;
     overflow-wrap: break-word;
 }
@@ -678,11 +674,10 @@ ul.rule-list li.rule-item::before { content: none; }
     padding-left: 3mm;
     position: relative;
     line-height: 1.4;
-    word-break: break-word;
     white-space: normal;
     overflow-wrap: break-word;
 }
-.sigma-item::before { content: "σ"; position: absolute; left: 0; color: #9a6700; font-weight: 700; }
+.sigma-item::before { content: "s."; position: absolute; left: 0; color: #9a6700; font-weight: 700; }
 .sigma-filename { font-family: var(--ff-mono); font-size: 5.5pt; color: #6e7681; display: block; }
 
 /* ══════════════════════════════════════════════════════
@@ -850,7 +845,7 @@ ul.rule-list li.rule-item::before { content: none; }
 
 {% if sigma_opportunity_count %}
 <div class="quick-win-card avoid-break">
-    <div class="quick-win-icon">&#963;</div>
+    <div class="quick-win-icon">Sig</div>
     <div class="quick-win-body">
         <div class="quick-win-title">Quick Win — Sigma Rules Available to Close Gaps</div>
         <div><span class="quick-win-count">{{ sigma_opportunity_count }}</span></div>
@@ -910,7 +905,7 @@ ul.rule-list li.rule-item::before { content: none; }
 
     <div class="overlap-callout">
         <div class="overlap-callout-title">
-            &#9888; High ROI Priority — Top Adversary Overlap
+            High ROI Priority — Top Adversary Overlap
             <span class="roi-badge">{{ overlap_table | length }} technique{{ 's' if overlap_table | length != 1 else '' }}</span>
         </div>
         <div class="overlap-callout-desc">
@@ -998,7 +993,7 @@ ul.rule-list li.rule-item::before { content: none; }
             {% if show_defense %}
             <span class="legend-tile defense">DEFENSE IN DEPTH</span>
             {% endif %}
-            <span class="legend-rule-note">&#9654;N = number of Elastic rules</span>
+            <span class="legend-rule-note">#N = number of Elastic rules</span>
         </div>
     </div>
 
@@ -1011,7 +1006,7 @@ ul.rule-list li.rule-item::before { content: none; }
             <div class="ttp-cell status-{{ cell.status }}">
                 {{ cell.id }}
                 {% if cell.rule_count %}
-                <span class="ttp-rule-indicator">&#9654;{{ cell.rule_count }}</span>
+                <span class="ttp-rule-indicator">#{{ cell.rule_count }}</span>
                 {% endif %}
             </div>
             {% endfor %}
@@ -1038,7 +1033,7 @@ ul.rule-list li.rule-item::before { content: none; }
             {% if show_defense %}
             <span class="legend-tile defense">DEFENSE IN DEPTH</span>
             {% endif %}
-            <span class="legend-rule-note">&#9654;N = number of Elastic rules</span>
+            <span class="legend-rule-note">#N = number of Elastic rules</span>
         </div>
     </div>
 
@@ -1051,7 +1046,7 @@ ul.rule-list li.rule-item::before { content: none; }
             <div class="ttp-cell status-{{ cell.status }}">
                 {{ cell.id }}
                 {% if cell.rule_count %}
-                <span class="ttp-rule-indicator">&#9654;{{ cell.rule_count }}</span>
+                <span class="ttp-rule-indicator">#{{ cell.rule_count }}</span>
                 {% endif %}
             </div>
             {% endfor %}
@@ -1076,7 +1071,7 @@ ul.rule-list li.rule-item::before { content: none; }
             Source = MITRE framework (Enterprise / ICS) or OpenCTI.
             Rules = enabled Elastic detection rules providing coverage.
             {% if gap_count > 0 %}
-            Sigma = community Sigma rules available for GAP techniques (&#963;).
+            Sigma = community Sigma rules available for GAP techniques.
             {% endif %}
         </div>
     </div>
