@@ -51,6 +51,20 @@
             {% endfor %}
         </select>
     </div>
+
+    <div class="sigma-select-group">
+        <label title="Custom pipelines — click to toggle, applied in selection order">Custom Pipelines</label>
+        <div id="pipeline-multiselect" class="pipeline-multiselect">
+            {% for pl in pipeline_files %}
+            <div class="pipeline-option" data-value="{{ pl.filename }}" onclick="window._togglePipelineOption(this)">
+                <span class="pipeline-option-check">&#10003;</span>
+                <span class="pipeline-option-name">{{ pl.display }}</span>
+                <span class="pipeline-option-badge"></span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
 </div>
 
 <!-- Collapsible Rule Browser -->
@@ -155,6 +169,9 @@ level: medium"></textarea>
                 <input type="hidden" id="form-backend" name="backend" value="elasticsearch">
                 <input type="hidden" id="form-pipeline" name="pipeline" value="none">
                 <input type="hidden" id="form-format" name="output_format" value="kibana_ndjson">
+                <input type="hidden" id="form-index-pattern" name="index_pattern" value="">
+                <input type="hidden" id="form-custom-pipeline" name="custom_pipeline_yaml" value="">
+                <input type="hidden" id="form-pipeline-file" name="pipeline_file" value="">
             </form>
             <div id="validation-result"></div>
         </div>
@@ -210,11 +227,15 @@ level: medium"></textarea>
                 
                 <div class="filter-group">
                     <label>Space</label>
-                    <select name="space">
-                        <option value="staging">Staging</option>
-                        <option value="production">Production</option>
+                    <select id="deploy-space-select" name="space">
+                        {% for space in spaces %}
+                        <option value="{{ space }}" {% if space == 'staging' %}selected{% endif %}>{{ space | title }}</option>
+                        {% endfor %}
                     </select>
                 </div>
+
+                <input type="hidden" name="index_pattern" id="deploy-index-pattern">
+                <input type="hidden" name="pipeline_file" id="deploy-pipeline-file">
                 
                 <label class="checkbox-group">
                     <input type="checkbox" name="enabled" value="true">
@@ -352,13 +373,33 @@ window.initSigmaPage = function(retryCount = 0) {
     });
     
     console.log('[Sigma] CodeMirror initialized successfully');
-    
+
+    // Load saved index patterns + default space from Settings page
+    try {
+        var _savedIdxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
+        var _idxField = document.getElementById('form-index-pattern');
+        if (_idxField && _savedIdxs.length) {
+            _idxField.value = _savedIdxs.join(', ');
+        }
+    } catch (_e) {}
+    try {
+        var _savedSpace = localStorage.getItem('pref-sigma-default-space');
+        var _spaceSelect = document.getElementById('deploy-space-select');
+        if (_spaceSelect) {
+            _spaceSelect.value = _savedSpace || 'staging';
+        }
+    } catch (_e) {}
+
     // Auto-open if there's a technique filter
     {% if technique_filter %}
     const ruleBrowser = document.getElementById('rule-browser');
     if (ruleBrowser) ruleBrowser.classList.add('open');
     {% endif %}
     
+    // Refresh the Custom Pipeline dropdown from the API so edits on the
+    // Settings page are visible without a hard browser refresh.
+    refreshPipelineFileSelect();
+
     // Sync select values to hidden form fields
     const backendSelect = document.getElementById('backend-select');
     const formatSelect = document.getElementById('format-select');
@@ -395,8 +436,116 @@ window.initSigmaPage = function(retryCount = 0) {
             document.getElementById('form-pipeline').value = this.value;
         });
     }
+
+    // Pipeline multi-select: ordered selection array
+    window._pipelineSelection = [];  // ordered list of selected values
+
+    window._togglePipelineOption = function(el) {
+        var val = el.getAttribute('data-value');
+        var idx = window._pipelineSelection.indexOf(val);
+        if (idx === -1) {
+            window._pipelineSelection.push(val);
+            el.classList.add('selected');
+        } else {
+            window._pipelineSelection.splice(idx, 1);
+            el.classList.remove('selected');
+        }
+        // Update order badges on all selected items
+        window._pipelineSelection.forEach(function(v, i) {
+            var opt = document.querySelector('#pipeline-multiselect .pipeline-option[data-value="' + v + '"]');
+            if (opt) {
+                var badge = opt.querySelector('.pipeline-option-badge');
+                if (badge) badge.textContent = i + 1;
+            }
+        });
+        // Clear badge on deselected items
+        document.querySelectorAll('#pipeline-multiselect .pipeline-option:not(.selected) .pipeline-option-badge').forEach(function(b) {
+            b.textContent = '';
+        });
+        window._syncPipelineFiles();
+    };
+
+    // Helper: sync selection array to hidden form field
+    window._syncPipelineFiles = function() {
+        var combined = window._pipelineSelection.join(',');
+        var hidden = document.getElementById('form-pipeline-file');
+        if (hidden) hidden.value = combined;
+        return combined;
+    };
+
+    window._syncPipelineFiles();
+
+    // Re-sync all hidden fields just before every HTMX form submit
+    // so navigating away and back doesn't leave stale empty values
+    const convertForm = document.getElementById('convert-form');
+    if (convertForm) {
+        convertForm.addEventListener('htmx:configRequest', function() {
+            // Sync CodeMirror content to the textarea FIRST so yaml_content is always current.
+            var cm = window.sigmaYamlEditor;
+            var ta = document.getElementById('yaml-editor');
+            if (cm && ta) ta.value = cm.getValue();
+            if (window._syncPipelineFiles) window._syncPipelineFiles();
+            const ps = document.getElementById('pipeline-select');
+            if (ps) document.getElementById('form-pipeline').value = ps.value;
+            const bs = document.getElementById('backend-select');
+            if (bs) document.getElementById('form-backend').value = bs.value;
+            const fs = document.getElementById('format-select');
+            if (fs) document.getElementById('form-format').value = fs.value;
+            // When custom pipeline files are selected, they control the index.
+            // Clear the saved index_pattern so pipeline-derived indices are used.
+            if (window._pipelineSelection && window._pipelineSelection.length > 0) {
+                var iField = document.getElementById('form-index-pattern');
+                if (iField) iField.value = '';
+            }
+        });
+    }
+
+    // Sync deploy form fields just before deploy submit too
+    const deployForm = document.getElementById('deploy-form');
+    if (deployForm) {
+        deployForm.addEventListener('htmx:configRequest', function() {
+            var combined = window._syncPipelineFiles ? window._syncPipelineFiles() : '';
+            var dpf = document.getElementById('deploy-pipeline-file');
+            if (dpf) dpf.value = combined;
+            const rqs = document.getElementById('raw-query-store');
+            const dq = document.getElementById('deploy-query');
+            if (rqs && dq) dq.value = rqs.value;
+        });
+    }
     
     console.log('[Sigma] Sigma page initialized');
+};
+
+// Refresh the Custom Pipelines widget from the saved-pipelines API
+window.refreshPipelineFileSelect = function() {
+    var widget = document.getElementById('pipeline-multiselect');
+    if (!widget) return;
+    var prevSelected = (window._pipelineSelection || []).slice();
+    var bust = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now();
+    fetch('/api/sigma/saved-pipelines?_v=' + bust)
+        .then(function(r) { return r.json(); })
+        .then(function(pipelines) {
+            widget.innerHTML = '';
+            pipelines.forEach(function(pl) {
+                var row = document.createElement('div');
+                row.className = 'pipeline-option';
+                row.setAttribute('data-value', pl.filename);
+                row.setAttribute('onclick', 'window._togglePipelineOption(this)');
+                var ord = prevSelected.indexOf(pl.filename);
+                if (ord !== -1) row.classList.add('selected');
+                row.innerHTML =
+                    '<span class="pipeline-option-check">&#10003;</span>' +
+                    '<span class="pipeline-option-name">' + pl.display + '</span>' +
+                    '<span class="pipeline-option-badge">' + (ord !== -1 ? (ord + 1) : '') + '</span>';
+                widget.appendChild(row);
+            });
+            // Restore _pipelineSelection to only those still present
+            window._pipelineSelection = prevSelected.filter(function(v) {
+                return pipelines.some(function(p) { return p.filename === v; });
+            });
+            if (window._syncPipelineFiles) window._syncPipelineFiles();
+        })
+        .catch(function(e) { console.error('[Sigma] Failed to refresh pipeline list:', e); });
 };
 
 // Initialize immediately on page load
@@ -450,6 +599,86 @@ window.clearYamlEditor = function() {
         </div>
     `;
     document.getElementById('validation-result').innerHTML = '';
+};
+
+// Prepare deploy form before submit — syncs ALL fields from page state
+window.prepareDeployForm = function() {
+    // 1. YAML content from CodeMirror editor
+    const editor = window.sigmaYamlEditor;
+    if (editor) {
+        const deployYaml = document.getElementById('deploy-yaml');
+        if (deployYaml) deployYaml.value = editor.getValue();
+    }
+    // 2. Raw query from conversion result (stored by the convert partial)
+    const rawQueryStore = document.getElementById('raw-query-store');
+    const deployQuery = document.getElementById('deploy-query');
+    if (rawQueryStore && deployQuery) {
+        deployQuery.value = rawQueryStore.value;
+    }
+    // 3. Pipeline file selections (field + index)
+    var _combined = window._syncPipelineFiles ? window._syncPipelineFiles() : '';
+    var dpf = document.getElementById('deploy-pipeline-file');
+    if (dpf) dpf.value = _combined;
+    // 4. Index pattern from localStorage (only when no pipeline files selected —
+    //    pipeline files control their own indices via add_condition.)
+    if (!window._pipelineSelection || window._pipelineSelection.length === 0) {
+        try {
+            var idxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
+            var idxStr = idxs.join(', ');
+            var deployIdx = document.getElementById('deploy-index-pattern');
+            if (deployIdx) deployIdx.value = idxStr;
+            var formIdx = document.getElementById('form-index-pattern');
+            if (formIdx) formIdx.value = idxStr;
+        } catch (_e) {}
+    } else {
+        // Pipeline files are active — clear index so backend uses pipeline-derived indices
+        var deployIdx2 = document.getElementById('deploy-index-pattern');
+        if (deployIdx2) deployIdx2.value = '';
+        var formIdx2 = document.getElementById('form-index-pattern');
+        if (formIdx2) formIdx2.value = '';
+    }
+};
+
+// Upload custom Sigma pipeline YAML to backend for validation, store in hidden field
+window.uploadCustomPipeline = async function(inputEl) {
+    const file = inputEl.files[0];
+    if (!file) return;
+
+    const statusEl = document.getElementById('pipeline-upload-status');
+    statusEl.textContent = 'Uploading…';
+    statusEl.style.color = 'var(--text-secondary)';
+
+    const formData = new FormData();
+    formData.append('pipeline_file', file);
+
+    try {
+        const resp = await fetch('/api/sigma/upload-pipeline', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json();
+            throw new Error(err.detail || resp.statusText);
+        }
+
+        const data = await resp.json();
+        // Store YAML content in hidden form field
+        const hidden = document.getElementById('form-custom-pipeline');
+        if (hidden) hidden.value = data.content;
+
+        statusEl.textContent = `✓ ${data.filename} (${data.item_count} items)`;
+        statusEl.style.color = 'var(--color-success, #3fb950)';
+    } catch (e) {
+        statusEl.textContent = `✗ ${e.message}`;
+        statusEl.style.color = 'var(--color-danger, #f85149)';
+        // Clear stored pipeline on error
+        const hidden = document.getElementById('form-custom-pipeline');
+        if (hidden) hidden.value = '';
+    }
+
+    // Reset file input so the same file can be re-uploaded after clearing
+    inputEl.value = '';
 };
 </script>
 

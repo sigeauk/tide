@@ -2,13 +2,20 @@
 
 {% block title %}Settings - TIDE{% endblock %}
 {% from "macros/icons.html" import icon %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
+<script defer src="/static/js/vendor/codemirror.min.js"></script>
+<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
+{% endblock %}
+
 {% block content %}
 <div class="page-header">
     <h1 class="page-title-hero">Settings</h1>
     <p class="page-subtitle">Configure logging, integrations, and user preferences.</p>
 </div>
 
-<!-- Tab Navigation -->
 <div class="settings-tabs">
     <button class="settings-tab active" data-tab="logging" onclick="switchTab('logging')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -26,177 +33,130 @@
         </svg>
         Integrations
     </button>
-    <button class="settings-tab" data-tab="preferences" onclick="switchTab('preferences')">
+    <button class="settings-tab" data-tab="sigma" onclick="switchTab('sigma')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2"/><path d="M12 20v2"/>
-            <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
-            <path d="M2 12h2"/><path d="M20 12h2"/>
-            <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
         </svg>
-        Preferences
+        Sigma
     </button>
-
 </div>
 
-<!-- ═══ LOGGING TAB ═══ -->
 <div class="settings-panel active" id="tab-logging">
-<form id="settings-form" hx-post="/api/settings/save" hx-swap="none">
+    <form id="settings-form" hx-post="/api/settings/save" hx-swap="none">
+        <div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
+            <div class="preference-card">
+                <div class="preference-header">
+                    <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
+                        <polyline points="14 2 14 8 20 8"/>
+                        <line x1="16" x2="8" y1="13" y2="13"/>
+                        <line x1="16" x2="8" y1="17" y2="17"/>
+                    </svg>
+                    <h2 class="preference-title">Rule Logging</h2>
+                </div>
+                <div class="preference-body">
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">Enable Rule Logging</span>
+                            <span class="preference-desc">Export detection rule statistics as JSON lines daily for SIEM ingestion</span>
+                        </div>
+                        <label class="toggle-switch">
+                            <input type="checkbox" name="rule_log_enabled" id="rule_log_enabled"
+                                   {{ 'checked' if app_settings.get('rule_log_enabled', 'false') == 'true' else '' }}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">Host Log Path</span>
+                            <span class="preference-desc">Where your SIEM agent reads from (set via <code style="color:var(--color-primary);">RULE_LOG_PATH</code> in .env)</span>
+                        </div>
+                        <span style="white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-text-secondary);">{{ env.rule_log_host_path }}</span>
+                    </div>
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">Container Path</span>
+                            <span class="preference-desc">Internal Docker path mapped via <code style="color:var(--color-primary);">./data:/app/data</code></span>
+                        </div>
+                        <span style="white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-text-secondary);">/app/data/log/rules</span>
+                    </div>
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">Schedule (24h)</span>
+                            <span class="preference-desc">Time of day to export rule logs (HH:MM format)</span>
+                        </div>
+                        <input type="time" class="form-input" name="rule_log_schedule" id="rule_log_schedule"
+                               value="{{ app_settings.get('rule_log_schedule', '00:00') }}">
+                    </div>
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">Retention (days)</span>
+                            <span class="preference-desc">Log files older than this are automatically deleted</span>
+                        </div>
+                        <input type="number" class="form-input" name="rule_log_retention_days" id="rule_log_retention_days"
+                               value="{{ app_settings.get('rule_log_retention_days', '7') }}"
+                               min="1" max="365" style="width: 80px;">
+                    </div>
+                    <div class="preference-item">
+                        <div class="preference-info">
+                            <span class="preference-label">File Naming</span>
+                        </div>
+                        <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-primary);">YYYY-MM-DD-rules.log</span>
+                    </div>
+                </div>
+            </div>
 
-<div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
-
-    <!-- Rule Logging Config -->
-    <div class="preference-card">
-        <div class="preference-header">
-            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="16" x2="8" y1="13" y2="13"/>
-                <line x1="16" x2="8" y1="17" y2="17"/>
-            </svg>
-            <h2 class="preference-title">Rule Logging</h2>
-        </div>
-        
-        <div class="preference-body">
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Enable Rule Logging</span>
-                    <span class="preference-desc">Export detection rule statistics as JSON lines daily for SIEM ingestion</span>
+            <div class="preference-card">
+                <div class="preference-header">
+                    <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="16 18 22 12 16 6"/>
+                        <polyline points="8 6 2 12 8 18"/>
+                    </svg>
+                    <h2 class="preference-title">Log Format</h2>
                 </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" name="rule_log_enabled" id="rule_log_enabled"
-                           {{ 'checked' if app_settings.get('rule_log_enabled', 'false') == 'true' else '' }}>
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Host Log Path</span>
-                    <span class="preference-desc">Where your SIEM agent reads from (set via <code style="color:var(--color-primary);">RULE_LOG_PATH</code> in .env)</span>
-                </div>
-                <span style="white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-text-secondary);">{{ env.rule_log_host_path }}</span>
-            </div>
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Container Path</span>
-                    <span class="preference-desc">Internal Docker path mapped via <code style="color:var(--color-primary);">./data:/app/data</code></span>
-                </div>
-                <span style="white-space: nowrap; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-text-secondary);">/app/data/log/rules</span>
-            </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Schedule (24h)</span>
-                    <span class="preference-desc">Time of day to export rule logs (HH:MM format)</span>
-                </div>
-                <input type="time" class="form-input" name="rule_log_schedule" id="rule_log_schedule"
-                       value="{{ app_settings.get('rule_log_schedule', '00:00') }}">
-            </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Retention (days)</span>
-                    <span class="preference-desc">Log files older than this are automatically deleted</span>
-                </div>
-                <input type="number" class="form-input" name="rule_log_retention_days" id="rule_log_retention_days"
-                       value="{{ app_settings.get('rule_log_retention_days', '7') }}"
-                       min="1" max="365" style="width: 80px;">
-            </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">File Naming</span>
-                </div>
-                <span style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--color-primary);">YYYY-MM-DD-rules.log</span>
-            </div>
-        </div>
-    </div>
-
-    <!-- Log Format Preview -->
-    <div class="preference-card">
-        <div class="preference-header">
-            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="16 18 22 12 16 6"/>
-                <polyline points="8 6 2 12 8 18"/>
-            </svg>
-            <h2 class="preference-title">Log Format</h2>
-        </div>
-        
-        <div class="preference-body">
-            <div class="preference-info" style="margin-bottom: 0.75rem;">
-                <span class="preference-label">JSON Line Format</span>
-                <span class="preference-desc">Each rule is written as a single JSON line per day. Point your SIEM agent at the host log path to ingest.</span>
-            </div>
-            
-            <div class="code-preview"><code><span class="json-brace">{</span>
+                <div class="preference-body">
+                    <div class="preference-info" style="margin-bottom: 0.75rem;">
+                        <span class="preference-label">JSON Line Format</span>
+                        <span class="preference-desc">Each rule is written as a single JSON line per day.</span>
+                    </div>
+                    <div class="code-preview"><code><span class="json-brace">{</span>
   <span class="json-key">"date"</span><span class="json-colon">:</span> <span class="json-string">"2026-02-10T00:00:00Z"</span>,
   <span class="json-key">"rule_id"</span><span class="json-colon">:</span> <span class="json-string">"abc-123"</span>,
   <span class="json-key">"name"</span><span class="json-colon">:</span> <span class="json-string">"Example Rule"</span>,
-  <span class="json-key">"space"</span><span class="json-colon">:</span> <span class="json-string">"production"</span>,
-  <span class="json-key">"severity"</span><span class="json-colon">:</span> <span class="json-string">"high"</span>,
-  <span class="json-key">"author"</span><span class="json-colon">:</span> <span class="json-string">"Elastic"</span>,
-  <span class="json-key">"enabled"</span><span class="json-colon">:</span> <span class="json-bool">true</span>,
-  <span class="json-key">"score_mapping"</span><span class="json-colon">:</span> <span class="json-num">20</span>,
-  <span class="json-key">"score_search_time"</span><span class="json-colon">:</span> <span class="json-num">10</span>,
-  <span class="json-key">"score_field_type"</span><span class="json-colon">:</span> <span class="json-num">11</span>,
-  <span class="json-key">"score_language"</span><span class="json-colon">:</span> <span class="json-num">9</span>,
-  <span class="json-key">"quality_score"</span><span class="json-colon">:</span> <span class="json-num">50</span>,
-  <span class="json-key">"score_note"</span><span class="json-colon">:</span> <span class="json-num">20</span>,
-  <span class="json-key">"score_override"</span><span class="json-colon">:</span> <span class="json-num">5</span>,
-  <span class="json-key">"score_tactics"</span><span class="json-colon">:</span> <span class="json-num">3</span>,
-  <span class="json-key">"score_techniques"</span><span class="json-colon">:</span> <span class="json-num">7</span>,
-  <span class="json-key">"score_author"</span><span class="json-colon">:</span> <span class="json-num">5</span>,
-  <span class="json-key">"score_highlights"</span><span class="json-colon">:</span> <span class="json-num">10</span>,
-  <span class="json-key">"meta_score"</span><span class="json-colon">:</span> <span class="json-num">50</span>,
-  <span class="json-key">"score"</span><span class="json-colon">:</span> <span class="json-num">100</span>,
-  <span class="json-key">"mitre_ids"</span><span class="json-colon">:</span> <span class="json-brace">[</span><span class="json-string">"T1059.001"</span><span class="json-brace">]</span>,
-  <span class="json-key">"last_checked_on"</span><span class="json-colon">:</span> <span class="json-string">"2026-01-31T00:00:00Z"</span>,
-  <span class="json-key">"checked_by"</span><span class="json-colon">:</span> <span class="json-string">"analyst"</span>
+  <span class="json-key">"score"</span><span class="json-colon">:</span> <span class="json-num">100</span>
 <span class="json-brace">}</span></code></div>
+                </div>
+            </div>
         </div>
-    </div>
 
+        <div class="settings-actions">
+            <button type="submit" class="btn btn-primary">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                    <polyline points="17 21 17 13 7 13 7 21"/>
+                    <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                Save Settings
+            </button>
+            <button type="button" class="btn btn-secondary" hx-post="/api/settings/rule-log/export" hx-swap="none">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7 10 12 15 17 10"/>
+                    <line x1="12" x2="12" y1="15" y2="3"/>
+                </svg>
+                Export Now
+            </button>
+        </div>
+    </form>
 </div>
 
-<!-- Logging Action Bar -->
-<div class="settings-actions">
-    <button type="submit" class="btn btn-primary">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-            <polyline points="17 21 17 13 7 13 7 21"/>
-            <polyline points="7 3 7 8 15 8"/>
-        </svg>
-        Save Settings
-    </button>
-    
-    <button type="button" class="btn btn-secondary"
-            hx-post="/api/settings/rule-log/export"
-            hx-swap="none">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" x2="12" y1="15" y2="3"/>
-        </svg>
-        Export Now
-    </button>
-</div>
-
-</form>
-</div>
-
-<!-- ═══ INTEGRATIONS TAB ═══ -->
 <div class="settings-panel" id="tab-integrations">
-
-<div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
-
-    <!-- Connected Services -->
-    <div class="overview-section" style="margin-bottom: 0;">
-        <h2 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-            {{ icon('settings', '20') }} Connected Services
-        </h2>
-        
-        <div class="integrations-grid">
+    <div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="overview-section" style="margin-bottom: 0;">
+            <h2 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                {{ icon('settings', '20') }} Connected Services
+            </h2>
+            <div class="integrations-grid">
                 <div class="integration-row">
                     <div class="integration-info">
                         <span class="preference-label">Elasticsearch</span>
@@ -204,19 +164,6 @@
                     </div>
                     <span class="status-dot status-{{ 'active' if env.elastic_api_key else 'inactive' }}">{{ 'Connected' if env.elastic_api_key else 'No API Key' }}</span>
                 </div>
-                
-                {% set spaces = env.kibana_spaces.split(',') %}
-                {% for space_name in spaces %}
-                {% set space = space_name.strip() %}
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">Kibana ({{ space | capitalize }})</span>
-                        <span class="preference-desc">{{ env.elastic_url }}/s/{{ space }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if env.elastic_api_key else 'inactive' }}">{{ 'Connected' if env.elastic_api_key else 'No API Key' }}</span>
-                </div>
-                {% endfor %}
-                
                 <div class="integration-row">
                     <div class="integration-info">
                         <span class="preference-label">OpenCTI</span>
@@ -224,64 +171,13 @@
                     </div>
                     <span class="status-dot status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
                 </div>
-                
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">GitLab</span>
-                        <span class="preference-desc">{{ env.gitlab_url }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
-                </div>
-
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">Logging</span>
-                        <span class="preference-desc">Rule log export to SIEM</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'inactive' }}">{{ 'Enabled' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'Disabled' }}</span>
-                </div>
             </div>
-    </div>
-
-    <!-- Repositories -->
-    <div class="overview-section" style="margin-bottom: 0;">
-        <h2 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
-            {{ icon('github', '20') }} Repositories
-        </h2>
-        
-        <div class="integrations-grid">
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">MITRE Enterprise ATT&amp;CK</span>
-                        <span class="preference-desc">{{ env.mitre_source | truncate(60, True, '...') }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if repo_status.mitre_enterprise else 'inactive' }}">{{ 'Active' if repo_status.mitre_enterprise else 'Missing' }}</span>
-                </div>
-                
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">MITRE Mobile ATT&amp;CK</span>
-                        <span class="preference-desc">{{ env.mitre_mobile_source | truncate(60, True, '...') }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if repo_status.mitre_mobile else 'inactive' }}">{{ 'Active' if repo_status.mitre_mobile else 'Missing' }}</span>
-                </div>
-                
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">MITRE ICS ATT&amp;CK</span>
-                        <span class="preference-desc">{{ env.mitre_ics_source | truncate(60, True, '...') }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if repo_status.mitre_ics else 'inactive' }}">{{ 'Active' if repo_status.mitre_ics else 'Missing' }}</span>
-                </div>
-                
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">MITRE PRE-ATT&amp;CK</span>
-                        <span class="preference-desc">{{ env.mitre_pre_source | truncate(60, True, '...') }}</span>
-                    </div>
-                    <span class="status-dot status-{{ 'active' if repo_status.mitre_pre else 'inactive' }}">{{ 'Active' if repo_status.mitre_pre else 'Missing' }}</span>
-                </div>
-                
+        </div>
+        <div class="overview-section" style="margin-bottom: 0;">
+            <h2 style="font-size: 1.1rem; color: var(--color-primary); margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem;">
+                {{ icon('github', '20') }} Repositories
+            </h2>
+            <div class="integrations-grid">
                 <div class="integration-row">
                     <div class="integration-info">
                         <span class="preference-label">Sigma Rules</span>
@@ -289,152 +185,80 @@
                     </div>
                     <span class="status-dot status-{{ 'active' if repo_status.sigma else 'inactive' }}">{{ 'Cloned' if repo_status.sigma else 'Not Found' }}</span>
                 </div>
-                
-                <div class="integration-row">
-                    <div class="integration-info">
-                        <span class="preference-label">Elastic Detection Rules</span>
-                        <span class="preference-desc">{{ env.elastic_repo_url }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="settings-panel" id="tab-sigma">
+    <div class="preferences-grid">
+        <div class="preference-card" style="grid-column: 1 / -1; margin-top: 0;">
+            <div class="preference-header">
+                <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <line x1="8" x2="16" y1="13" y2="13"/><line x1="8" x2="16" y1="17" y2="17"/>
+                </svg>
+                <h2 class="preference-title">Custom Pipelines</h2>
+            </div>
+            <p class="preference-desc" style="margin:0 0 1rem; max-width:80ch;">
+                Manage Sigma <code style="color:var(--color-primary)">ProcessingPipeline</code> YAML files. These handle field-mapping and index scoping.
+                Files persist in <code style="color:var(--color-primary)">./data/sigma_pipelines/</code>.
+            </p>
+            
+            <div style="display:grid; grid-template-columns: 200px 1fr; gap:1rem; align-items:start;">
+                <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                    <div id="pipeline-list"
+                         style="display:flex; flex-direction:column; gap:0.15rem; min-height:140px; max-height:340px;
+                                border:1px solid var(--color-border); border-radius:var(--radius-sm);
+                                padding:0.4rem; overflow-y:auto; background:var(--color-bg-action);">
+                        <span style="color:var(--color-text-muted); font-size:0.78rem;">Loading…</span>
                     </div>
-                    <span class="status-dot status-{{ 'active' if repo_status.elastic_detection else 'inactive' }}">{{ 'Cloned' if repo_status.elastic_detection else 'Not Found' }}</span>
+                    <div style="display:flex; gap:0.35rem;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="pipelineNew()" style="flex:1;">
+                            + New Pipeline
+                        </button>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="loadPipelineList()" title="Refresh list" style="padding:0 0.6rem;">
+                            &#8635;
+                        </button>
+                    </div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.5rem;">
+                    <div style="display:flex; gap:0.5rem; align-items:center;">
+                        <input type="text" id="pipeline-name-input" class="form-input"
+                               placeholder="pipeline-name"
+                               style="flex:1; min-width:0; font-size:0.85rem;">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="pipelineSave()">Save</button>
+                        <button type="button" class="btn btn-danger btn-sm" id="pipeline-delete-btn"
+                                onclick="pipelineDelete()" style="display:none;">Delete</button>
+                    </div>
+                    <textarea id="pipeline-yaml-editor" style="display:block; width:100%; height:300px;"></textarea>
+                    <div id="pipeline-status" style="font-size:0.75rem; min-height:1.2em;"></div>
                 </div>
             </div>
-    </div>
-
-</div>
-
-<div class="preference-info" style="margin-top: 1rem;">
-    <span class="preference-desc">Integration settings are configured via environment variables in the <code style="color:var(--color-primary);">.env</code> file. Restart the container after changes.</span>
-</div>
-
-</div>
-
-<!-- ═══ PREFERENCES TAB ═══ -->
-<div class="settings-panel" id="tab-preferences">
-
-<div class="preferences-grid">
-
-    <!-- Appearance -->
-    <div class="preference-card">
-        <div class="preference-header">
-            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="4"/>
-                <path d="M12 2v2"/><path d="M12 20v2"/>
-                <path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/>
-                <path d="M2 12h2"/><path d="M20 12h2"/>
-                <path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>
-            </svg>
-            <h2 class="preference-title">Appearance</h2>
         </div>
-        
-        <div class="preference-body">
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Theme</span>
-                    <span class="preference-desc">Choose between light and dark mode</span>
-                </div>
-                <div class="theme-toggle-group">
-                    <button type="button" class="theme-btn" id="theme-dark" onclick="setTheme('dark')">
-                        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-                        Dark
-                    </button>
-                    <button type="button" class="theme-btn" id="theme-light" onclick="setTheme('light')">
-                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-                        Light
-                    </button>
-                </div>
+
+        <div class="preference-card" style="grid-column: 1 / -1; margin-top: 1rem; background: var(--color-bg-alt);">
+            <div class="preference-header">
+                {{ icon('book', '18') }}
+                <h2 class="preference-title" style="font-size: 1rem;">Sigma Pipeline Guide</h2>
             </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Brand Color</span>
-                    <span class="preference-desc">Customize the primary accent hue (0-360)</span>
-                </div>
-                <div class="hue-picker">
-                    <input type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" oninput="previewHue(this.value)">
-                    <span class="hue-value" id="hue-value">240</span>
+            <div class="preference-body" style="font-size: 0.85rem; line-height: 1.5; color: var(--color-text-muted);">
+                <p style="margin-bottom: 0.75rem;">
+                    A <strong>Processing Pipeline</strong> transforms generic Sigma rules into backend-specific queries (e.g., Elasticsearch DSL). It consists of three primary components:
+                </p>
+                <ul style="padding-left: 1.25rem; margin-bottom: 1rem;">
+                    <li><strong>Identifer & Priority:</strong> Every pipeline needs a unique <code>name</code>. The <code>priority</code> determines the order in which multiple pipelines are applied.</li>
+                    <li><strong>Field Mapping:</strong> Use the <code>field_name_mapping</code> transformation to translate Sigma's standard field names (like <code>Image</code>) to your environment's schema (like <code>process.executable</code>).</li>
+                    <li><strong>Index Scoping:</strong> Use <code>add_condition</code> to automatically append index constraints (e.g., <code>index: logs-*</code>) to every rule converted using this pipeline.</li>
+                </ul>
+                <div style="background: var(--color-bg-action); padding: 0.75rem; border-radius: 4px; border-left: 3px solid var(--color-primary);">
+                    <strong>Pro Tip:</strong> You can select these pipelines directly from the <strong>Sigma Converter</strong> page via the "Custom Pipeline" dropdown to apply your mappings on-the-fly.
                 </div>
             </div>
         </div>
     </div>
-
-    <!-- Notifications -->
-    <div class="preference-card">
-        <div class="preference-header">
-            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
-                <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
-            </svg>
-            <h2 class="preference-title">Notifications</h2>
-        </div>
-        
-        <div class="preference-body">
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Sync Alerts</span>
-                    <span class="preference-desc">Show toast notifications on sync completion</span>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="notify-sync" checked onchange="savePref('notify-sync', this.checked)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Validation Reminders</span>
-                    <span class="preference-desc">Alert when rules need revalidation</span>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="notify-validation" checked onchange="savePref('notify-validation', this.checked)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-        </div>
-    </div>
-    
-    <!-- Display -->
-    <div class="preference-card">
-        <div class="preference-header">
-            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect width="7" height="9" x="3" y="3" rx="1"/>
-                <rect width="7" height="5" x="14" y="3" rx="1"/>
-                <rect width="7" height="9" x="14" y="12" rx="1"/>
-                <rect width="7" height="5" x="3" y="16" rx="1"/>
-            </svg>
-            <h2 class="preference-title">Display</h2>
-        </div>
-        
-        <div class="preference-body">
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Cards Per Row</span>
-                    <span class="preference-desc">Default grid layout for rule cards</span>
-                </div>
-                <select class="form-select" id="cards-per-row" onchange="savePref('cards-per-row', this.value)">
-                    <option value="2">2 Cards</option>
-                    <option value="3" selected>3 Cards</option>
-                    <option value="4">4 Cards</option>
-                </select>
-            </div>
-            
-            <div class="preference-item">
-                <div class="preference-info">
-                    <span class="preference-label">Default Page Size</span>
-                    <span class="preference-desc">Items shown per page</span>
-                </div>
-                <select class="form-select" id="page-size" onchange="savePref('page-size', this.value)">
-                    <option value="12">12</option>
-                    <option value="24" selected>24</option>
-                    <option value="48">48</option>
-                </select>
-            </div>
-        </div>
-    </div>
-
 </div>
-</div>
-
-
 
 <script>
 // Tab switching
@@ -444,72 +268,119 @@ window.switchTab = function(tabName) {
     document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('tab-' + tabName).classList.add('active');
     localStorage.setItem('settings-active-tab', tabName);
-};
-
-// Theme management
-window.setTheme = function(theme) {
-    if (theme === 'light') {
-        document.body.classList.add('light');
-    } else {
-        document.body.classList.remove('light');
+    if (tabName === 'sigma') {
+        initPipelineEditor();
+        setTimeout(function() { if (_pipelineCM) _pipelineCM.refresh(); }, 80);
     }
-    localStorage.setItem('theme', theme);
-    updateThemeButtons(theme);
 };
 
-function updateThemeButtons(theme) {
-    var darkBtn = document.getElementById('theme-dark');
-    var lightBtn = document.getElementById('theme-light');
-    if (darkBtn) darkBtn.classList.toggle('active', theme === 'dark');
-    if (lightBtn) lightBtn.classList.toggle('active', theme === 'light');
+// Pipeline Manager
+var _pipelineCurrentFile = null;
+var _pipelineCM = null;
+var _pendingPipelineContent = null;
+
+function pl_status(msg, isError) {
+    var el = document.getElementById('pipeline-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = isError ? 'var(--color-danger, #f85149)' : 'var(--color-success, #3fb950)';
 }
 
-// Hue preview
-window.previewHue = function(value) {
-    var el = document.getElementById('hue-value');
-    if (el) el.textContent = value;
-    document.documentElement.style.setProperty('--brand-hue', value);
-    localStorage.setItem('brand-hue', value);
+function loadPipelineList() {
+    var bust = Date.now();
+    fetch('/api/sigma/saved-pipelines?_v=' + bust)
+        .then(r => r.json())
+        .then(pipelines => {
+            var list = document.getElementById('pipeline-list');
+            if (!list) return;
+            if (!pipelines.length) {
+                list.innerHTML = '<span style="color:var(--color-text-muted);font-size:0.78rem;">No pipelines saved.</span>';
+                return;
+            }
+            list.innerHTML = pipelines.map(pl => {
+                var active = _pipelineCurrentFile === pl.filename;
+                return `<button type="button" class="pipeline-list-item" 
+                        onclick="pipelineLoad('${pl.filename}')"
+                        style="width:100%;text-align:left;background:${active ? 'var(--color-bg-action-hover)' : 'none'};
+                        font-weight:${active ? '600' : 'normal'}; border:none; padding:0.3rem 0.5rem; 
+                        border-radius:var(--radius-sm); cursor:pointer; color:var(--color-text);
+                        font-size:0.82rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+                        ${pl.display}</button>`;
+            }).join('');
+        });
+}
+
+function pipelineLoad(filename) {
+    fetch('/api/sigma/saved-pipelines/' + encodeURIComponent(filename))
+        .then(r => r.json())
+        .then(data => {
+            _pipelineCurrentFile = data.filename;
+            document.getElementById('pipeline-name-input').value = data.filename.replace(/\.ya?ml$/, '');
+            if (_pipelineCM) {
+                _pipelineCM.setValue(data.content);
+                setTimeout(() => _pipelineCM.refresh(), 80);
+            } else {
+                _pendingPipelineContent = data.content;
+                initPipelineEditor();
+            }
+            document.getElementById('pipeline-delete-btn').style.display = '';
+            loadPipelineList();
+            pl_status('');
+        });
+}
+
+window.pipelineNew = function() {
+    _pipelineCurrentFile = null;
+    document.getElementById('pipeline-name-input').value = '';
+    var stub = 'name: my-custom-pipeline\npriority: 20\n\ntransformations:\n  - id: map_fields\n    type: field_name_mapping\n    mapping:\n      Image: process.executable\n';
+    if (_pipelineCM) { _pipelineCM.setValue(stub); }
+    document.getElementById('pipeline-delete-btn').style.display = 'none';
+    pl_status('');
 };
 
-// Save preference
-window.savePref = function(key, value) {
-    localStorage.setItem('pref-' + key, value);
-    showToast('Preference saved', 'success');
+window.pipelineSave = function() {
+    var name = document.getElementById('pipeline-name-input').value.trim();
+    if (!name) { pl_status('Enter a name.', true); return; }
+    var content = _pipelineCM ? _pipelineCM.getValue() : '';
+    var fd = new FormData();
+    fd.append('name', name);
+    fd.append('content', content);
+    fetch('/api/sigma/saved-pipelines', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(data => {
+            _pipelineCurrentFile = data.filename;
+            document.getElementById('pipeline-delete-btn').style.display = '';
+            pl_status('Saved: ' + data.filename);
+            loadPipelineList();
+        });
 };
 
-// Initialize settings page
-(function initSettingsPage() {
-    var urlParams = new URLSearchParams(window.location.search);
-    var tabFromUrl = urlParams.get('tab');
-    var savedTab = tabFromUrl || localStorage.getItem('settings-active-tab');
-    // Validate the saved tab still exists in the DOM
-    if (savedTab && document.getElementById('tab-' + savedTab)) {
-        switchTab(savedTab);
-    }
+window.pipelineDelete = function() {
+    if (!_pipelineCurrentFile || !confirm('Delete this pipeline?')) return;
+    fetch('/api/sigma/saved-pipelines/' + encodeURIComponent(_pipelineCurrentFile), { method: 'DELETE' })
+        .then(() => { pipelineNew(); loadPipelineList(); });
+};
 
-    var theme = localStorage.getItem('theme') || 'dark';
-    updateThemeButtons(theme);
-
-    var hueSlider = document.getElementById('hue-slider');
-    if (hueSlider) {
-        var hue = localStorage.getItem('brand-hue') || '240';
-        hueSlider.value = hue;
-        var hueValue = document.getElementById('hue-value');
-        if (hueValue) hueValue.textContent = hue;
-    }
-
-    ['notify-sync', 'notify-validation'].forEach(function(key) {
-        var val = localStorage.getItem('pref-' + key);
-        var el = document.getElementById(key);
-        if (val !== null && el) el.checked = val === 'true';
+function initPipelineEditor() {
+    if (typeof CodeMirror === 'undefined') { setTimeout(initPipelineEditor, 300); return; }
+    var el = document.getElementById('pipeline-yaml-editor');
+    if (!el || el._cmInited) return;
+    el._cmInited = true;
+    _pipelineCM = CodeMirror.fromTextArea(el, {
+        mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2
     });
+    _pipelineCM.setSize(null, 300);
+    if (_pendingPipelineContent) {
+        _pipelineCM.setValue(_pendingPipelineContent);
+        _pendingPipelineContent = null;
+    }
+}
 
-    ['cards-per-row', 'page-size'].forEach(function(key) {
-        var val = localStorage.getItem('pref-' + key);
-        var el = document.getElementById(key);
-        if (val && el) el.value = val;
-    });
+// Global Init
+(function init() {
+    var savedTab = localStorage.getItem('settings-active-tab') || 'logging';
+    switchTab(savedTab);
+    loadPipelineList();
 })();
 </script>
 {% endblock %}

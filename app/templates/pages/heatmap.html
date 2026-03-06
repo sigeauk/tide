@@ -79,6 +79,33 @@
         </label>
     </div>
 
+    <!-- Source Filter -->
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <div class="actor-select-container" id="source-select-container">
+            <div class="actor-select-trigger" onclick="toggleSourceDropdown()">
+                <span class="actor-select-text" id="source-select-text">All sources</span>
+                <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m6 9 6 6 6-6"/>
+                </svg>
+            </div>
+            <div class="actor-select-dropdown" id="source-dropdown">
+                <div class="actor-checkbox-list" id="source-checkbox-list">
+                    {% for src in sources %}
+                    <label class="actor-checkbox-item" data-name="{{ src | lower }}">
+                        <input
+                            type="checkbox"
+                            name="source_filter"
+                            value="{{ src }}"
+                            onchange="updateSourceSelection(); triggerHeatmapUpdate();">
+                        <span class="actor-checkbox-label">{{ src }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Export -->
     <div class="filter-group" style="align-self: flex-end;">
         <label class="form-label">Export Report</label>
@@ -106,13 +133,19 @@ function toggleActorDropdown() {
     dropdown.style.display = isOpen ? 'flex' : 'none';
 }
 
-// Close dropdown when clicking outside
+// Close dropdowns when clicking outside
 document.addEventListener('click', function(e) {
-    const container = document.getElementById('actor-select-container');
-    const dropdown = document.getElementById('actor-dropdown');
-    if (container && !container.contains(e.target)) {
-        container.classList.remove('open');
-        if (dropdown) dropdown.style.display = 'none';
+    const actorContainer = document.getElementById('actor-select-container');
+    const actorDropdown = document.getElementById('actor-dropdown');
+    if (actorContainer && !actorContainer.contains(e.target)) {
+        actorContainer.classList.remove('open');
+        if (actorDropdown) actorDropdown.style.display = 'none';
+    }
+    const sourceContainer = document.getElementById('source-select-container');
+    const sourceDropdown = document.getElementById('source-dropdown');
+    if (sourceContainer && !sourceContainer.contains(e.target)) {
+        sourceContainer.classList.remove('open');
+        if (sourceDropdown) sourceDropdown.style.display = 'none';
     }
 });
 
@@ -146,16 +179,40 @@ function updateActorSelection() {
 function triggerHeatmapUpdate() {
     const checked = document.querySelectorAll('input[name="actors"]:checked');
     const showDefense = document.getElementById('show-defense-checkbox').checked;
+    const sourceChecked = document.querySelectorAll('input[name="source_filter"]:checked');
     
     const actors = Array.from(checked).map(cb => cb.value);
     const params = new URLSearchParams();
     actors.forEach(a => params.append('actors', a));
     if (showDefense) params.append('show_defense', 'on');
+    sourceChecked.forEach(cb => params.append('source_filter', cb.value));
     
     htmx.ajax('GET', '/api/heatmap/matrix?' + params.toString(), {
         target: '#heatmap-container',
         swap: 'innerHTML'
     });
+}
+
+function toggleSourceDropdown() {
+    const container = document.getElementById('source-select-container');
+    const dropdown = document.getElementById('source-dropdown');
+    const isOpen = container.classList.toggle('open');
+    dropdown.style.display = isOpen ? 'flex' : 'none';
+}
+
+function updateSourceSelection() {
+    const checked = document.querySelectorAll('input[name="source_filter"]:checked');
+    const textEl = document.getElementById('source-select-text');
+    if (checked.length === 0) {
+        textEl.textContent = 'All sources';
+        textEl.classList.remove('has-selection');
+    } else if (checked.length === 1) {
+        textEl.textContent = checked[0].value;
+        textEl.classList.add('has-selection');
+    } else {
+        textEl.textContent = `${checked.length} sources`;
+        textEl.classList.add('has-selection');
+    }
 }
 
 // Filter techniques in the heatmap matrix by search query

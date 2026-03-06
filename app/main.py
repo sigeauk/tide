@@ -656,6 +656,33 @@ def create_app() -> FastAPI:
         db = get_database_service()
         actors = db.get_threat_actors()
 
+        # Derive distinct sources from loaded actors for the source filter
+        # Normalise raw DB values to human-friendly display names
+        _SOURCE_DISPLAY = {
+            "enterprise": "Enterprise",
+            "mitre:enterprise": "Enterprise",
+            "mitre-enterprise": "Enterprise",
+            "mobile": "Mobile",
+            "mitre:mobile": "Mobile",
+            "ics": "ICS",
+            "mitre:ics": "ICS",
+            "opencti": "OpenCTI",
+            "open-cti": "OpenCTI",
+            "octi": "OpenCTI",
+        }
+        # Build unique normalised names (preserving sort order, deduplicating)
+        _seen = set()
+        sources = []
+        for actor in actors:
+            for s in (actor.source or []):
+                if not s:
+                    continue
+                display = _SOURCE_DISPLAY.get(s.lower().strip(), s.title())
+                if display not in _seen:
+                    _seen.add(display)
+                    sources.append(display)
+        sources = sorted(sources)
+
         # Empty initial data
         empty_data = HeatmapData(
             tactics=[],
@@ -677,6 +704,7 @@ def create_app() -> FastAPI:
                 "actors": actors,
                 "data": empty_data,
                 "classification_options": CLASSIFICATION_OPTIONS,
+                "sources": sources,
             }
         )
     
@@ -784,6 +812,11 @@ def create_app() -> FastAPI:
         
         # Coverage data for MITRE pills (single DB connection)
         covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
+
+        # Dynamic env-driven dropdowns
+        spaces = sigma_mod.get_kibana_spaces()
+        indices = sigma_mod.get_elastic_indices()
+        pipeline_files = sigma_mod.list_saved_pipelines()
         
         return render_template(
             "pages/sigma.html",
@@ -801,6 +834,9 @@ def create_app() -> FastAPI:
                 "technique_filter": technique,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
+                "spaces": spaces,
+                "indices": indices,
+                "pipeline_files": pipeline_files,
             }
         )
     
@@ -850,6 +886,7 @@ def create_app() -> FastAPI:
     def settings_page(request: Request, user: CurrentUser, db: DbDep):
         """Settings page - configure integrations, logging, and system health."""
         import os
+        from app import sigma_helper as sigma_mod
         app_settings = db.get_all_settings()
         env_settings = get_settings()
 
@@ -872,6 +909,8 @@ def create_app() -> FastAPI:
                 "app_settings": app_settings,
                 "env": env_settings,
                 "repo_status": repo_status,
+                "sigma_indices": sigma_mod.get_elastic_indices(),
+                "sigma_spaces": sigma_mod.get_kibana_spaces(),
             }
         )
     

@@ -59,6 +59,7 @@ def get_heatmap_matrix(
     user: CurrentUser,
     actors: List[str] = Query(default=[]),
     show_defense: bool = Query(False),
+    source_filter: List[str] = Query(default=[], description="Filter actors by data source(s). Empty = all sources."),
 ):
     """
     Generate MITRE ATT&CK heatmap matrix for selected actors.
@@ -73,6 +74,33 @@ def get_heatmap_matrix(
     
     # Filter to selected actors
     selected_actors = [a for a in all_actors if a.name in actors]
+
+    # Apply source filter — only retain actors whose source list overlaps with the selected filters
+    # Both the filter values and the actor's raw sources are normalised before comparison
+    # so that e.g. "Enterprise" (display) matches DB values "enterprise" or "mitre:enterprise".
+    _SOURCE_NORM = {
+        "enterprise": "enterprise",
+        "mitre:enterprise": "enterprise",
+        "mitre-enterprise": "enterprise",
+        "mobile": "mobile",
+        "mitre:mobile": "mobile",
+        "ics": "ics",
+        "mitre:ics": "ics",
+        "opencti": "opencti",
+        "open-cti": "opencti",
+        "octi": "opencti",
+    }
+
+    def _norm(s: str) -> str:
+        key = s.strip().lower()
+        return _SOURCE_NORM.get(key, key)
+
+    if source_filter:
+        norm_filters = {_norm(s) for s in source_filter if s.strip()}
+        selected_actors = [
+            a for a in selected_actors
+            if norm_filters & {_norm(s) for s in (a.source or [])}
+        ]
     
     # Build relevant TTPs set and actor mapping
     relevant_ttps: Set[str] = set()

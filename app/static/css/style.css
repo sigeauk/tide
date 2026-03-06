@@ -2848,6 +2848,119 @@ body.light {
 .sigma-select:hover { border-color: var(--color-border-strong); }
 .sigma-select:focus { outline: none; border-color: var(--color-primary); }
 
+/* Custom pipeline multi-select widget */
+.pipeline-multiselect {
+  min-width: 220px;
+  max-width: 280px;
+  background: var(--color-bg-action);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  overflow-y: auto;
+  max-height: 9rem;
+}
+.pipeline-option {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text);
+}
+.pipeline-option:hover { background: var(--color-bg-hover, rgba(255,255,255,0.06)); }
+.pipeline-option.selected { background: var(--color-primary, #4a90d9); color: #fff; }
+.pipeline-option-check {
+  width: 1rem;
+  text-align: center;
+  opacity: 0;
+  font-size: 0.75rem;
+}
+.pipeline-option.selected .pipeline-option-check { opacity: 1; }
+.pipeline-option-name { flex: 1; }
+.pipeline-option-badge {
+  min-width: 1.1rem;
+  height: 1.1rem;
+  line-height: 1.1rem;
+  text-align: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+  background: rgba(0,0,0,0.25);
+  border-radius: 50%;
+}
+.pipeline-option:not(.selected) .pipeline-option-badge { display: none; }
+
+/* Settings toggle button in header row */
+.sigma-settings-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  align-self: flex-end;
+}
+
+/* Collapsible settings panel */
+.sigma-settings-panel {
+  overflow: hidden;
+  max-height: 0;
+  opacity: 0;
+  margin-bottom: 0;
+  transition: max-height 0.25s ease, opacity 0.2s ease, margin-bottom 0.2s ease;
+}
+.sigma-settings-panel.open {
+  max-height: 200px;
+  opacity: 1;
+  margin-bottom: 1.25rem;
+}
+
+.sigma-settings-inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: flex-end;
+  padding: 0.75rem 1rem;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+/* ── Sigma index chip (Settings page multi-select) ──────────────── */
+.sigma-index-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-elevated, var(--color-bg-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.sigma-index-chip input[type="checkbox"] {
+  display: none;
+}
+.sigma-index-chip svg {
+  opacity: 0;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+  stroke: var(--color-primary, #4f90f2);
+}
+.sigma-index-chip:hover {
+  border-color: var(--color-primary, #4f90f2);
+  color: var(--color-text-primary);
+}
+.sigma-index-chip:has(input:checked) {
+  background: color-mix(in srgb, var(--color-primary, #4f90f2) 15%, transparent);
+  border-color: var(--color-primary, #4f90f2);
+  color: var(--color-primary, #4f90f2);
+}
+.sigma-index-chip:has(input:checked) svg {
+  opacity: 1;
+}
+
 .sigma-main {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -3269,7 +3382,7 @@ body.light {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
+  min-width: 100%;
   background: var(--color-bg-layer-5);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -3279,6 +3392,7 @@ body.light {
   flex-direction: column;
   max-height: 300px;
   overflow: hidden;
+  width: max-content;
 }
 
 .actor-select-container.open .actor-select-dropdown {
@@ -3334,8 +3448,6 @@ body.light {
   font-size: 0.85rem;
   color: var(--color-text);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .actor-checkbox-count {

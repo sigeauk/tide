@@ -73,6 +73,26 @@ def _technique_source(technique_id: str) -> str:
     return "Enterprise"
 
 
+_SOURCE_DISPLAY: Dict[str, str] = {
+    "enterprise": "Enterprise",
+    "mitre:enterprise": "Enterprise",
+    "mitre-enterprise": "Enterprise",
+    "enterprise attack": "Enterprise",
+    "mobile": "Mobile",
+    "mitre:mobile": "Mobile",
+    "ics": "ICS",
+    "mitre:ics": "ICS",
+    "opencti": "OpenCTI",
+    "open-cti": "OpenCTI",
+    "octi": "OpenCTI",
+}
+
+
+def _normalise_source(raw: str) -> str:
+    """Return a human-friendly display name for an actor intel source."""
+    return _SOURCE_DISPLAY.get(raw.lower().strip(), raw.title())
+
+
 # ── Core data builder ───────────────────────────────────────────────────────
 
 def build_report_data(
@@ -227,11 +247,12 @@ def build_report_data(
         "selected_actors":           [a.name for a in selected_actors],
         "actor_details": [
             {
-                "name":      a.name,
-                "aliases":   a.aliases or "",
-                "origin":    a.origin or "Unknown",
-                "sources":   a.source or [],
-                "ttp_count": a.ttp_count,
+                "name":        a.name,
+                "description": a.description or "",
+                "aliases":     a.aliases or "",
+                "origin":      a.origin or "Unknown",
+                "sources":     [_normalise_source(s) for s in (a.source or [])],
+                "ttp_count":   a.ttp_count,
             }
             for a in selected_actors
         ],
@@ -401,16 +422,16 @@ def generate_markdown(data: Dict[str, Any]) -> str:
 
     # ── Selected Adversaries ──────────────────────────────────────────────
     lines += ["## Selected Adversaries", ""]
+    lines += ["| Actor | Description | TTPs | Intel Sources | Aliases |"]
+    lines += ["|-------|-------------|-----:|---------------|---------|"]
     for actor in data["actor_details"]:
         src = ", ".join(actor["sources"]) if actor["sources"] else "MITRE"
+        desc = (actor.get("description") or "").replace("\n", " ").replace("|", "\\|")
+        aliases = (actor["aliases"] or "—").replace("|", "\\|")
         lines.append(
-            f"- **{actor['name']}** — Origin: `{actor['origin']}` | "
-            f"TTPs: {actor['ttp_count']} | Sources: {src}"
+            f"| **{actor['name']}** | {desc} | {actor['ttp_count']} | {src} | {aliases} |"
         )
-        if actor["aliases"]:
-            lines.append(f"  - *Aliases: {actor['aliases']}*")
     lines.append("")
-
     # ── Coverage matrix overview ──────────────────────────────────────────
     lines += [
         "## MITRE ATT&CK Coverage Overview",

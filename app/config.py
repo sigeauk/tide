@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     elastic_url: str = Field(default="http://kibana:5601", alias="ELASTIC_URL")
     elastic_api_key: str = Field(default="", alias="ELASTIC_API_KEY")
     kibana_spaces: str = Field(default="production, staging", alias="KIBANA_SPACES")
+    elastic_indices: str = Field(
+        default="logs-*, winlogbeat-*, filebeat-*",
+        alias="ELASTIC_INDICES"
+    )
     
     # --- OPENCTI ---
     opencti_url: str = Field(default="http://opencti:8080", alias="OPENCTI_URL")
@@ -162,6 +166,11 @@ class Settings(BaseSettings):
     def kibana_space_list(self) -> List[str]:
         """Parse comma-separated Kibana spaces."""
         return [s.strip() for s in self.kibana_spaces.split(",") if s.strip()]
+
+    @property
+    def elastic_index_list(self) -> List[str]:
+        """Parse comma-separated Elasticsearch index patterns."""
+        return [s.strip() for s in self.elastic_indices.split(",") if s.strip()]
     
     @model_validator(mode='after')
     def override_version_from_file(self) -> 'Settings':
