@@ -36,6 +36,14 @@ else:
 # Sigma repository paths - check /opt/repos first (Docker), then fallback locations
 SIGMA_REPO_PATH = os.getenv('SIGMA_REPO_PATH', '/opt/repos/sigma')
 
+# Pipeline storage — inside the already-mounted data volume, so saved pipelines
+# survive container restarts without requiring an extra volume mount.
+# Default resolves to /app/data/sigma_pipelines/ (alongside tide.duckdb).
+PIPELINE_DIR: str = os.path.join(
+    os.path.dirname(os.getenv("DB_PATH", "/app/data/tide.duckdb")),
+    "sigma_pipelines",
+)
+
 # Cache for loaded rules
 _rules_cache: Optional[List[Dict]] = None
 
@@ -80,8 +88,10 @@ def warm_up_backends() -> None:
         log_error(f"[SIGMA]   ✗ splunk backend: {e}")
 
     try:
-        from sigma.backends.microsoft365defender import Microsoft365DefenderBackend
-        backend_classes.append(Microsoft365DefenderBackend)
+        try:
+            from sigma.backends.microsoft365defender import Microsoft365DefenderBackend  # noqa: F401
+        except ImportError:
+            from sigma.backends.microsoft365defender import KustoBackend  # noqa: F401
         log_info("[SIGMA]   ✓ microsoft365defender backend")
     except Exception as e:
         log_error(f"[SIGMA]   ✗ microsoft365defender backend: {e}")
@@ -101,7 +111,11 @@ def warm_up_backends() -> None:
         log_error(f"[SIGMA]   ✗ sysmon pipeline: {e}")
 
     try:
-        from sigma.pipelines.windows import windows_pipeline, windows_audit_pipeline  # noqa: F401
+        try:
+            from sigma.pipelines.windows import windows_logsource_pipeline  # noqa: F401
+        except ImportError:
+            from sigma.pipelines.windows import windows_pipeline  # noqa: F401
+        from sigma.pipelines.windows import windows_audit_pipeline  # noqa: F401
         log_info("[SIGMA]   ✓ windows pipelines")
     except Exception as e:
         log_error(f"[SIGMA]   ✗ windows pipelines: {e}")
@@ -300,7 +314,7 @@ def get_output_formats(backend: str) -> Dict[str, str]:
     # Note: Order matters - first item is default
     formats = {
         'elasticsearch': {
-            'kibana_ndjson': 'Kibana NDJSON',
+            'kibana_ndjson': 'Kibana Detection Rule',
             'default': 'Default Query',
             'dsl_lucene': 'DSL Query (Lucene)',
         },
@@ -339,56 +353,170 @@ def convert_sigma_rule(
     yaml_content: str,
     backend: str = 'elasticsearch',
     pipeline: str = 'none',
-    output_format: str = 'default'
+    output_format: str = 'default',
+    index_pattern: str = '',
+    custom_pipeline_yaml: str = '',
+    pipeline_file: str = '',
 ) -> Tuple[bool, str]:
     """
     Convert a Sigma rule to a target query language.
-    
-    Args:
-        yaml_content: The Sigma rule YAML content
-        backend: Target backend (elasticsearch, splunk, etc.)
-        pipeline: Processing pipeline to use
-        output_format: Output format for the backend
-    
+
+    When a user-provided pipeline (pipeline_file or custom_pipeline_yaml) is
+    present, conversion is delegated to the installed sigma-cli binary so the
+    field-mapping is handled exactly as documented by the pySigma project.
+    Built-in pipeline selection (sysmon, windows, …) without a user pipeline
+    falls back to the pySigma Python API.
+
     Returns:
-        Tuple of (success: bool, result: str)
+        (True, result_string)  on success
+        (False, error_string)  on failure
     """
+    import subprocess
+    import shutil
+    import tempfile
+
+    # ── Resolve user pipelines ─────────────────────────────────────────────
+    # pipeline_file may be a comma-separated list of filenames (e.g.
+    # "system1-ecs-template.yml,index-template.yml") so users can layer a
+    # field-mapping pipeline with a separate index pipeline.
+    # custom_pipeline_yaml is used as a single fallback when no files given.
+    pipeline_yamls: List[str] = []       # YAML content, one entry per file
+    pipeline_disk_paths: List[str] = []  # abs paths of on-disk files
+
+    if pipeline_file and pipeline_file.strip():
+        for fname in [f.strip() for f in pipeline_file.split(',') if f.strip()]:
+            content = read_pipeline_file(fname)
+            if not content:
+                return False, f"Pipeline file not found: {fname}"
+            pipeline_yamls.append(content)
+            pipeline_disk_paths.append(
+                os.path.join(PIPELINE_DIR, os.path.basename(fname))
+            )
+    elif custom_pipeline_yaml and custom_pipeline_yaml.strip():
+        pipeline_yamls.append(custom_pipeline_yaml)
+
+    use_cli = bool(pipeline_yamls) and bool(shutil.which('sigma'))
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PATH A — sigma-cli (user pipeline(s) present)
+    # ══════════════════════════════════════════════════════════════════════
+    if use_cli:
+        target_map = {
+            'elasticsearch': 'lucene',
+            'eql':  'eql',
+            'esql': 'esql',
+            'splunk': 'splunk',
+            'microsoft365defender': 'kusto',
+        }
+        target = target_map.get(backend, 'lucene')
+
+        tmp_rule: Optional[str] = None
+        tmp_files: List[str] = []   # all temp files to clean up
+        try:
+            # Write rule to temp file
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.yml', delete=False, dir='/tmp'
+            ) as f:
+                f.write(yaml_content)
+                tmp_rule = f.name
+
+            # ── kibana_ndjson ──────────────────────────────────────────────
+            # Need a clean Lucene query (no _index) + the index list separately.
+            # Strip add_condition from every pipeline so sigma-cli never
+            # injects _index into the query.  Indices come from the pipeline
+            # YAMLs (structured read) and are merged across all files.
+            if output_format == 'kibana_ndjson':
+                all_indices: List[str] = []
+                cmd = ['sigma', 'convert', '-t', target]
+
+                for pl_yaml in pipeline_yamls:
+                    pl_indices, stripped = _extract_and_strip_index_from_pipeline(pl_yaml)
+                    all_indices.extend(pl_indices)
+                    if stripped.strip():
+                        with tempfile.NamedTemporaryFile(
+                            mode='w', suffix='.yml', delete=False, dir='/tmp'
+                        ) as f:
+                            f.write(stripped)
+                            tmp_files.append(f.name)
+                        cmd.extend(['-p', tmp_files[-1]])
+
+                # Index priority: explicit param > pipeline YAMLs > default
+                if index_pattern and index_pattern.strip():
+                    rule_indices = [p.strip() for p in index_pattern.split(',') if p.strip()]
+                elif all_indices:
+                    rule_indices = all_indices
+                else:
+                    rule_indices = ['logs-*']
+
+                cmd.append(tmp_rule)
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                raw_query = proc.stdout.strip()
+                if proc.returncode != 0 and not raw_query:
+                    return False, f"sigma-cli: {proc.stderr.strip()}"
+
+                rule_obj = yaml.safe_load(yaml_content) or {}
+                log_info(f'[SIGMA] CLI kibana_ndjson: query="{raw_query}", indices={rule_indices}')
+                # Compact JSON — the template's JS parses and re-formats it
+                return True, json.dumps(
+                    build_detection_rule_dict(rule_obj, raw_query, rule_indices)
+                )
+
+            # ── All other formats ──────────────────────────────────────────
+            cmd = ['sigma', 'convert', '-t', target]
+            for idx, pl_yaml in enumerate(pipeline_yamls):
+                disk_path = pipeline_disk_paths[idx] if idx < len(pipeline_disk_paths) else ''
+                if disk_path and os.path.isfile(disk_path):
+                    cmd.extend(['-p', disk_path])
+                else:
+                    with tempfile.NamedTemporaryFile(
+                        mode='w', suffix='.yml', delete=False, dir='/tmp'
+                    ) as f:
+                        f.write(pl_yaml)
+                        tmp_files.append(f.name)
+                    cmd.extend(['-p', tmp_files[-1]])
+            cmd.append(tmp_rule)
+
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            raw_output = proc.stdout.strip()
+            if proc.returncode != 0 and not raw_output:
+                return False, f"sigma-cli: {proc.stderr.strip()}"
+            return True, raw_output
+
+        except subprocess.TimeoutExpired:
+            return False, "Conversion timed out"
+        except Exception as exc:
+            log_error(f"[SIGMA] CLI conversion failed: {exc}")
+            return False, f"Conversion error: {exc}"
+        finally:
+            for f in ([tmp_rule] if tmp_rule else []) + tmp_files:
+                try:
+                    os.unlink(f)
+                except OSError:
+                    pass
+
+    # ══════════════════════════════════════════════════════════════════════
+    # PATH B — pure pySigma (no user pipeline; built-in pipelines only)
+    # ══════════════════════════════════════════════════════════════════════
     try:
         from sigma.rule import SigmaRule
         from sigma.collection import SigmaCollection
-        
-        # Parse the Sigma rule
+
         rule = SigmaRule.from_yaml(yaml_content)
         collection = SigmaCollection([rule])
-        
-        # Get the appropriate backend
-        if backend == 'elasticsearch':
-            from sigma.backends.elasticsearch import LuceneBackend
-            sigma_backend = LuceneBackend()
-        elif backend == 'eql':
-            from sigma.backends.elasticsearch import EqlBackend
-            sigma_backend = EqlBackend()
-        elif backend == 'esql':
-            from sigma.backends.elasticsearch import ESQLBackend
-            sigma_backend = ESQLBackend()
-        elif backend == 'splunk':
-            from sigma.backends.splunk import SplunkBackend
-            sigma_backend = SplunkBackend()
-        elif backend == 'microsoft365defender':
-            from sigma.backends.microsoft365defender import Microsoft365DefenderBackend
-            sigma_backend = Microsoft365DefenderBackend()
-        else:
-            return False, f"Unknown backend: {backend}"
-        
-        # Apply pipeline if specified
+
+        # Build the processing pipeline from built-in selection
         processing_pipeline = None
         if pipeline and pipeline != 'none':
             if pipeline == 'sysmon':
                 from sigma.pipelines.sysmon import sysmon_pipeline
                 processing_pipeline = sysmon_pipeline()
             elif pipeline == 'windows':
-                from sigma.pipelines.windows import windows_pipeline
-                processing_pipeline = windows_pipeline()
+                try:
+                    from sigma.pipelines.windows import windows_logsource_pipeline
+                    processing_pipeline = windows_logsource_pipeline()
+                except ImportError:
+                    from sigma.pipelines.windows import windows_pipeline
+                    processing_pipeline = windows_pipeline()
             elif pipeline == 'windows-audit':
                 from sigma.pipelines.windows import windows_audit_pipeline
                 processing_pipeline = windows_audit_pipeline()
@@ -398,37 +526,66 @@ def convert_sigma_rule(
                     processing_pipeline = ecs_windows()
                 except ImportError:
                     pass
-        
-        # Apply pipeline to backend if available
+
+        # Backend factory
+        bk_kwargs: Dict = {}
         if processing_pipeline:
-            sigma_backend = sigma_backend.__class__(processing_pipeline=processing_pipeline)
-        
-        # Convert the rule with specified format
+            bk_kwargs['processing_pipeline'] = processing_pipeline
+
+        if backend == 'elasticsearch':
+            from sigma.backends.elasticsearch import LuceneBackend
+            sigma_backend = LuceneBackend(**bk_kwargs)
+        elif backend == 'eql':
+            from sigma.backends.elasticsearch import EqlBackend
+            sigma_backend = EqlBackend(**bk_kwargs)
+        elif backend == 'esql':
+            from sigma.backends.elasticsearch import ESQLBackend
+            sigma_backend = ESQLBackend(**bk_kwargs)
+        elif backend == 'splunk':
+            from sigma.backends.splunk import SplunkBackend
+            sigma_backend = SplunkBackend(**bk_kwargs)
+        elif backend == 'microsoft365defender':
+            try:
+                from sigma.backends.microsoft365defender import Microsoft365DefenderBackend
+                sigma_backend = Microsoft365DefenderBackend(**bk_kwargs)
+            except ImportError:
+                from sigma.backends.microsoft365defender import KustoBackend
+                sigma_backend = KustoBackend(**bk_kwargs)
+        else:
+            return False, f"Unknown backend: {backend}"
+
+        # kibana_ndjson → Elastic Detection Rule JSON
+        if output_format == 'kibana_ndjson':
+            qs = sigma_backend.convert(collection)
+            raw_q = qs[0] if isinstance(qs, list) and qs else str(qs)
+            rule_indices = (
+                [p.strip() for p in index_pattern.split(',') if p.strip()]
+                if index_pattern and index_pattern.strip()
+                else ['logs-*']
+            )
+            rule_obj = yaml.safe_load(yaml_content) or {}
+            log_info(f'[SIGMA] pySigma kibana_ndjson: query="{raw_q}", indices={rule_indices}')
+            # Compact JSON — template JS formats it
+            return True, json.dumps(build_detection_rule_dict(rule_obj, raw_q, rule_indices))
+
+        # All other formats
         if output_format and output_format != 'default':
             try:
                 result = sigma_backend.convert(collection, output_format)
             except TypeError:
-                # Some backends don't support output_format parameter
                 result = sigma_backend.convert(collection)
         else:
             result = sigma_backend.convert(collection)
-        
+
         if isinstance(result, list):
-            # Convert each item properly - use json.dumps for dicts
-            formatted_items = []
-            for r in result:
-                if isinstance(r, dict):
-                    formatted_items.append(json.dumps(r))
-                else:
-                    formatted_items.append(str(r))
-            result = '\n'.join(formatted_items) if len(formatted_items) > 1 else (formatted_items[0] if formatted_items else '')
-        elif isinstance(result, dict):
-            result = json.dumps(result)
-        
+            parts = [json.dumps(r) if isinstance(r, dict) else str(r) for r in result]
+            return True, '\n'.join(parts)
+        if isinstance(result, dict):
+            return True, json.dumps(result)
         return True, str(result)
-        
-    except Exception as e:
-        return False, f"Conversion error: {str(e)}"
+
+    except Exception as exc:
+        return False, f"Conversion error: {str(exc)}"
 
 
 def validate_sigma_rule(yaml_content: str) -> Tuple[bool, str]:
@@ -447,106 +604,238 @@ def get_kibana_spaces() -> List[str]:
     return [s.strip() for s in spaces_str.split(',') if s.strip()]
 
 
-def send_rule_to_siem(
-    yaml_content: str,
-    query: str,
-    space: str,
-    enabled: bool = False
-) -> Tuple[bool, str]:
+def get_elastic_indices() -> List[str]:
+    """Get Elasticsearch index patterns from ELASTIC_INDICES env var."""
+    indices_str = os.getenv('ELASTIC_INDICES', 'logs-*, winlogbeat-*, filebeat-*')
+    return [s.strip() for s in indices_str.split(',') if s.strip()]
+
+
+
+
+def _extract_indices_from_pipeline_yaml(yaml_content: str) -> List[str]:
     """
-    Send a converted Sigma rule to Kibana/Elasticsearch SIEM.
-    
-    Args:
-        yaml_content: Original Sigma rule YAML
-        query: Converted query string
-        space: Kibana space to send to
-        enabled: Whether to enable the rule
-    
-    Returns:
-        Tuple of (success: bool, message: str)
+    Read a Sigma ProcessingPipeline YAML and return every _index value found
+    in add_condition transformations.
     """
-    import requests
-    import yaml as pyyaml
-    
-    # Get Elastic/Kibana config
-    kibana_url = os.getenv('ELASTIC_URL', '')
-    api_key = os.getenv('ELASTIC_API_KEY', '')
-    
-    if not kibana_url or not api_key:
-        return False, "Missing ELASTIC_URL or ELASTIC_API_KEY in environment"
-    
-    # Parse the Sigma rule to extract metadata
     try:
-        sigma_rule = pyyaml.safe_load(yaml_content)
-    except Exception as e:
-        return False, f"Failed to parse Sigma YAML: {e}"
-    
-    # Build the Kibana detection rule payload
-    rule_id = sigma_rule.get('id', str(uuid.uuid4()))
-    title = sigma_rule.get('title', 'Untitled Sigma Rule')
-    description = sigma_rule.get('description', '')
-    level = sigma_rule.get('level', 'medium')
-    
-    # Prefix title with SIGMA - for easy identification in SIEM
+        data = yaml.safe_load(yaml_content) or {}
+        indices: List[str] = []
+        for t in data.get('transformations', []):
+            if t.get('type') == 'add_condition':
+                idx = (t.get('conditions') or {}).get('_index')
+                if isinstance(idx, list):
+                    indices.extend(str(i) for i in idx)
+                elif isinstance(idx, str):
+                    indices.append(idx)
+        return indices
+    except Exception:
+        return []
+
+
+def _extract_and_strip_index_from_pipeline(pipeline_yaml: str) -> Tuple[List[str], str]:
+    """
+    Structured (no-regex) extraction of _index values from a pipeline YAML.
+
+    Reads every ``add_condition`` transformation, collects ``_index`` values,
+    and returns a copy of the pipeline YAML with those transformations removed.
+    The cleaned YAML is safe to pass to `LuceneBackend` for Kibana Detection
+    Rule conversion — the ``_index`` will NOT appear in the query string, so
+    no regex post-processing is required.
+
+    Returns:
+        (index_list, cleaned_pipeline_yaml)
+    """
+    try:
+        data = yaml.safe_load(pipeline_yaml) or {}
+        indices: List[str] = []
+        kept = []
+        for t in data.get('transformations', []):
+            if t.get('type') == 'add_condition':
+                idx = (t.get('conditions') or {}).get('_index')
+                if idx is not None:
+                    if isinstance(idx, list):
+                        indices.extend(str(v) for v in idx)
+                    else:
+                        indices.append(str(idx))
+                    continue  # drop this transformation from the clean pipeline
+            kept.append(t)
+        clean_data = {**data, 'transformations': kept}
+        return indices, yaml.dump(clean_data, default_flow_style=False)
+    except Exception:
+        return [], pipeline_yaml
+
+
+# ─── Saved Pipeline File Management ───────────────────────────────────────────
+
+def ensure_pipeline_dir() -> str:
+    """Create the pipeline storage directory if it does not exist."""
+    os.makedirs(PIPELINE_DIR, exist_ok=True)
+    return PIPELINE_DIR
+
+
+def list_saved_pipelines() -> List[Dict]:
+    """
+    Return metadata for all .yml/.yaml files in PIPELINE_DIR.
+    Each entry: {filename, name (stem), display (title-cased stem)}.
+    """
+    ensure_pipeline_dir()
+    results: List[Dict] = []
+    try:
+        for fname in sorted(os.listdir(PIPELINE_DIR)):
+            if fname.endswith(('.yml', '.yaml')):
+                stem = os.path.splitext(fname)[0]
+                results.append({
+                    "filename": fname,
+                    "name":     stem,
+                    "display":  stem.replace('-', ' ').replace('_', ' ').title(),
+                })
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to list saved pipelines: {_e}")
+    return results
+
+
+def read_pipeline_file(filename: str) -> Optional[str]:
+    """Read a saved pipeline YAML by filename. Returns None if not found."""
+    ensure_pipeline_dir()
+    safe = os.path.basename(filename)  # prevent path traversal
+    path = os.path.join(PIPELINE_DIR, safe)
+    if not os.path.isfile(path):
+        log_error(f"[SIGMA] Pipeline file not found: {safe}")
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to read pipeline file {safe}: {_e}")
+        return None
+
+
+def validate_pipeline_yaml(content: str) -> Tuple[bool, str]:
+    """
+    Dry-run parse a Sigma ProcessingPipeline YAML.
+    Returns (True, info_message) or (False, error_message).
+    """
+    try:
+        from sigma.processing.pipeline import ProcessingPipeline as _PP
+        pl = _PP.from_yaml(content)
+        item_count = len(pl.items) if hasattr(pl, 'items') else '?'
+        log_info(f"[SIGMA] Pipeline validation OK — {item_count} items")
+        return True, f"Valid pipeline ({item_count} processing item(s))"
+    except Exception as _e:
+        return False, f"Invalid pipeline YAML: {_e}"
+
+
+def write_pipeline_file(filename: str, content: str) -> Tuple[bool, str]:
+    """
+    Validate then save a pipeline YAML to PIPELINE_DIR.
+    Ensures the filename has a .yml extension.
+    Returns (True, saved_filename) or (False, error_message).
+    """
+    ok, msg = validate_pipeline_yaml(content)
+    if not ok:
+        return False, msg
+    ensure_pipeline_dir()
+    safe = os.path.basename(filename)
+    if not safe.endswith(('.yml', '.yaml')):
+        safe += '.yml'
+    path = os.path.join(PIPELINE_DIR, safe)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        log_info(f"[SIGMA] Saved pipeline file: {safe}")
+        return True, safe
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to save pipeline file {safe}: {_e}")
+        return False, str(_e)
+
+
+def delete_pipeline_file(filename: str) -> Tuple[bool, str]:
+    """
+    Delete a saved pipeline YAML by filename.
+    Returns (True, filename) or (False, error_message).
+    """
+    ensure_pipeline_dir()
+    safe = os.path.basename(filename)
+    path = os.path.join(PIPELINE_DIR, safe)
+    if not os.path.isfile(path):
+        return False, f"Pipeline not found: {safe}"
+    try:
+        os.remove(path)
+        log_info(f"[SIGMA] Deleted pipeline file: {safe}")
+        return True, safe
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to delete pipeline file {safe}: {_e}")
+        return False, str(_e)
+
+
+def build_detection_rule_dict(
+    sigma_rule_obj: Dict,
+    query: str,
+    rule_indices: List[str],
+    username: str = '',
+) -> Dict:
+    """
+    Build an Elastic Detection Rule payload dict from a parsed Sigma rule.
+
+    This is the single source of truth for rule serialisation — used by both
+    ``convert_sigma_rule`` (kibana_ndjson export/display) and
+    ``send_rule_to_siem`` (API deploy).  Keeping one path guarantees that
+    the rule the user previews is byte-identical to the rule sent to Elastic.
+
+    Args:
+        sigma_rule_obj: Parsed Sigma YAML as a dict
+        query: Lucene query string (already transformed, _index stripped)
+        rule_indices: Index patterns for the detection rule
+        username: Author to stamp on the rule
+
+    Returns:
+        Dict ready for ``json.dumps`` or Kibana Detection Rules API POST/PUT
+    """
+    rule_id = sigma_rule_obj.get('id', str(uuid.uuid4()))
+    title = sigma_rule_obj.get('title', 'Untitled Sigma Rule')
+    description = sigma_rule_obj.get('description', '')
+    level = sigma_rule_obj.get('level', 'medium')
+
     if not title.upper().startswith('SIGMA'):
         title = f"SIGMA - {title}"
-    
-    # Map Sigma severity to Kibana severity
+
     severity_map = {
-        'critical': 'critical',
-        'high': 'high',
-        'medium': 'medium',
-        'low': 'low',
-        'informational': 'low'
+        'critical': 'critical', 'high': 'high',
+        'medium': 'medium', 'low': 'low', 'informational': 'low',
     }
+    risk_map = {'critical': 99, 'high': 73, 'medium': 47, 'low': 21}
     severity = severity_map.get(level, 'medium')
-    
-    # Map severity to risk score
-    risk_map = {
-        'critical': 99,
-        'high': 73,
-        'medium': 47,
-        'low': 21
-    }
     risk_score = risk_map.get(severity, 47)
-    
-    # Extract tags
-    tags = sigma_rule.get('tags', []) or []
-    if isinstance(tags, list):
-        tags = [str(t) for t in tags]
-    else:
-        tags = []
-    
-    # Add Sigma tag
+
+    tags = sigma_rule_obj.get('tags', []) or []
+    tags = [str(t) for t in tags] if isinstance(tags, list) else []
     if 'Sigma' not in tags:
         tags.append('Sigma')
-    
-    # Build the rule payload
-    payload = {
+
+    payload: Dict = {
         "rule_id": rule_id,
         "name": title,
         "description": description or f"Sigma rule: {title}",
         "severity": severity,
         "risk_score": risk_score,
         "tags": tags,
-        "enabled": enabled,
+        "enabled": False,
         "type": "query",
         "query": query,
         "language": "lucene",
-        "index": ["logs-*", "winlogbeat-*", "filebeat-*"],
+        "index": rule_indices,
         "from": "now-6m",
         "to": "now",
         "interval": "5m",
         "actions": [],
-        "author": [sigma_rule.get('author', 'Sigma')],
-        "license": sigma_rule.get('license', 'DRL'),
-        "false_positives": sigma_rule.get('falsepositives', []) or [],
-        "references": sigma_rule.get('references', []) or [],
+        "author": [username] if username else [sigma_rule_obj.get('author', 'Sigma')],
+        "license": sigma_rule_obj.get('license', 'DRL'),
+        "false_positives": sigma_rule_obj.get('falsepositives', []) or [],
+        "references": sigma_rule_obj.get('references', []) or [],
         "max_signals": 100,
-        "threat": []
+        "threat": [],
     }
-    
-    # MITRE ATT&CK Tactic mapping
+
     tactic_map = {
         'reconnaissance': {'id': 'TA0043', 'name': 'Reconnaissance'},
         'resource_development': {'id': 'TA0042', 'name': 'Resource Development'},
@@ -570,137 +859,159 @@ def send_rule_to_siem(
         'exfiltration': {'id': 'TA0010', 'name': 'Exfiltration'},
         'impact': {'id': 'TA0040', 'name': 'Impact'},
     }
-    
-    # Extract tactics from tags
-    tactics_found = []
-    techniques_found = []
-    
+
+    tactics_found: list = []
+    techniques_found: list = []
     for tag in tags:
         if not isinstance(tag, str):
             continue
         tag_lower = tag.lower()
-        
-        # Check for technique (attack.t1234 or attack.t1234.001)
         if tag_lower.startswith('attack.t'):
-            match = re.search(r'attack\.t(\d+(?:\.\d+)?)', tag, re.IGNORECASE)
-            if match:
-                tech_id = f"T{match.group(1).upper()}"
+            m = re.search(r'attack\.t(\d+(?:\.\d+)?)', tag, re.IGNORECASE)
+            if m:
+                tech_id = f"T{m.group(1).upper()}"
                 if tech_id not in techniques_found:
                     techniques_found.append(tech_id)
-        # Check for tactic (attack.execution, attack.command-and-control, etc)
         elif tag_lower.startswith('attack.'):
-            tactic_name = tag_lower.replace('attack.', '')
-            if tactic_name in tactic_map:
-                tactic_info = tactic_map[tactic_name]
-                if tactic_info not in tactics_found:
-                    tactics_found.append(tactic_info)
-    
-    # Build MITRE threat mapping - group techniques under their tactics
+            tname = tag_lower.replace('attack.', '')
+            if tname in tactic_map and tactic_map[tname] not in tactics_found:
+                tactics_found.append(tactic_map[tname])
+
     for tactic in tactics_found:
-        threat_entry = {
+        threat_entry: Dict = {
             "framework": "MITRE ATT&CK",
             "tactic": {
                 "id": tactic['id'],
                 "name": tactic['name'],
-                "reference": f"https://attack.mitre.org/tactics/{tactic['id']}/"
+                "reference": f"https://attack.mitre.org/tactics/{tactic['id']}/",
             },
-            "technique": []
+            "technique": [
+                {
+                    "id": tid,
+                    "name": tid,
+                    "reference": f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/",
+                }
+                for tid in techniques_found
+            ],
         }
-        
-        # Add all techniques to each tactic (since we can't determine technique-to-tactic mapping without external data)
-        for tech_id in techniques_found:
-            threat_entry["technique"].append({
-                "id": tech_id,
-                "name": tech_id,  # Use ID as name since we don't have technique names
-                "reference": f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/"
-            })
-        
-        if threat_entry["technique"]:  # Only add if there are techniques
+        if threat_entry["technique"]:
             payload["threat"].append(threat_entry)
-    
-    # If we have techniques but no tactics, add them under Unknown
+
     if techniques_found and not tactics_found:
-        for tech_id in techniques_found:
+        for tid in techniques_found:
             payload["threat"].append({
                 "framework": "MITRE ATT&CK",
                 "tactic": {
-                    "id": "TA0002",
-                    "name": "Execution",
-                    "reference": "https://attack.mitre.org/tactics/TA0002/"
+                    "id": "TA0002", "name": "Execution",
+                    "reference": "https://attack.mitre.org/tactics/TA0002/",
                 },
                 "technique": [{
-                    "id": tech_id,
-                    "name": tech_id,
-                    "reference": f"https://attack.mitre.org/techniques/{tech_id.replace('.', '/')}/"
-                }]
+                    "id": tid, "name": tid,
+                    "reference": f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/",
+                }],
             })
-    
-    # Send to Kibana
+
+    return payload
+
+
+def send_rule_to_siem(
+    yaml_content: str,
+    space: str,
+    enabled: bool = False,
+    index_pattern: Optional[str] = None,
+    pipeline_file: str = '',
+    username: str = '',
+) -> Tuple[bool, str]:
+    """
+    Send a Sigma rule to Kibana/Elasticsearch SIEM via the Detection Rules API.
+
+    Unified path: internally calls ``convert_sigma_rule`` with
+    ``output_format='kibana_ndjson'`` so preview and deploy are guaranteed to
+    produce identical output — no split-brain, no duplicated logic.
+
+    Args:
+        yaml_content: Original Sigma rule YAML
+        space: Kibana space to deploy to (e.g. ``staging``, ``production``)
+        enabled: Whether to enable the rule immediately after creation/update
+        index_pattern: Comma-separated index patterns (overrides pipeline)
+        pipeline_file: Comma-separated filenames of saved pipelines in PIPELINE_DIR
+        username: Username of the deploying user (added to ``author`` field)
+
+    Returns:
+        Tuple of (success: bool, message: str)
+    """
+    import requests
+
+    # ── Re-convert using the exact same code path as the UI preview ────────
+    ok, json_str = convert_sigma_rule(
+        yaml_content=yaml_content,
+        backend='elasticsearch',
+        pipeline='none',
+        output_format='kibana_ndjson',
+        index_pattern=index_pattern or '',
+        pipeline_file=pipeline_file,
+    )
+    if not ok:
+        return False, f"Conversion failed before deploy: {json_str}"
+
+    try:
+        payload = json.loads(json_str)
+    except json.JSONDecodeError as exc:
+        return False, f"Failed to parse conversion result: {exc}"
+
+    # Apply deploy-time overrides
+    payload['enabled'] = enabled
+    if username:
+        payload['author'] = [username]
+
+    title = payload.get('name', 'Unknown Rule')
+    rule_id = payload.get('rule_id', '')
+
+    kibana_url = os.getenv('ELASTIC_URL', '')
+    api_key = os.getenv('ELASTIC_API_KEY', '')
+    if not kibana_url or not api_key:
+        return False, "Missing ELASTIC_URL or ELASTIC_API_KEY in environment"
+
     headers = {
         "kbn-xsrf": "true",
         "Content-Type": "application/json",
-        "Authorization": f"ApiKey {api_key}"
+        "Authorization": f"ApiKey {api_key}",
     }
-    
     url = f"{kibana_url}/s/{space}/api/detection_engine/rules"
-    
+
     try:
-        # Suppress SSL warnings
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        
-        # First check if rule already exists by fetching it
+
         check_response = requests.get(
             f"{url}?rule_id={rule_id}",
             headers=headers,
             verify=False,
-            timeout=30
+            timeout=30,
         )
-        
-        rule_exists = check_response.status_code == 200
-        
-        if rule_exists:
-            # Update existing rule with PUT
+
+        if check_response.status_code == 200:
             response = requests.put(
-                url,
-                json=payload,
-                headers=headers,
-                verify=False,
-                timeout=30
+                url, json=payload, headers=headers, verify=False, timeout=30
             )
-            if response.status_code in [200, 201]:
-                return True, f"Rule '{title}' updated in {space} space!"
-            else:
-                return False, f"Failed to update rule: {response.status_code} - {response.text}"
+            action = "updated"
         else:
-            # Create new rule with POST
             response = requests.post(
-                url,
-                json=payload,
-                headers=headers,
-                verify=False,
-                timeout=30
+                url, json=payload, headers=headers, verify=False, timeout=30
             )
-            if response.status_code in [200, 201]:
-                return True, f"Rule '{title}' created in {space} space successfully!"
-            elif response.status_code == 409:
-                # Rule already exists (conflict), try update
+            action = "created"
+            if response.status_code == 409:
                 response = requests.put(
-                    url,
-                    json=payload,
-                    headers=headers,
-                    verify=False,
-                    timeout=30
+                    url, json=payload, headers=headers, verify=False, timeout=30
                 )
-                if response.status_code in [200, 201]:
-                    return True, f"Rule '{title}' updated in {space} space!"
-                else:
-                    return False, f"Failed to update rule: {response.status_code} - {response.text}"
-            else:
-                return False, f"Failed to create rule: {response.status_code} - {response.text}"
-            
-    except requests.exceptions.RequestException as e:
-        return False, f"Connection error: {str(e)}"
+                action = "updated"
+
+        if response.status_code in [200, 201]:
+            return True, f"Rule '{title}' {action} in {space} space!"
+        return False, f"Failed to {action} rule: {response.status_code} - {response.text}"
+
+    except requests.exceptions.RequestException as exc:
+        return False, f"Connection error: {exc}"
 
 
 def get_rule_by_id(rule_id: str) -> Optional[Dict]:

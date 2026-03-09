@@ -59,6 +59,7 @@ def get_heatmap_matrix(
     user: CurrentUser,
     actors: List[str] = Query(default=[]),
     show_defense: bool = Query(False),
+    source_filter: List[str] = Query(default=[], description="Filter actors by data source(s). Empty = all sources."),
 ):
     """
     Generate MITRE ATT&CK heatmap matrix for selected actors.
@@ -73,6 +74,33 @@ def get_heatmap_matrix(
     
     # Filter to selected actors
     selected_actors = [a for a in all_actors if a.name in actors]
+
+    # Apply source filter — only retain actors whose source list overlaps with the selected filters
+    # Both the filter values and the actor's raw sources are normalised before comparison
+    # so that e.g. "Enterprise" (display) matches DB values "enterprise" or "mitre:enterprise".
+    _SOURCE_NORM = {
+        "enterprise": "enterprise",
+        "mitre:enterprise": "enterprise",
+        "mitre-enterprise": "enterprise",
+        "mobile": "mobile",
+        "mitre:mobile": "mobile",
+        "ics": "ics",
+        "mitre:ics": "ics",
+        "opencti": "opencti",
+        "open-cti": "opencti",
+        "octi": "opencti",
+    }
+
+    def _norm(s: str) -> str:
+        key = s.strip().lower()
+        return _SOURCE_NORM.get(key, key)
+
+    if source_filter:
+        norm_filters = {_norm(s) for s in source_filter if s.strip()}
+        selected_actors = [
+            a for a in selected_actors
+            if norm_filters & {_norm(s) for s in (a.source or [])}
+        ]
     
     # Build relevant TTPs set and actor mapping
     relevant_ttps: Set[str] = set()
@@ -274,6 +302,8 @@ def export_threat_report(
     actors: List[str] = Query(default=[]),
     format: str = Query("pdf", pattern="^(pdf|markdown)$"),
     show_defense: bool = Query(False),
+    audience_level: str = Query("executive", pattern="^(executive|technical)$"),
+    classification: str = Query("Official"),
 ):
     """
     Generate and download a Threat Coverage Report for selected actors.
@@ -283,6 +313,12 @@ def export_threat_report(
     pdf      — Professional A4 PDF rendered by WeasyPrint (CSS Grid matrix +
                executive summary + per-tactic detail tables).
     markdown — Plain-text Markdown report (no extra dependencies).
+
+    Audience levels
+    ---------------
+    executive — Title page + exec summary + actor profiles + MITRE matrix.
+    technical — All executive content + granular tactic/rule tables + Sigma
+                opportunity listings for each GAP technique.
 
     The endpoint is synchronous and runs inside FastAPI's threadpool, so
     WeasyPrint's blocking PDF generation does not stall the event loop.
@@ -294,12 +330,23 @@ def export_threat_report(
         )
 
     from app.services.report_generator import (
+        CLASSIFICATION_OPTIONS,
         build_report_data,
         generate_markdown,
         generate_pdf_bytes,
     )
 
-    report_data = build_report_data(db, actors, show_defense=show_defense)
+    # Validate classification against the server-side list
+    if classification not in CLASSIFICATION_OPTIONS:
+        classification = CLASSIFICATION_OPTIONS[0]
+
+    report_data = build_report_data(
+        db,
+        actors,
+        show_defense=show_defense,
+        audience_level=audience_level,
+        classification=classification,
+    )
     if report_data is None:
         raise HTTPException(
             status_code=404,
@@ -315,11 +362,12 @@ def export_threat_report(
         safe_actors += f"_and_{len(actors) - 3}_more"
 
     from datetime import datetime
-    date_str = datetime.utcnow().strftime("%Y%m%d")
+    date_str    = datetime.utcnow().strftime("%Y%m%d")
+    level_tag   = "Technical" if audience_level == "technical" else "Executive"
 
     if format == "markdown":
         md_text = generate_markdown(report_data)
-        filename = f"TIDE_ThreatReport_{safe_actors}_{date_str}.md"
+        filename = f"TIDE_ThreatReport_{level_tag}_{safe_actors}_{date_str}.md"
         return Response(
             content=md_text.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -345,7 +393,7 @@ def export_threat_report(
             detail="PDF generation failed. Check server logs for details.",
         )
 
-    filename = f"TIDE_ThreatReport_{safe_actors}_{date_str}.pdf"
+    filename = f"TIDE_ThreatReport_{level_tag}_{safe_actors}_{date_str}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

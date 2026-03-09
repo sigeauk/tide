@@ -3,8 +3,9 @@ API routes for Sigma Converter.
 Provides endpoints for rule browsing, conversion, validation, and SIEM deployment.
 """
 
-from fastapi import APIRouter, Request, Query, Form
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request, Query, Form, UploadFile, File, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from typing import Optional
 
 from app.api.deps import CurrentUser, SettingsDep, DbDep
 from app import sigma_helper as sigma
@@ -80,6 +81,9 @@ def convert_rule(
     backend: str = Form("elasticsearch"),
     pipeline: str = Form("none"),
     output_format: str = Form("default"),
+    index_pattern: str = Form(""),
+    custom_pipeline_yaml: str = Form(""),
+    pipeline_file: str = Form(""),
 ):
     """
     Convert a Sigma rule to target query language.
@@ -94,7 +98,10 @@ def convert_rule(
         yaml_content=yaml_content,
         backend=backend,
         pipeline=pipeline,
-        output_format=output_format
+        output_format=output_format,
+        index_pattern=index_pattern,
+        custom_pipeline_yaml=custom_pipeline_yaml,
+        pipeline_file=pipeline_file,
     )
     
     # Also get raw query for SIEM deployment
@@ -104,9 +111,12 @@ def convert_rule(
             yaml_content=yaml_content,
             backend=backend,
             pipeline=pipeline,
-            output_format='default'
+            output_format='default',
+            index_pattern=index_pattern,
+            custom_pipeline_yaml=custom_pipeline_yaml,
+            pipeline_file=pipeline_file,
         )
-        raw_query = raw_result if raw_success else result
+        raw_query = raw_result if raw_success else ""
     
     # Determine code language for highlighting
     if backend == 'eql':
@@ -162,6 +172,8 @@ def deploy_to_siem(
     raw_query: str = Form(...),
     space: str = Form("staging"),
     enabled: bool = Form(False),
+    index_pattern: str = Form(""),
+    pipeline_file: str = Form(""),
 ):
     """
     Deploy a converted Sigma rule to Elastic SIEM.
@@ -170,14 +182,16 @@ def deploy_to_siem(
         return HTMLResponse(
             '<div class="alert alert-warning">Convert a rule first before deploying</div>'
         )
-    
+
     success, message = sigma.send_rule_to_siem(
         yaml_content=yaml_content,
-        query=raw_query,
         space=space,
-        enabled=enabled
+        enabled=enabled,
+        index_pattern=index_pattern or None,
+        pipeline_file=pipeline_file,
+        username=user.username,
     )
-    
+
     if success:
         return HTMLResponse(f'<div class="alert alert-success">{message}</div>')
     else:
@@ -232,3 +246,107 @@ def get_spaces(request: Request, user: CurrentUser):
     for space in spaces:
         html += f'<option value="{space}">{space.title()}</option>'
     return HTMLResponse(html)
+
+
+@router.get("/indices", response_class=HTMLResponse)
+def get_indices(request: Request, user: CurrentUser):
+    """Get Elasticsearch index patterns as HTML options."""
+    indices = sigma.get_elastic_indices()
+    html = '<option value="">No Index Filter</option>'
+    for idx in indices:
+        html += f'<option value="{idx}">{idx}</option>'
+    return HTMLResponse(html)
+
+
+@router.post("/upload-pipeline")
+async def upload_pipeline(
+    request: Request,
+    user: CurrentUser,
+    pipeline_file: UploadFile = File(...),
+) -> JSONResponse:
+    """
+    Upload a custom Sigma ProcessingPipeline YAML file (mapping.yml).
+    Validates the pipeline is parseable and returns the YAML content
+    for the client to store and submit with future /convert calls.
+    """
+    content_bytes = await pipeline_file.read()
+    yaml_content = content_bytes.decode("utf-8")
+
+    # Validate before returning to client
+    try:
+        from sigma.processing.pipeline import ProcessingPipeline
+        pl = ProcessingPipeline.from_yaml(yaml_content)
+        item_count = len(pl.items) if hasattr(pl, "items") else "?"
+        return JSONResponse({
+            "status": "ok",
+            "filename": pipeline_file.filename,
+            "item_count": item_count,
+            "content": yaml_content,
+        })
+    except Exception as e:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid Sigma pipeline YAML: {str(e)}"
+        )
+
+
+# ─── Saved Pipeline CRUD ─────────────────────────────────────────────────────
+
+@router.get("/saved-pipelines")
+def list_saved_pipelines(request: Request, user: CurrentUser) -> JSONResponse:
+    """Return list of saved pipeline file metadata."""
+    return JSONResponse(
+        sigma.list_saved_pipelines(),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@router.get("/saved-pipelines/{filename}")
+def get_saved_pipeline(
+    request: Request,
+    user: CurrentUser,
+    filename: str,
+) -> JSONResponse:
+    """Return the YAML content of a saved pipeline by filename."""
+    content = sigma.read_pipeline_file(filename)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"Pipeline not found: {filename}")
+    return JSONResponse(
+        {"filename": filename, "content": content},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@router.post("/saved-pipelines")
+async def save_pipeline(
+    request: Request,
+    user: CurrentUser,
+    name: str = Form(...),
+    content: str = Form(...),
+) -> JSONResponse:
+    """
+    Validate and save a pipeline YAML to disk.
+    `name` is the desired filename stem (without extension).
+    """
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="Pipeline name is required")
+    # Sanitise: keep only safe filename characters
+    import re as _re
+    safe_name = _re.sub(r'[^\w\-]', '_', name.strip().lower()) + '.yml'
+    ok, msg = sigma.write_pipeline_file(safe_name, content)
+    if not ok:
+        raise HTTPException(status_code=422, detail=msg)
+    return JSONResponse({"status": "ok", "filename": msg})
+
+
+@router.delete("/saved-pipelines/{filename}")
+def delete_saved_pipeline(
+    request: Request,
+    user: CurrentUser,
+    filename: str,
+) -> JSONResponse:
+    """Delete a saved pipeline YAML by filename."""
+    ok, msg = sigma.delete_pipeline_file(filename)
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
+    return JSONResponse({"status": "ok", "deleted": msg})

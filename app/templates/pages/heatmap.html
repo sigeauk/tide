@@ -79,38 +79,48 @@
         </label>
     </div>
 
+    <!-- Source Filter -->
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <div class="actor-select-container" id="source-select-container">
+            <div class="actor-select-trigger" onclick="toggleSourceDropdown()">
+                <span class="actor-select-text" id="source-select-text">All sources</span>
+                <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="m6 9 6 6 6-6"/>
+                </svg>
+            </div>
+            <div class="actor-select-dropdown" id="source-dropdown">
+                <div class="actor-checkbox-list" id="source-checkbox-list">
+                    {% for src in sources %}
+                    <label class="actor-checkbox-item" data-name="{{ src | lower }}">
+                        <input
+                            type="checkbox"
+                            name="source_filter"
+                            value="{{ src }}"
+                            onchange="updateSourceSelection(); triggerHeatmapUpdate();">
+                        <span class="actor-checkbox-label">{{ src }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Export -->
     <div class="filter-group" style="align-self: flex-end;">
         <label class="form-label">Export Report</label>
-        <div style="display:flex; gap:0.5rem;">
-            <button
-                class="btn btn-secondary"
-                onclick="exportReport('pdf')"
-                title="Download PDF report for selected actors"
-                style="display:flex; align-items:center; gap:0.375rem; font-size:0.8rem; padding:0.4rem 0.75rem;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="12" y1="18" x2="12" y2="12"/>
-                    <line x1="9" y1="15" x2="15" y2="15"/>
-                </svg>
-                PDF
-            </button>
-            <button
-                class="btn btn-secondary"
-                onclick="exportReport('markdown')"
-                title="Download Markdown report for selected actors"
-                style="display:flex; align-items:center; gap:0.375rem; font-size:0.8rem; padding:0.4rem 0.75rem;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <line x1="16" y1="13" x2="8" y2="13"/>
-                    <line x1="16" y1="17" x2="8" y2="17"/>
-                    <polyline points="10 9 9 9 8 9"/>
-                </svg>
-                Markdown
-            </button>
-        </div>
+        <button
+            class="btn btn-secondary"
+            onclick="openExportModal()"
+            title="Export threat report for selected actors"
+            style="display:flex; align-items:center; gap:0.375rem; font-size:0.8rem; padding:0.4rem 0.9rem;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export
+        </button>
     </div>
 </div>
 
@@ -123,13 +133,19 @@ function toggleActorDropdown() {
     dropdown.style.display = isOpen ? 'flex' : 'none';
 }
 
-// Close dropdown when clicking outside
+// Close dropdowns when clicking outside
 document.addEventListener('click', function(e) {
-    const container = document.getElementById('actor-select-container');
-    const dropdown = document.getElementById('actor-dropdown');
-    if (container && !container.contains(e.target)) {
-        container.classList.remove('open');
-        if (dropdown) dropdown.style.display = 'none';
+    const actorContainer = document.getElementById('actor-select-container');
+    const actorDropdown = document.getElementById('actor-dropdown');
+    if (actorContainer && !actorContainer.contains(e.target)) {
+        actorContainer.classList.remove('open');
+        if (actorDropdown) actorDropdown.style.display = 'none';
+    }
+    const sourceContainer = document.getElementById('source-select-container');
+    const sourceDropdown = document.getElementById('source-dropdown');
+    if (sourceContainer && !sourceContainer.contains(e.target)) {
+        sourceContainer.classList.remove('open');
+        if (sourceDropdown) sourceDropdown.style.display = 'none';
     }
 });
 
@@ -163,16 +179,40 @@ function updateActorSelection() {
 function triggerHeatmapUpdate() {
     const checked = document.querySelectorAll('input[name="actors"]:checked');
     const showDefense = document.getElementById('show-defense-checkbox').checked;
+    const sourceChecked = document.querySelectorAll('input[name="source_filter"]:checked');
     
     const actors = Array.from(checked).map(cb => cb.value);
     const params = new URLSearchParams();
     actors.forEach(a => params.append('actors', a));
     if (showDefense) params.append('show_defense', 'on');
+    sourceChecked.forEach(cb => params.append('source_filter', cb.value));
     
     htmx.ajax('GET', '/api/heatmap/matrix?' + params.toString(), {
         target: '#heatmap-container',
         swap: 'innerHTML'
     });
+}
+
+function toggleSourceDropdown() {
+    const container = document.getElementById('source-select-container');
+    const dropdown = document.getElementById('source-dropdown');
+    const isOpen = container.classList.toggle('open');
+    dropdown.style.display = isOpen ? 'flex' : 'none';
+}
+
+function updateSourceSelection() {
+    const checked = document.querySelectorAll('input[name="source_filter"]:checked');
+    const textEl = document.getElementById('source-select-text');
+    if (checked.length === 0) {
+        textEl.textContent = 'All sources';
+        textEl.classList.remove('has-selection');
+    } else if (checked.length === 1) {
+        textEl.textContent = checked[0].value;
+        textEl.classList.add('has-selection');
+    } else {
+        textEl.textContent = `${checked.length} sources`;
+        textEl.classList.add('has-selection');
+    }
 }
 
 // Filter techniques in the heatmap matrix by search query
@@ -213,30 +253,44 @@ function filterHeatmapTechniques(query) {
 }
 
 /**
- * Trigger a threat report download for the current actor selection.
- * Builds a URL with the selected actors and options as query parameters,
- * then navigates to /api/heatmap/export which returns the file as an
- * attachment — the browser handles the download automatically.
- *
- * @param {string} format - 'pdf' or 'markdown'
+ * Open the export options modal. Validates actor selection first.
  */
-function exportReport(format) {
+function openExportModal() {
     const checked = document.querySelectorAll('input[name="actors"]:checked');
     if (checked.length === 0) {
         alert('Select at least one threat actor before exporting a report.');
         return;
     }
+    document.getElementById('export-modal-overlay').style.display = 'flex';
+}
 
-    const showDefense = document.getElementById('show-defense-checkbox').checked;
+function closeExportModal() {
+    document.getElementById('export-modal-overlay').style.display = 'none';
+}
+
+function confirmExport() {
+    const checked        = document.querySelectorAll('input[name="actors"]:checked');
+    const showDefense    = document.getElementById('show-defense-checkbox').checked;
+    const format         = document.getElementById('modal-format').value;
+    const classification = document.getElementById('modal-classification').value;
+    const audienceLevel  = document.getElementById('modal-audience').value;
+
     const params = new URLSearchParams();
     params.set('format', format);
+    params.set('classification', classification);
+    params.set('audience_level', audienceLevel);
     Array.from(checked).forEach(cb => params.append('actors', cb.value));
     if (showDefense) params.set('show_defense', 'true');
 
-    // Navigate to the export URL; the server sets Content-Disposition: attachment
-    // so the browser silently downloads the file without leaving the page.
+    closeExportModal();
     window.location.href = '/api/heatmap/export?' + params.toString();
 }
+
+// Close modal on overlay click
+document.addEventListener('click', function(e) {
+    const overlay = document.getElementById('export-modal-overlay');
+    if (overlay && e.target === overlay) closeExportModal();
+});
 </script>
 
 
@@ -249,5 +303,90 @@ function exportReport(format) {
 
 <!-- Slide Panel Container (for technique details) -->
 <div id="slide-panel-container"></div>
+
+<!-- ── Export Options Modal ─────────────────────────────────────────────── -->
+<div id="export-modal-overlay"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
+            z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+                border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
+                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+
+        <!-- Header -->
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
+                Export Threat Report
+            </h3>
+            <button onclick="closeExportModal()"
+                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    title="Close">&#x2715;</button>
+        </div>
+
+        <!-- Format -->
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+                Format
+            </label>
+            <select id="modal-format"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="pdf">PDF</option>
+                <option value="markdown">Markdown</option>
+            </select>
+        </div>
+
+        <!-- Classification -->
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+                Classification
+            </label>
+            <select id="modal-classification"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                {% for clf in classification_options %}
+                <option value="{{ clf }}">{{ clf }}</option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <!-- Audience -->
+        <div style="margin-bottom:1.5rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+                Audience
+            </label>
+            <select id="modal-audience"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="executive">Executive / CISO</option>
+                <option value="technical">Technical / Engineer</option>
+            </select>
+        </div>
+
+        <!-- Actions -->
+        <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
+            <button onclick="closeExportModal()" class="btn btn-secondary"
+                    style="font-size:0.85rem; padding:0.45rem 1rem;">
+                Cancel
+            </button>
+            <button onclick="confirmExport()" class="btn btn-primary"
+                    style="font-size:0.85rem; padding:0.45rem 1.25rem;">
+                Download
+            </button>
+        </div>
+    </div>
+</div>
 
 {% endblock %}

@@ -96,18 +96,8 @@ function downloadQuery() {
     URL.revokeObjectURL(url);
 }
 
-function prepareDeployForm() {
-    const yaml = document.getElementById('yaml-editor')?.value || '';
-    const rawQuery = document.getElementById('raw-query-store')?.value || '';
-    const deployYaml = document.getElementById('deploy-yaml');
-    const deployQuery = document.getElementById('deploy-query');
-    if (deployYaml) deployYaml.value = yaml;
-    if (deployQuery) deployQuery.value = rawQuery;
-}
-
 // Expose globally
 window.downloadQuery = downloadQuery;
-window.prepareDeployForm = prepareDeployForm;
 </script>
 
 {% else %}
