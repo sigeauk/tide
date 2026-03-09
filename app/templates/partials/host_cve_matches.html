@@ -1,0 +1,83 @@
+
+{# Partial: host_cve_matches.html
+   Context:
+     host  (Host)
+     vulns (List[CveMatch])
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if vulns %}
+
+<!-- Color key -->
+<div class="det-color-key">
+    <span class="det-color-key__label">Color Key:</span>
+    <span class="det-color-key__item">
+        <span class="det-color-key__swatch" style="background:var(--color-success);"></span> Detection in place
+    </span>
+    <span class="det-color-key__item">
+        <span class="det-color-key__swatch" style="background:var(--color-danger);"></span> No detection (Ransomware)
+    </span>
+    <span class="det-color-key__item">
+        <span class="det-color-key__swatch" style="background:var(--color-border-strong);"></span> No detection
+    </span>
+</div>
+
+<div class="cve-mini-list">
+{% for vuln in vulns %}
+{% set has_det = vuln.detection is not none %}
+<div class="cve-mini-card {% if has_det %}cve-mini-card--detected{% elif vuln.known_ransomware %}cve-mini-card--no-cover{% endif %}">
+
+    <div class="cve-mini-card__id">
+        <a href="/cve/{{ vuln.cve_id }}">{{ vuln.cve_id }}</a>
+    </div>
+
+    <div class="cve-mini-card__body">
+        <div class="cve-mini-card__name">{{ vuln.vulnerability_name }}</div>
+        <div class="cve-mini-card__badges">
+
+            {% if has_det %}
+            <span class="status-pill status-enabled" style="font-size:0.69rem;padding:0.1rem 0.4rem;">
+                {{ icon('shield-check', '10') }} Detected
+            </span>
+            {% if vuln.detection.rule_ref %}
+            <span style="font-size:0.7rem;color:var(--color-text-muted);" title="{{ vuln.detection.rule_ref }}">
+                {{ icon('link', '9') }} {{ vuln.detection.rule_ref }}
+            </span>
+            {% endif %}
+            {% else %}
+            <span class="status-pill status-disabled" style="font-size:0.69rem;padding:0.1rem 0.4rem;">
+                {{ icon('shield-off', '10') }} No Cover
+            </span>
+            {% endif %}
+
+            {% if vuln.known_ransomware %}
+            <span class="status-pill" style="font-size:0.69rem;padding:0.1rem 0.4rem;background:var(--color-warning-bg);color:var(--color-warning-text);border-color:var(--color-warning);">
+                {{ icon('zap', '10') }} Ransomware
+            </span>
+            {% endif %}
+
+            {% if vuln.matched_software %}
+            <span style="display:inline-flex;flex-wrap:wrap;gap:0.2rem;align-items:center;">
+                {% for sw_name in vuln.matched_software %}
+                <span class="badge badge-neutral" style="font-size:0.67rem;padding:0.1rem 0.35rem;font-family:monospace;">{{ sw_name }}</span>
+                {% endfor %}
+            </span>
+            {% endif %}
+
+        </div>
+    </div>
+
+    <div style="flex-shrink:0;font-size:0.7rem;color:var(--color-text-muted);text-align:right;white-space:nowrap;">
+        {{ vuln.date_added }}
+    </div>
+
+</div>
+{% endfor %}
+</div>
+
+{% else %}
+<div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
+    {{ icon('shield-check', '40') }}
+    <p style="margin-top:0.75rem;font-size:0.9rem;">No CISA KEV matches for <strong>{{ host.name }}</strong>.</p>
+</div>
+{% endif %}

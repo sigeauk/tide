@@ -1,0 +1,176 @@
+{# Sub-partial for a single system detection row.
+   In-scope: cve_id, sys_id, sys_name, det (Optional[VulnDetection]), technique_rules
+   rule_ref stored as comma-separated string for multiple rules. #}
+{% from "macros/icons.html" import icon %}
+
+{# unique ID suffix per row to avoid conflicts when multiple rows exist #}
+{% set row_id = (sys_id | replace('-','_') | replace(' ','_')) %}
+
+<div id="det-row-{{ row_id }}"
+     style="padding:0.75rem;border-radius:var(--radius-sm);
+            border:1px solid var(--color-border);
+            background:var(--color-bg-action);">
+
+  {# ── System label ── #}
+  <p style="margin:0 0 0.4rem;font-size:0.8rem;font-weight:600;color:var(--color-primary);
+            display:flex;align-items:center;gap:0.3rem;">
+    {{ icon('server','12') }} {{ sys_name }}
+  </p>
+
+  {% if det %}
+  {# ── Detection exists: show chips + Edit/Remove buttons ── #}
+  <div id="det-display-{{ row_id }}">
+    <span class="badge badge-success" style="font-size:0.78rem;display:inline-flex;align-items:center;gap:0.25rem;margin-bottom:0.4rem;">
+      {{ icon('shield-check','12') }} Detection In Place
+    </span>
+
+    {# Rule chips — comma-separated stored values, show name if found in technique_rules #}
+    {% if det.rule_ref %}
+    <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin:0.25rem 0 0.2rem;">
+      {% for ref in det.rule_ref.split(',') %}
+      {% set ref = ref.strip() %}
+      {% if ref %}
+      {# Resolve rule name from technique_rules if available #}
+      {% set ns = namespace(rule_label=ref) %}
+      {% for tid, t_rules in technique_rules.items() %}
+        {% for r in t_rules %}
+          {% if r.rule_id == ref %}{% set ns.rule_label = r.name %}{% endif %}
+        {% endfor %}
+      {% endfor %}
+      <span style="font-size:0.72rem;font-weight:500;padding:0.15rem 0.45rem;border-radius:3px;
+                   background:rgba(22,163,74,0.12);color:#14532d;border:1px solid rgba(22,163,74,0.25);"
+            title="{{ ref }}">
+        {{ icon('shield','10') }} {{ ns.rule_label }}
+      </span>
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if det.note %}
+    <p style="margin:0.2rem 0 0;font-size:0.78rem;color:var(--color-muted);font-style:italic;">{{ det.note }}</p>
+    {% endif %}
+
+    <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
+              onclick="document.getElementById('det-display-{{ row_id }}').style.display='none';
+                       document.getElementById('det-edit-{{ row_id }}').style.display='flex';">
+        Edit
+      </button>
+      <button class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
+              onclick="document.getElementById('det-edit-{{ row_id }}').style.display='none';
+                       document.getElementById('det-add-rule-{{ row_id }}').style.display='flex';">
+        {{ icon('plus','11') }} Add Rule
+      </button>
+      <button class="btn btn-danger btn-sm" style="font-size:0.74rem;"
+              hx-delete="/api/inventory/cve/{{ cve_id }}/detect?system_id={{ sys_id | urlencode }}"
+              hx-target="#detection-section-inner"
+              hx-swap="outerHTML"
+              hx-confirm="Remove all detection markers for {{ sys_name }}?">
+        {{ icon('x','11') }} Remove
+      </button>
+    </div>
+
+    {# ── Edit form (hidden by default, replaces entire detection) ── #}
+    <form id="det-edit-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
+          padding:0.6rem;border-radius:var(--radius-sm);background:var(--color-surface,rgba(0,0,0,.04));"
+          hx-post="/api/inventory/cve/{{ cve_id }}/detect"
+          hx-target="#detection-section-inner"
+          hx-swap="outerHTML"
+          hx-on::after-request="document.getElementById('det-edit-{{ row_id }}').style.display='none';
+                                 document.getElementById('det-display-{{ row_id }}').style.display='';">
+      <input type="hidden" name="system_id" value="{{ sys_id }}">
+      <label style="font-size:0.72rem;font-weight:600;color:var(--color-muted);">Rules (comma-separated)</label>
+      {% if technique_rules %}
+      <select class="form-input" style="font-size:0.78rem;padding:0.25rem 0.4rem;"
+              onchange="var f=this.closest('form'),v=this.value;if(v){var cur=f.querySelector('[name=rule_ref]').value;f.querySelector('[name=rule_ref]').value=cur?(cur+', '+v):v;}this.value='';">
+        <option value="">— Append from mapped rule —</option>
+        {% for tid, rules in technique_rules.items() %}
+        <optgroup label="{{ tid }}">
+          {% for r in rules %}
+          <option value="{{ r.rule_id }}">{{ r.name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <input class="form-input" name="rule_ref" value="{{ det.rule_ref or '' }}"
+             placeholder="Rule ID, rule2, rule3 …" style="font-size:0.78rem;">
+      <input class="form-input" name="note" value="{{ det.note or '' }}"
+             placeholder="Notes (optional)…" style="font-size:0.78rem;">
+      <div style="display:flex;gap:0.4rem;">
+        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('save','12') }} Save</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+                onclick="document.getElementById('det-edit-{{ row_id }}').style.display='none';
+                         document.getElementById('det-display-{{ row_id }}').style.display='';">Cancel</button>
+      </div>
+    </form>
+
+    {# ── Add Rule form (hidden by default, appends to existing rule_ref) ── #}
+    <form id="det-add-rule-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
+          padding:0.6rem;border-radius:var(--radius-sm);background:var(--color-surface,rgba(0,0,0,.04));"
+          hx-post="/api/inventory/cve/{{ cve_id }}/detect/append-rule"
+          hx-target="#detection-section-inner"
+          hx-swap="outerHTML"
+          hx-on::after-request="document.getElementById('det-add-rule-{{ row_id }}').style.display='none';">
+      <input type="hidden" name="system_id" value="{{ sys_id }}">
+      <input type="hidden" name="existing_rule_ref" value="{{ det.rule_ref or '' }}">
+      <label style="font-size:0.72rem;font-weight:600;color:var(--color-muted);">Add Rule Reference</label>
+      {% if technique_rules %}
+      <select class="form-input" style="font-size:0.78rem;padding:0.25rem 0.4rem;"
+              onchange="if(this.value){this.closest('form').querySelector('[name=new_rule_ref]').value=this.value;}this.value='';">
+        <option value="">— Pick from mapped rule —</option>
+        {% for tid, rules in technique_rules.items() %}
+        <optgroup label="{{ tid }}">
+          {% for r in rules %}<option value="{{ r.rule_id }}">{{ r.name }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <input class="form-input" name="new_rule_ref" placeholder="Rule ID or reference…" style="font-size:0.78rem;" required>
+      <div style="display:flex;gap:0.4rem;">
+        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('plus','12') }} Add</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+                onclick="document.getElementById('det-add-rule-{{ row_id }}').style.display='none';">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  {% else %}
+  {# ── No detection: show Mark as Detected button + form ── #}
+  <span class="badge badge-neutral" style="font-size:0.76rem;color:var(--color-muted);">No detection</span>
+  <div style="margin-top:0.4rem;" id="det-add-{{ row_id }}">
+    <button class="btn btn-sm btn-secondary" style="font-size:0.76rem;"
+            onclick="this.style.display='none';document.getElementById('det-form-{{ row_id }}').style.display='flex';">
+      {{ icon('plus','12') }} Mark as Detected
+    </button>
+    <form id="det-form-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.35rem;"
+          hx-post="/api/inventory/cve/{{ cve_id }}/detect"
+          hx-target="#detection-section-inner"
+          hx-swap="outerHTML">
+      <input type="hidden" name="system_id" value="{{ sys_id }}">
+      {% if technique_rules %}
+      <select class="form-input" style="font-size:0.78rem;padding:0.25rem 0.4rem;"
+              onchange="var f=this.closest('form'),v=this.value;if(v){var cur=f.querySelector('[name=rule_ref]').value;f.querySelector('[name=rule_ref]').value=cur?(cur+', '+v):v;}this.value='';">
+        <option value="">— Append from mapped rule —</option>
+        {% for tid, rules in technique_rules.items() %}
+        <optgroup label="{{ tid }}">
+          {% for r in rules %}
+          <option value="{{ r.rule_id }}">{{ r.name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+      {% endif %}
+      <input class="form-input" name="rule_ref" placeholder="Rule ID(s), comma-separated …" style="font-size:0.78rem;">
+      <input class="form-input" name="note" placeholder="Notes (optional)…" style="font-size:0.78rem;">
+      <div style="display:flex;gap:0.4rem;">
+        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">Save</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+                onclick="document.getElementById('det-form-{{ row_id }}').style.display='none';
+                         this.closest('[id^=det-add-]').querySelector('button:first-child').style.display='inline-flex';">Cancel</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+</div>

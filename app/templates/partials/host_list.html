@@ -1,0 +1,121 @@
+{# Partial: host_list.html
+   Context:
+     system_id      (str)
+     host_summaries (List[HostSummary])
+     nessus_hosts   (int | None)
+     nessus_records (int | None)
+     nessus_warnings (List[str] | None)
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if nessus_hosts is defined %}
+<div class="alert alert-success" style="margin-bottom:0.75rem;padding:0.6rem 1rem;border-radius:var(--radius-md);background:rgba(var(--color-success-rgb,34,197,94),.12);border:1px solid rgba(var(--color-success-rgb,34,197,94),.3);font-size:0.85rem;">
+    {{ icon('check-circle', '14') }}
+    Nessus import complete: <strong>{{ nessus_hosts }}</strong> host{% if nessus_hosts != 1 %}s{% endif %} created,
+    <strong>{{ nessus_records }}</strong> software record{% if nessus_records != 1 %}s{% endif %} added.
+    {% if nessus_warnings %}
+    <details style="margin-top:0.4rem;"><summary style="cursor:pointer;color:var(--color-warning);">{{ nessus_warnings | length }} warning{% if nessus_warnings | length != 1 %}s{% endif %}</summary>
+    <ul style="margin:0.4rem 0 0 1rem;padding:0;">{% for w in nessus_warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+</div>
+{% endif %}
+
+{% if host_summaries %}
+
+<!-- Search bar -->
+<div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;">
+    <input id="host-search" class="form-input" type="search" placeholder="Search by name, IP or OS…"
+           oninput="filterHosts()" style="max-width:320px;font-size:0.85rem;">
+    <span id="host-search-count" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
+</div>
+
+<div class="host-card-grid" id="host-card-grid">
+    {% for hs in host_summaries %}
+    {% set h = hs.host %}
+    <div class="host-card"
+         data-name="{{ h.name | lower }}"
+         data-ip="{{ h.ip_address or '' }}"
+         data-os="{{ h.os or '' | lower }}">
+
+        <!-- CVE count badge (top-right) -->
+        <div class="host-card__badge">
+            {% if hs.vuln_count > 0 %}
+            <span class="badge badge-danger" style="font-size:0.7rem;">{{ hs.vuln_count }} KEV</span>
+            {% else %}
+            <span class="badge badge-success" style="font-size:0.7rem;">Clean</span>
+            {% endif %}
+        </div>
+
+        <!-- Hostname link -->
+        <a href="/hosts/{{ h.id }}" class="host-card__title">
+            {{ icon('server', '14') }} {{ h.name }}
+        </a>
+
+        <!-- Meta info -->
+        <div class="host-card__meta">
+            {% if h.ip_address %}
+            <span class="host-card__meta-row">
+                {{ icon('wifi', '11') }}
+                <span style="font-family:monospace;">{{ h.ip_address }}</span>
+            </span>
+            {% endif %}
+            {% if h.os %}
+            <span class="host-card__meta-row">
+                {{ icon('monitor', '11') }} {{ h.os }}
+            </span>
+            {% endif %}
+        </div>
+
+        <!-- Footer: stats + source + delete -->
+        <div class="host-card__footer">
+            <span class="status-pill" style="font-size:0.69rem;padding:0.1rem 0.45rem;">
+                {{ icon('package', '10') }} {{ hs.software_count }} SW
+            </span>
+            <span class="badge badge-neutral" style="font-size:0.69rem;">{{ h.source }}</span>
+            <div class="host-card__footer-actions">
+                <button class="btn btn-danger btn-sm"
+                        hx-delete="/api/inventory/hosts/{{ h.id }}?system_id={{ system_id }}"
+                        hx-confirm="Delete host '{{ h.name }}' and all its software?"
+                        hx-target="#hosts-section"
+                        hx-swap="innerHTML"
+                        style="padding:0.2rem 0.5rem;font-size:0.72rem;">
+                    {{ icon('trash-2', '11') }}
+                </button>
+            </div>
+        </div>
+
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+function filterHosts() {
+    var q = document.getElementById('host-search').value.toLowerCase();
+    var cards = document.querySelectorAll('#host-card-grid .host-card');
+    var visible = 0;
+    cards.forEach(function(card) {
+        var text = (card.dataset.name || '') + ' ' + (card.dataset.ip || '') + ' ' + (card.dataset.os || '');
+        if (!q || text.indexOf(q) !== -1) {
+            card.style.display = '';
+            visible++;
+        } else {
+            card.style.display = 'none';
+        }
+    });
+    var countEl = document.getElementById('host-search-count');
+    if (q) {
+        countEl.textContent = visible + ' of ' + cards.length + ' shown';
+    } else {
+        countEl.textContent = '';
+    }
+}
+</script>
+
+{% else %}
+<div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
+    {{ icon('server', '40') }}
+    <p style="margin-top:1rem;">No hosts yet.</p>
+    <p style="font-size:0.85rem;">Upload a Nessus scan or add hosts manually.</p>
+</div>
+{% endif %}

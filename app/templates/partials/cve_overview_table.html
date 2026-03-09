@@ -1,0 +1,217 @@
+
+{# Partial: cve_overview_table.html
+   Context:
+     cves          (List[CveMatch])  — ALL KEV entries, matched first
+     matched_count (int)
+     systems       (List[System])    — for system filter dropdown
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if cves %}
+
+{# ── Toolbar: system filter + sort controls ─────────────────────────────── #}
+<div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;padding:0.75rem 1rem;border-bottom:var(--border-card);">
+    {% if systems %}
+    <select id="filter-system" class="form-input" style="max-width:220px;font-size:0.82rem;"
+            onchange="filterCveCards()">
+        <option value="">All Systems</option>
+        {% for s in systems %}
+        <option value="{{ s.id }}">{{ s.name }}</option>
+        {% endfor %}
+    </select>
+    {% endif %}
+
+    <select id="sort-field" class="form-input" style="max-width:160px;font-size:0.82rem;"
+            onchange="sortCveCards()">
+        <option value="cve_id">Sort: CVE ID</option>
+        <option value="name">Sort: Vulnerability</option>
+        <option value="vendor">Sort: Vendor</option>
+        <option value="date_added">Sort: Date Added</option>
+        <option value="due_date">Sort: Due Date</option>
+        <option value="matched">Sort: Matched first</option>
+    </select>
+
+    <button id="sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleSortDir()" title="Toggle sort direction">
+        <span id="sort-dir-icon">▼</span>
+    </button>
+
+    <span style="font-size:0.8rem;color:var(--color-text-muted);margin-left:auto;">
+        <span id="cve-visible-count">{{ cves | length }}</span> / {{ cves | length }} entries
+        &nbsp;·&nbsp; {{ matched_count }} matched
+    </span>
+</div>
+
+{# ── CVE card list ─────────────────────────────────────────────────────── #}
+<div class="cve-list" id="cve-card-list" style="padding:0.75rem 1rem;">
+{% for cve in cves %}
+{% set matched = cve.affected_hosts | length > 0 %}
+
+{# Build system_ids string for data-systems attribute #}
+{% set ns = namespace(sys_ids=[], sys_seen=[], all_det=true, any_det=false) %}
+{% for h in cve.affected_hosts %}
+  {% if h.system_id not in ns.sys_seen %}
+    {% set ns.sys_seen = ns.sys_seen + [h.system_id] %}
+    {% set ns.sys_ids = ns.sys_ids + [h.system_id] %}
+    {% if h.system_id in cve.system_detections %}
+      {% set ns.any_det = true %}
+    {% else %}
+      {% set ns.all_det = false %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+
+<div class="cve-card-item {% if matched %}cve-card-item--matched{% endif %}"
+     data-matched="{{ '1' if matched else '0' }}"
+     data-systems="{{ ns.sys_ids | join(',') }}"
+     data-cve-id="{{ cve.cve_id }}"
+     data-name="{{ cve.vulnerability_name }}"
+     data-vendor="{{ cve.vendor_project }}"
+     data-date-added="{{ cve.date_added }}"
+     data-due-date="{{ cve.due_date }}">
+
+    {# Left: CVE ID #}
+    <div class="cve-card-item__id">
+        <a href="/cve/{{ cve.cve_id }}"
+           class="{% if matched %}cve-matched{% else %}cve-unmatched{% endif %}">
+            {{ cve.cve_id }}
+        </a>
+        {% if cve.known_ransomware %}
+        <span class="badge badge-danger" style="font-size:0.65rem;padding:0.1rem 0.4rem;">
+            {{ icon('zap','10') }} Ransomware
+        </span>
+        {% endif %}
+    </div>
+
+    {# Body: name + description + meta #}
+    <div class="cve-card-item__body">
+        <div class="cve-card-item__name" title="{{ cve.vulnerability_name }}">{{ cve.vulnerability_name }}</div>
+        {% if cve.short_description %}
+        <div class="cve-card-item__desc">{{ cve.short_description }}</div>
+        {% endif %}
+        <div class="cve-card-item__meta">
+            <span>{{ icon('box','11') }} {{ cve.vendor_project }} / {{ cve.product }}</span>
+            <span>{{ icon('calendar','11') }} Added: {{ cve.date_added }}</span>
+            <span>{{ icon('clock','11') }} Due: {{ cve.due_date }}</span>
+        </div>
+    </div>
+
+    {# Right: systems + detection #}
+    <div class="cve-card-item__right">
+        {# Affected system pills #}
+        {% if cve.affected_hosts %}
+        <div class="cve-card-item__systems">
+            {% set shown = namespace(ids=[]) %}
+            {% for h in cve.affected_hosts %}
+              {% if h.system_id not in shown.ids %}
+                {% set shown.ids = shown.ids + [h.system_id] %}
+                {% set has_det = h.system_id in cve.system_detections %}
+                <a href="/systems/{{ h.system_id }}"
+                   class="mitre-pill mitre-sm {% if has_det %}mitre-covered{% else %}mitre-gap{% endif %}"
+                   title="{% if has_det %}Detection recorded{% else %}No detection{% endif %} — {{ h.system_name }}">
+                    {% if has_det %}{{ icon('shield-check','9') }}{% else %}{{ icon('alert-triangle','9') }}{% endif %}
+                    {{ h.system_name }}
+                </a>
+              {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {# Detection badge #}
+        <div class="cve-card-item__badges">
+            {% if matched %}
+              {% if ns.all_det and ns.sys_seen | length > 0 %}
+                <span class="status-pill status-enabled" title="All affected systems have detections">
+                    {{ icon('shield-check','11') }} Detected
+                </span>
+              {% elif ns.any_det %}
+                <span class="status-pill" style="background:var(--color-warning-bg);color:var(--color-warning-text);border-color:var(--color-warning);" title="Partial coverage">
+                    {{ icon('shield','11') }} Partial
+                </span>
+              {% else %}
+                <span class="status-pill" style="background:rgba(220,38,38,.12);color:var(--color-danger);border-color:rgba(220,38,38,.3);" title="No detection mapped for affected systems">
+                    {{ icon('shield-off','11') }} No Cover
+                </span>
+              {% endif %}
+            {% elif cve.detection %}
+              <span class="status-pill status-enabled" title="{{ cve.detection.rule_ref or '' }}">
+                  {{ icon('shield-check','11') }} Detected
+              </span>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endfor %}
+</div>
+
+<script>
+(function(){
+  let sortAsc = true;
+  let sortField = 'matched';
+
+  function getCards() {
+    return Array.from(document.querySelectorAll('#cve-card-list .cve-card-item'));
+  }
+
+  window.filterCveCards = function() {
+    const q = (document.getElementById('kev-search')?.value || '').toLowerCase();
+    const matchedOnly = document.getElementById('filter-matched')?.checked;
+    const sysFilter = document.getElementById('filter-system')?.value || '';
+    let visible = 0;
+    getCards().forEach(card => {
+      const text = card.textContent.toLowerCase();
+      const isMatched = card.dataset.matched === '1';
+      const systems = card.dataset.systems || '';
+      const showSys = !sysFilter || systems.split(',').includes(sysFilter);
+      const show = text.includes(q) && (!matchedOnly || isMatched) && showSys;
+      card.style.display = show ? '' : 'none';
+      if (show) visible++;
+    });
+    const countEl = document.getElementById('cve-visible-count');
+    if (countEl) countEl.textContent = visible;
+  };
+
+  // Alias for the main page filterTable function
+  window.filterTable = window.filterCveCards;
+
+  window.sortCveCards = function() {
+    sortField = document.getElementById('sort-field')?.value || 'cve_id';
+    const list = document.getElementById('cve-card-list');
+    if (!list) return;
+    const cards = getCards();
+    cards.sort((a, b) => {
+      let va = '', vb = '';
+      if (sortField === 'matched') {
+        va = a.dataset.matched; vb = b.dataset.matched;
+        // matched first → reverse for asc
+        const cmp = vb.localeCompare(va);
+        return sortAsc ? cmp : -cmp;
+      }
+      const field = {cve_id:'cveId', name:'name', vendor:'vendor', date_added:'dateAdded', due_date:'dueDate'}[sortField] || 'cveId';
+      const key = field.replace(/([A-Z])/g, m => '-'+m.toLowerCase());
+      va = (a.dataset[field] || a.dataset[sortField.replace(/_/g,'-')] || a.dataset[sortField] || '');
+      vb = (b.dataset[field] || b.dataset[sortField.replace(/_/g,'-')] || b.dataset[sortField] || '');
+      const cmp = va.localeCompare(vb, undefined, {numeric:true, sensitivity:'base'});
+      return sortAsc ? cmp : -cmp;
+    });
+    cards.forEach(c => list.appendChild(c));
+  };
+
+  window.toggleSortDir = function() {
+    sortAsc = !sortAsc;
+    const icon = document.getElementById('sort-dir-icon');
+    if (icon) icon.textContent = sortAsc ? '▼' : '▲';
+    window.sortCveCards();
+  };
+
+  // Initial sort: matched first
+  window.sortCveCards();
+})();
+</script>
+
+{% else %}
+<div class="empty-output" style="padding:3rem 1rem;">
+    {{ icon('shield-check','48') }}
+    <p style="margin-top:1rem;">No CISA KEV data loaded.</p>
+    <p class="text-sm">Use <strong>Import KEV</strong> above to load the catalogue.</p>
+</div>
+{% endif %}

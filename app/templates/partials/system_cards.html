@@ -1,0 +1,70 @@
+{# Partial: system_cards.html
+   Context: summaries (List[SystemSummary])
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if toast is defined %}
+<div class="toast toast-success" style="display:none" data-toast="{{ toast }}"></div>
+<script>
+  (function(){
+    const el = document.querySelector('[data-toast]');
+    if(!el) return;
+    const msg = el.dataset.toast;
+    if(msg && window.showToast) showToast(msg, 'success');
+  })();
+</script>
+{% endif %}
+
+{% if summaries %}
+<div class="systems-grid">
+    {% for summary in summaries %}
+    {% set s = summary.system %}
+    <div class="system-card">
+
+        <!-- Status badge (top-right) -->
+        <div class="system-card__badge">
+            {% if summary.vuln_count > 0 %}
+            <span class="badge badge-danger">{{ summary.vuln_count }} CVE{% if summary.vuln_count != 1 %}s{% endif %}</span>
+            {% else %}
+            <span class="badge badge-success">Clean</span>
+            {% endif %}
+        </div>
+
+        <!-- Title row -->
+        <div class="system-card__title-wrap">
+            {{ icon('server', '18') }}
+            <a href="/systems/{{ s.id }}" class="system-card__title" title="{{ s.name }}">{{ s.name }}</a>
+        </div>
+
+        <!-- Classification pill -->
+        {% if s.classification %}
+        <div>
+            <span class="system-card__classification">{{ icon('lock', '10') }} {{ s.classification }}</span>
+        </div>
+        {% endif %}
+
+        <!-- Description -->
+        {% if s.description %}
+        <p class="system-card__desc">{{ s.description }}</p>
+        {% endif %}
+
+        <!-- Stats footer -->
+        <div class="system-card__footer">
+            <span class="system-card__stat">{{ icon('server', '13') }} {{ summary.host_count }} host{% if summary.host_count != 1 %}s{% endif %}</span>
+            <span class="system-card__stat">{{ icon('bug', '13') }} {{ summary.vuln_count }} vuln{% if summary.vuln_count != 1 %}s{% endif %}</span>
+            <span class="system-card__stat">{{ icon('package', '13') }} {{ summary.software_count }} pkg</span>
+        </div>
+
+        <a href="/systems/{{ s.id }}" class="btn btn-secondary btn-sm btn-block">
+            View Details →
+        </a>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div class="empty-output" style="padding:4rem 2rem;">
+    {{ icon('monitor', '48') }}
+    <p style="margin-top:1rem;font-size:1rem;">No systems yet.</p>
+    <p class="text-sm">Click <strong>Add Environment</strong> to create your first enterprise environment.</p>
+</div>
+{% endif %}

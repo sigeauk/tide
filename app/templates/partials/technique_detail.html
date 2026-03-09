@@ -77,9 +77,15 @@
             </div>
             
             <!-- Detection Rules Section -->
-            {% if is_covered %}
+            {% if is_covered or has_rules %}
             <div class="rules-section">
-                <h3 class="rules-title">Detection Rules {% if search %}<span class="rules-title-filter text-primary">(filtered by "{{ search }}")</span>{% else %}<span class="rules-title-filter text-muted">(all enabled)</span>{% endif %}</h3>
+                {% if not is_covered and has_rules %}
+                <div class="alert alert-warning" style="margin-bottom:0.75rem;font-size:0.82rem;display:flex;align-items:center;gap:0.4rem;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                    Rules exist but are currently <strong>disabled</strong> — enable them in the Sigma library to activate coverage.
+                </div>
+                {% endif %}
+                <h3 class="rules-title">Detection Rules {% if search %}<span class="rules-title-filter text-primary">(filtered by "{{ search }}")</span>{% else %}<span class="rules-title-filter text-muted">({{ 'enabled' if is_covered else 'disabled' }})</span>{% endif %}</h3>
                 <div id="technique-rules" 
                      hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
                      hx-trigger="load"

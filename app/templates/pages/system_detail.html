@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}{{ system.name }} | Environments | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
+    <div>
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
+            <a href="/systems" style="color:var(--color-muted);font-size:0.85rem;">← Environments</a>
+        </div>
+        <h1 class="page-title-hero">{{ system.name }}</h1>
+        <p class="page-subtitle">
+            {% if system.description %}{{ system.description }}{% else %}No description.{% endif %}
+        </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-shrink:0;align-items:flex-start;padding-top:0.5rem;">
+        <button class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('edit-env-modal').style.display='flex'">
+            {{ icon('edit-2', '14') }} Edit
+        </button>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/api/inventory/systems/{{ system.id }}"
+                hx-confirm="Delete '{{ system.name }}' and ALL its hosts and software? This cannot be undone."
+                hx-target="body"
+                hx-push-url="/systems">
+            {{ icon('trash-2', '14') }} Delete
+        </button>
+    </div>
+</div>
+
+<!-- Stats strip -->
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    {% set host_count = host_summaries | length %}
+    {% set vuln_count = host_summaries | sum(attribute='vuln_count') %}
+    {% set sw_count = host_summaries | sum(attribute='software_count') %}
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('server', '16') }} Hosts</div>
+        <div class="metric-value">{{ host_count }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('package', '16') }} Software</div>
+        <div class="metric-value">{{ sw_count }}</div>
+    </div>
+    <div class="metric-card {% if vuln_count > 0 %}metric-card--danger{% endif %}">
+        <div class="metric-label">{{ icon('bug', '16') }} KEV Matches</div>
+        <div class="metric-value">{{ vuln_count }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('zap', '16') }} Ransomware</div>
+        <div class="metric-value">
+            {% set rw = namespace(count=0) %}
+            {% for hs in host_summaries %}{% if hs.vuln_count > 0 %}{% set rw.count = rw.count + 1 %}{% endif %}{% endfor %}
+            —
+        </div>
+    </div>
+</div>
+
+<!-- Hosts Table -->
+<div class="card" style="padding:1.25rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('server', '18') }} Hosts</h2>
+        <div style="display:flex;gap:0.5rem;">
+            <!-- Nessus Upload -->
+            <label class="btn btn-secondary btn-sm" for="nessus-upload"
+                   title="Upload a .nessus or .xml scan file to auto-populate hosts and software">
+                {{ icon('upload', '14') }} Upload Nessus
+            </label>
+            <input id="nessus-upload" type="file" accept=".nessus,.xml" style="display:none"
+                   hx-post="/api/inventory/systems/{{ system.id }}/nessus-upload"
+                   hx-trigger="change"
+                   hx-encoding="multipart/form-data"
+                   hx-target="#hosts-section"
+                   hx-swap="innerHTML"
+                   name="file">
+            <!-- Add host manually -->
+            <button class="btn btn-primary btn-sm"
+                    onclick="document.getElementById('add-host-modal').style.display='flex'">
+                {{ icon('plus', '14') }} Add Host
+            </button>
+        </div>
+    </div>
+    <div id="hosts-section">
+        {% set system_id = system.id %}
+        {% include "partials/host_list.html" %}
+    </div>
+</div>
+
+<!-- ── Add Host Modal ──────────────────────────────────────────── -->
+<div id="add-host-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Host</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('add-host-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-post="/api/inventory/systems/{{ system.id }}/hosts"
+              hx-target="#hosts-section"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-host-modal').style.display='none';this.reset()"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label class="form-label">Hostname <span style="color:var(--color-danger)">*</span></label>
+                <input name="name" class="form-input" required placeholder="e.g. DC-PROD-01">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+                <div>
+                    <label class="form-label">IP Address</label>
+                    <input name="ip_address" class="form-input" placeholder="10.0.0.1">
+                </div>
+                <div>
+                    <label class="form-label">Operating System</label>
+                    <input name="os" class="form-input" placeholder="e.g. Windows Server 2022">
+                </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('add-host-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Host</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Edit Environment Modal ─────────────────────────────────── -->
+<div id="edit-env-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Edit Environment</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-env-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-put="/api/inventory/systems/{{ system.id }}"
+              hx-target="#toast-container"
+              hx-swap="beforeend"
+              hx-on::after-request="document.getElementById('edit-env-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
+                <input name="name" class="form-input" required value="{{ system.name }}">
+            </div>
+            <div>
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-input" rows="2">{{ system.description or '' }}</textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('edit-env-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

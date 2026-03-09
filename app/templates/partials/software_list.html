@@ -1,0 +1,83 @@
+{# Partial: software_list.html
+   Context:
+     system_id       (str)
+     software        (List[SoftwareInventory])
+     vulns           (List[CveMatch])   — used to badge vulnerable software
+     nessus_inserted (int, optional)
+     nessus_warnings (List[str], optional)
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if nessus_inserted is defined %}
+<div class="toast toast-success" style="display:none"
+     data-toast="Nessus import: {{ nessus_inserted }} records added."></div>
+<script>
+  (function(){
+    const el = document.querySelector('[data-toast]');
+    if(!el) return;
+    const msg = el.dataset.toast;
+    if(msg && window.showToast) showToast(msg, 'success');
+  })();
+</script>
+{% if nessus_warnings %}
+<div style="background:var(--color-warning-bg,#fffbe6);border:1px solid var(--color-warning,#e6a817);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem;font-size:0.82rem;">
+    {{ icon('triangle-alert', '14') }} {{ nessus_warnings | length }} import warning(s):
+    <ul style="margin:0.25rem 0 0 1.2rem;padding:0;">
+        {% for w in nessus_warnings[:5] %}<li>{{ w }}</li>{% endfor %}
+        {% if nessus_warnings | length > 5 %}<li>… and {{ nessus_warnings | length - 5 }} more</li>{% endif %}
+    </ul>
+</div>
+{% endif %}
+{% endif %}
+
+{% set vuln_products = vulns | map(attribute='matched_software') | sum(start=[]) | map('lower') | list %}
+
+{% if software %}
+<table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+    <thead>
+        <tr style="border-bottom:1px solid var(--color-border);text-align:left;">
+            <th style="padding:0.4rem 0.5rem;">Name</th>
+            <th style="padding:0.4rem 0.5rem;">Version</th>
+            <th style="padding:0.4rem 0.5rem;">Vendor</th>
+            <th style="padding:0.4rem 0.5rem;">Source</th>
+            <th style="padding:0.4rem 0.5rem;"></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for sw in software %}
+    {% set is_vuln = sw.name | lower in vuln_products %}
+    <tr style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06));{% if is_vuln %}background:rgba(var(--color-danger-rgb,220,38,38),.05);{% endif %}">
+        <td style="padding:0.4rem 0.5rem;font-weight:500;">
+            {{ sw.name }}
+            {% if is_vuln %}
+            <span class="badge badge-danger" style="margin-left:0.4rem;font-size:0.7rem;">KEV</span>
+            {% endif %}
+        </td>
+        <td style="padding:0.4rem 0.5rem;color:var(--color-muted);">{{ sw.version or '—' }}</td>
+        <td style="padding:0.4rem 0.5rem;color:var(--color-muted);">{{ sw.vendor or '—' }}</td>
+        <td style="padding:0.4rem 0.5rem;">
+            <span class="badge badge-{% if sw.source == 'nessus' %}info{% elif sw.source == 'opencti' %}purple{% else %}default{% endif %}">
+                {{ sw.source }}
+            </span>
+        </td>
+        <td style="padding:0.4rem 0.5rem;text-align:right;">
+            <button class="btn btn-ghost btn-sm"
+                    style="color:var(--color-danger);padding:0.2rem 0.4rem;"
+                    hx-delete="/api/inventory/software/{{ sw.id }}?system_id={{ system_id }}"
+                    hx-confirm="Remove '{{ sw.name }}'?"
+                    hx-target="#software-section"
+                    hx-swap="innerHTML">
+                {{ icon('trash-2', '14') }}
+            </button>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-muted);font-size:0.9rem;">
+    {{ icon('package', '36') }}
+    <p style="margin-top:0.5rem;">No software recorded yet.</p>
+    <p style="font-size:0.82rem;">Add manually or upload a Nessus file.</p>
+</div>
+{% endif %}

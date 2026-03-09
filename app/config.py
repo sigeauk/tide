@@ -128,6 +128,21 @@ class Settings(BaseSettings):
     elastic_repo_path: str = Field(default="/opt/repos/elastic-detection-rules", alias="ELASTIC_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")
     
+    # --- CVE / VULNERABILITY INTELLIGENCE (baked into Docker image) ---
+    cisa_kev_path: str = Field(
+        default="/opt/repos/cisa/known_exploited_vulnerabilities.json",
+        alias="CISA_KEV_PATH"
+    )
+    mitre_cve_path: str = Field(
+        default="/opt/repos/mappings/attack-to-cve.json",
+        alias="MITRE_CVE_PATH"
+    )
+    # Override with a runtime-provided path (e.g. from a 1-way diode / OpenCTI export)
+    cisa_kev_override_path: str = Field(
+        default="/app/data/cisa_kev_override.json",
+        alias="CISA_KEV_OVERRIDE_PATH"
+    )
+
     # --- RULE LOGGING ---
     # Host path from .env (displayed on settings page for SIEM agent reference)
     rule_log_host_path: str = Field(default="/app/data/log/rules", alias="RULE_LOG_PATH")

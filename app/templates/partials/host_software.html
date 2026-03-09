@@ -1,0 +1,102 @@
+{# Partial: host_software.html
+   Context:
+     host    (Host)
+     software (List[SoftwareInventory])
+     vulns   (List[CveMatch])
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if software %}
+{% set matched_sw_names = vulns | map(attribute='matched_software') | sum(start=[]) | list %}
+<div class="sw-list">
+{% for sw in software %}
+
+<div class="sw-card {% if sw.name in matched_sw_names %}sw-card--kev{% endif %}" id="sw-row-{{ sw.id }}">
+
+    <!-- Display mode -->
+    <div id="sw-display-{{ sw.id }}">
+        <div class="sw-card__header">
+            <span class="sw-card__name" title="{{ sw.name }}">{{ sw.name }}</span>
+            {% if sw.name in matched_sw_names %}
+            <span class="badge badge-danger" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="Matched in CISA KEV">
+                {{ icon('bug', '10') }} KEV
+            </span>
+            {% endif %}
+            <span class="badge badge-neutral" style="font-size:0.68rem;">{{ sw.source }}</span>
+        </div>
+        <div class="sw-card__meta">
+            {% if sw.version %}
+            <span style="font-family:monospace;">v{{ sw.version }}</span>
+            {% endif %}
+            {% if sw.vendor %}
+            <span>{{ sw.vendor }}</span>
+            {% endif %}
+        </div>
+        {% if sw.cpe %}
+        <div class="sw-card__cpe" title="{{ sw.cpe }}">{{ sw.cpe }}</div>
+        {% endif %}
+        <div class="sw-card__actions">
+            <button class="btn btn-secondary btn-sm"
+                    onclick="document.getElementById('sw-display-{{ sw.id }}').style.display='none';document.getElementById('sw-edit-{{ sw.id }}').style.display='flex';"
+                    style="padding:0.2rem 0.5rem;font-size:0.72rem;" title="Edit">
+                {{ icon('edit-2', '11') }} Edit
+            </button>
+            <button class="btn btn-danger btn-sm"
+                    hx-delete="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"
+                    hx-confirm="Remove '{{ sw.name }}'?"
+                    hx-target="#software-section"
+                    hx-swap="innerHTML"
+                    style="padding:0.2rem 0.5rem;font-size:0.72rem;" title="Delete">
+                {{ icon('trash-2', '11') }}
+            </button>
+        </div>
+    </div>
+
+    <!-- Edit mode (hidden by default) -->
+    <form id="sw-edit-{{ sw.id }}" class="sw-card__edit-form" style="display:none;"
+          hx-put="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"
+          hx-target="#software-section"
+          hx-swap="innerHTML"
+          hx-on::after-request="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
+        <div>
+            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Name</label>
+            <input class="form-input" name="name" value="{{ sw.name }}" required
+                   style="min-width:130px;font-size:0.8rem;padding:0.25rem 0.45rem;">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Version</label>
+            <input class="form-input" name="version" value="{{ sw.version or '' }}"
+                   style="width:90px;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="—">
+        </div>
+        <div>
+            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Vendor</label>
+            <input class="form-input" name="vendor" value="{{ sw.vendor or '' }}"
+                   style="width:120px;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="—">
+        </div>
+        <div style="flex:1;min-width:150px;">
+            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">CPE</label>
+            <input class="form-input" name="cpe" value="{{ sw.cpe or '' }}"
+                   style="width:100%;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="cpe:2.3:a:…">
+        </div>
+        <div style="display:flex;gap:0.3rem;align-self:flex-end;">
+            <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;padding:0.25rem 0.5rem;">
+                {{ icon('save', '11') }} Save
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:0.25rem 0.5rem;"
+                    onclick="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
+                Cancel
+            </button>
+        </div>
+    </form>
+
+</div>
+
+{% endfor %}
+</div>
+
+{% else %}
+<div style="text-align:center;padding:3rem 1rem;color:var(--color-text-muted);">
+    {{ icon('package', '40') }}
+    <p style="margin-top:0.75rem;font-size:0.9rem;">No software installed on this host.</p>
+</div>
+{% endif %}

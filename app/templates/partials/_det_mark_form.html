@@ -1,0 +1,28 @@
+{# Global detection mark form. In-scope: cve_id, technique_rules #}
+{% from "macros/icons.html" import icon %}
+<form id="global-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+      hx-post="/api/inventory/cve/{{ cve_id }}/detect"
+      hx-target="#detection-section-inner"
+      hx-swap="outerHTML">
+  <input type="hidden" name="system_id" value="">
+  {% if technique_rules %}
+  <select class="form-input" style="font-size:0.82rem;"
+          onchange="var f=this.closest('form'),v=this.value;if(v){var p=v.split('||');f.querySelector('[name=rule_ref]').value=p[0];f.querySelector('[name=note]').value=p[1]||'';}">
+    <option value="">— Copy from mapped rule —</option>
+    {% for tid, rules in technique_rules.items() %}
+    <optgroup label="{{ tid }}">
+      {% for r in rules %}<option value="{{ r.rule_id }}||{{ r.name }}">{{ r.name }}</option>{% endfor %}
+    </optgroup>
+    {% endfor %}
+  </select>
+  {% endif %}
+  <input class="form-input" name="rule_ref" placeholder="Rule ID / reference (optional)…">
+  <input class="form-input" name="note" placeholder="Notes (optional)…">
+  <div style="display:flex;gap:0.5rem;">
+    <button type="submit" class="btn btn-primary btn-sm">Save</button>
+    <button type="button" class="btn btn-secondary btn-sm"
+            onclick="document.getElementById('global-det-form').style.display='none';document.getElementById('global-det-btn').style.display='inline-flex';">
+      Cancel
+    </button>
+  </div>
+</form>

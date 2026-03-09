@@ -1,0 +1,75 @@
+{# Partial: cve_matches.html
+   Context:
+     system  (System | None)   — None when showing global overview
+     vulns   (List[CveMatch])
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if vulns %}
+<div style="overflow-x:auto;">
+<table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+    <thead>
+        <tr style="border-bottom:2px solid var(--color-border);text-align:left;background:var(--color-surface-raised,rgba(0,0,0,.03));">
+            <th style="padding:0.5rem 0.75rem;white-space:nowrap;">CVE ID</th>
+            <th style="padding:0.5rem 0.75rem;">Vulnerability</th>
+            <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Vendor / Product</th>
+            <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Added</th>
+            <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Due Date</th>
+            <th style="padding:0.5rem 0.75rem;">Matched Software</th>
+            <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Ransomware</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for vuln in vulns %}
+    <tr style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06));
+               {% if vuln.known_ransomware %}background:rgba(var(--color-danger-rgb,220,38,38),.04);{% endif %}">
+        <td style="padding:0.5rem 0.75rem;white-space:nowrap;font-weight:600;">
+            <a href="/cve/{{ vuln.cve_id }}"
+               style="color:var(--color-accent,hsl(220,85%,55%));text-decoration:none;">
+                {{ vuln.cve_id }}
+            </a>
+        </td>
+        <td style="padding:0.5rem 0.75rem;">
+            <span title="{{ vuln.notes or '' }}">{{ vuln.vulnerability_name }}</span>
+        </td>
+        <td style="padding:0.5rem 0.75rem;color:var(--color-muted);">
+            {{ vuln.vendor_project }} / {{ vuln.product }}
+        </td>
+        <td style="padding:0.5rem 0.75rem;color:var(--color-muted);white-space:nowrap;">
+            {{ vuln.date_added }}
+        </td>
+        <td style="padding:0.5rem 0.75rem;color:var(--color-muted);white-space:nowrap;">
+            {{ vuln.due_date }}
+        </td>
+        <td style="padding:0.5rem 0.75rem;font-size:0.8rem;color:var(--color-muted);">
+            {{ vuln.matched_software | join(', ') }}
+        </td>
+        <td style="padding:0.5rem 0.75rem;text-align:center;">
+            {% if vuln.known_ransomware %}
+            <span class="badge badge-danger" title="Associated with known ransomware campaigns">
+                {{ icon('zap', '12') }} Yes
+            </span>
+            {% else %}
+            <span style="color:var(--color-muted);font-size:0.78rem;">—</span>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{% else %}
+<div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
+    {{ icon('shield-check', '48') }}
+    <p style="margin-top:1rem;font-size:0.95rem;">
+        {% if system %}
+        No CISA KEV matches for <strong>{{ system.name }}</strong>.
+        {% else %}
+        No CISA KEV matches found across your inventory.
+        {% endif %}
+    </p>
+    <p style="font-size:0.82rem;">
+        Add software to your inventory and ensure the CISA KEV data file is loaded.
+    </p>
+</div>
+{% endif %}

@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}{{ host.name }} — TIDE{% endblock %}
+
+{% block content %}
+<div style="padding:1.5rem;">
+
+    <!-- Breadcrumb -->
+    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
+        <a href="/systems" style="color:inherit;text-decoration:none;">Environments</a>
+        <span style="margin:0 0.4rem;">›</span>
+        <a href="/systems/{{ system.id }}" style="color:inherit;text-decoration:none;">{{ system.name }}</a>
+        <span style="margin:0 0.4rem;">›</span>
+        <span>{{ host.name }}</span>
+    </nav>
+
+    <!-- Host header (editable) -->
+    {% include "partials/host_header.html" %}
+
+    <!-- Two-column layout -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
+
+        <!-- Software Section -->
+        <div style="min-width:0;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+                <h2 class="section-title" style="font-size:1.1rem;">
+                    {{ icon('package', '18') }} Installed Software
+                </h2>
+            </div>
+            <div class="card" style="padding:1rem;" id="software-section">
+                {% include "partials/host_software.html" %}
+            </div>
+        </div>
+
+        <!-- CVE Matches Section -->
+        <div style="min-width:0;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
+                <h2 class="section-title" style="font-size:1.1rem;">
+                    {{ icon('alert-triangle', '18') }} KEV Matches
+                </h2>
+                {% if vulns %}
+                <a href="/cve-overview" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
+                    View All {{ icon('external-link', '12') }}
+                </a>
+                {% endif %}
+            </div>
+            <div class="card" style="padding:1rem;max-height:72vh;overflow-y:auto;">
+                {% include "partials/host_cve_matches.html" %}
+            </div>
+        </div>
+
+    </div><!-- /grid -->
+
+</div><!-- /container -->
+
+<!-- ── Edit Host Modal ────────────────────────────────────────────── -->
+<div id="edit-host-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('edit-2','16') }} Edit Host</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-host-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-put="/api/inventory/hosts/{{ host.id }}"
+              hx-target="#host-header"
+              hx-swap="outerHTML"
+              hx-on::after-request="document.getElementById('edit-host-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label class="form-label">Hostname <span style="color:var(--color-danger)">*</span></label>
+                <input name="name" class="form-input" required value="{{ host.name }}">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+                <div>
+                    <label class="form-label">IP Address</label>
+                    <input name="ip_address" class="form-input" value="{{ host.ip_address or '' }}" placeholder="10.0.0.1">
+                </div>
+                <div>
+                    <label class="form-label">Operating System</label>
+                    <input name="os" class="form-input" value="{{ host.os or '' }}" placeholder="Windows Server 2022">
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+                <div>
+                    <label class="form-label">Hardware Vendor</label>
+                    <input name="hardware_vendor" class="form-input" value="{{ host.hardware_vendor or '' }}" placeholder="Dell">
+                </div>
+                <div>
+                    <label class="form-label">Model</label>
+                    <input name="model" class="form-input" value="{{ host.model or '' }}" placeholder="PowerEdge R740">
+                </div>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('edit-host-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">{{ icon('save','14') }} Save Changes</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Add Software Modal ─────────────────────────────────────────── -->
+<div id="add-sw-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <h3 style="margin:0 0 1rem;font-size:1.1rem;font-weight:600;">
+            Add Software — {{ host.name }}
+        </h3>
+        <form hx-post="/api/inventory/hosts/{{ host.id }}/software"
+              hx-target="#software-section"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-sw-modal').style.display='none';this.reset()"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div>
+                <label style="font-size:0.82rem;font-weight:500;display:block;margin-bottom:0.3rem;">
+                    Software Name <span style="color:var(--color-danger);">*</span>
+                </label>
+                <input class="form-input" name="name" required placeholder="e.g. Apache HTTP Server">
+            </div>
+            <div>
+                <label style="font-size:0.82rem;font-weight:500;display:block;margin-bottom:0.3rem;">Version</label>
+                <input class="form-input" name="version" placeholder="e.g. 2.4.51">
+            </div>
+            <div>
+                <label style="font-size:0.82rem;font-weight:500;display:block;margin-bottom:0.3rem;">Vendor</label>
+                <input class="form-input" name="vendor" placeholder="e.g. Apache Software Foundation">
+            </div>
+            <div>
+                <label style="font-size:0.82rem;font-weight:500;display:block;margin-bottom:0.3rem;">CPE</label>
+                <input class="form-input" name="cpe" placeholder="cpe:2.3:a:apache:http_server:2.4.51:*:*:*:*:*:*:*">
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('add-sw-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Software</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

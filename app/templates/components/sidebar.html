@@ -57,6 +57,23 @@ Icons use currentColor so they inherit text color from CSS
             </svg>
             <span class="nav-label">Sigma</span>
         </a>
+
+        <a href="/systems" class="nav-item {% if active_page == 'systems' %}active{% endif %}" data-tooltip="Systems">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+                <line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>
+            </svg>
+            <span class="nav-label">Systems</span>
+        </a>
+
+        <a href="/cve-overview" class="nav-item {% if active_page == 'cve_overview' %}active{% endif %}" data-tooltip="CVE Overview">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
+                <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
+                <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>
+            </svg>
+            <span class="nav-label">CVE Overview</span>
+        </a>
     </nav>
     
     <div class="sidebar-footer">

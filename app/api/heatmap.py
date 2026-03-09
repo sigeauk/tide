@@ -237,8 +237,9 @@ def get_technique_detail(
     tactic = get_tactic_display(raw_tactic)
     is_covered = ttp_upper in covered_ttps
     
-    # Get rules covering this technique with optional search filter
-    rules = db.get_rules_for_technique(technique_id, search=search)
+    # Get ALL rules (including disabled) so users see coverage gaps clearly
+    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False)
+    has_rules = len(rules) > 0
     
     # Build technique object for template
     from app.models.threats import MITRETechnique
@@ -257,7 +258,8 @@ def get_technique_detail(
             "technique": technique,
             "tactic": tactic,
             "is_covered": is_covered,
-            "rule_count": len(rules),
+            "has_rules": has_rules,
+            "rule_count": len([r for r in rules if r.enabled]),
             "actors": [],  # TODO: Get actors using this TTP
             "search": search or "",  # Pass search to template for rules endpoint
         }
@@ -280,7 +282,8 @@ def get_technique_rules(
         technique_id: MITRE technique ID
         search: Optional search filter to apply to rules (matches name, author, rule_id, mitre_ids)
     """
-    rules = db.get_rules_for_technique(technique_id, search=search)
+    # Get ALL rules for this technique (including disabled)
+    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False)
 
     templates = request.app.state.templates
     return templates.TemplateResponse(

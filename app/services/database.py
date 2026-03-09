@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 10
 
 
 class DatabaseService:
@@ -266,6 +266,118 @@ class DatabaseService:
             self._set_schema_version(conn, 4)
             logger.info("Migration 4: App settings table created")
         
+        # Migration 5: Asset inventory — systems & software inventory
+        if current_version < 5:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS systems (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name VARCHAR NOT NULL,
+                    hostname_pattern VARCHAR,
+                    description VARCHAR,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS software_inventory (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    system_id VARCHAR NOT NULL,
+                    name VARCHAR NOT NULL,
+                    version VARCHAR,
+                    vendor VARCHAR,
+                    cpe VARCHAR,
+                    source VARCHAR DEFAULT 'manual',
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 5)
+            logger.info("Migration 5: Asset inventory tables created (systems, software_inventory)")
+
+        # Migration 6: Enterprise model — hosts + host_id on software_inventory
+        if current_version < 6:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS hosts (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    system_id VARCHAR NOT NULL,
+                    name VARCHAR NOT NULL,
+                    ip_address VARCHAR,
+                    os VARCHAR,
+                    hardware_vendor VARCHAR,
+                    model VARCHAR,
+                    source VARCHAR DEFAULT 'manual',
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            # Add host_id column to existing software_inventory (nullable for backward compat)
+            try:
+                conn.execute("ALTER TABLE software_inventory ADD COLUMN host_id VARCHAR")
+            except Exception:
+                pass  # Column may already exist if migration was partially applied
+            self._set_schema_version(conn, 6)
+            logger.info("Migration 6: Enterprise model — hosts table + host_id column added")
+
+        # Migration 7: Vulnerability detection assertions
+        if current_version < 7:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS vuln_detections (
+                    cve_id  VARCHAR PRIMARY KEY,
+                    note    TEXT,
+                    rule_ref VARCHAR,
+                    created_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 7)
+            logger.info("Migration 7: vuln_detections table created")
+
+        # Migration 8: Per-system detection support
+        if current_version < 8:
+            # Preserve existing rows (if any) then rebuild with composite PK
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS vuln_detections_v8_tmp AS
+                SELECT cve_id,
+                       ''                AS system_id,
+                       note,
+                       rule_ref,
+                       created_at
+                FROM vuln_detections
+            """)
+            conn.execute("DROP TABLE IF EXISTS vuln_detections")
+            conn.execute("""
+                CREATE TABLE vuln_detections (
+                    cve_id     VARCHAR  NOT NULL,
+                    system_id  VARCHAR  NOT NULL DEFAULT '',
+                    note       TEXT,
+                    rule_ref   VARCHAR,
+                    created_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (cve_id, system_id)
+                )
+            """)
+            conn.execute("INSERT INTO vuln_detections SELECT * FROM vuln_detections_v8_tmp")
+            conn.execute("DROP TABLE IF EXISTS vuln_detections_v8_tmp")
+            self._set_schema_version(conn, 8)
+            logger.info("Migration 8: vuln_detections rebuilt with per-system PK")
+
+        # Migration 9: Add classification column to systems
+        if current_version < 9:
+            try:
+                conn.execute("ALTER TABLE systems ADD COLUMN classification VARCHAR")
+            except Exception:
+                pass  # Column may already exist
+            self._set_schema_version(conn, 9)
+            logger.info("Migration 9: Added classification column to systems")
+
+        # Migration 10: Add cve_technique_overrides table for manual MITRE mappings
+        if current_version < 10:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS cve_technique_overrides (
+                    cve_id      VARCHAR NOT NULL,
+                    technique_id VARCHAR NOT NULL,
+                    PRIMARY KEY (cve_id, technique_id)
+                )
+            """)
+            self._set_schema_version(conn, 10)
+            logger.info("Migration 10: Created cve_technique_overrides table")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -1312,7 +1424,8 @@ class DatabaseService:
             ttp_upper = technique_id.upper()
             
             # Build query with search filter if provided
-            base_conditions = "(array_contains(mitre_ids, ?) OR array_contains(mitre_ids, ?))"
+            # Use list_contains (DuckDB's array membership function)
+            base_conditions = "(list_contains(mitre_ids, ?) OR list_contains(mitre_ids, ?))"
             params = [ttp_upper, technique_id]
             
             if enabled_only:

@@ -17,7 +17,7 @@ import time
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory
 
 # Configure logging
 logging.basicConfig(
@@ -534,6 +534,7 @@ def create_app() -> FastAPI:
     app.include_router(promotion.router)
     app.include_router(sigma.router)
     app.include_router(settings_api.router)
+    app.include_router(inventory.router)
     
     # --- HEALTH CHECK ---
     
@@ -713,6 +714,7 @@ def create_app() -> FastAPI:
         """Dashboard page - Aggregated overview of detection engineering posture."""
         import os
         from app.services.database import get_database_service
+        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats
         db = get_database_service()
         
         # Single combined query for all metrics (1 connection, 1 validation load)
@@ -729,6 +731,14 @@ def create_app() -> FastAPI:
             "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
             "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
         }
+
+        # Inventory / CVE stats (best-effort — won't crash dashboard if engine unavailable)
+        try:
+            inventory_stats = get_inventory_stats()
+            cve_stats = get_cve_overview_stats()
+        except Exception:
+            inventory_stats = None
+            cve_stats = None
         
         return render_template(
             "pages/dashboard.html",
@@ -743,6 +753,8 @@ def create_app() -> FastAPI:
                 "env": env_settings,
                 "app_settings": app_settings,
                 "repo_status": repo_status,
+                "inventory_stats": inventory_stats,
+                "cve_stats": cve_stats,
             }
         )
     

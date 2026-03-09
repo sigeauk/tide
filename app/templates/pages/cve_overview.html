@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}CVE Overview — TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ icon('shield-alert','24') }} CVE Overview</h1>
+        <p class="page-subtitle">All CISA KEV entries — matched entries shown first.</p>
+    </div>
+    <div style="display:flex;gap:0.5rem;align-items:center;flex-shrink:0;flex-wrap:wrap;margin-left:auto;">
+        <!-- KEV import — uses fetch() for reliable file upload (HTMX 2.x has issues with standalone file inputs) -->
+        <label class="btn btn-secondary btn-sm" for="cisa-kev-upload" style="cursor:pointer;margin:0;">
+            {{ icon('upload', '14') }} Import KEV
+        </label>
+        <input id="cisa-kev-upload" type="file" accept=".json" style="display:none">
+
+        <!-- MITRE mapping upload (airgap-safe) -->
+        <label class="btn btn-secondary btn-sm" for="mitre-map-upload" style="cursor:pointer;margin:0;" title="Upload attack-to-cve.json mapping file">
+            {{ icon('map', '14') }} Upload MITRE Map
+        </label>
+        <input id="mitre-map-upload" type="file" accept=".json" style="display:none">
+
+        <span id="upload-status" style="font-size:0.8rem;color:var(--color-muted);"></span>
+    </div>
+</div>
+
+<!-- Metric cards -->
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ stats.total_kev }}</p>
+        <p class="metric-label">Total KEV</p>
+        <p class="metric-sub">{{ icon_text('database','CISA catalogue','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'danger' if stats.matched_count > 0 else '' }}">{{ stats.matched_count }}</p>
+        <p class="metric-label">CVEs Matched</p>
+        <p class="metric-sub">{{ icon_text('alert-triangle','In your environments','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'danger' if stats.affected_hosts > 0 else '' }}">{{ stats.affected_hosts }}</p>
+        <p class="metric-label">Affected Hosts</p>
+        <p class="metric-sub">{{ icon_text('server','Hosts with matches','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'warning' if stats.ransomware_count > 0 else '' }}">{{ stats.ransomware_count }}</p>
+        <p class="metric-label">Ransomware CVEs</p>
+        <p class="metric-sub">{{ icon_text('zap','Known ransomware use','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'success' if stats.detected_count > 0 else '' }}">{{ stats.detected_count }}</p>
+        <p class="metric-label">Detections In Place</p>
+        <p class="metric-sub">{{ icon_text('shield-check','Marked as detected','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'danger' if stats.ransomware_undetected > 0 else 'success' }}">{{ stats.ransomware_undetected }}</p>
+        <p class="metric-label">Ransomware Undetected</p>
+        <p class="metric-sub">{{ icon_text('alert-circle','Ransom without detection','14') }}</p>
+    </div>
+</div>
+
+<!-- Filter bar -->
+<div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center;">
+    <input id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
+           class="form-input" style="max-width:320px;font-size:0.85rem;"
+           oninput="filterTable(this.value)">
+    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer;">
+        <input type="checkbox" id="filter-matched" onchange="filterTable(document.getElementById('kev-search').value)">
+        Show matched only
+    </label>
+</div>
+
+<!-- Table -->
+<div class="card" style="padding:0;overflow:hidden;">
+    <div id="cve-table-container"
+         hx-get="/api/inventory/cve-overview-partial"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div style="padding:2rem;text-align:center;color:var(--color-muted);">
+            {{ icon('loader','24') }} Loading KEV catalogue…
+        </div>
+    </div>
+</div>
+
+<script>
+function filterTable(q) {
+    // Delegates to card-based filter defined in the partial once loaded
+    if (window.filterCveCards) window.filterCveCards();
+}
+
+async function uploadFile(inputId, endpoint, targetId, successMsg) {
+    const inp = document.getElementById(inputId);
+    if (!inp || !inp.files.length) return;
+    const status = document.getElementById('upload-status');
+    if (status) status.textContent = '⏳ Uploading…';
+    const fd = new FormData();
+    fd.append('file', inp.files[0]);
+    inp.value = ''; // reset so same file can be re-selected
+    try {
+        const resp = await fetch(endpoint, { method: 'POST', body: fd });
+        if (resp.redirected || resp.status === 401) {
+            if (status) status.textContent = '⚠ Session expired — please reload the page.';
+            return;
+        }
+        const html = await resp.text();
+        if (resp.ok) {
+            const target = document.getElementById(targetId);
+            if (target) {
+                target.innerHTML = html;
+                htmx.process(target);
+            }
+            if (status) status.textContent = successMsg || '✓ Done';
+            setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+        } else {
+            if (status) status.textContent = '✗ Error: ' + (resp.status);
+        }
+    } catch (err) {
+        if (status) status.textContent = '✗ ' + err.message;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('cisa-kev-upload').addEventListener('change', () =>
+        uploadFile('cisa-kev-upload', '/api/inventory/feed/cisa', 'cve-table-container', '✓ KEV imported'));
+    document.getElementById('mitre-map-upload').addEventListener('change', () =>
+        uploadFile('mitre-map-upload', '/api/inventory/feed/mitre-mapping', 'upload-status', '✓ MITRE map updated'));
+});
+</script>
+{% endblock %}

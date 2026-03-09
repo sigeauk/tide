@@ -133,4 +133,38 @@
     </div>
 </div>
 
+<!-- ═══ Asset Inventory ═══ -->
+<div class="overview-section">
+    <h2>{{ icon('server', '20') }} Asset Inventory</h2>
+    <div class="metrics-grid">
+        {% if inventory_stats %}
+        {% set stats = inventory_stats %}
+        {% include "partials/inventory_metrics.html" %}
+        {% else %}
+        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
+            <p class="metric-value" style="font-size:1rem;">—</p>
+            <p class="metric-label">No inventory data</p>
+            <p class="metric-sub"><a href="/systems">Go to Environments →</a></p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- ═══ CVE Overview ═══ -->
+<div class="overview-section">
+    <h2>{{ icon('shield-alert', '20') }} CVE Overview</h2>
+    <div class="metrics-grid">
+        {% if cve_stats %}
+        {% set stats = cve_stats %}
+        {% include "partials/cve_metrics.html" %}
+        {% else %}
+        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
+            <p class="metric-value" style="font-size:1rem;">—</p>
+            <p class="metric-label">No KEV data</p>
+            <p class="metric-sub"><a href="/cve-overview">Import KEV →</a></p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 {% endblock %}

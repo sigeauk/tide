@@ -1,0 +1,36 @@
+
+{#  Partial: partials/cve_metrics.html
+    Context:  stats (CveOverviewStats)
+#}
+{% from "macros/icons.html" import icon_text %}
+
+<div class="metric-card">
+    <p class="metric-value">{{ stats.total_kev }}</p>
+    <p class="metric-label">Total KEV</p>
+    <p class="metric-sub">{{ icon_text('database','CISA catalogue','14') }}</p>
+</div>
+<div class="metric-card">
+    <p class="metric-value {{ 'danger' if stats.matched_count > 0 else '' }}">{{ stats.matched_count }}</p>
+    <p class="metric-label">CVEs Matched</p>
+    <p class="metric-sub">{{ icon_text('alert-triangle','In your environments','14') }}</p>
+</div>
+<div class="metric-card">
+    <p class="metric-value {{ 'danger' if stats.affected_hosts > 0 else '' }}">{{ stats.affected_hosts }}</p>
+    <p class="metric-label">Affected Hosts</p>
+    <p class="metric-sub">{{ icon_text('server','Hosts with matches','14') }}</p>
+</div>
+<div class="metric-card">
+    <p class="metric-value {{ 'warning' if stats.ransomware_count > 0 else '' }}">{{ stats.ransomware_count }}</p>
+    <p class="metric-label">Ransomware CVEs</p>
+    <p class="metric-sub">{{ icon_text('zap','Known ransomware use','14') }}</p>
+</div>
+<div class="metric-card">
+    <p class="metric-value {{ 'success' if stats.detected_count > 0 else '' }}">{{ stats.detected_count }}</p>
+    <p class="metric-label">Detected</p>
+    <p class="metric-sub">{{ icon_text('shield-check','Marked as detected','14') }}</p>
+</div>
+<div class="metric-card">
+    <p class="metric-value {{ 'danger' if stats.ransomware_undetected > 0 else 'success' }}">{{ stats.ransomware_undetected }}</p>
+    <p class="metric-label">Ransom Undetected</p>
+    <p class="metric-sub">{{ icon_text('alert-circle','Ransom without coverage','14') }}</p>
+</div>

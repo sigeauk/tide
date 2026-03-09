@@ -1,0 +1,73 @@
+
+{#  Partial: partials/cve_detection_badge.html
+    Context (from page or API render):
+      cve_id            str
+      system_detections Dict[str, VulnDetection]   — system_id -> detection
+      affected_systems  Dict[str, str]              — system_id -> system_name
+      technique_rules   Dict[str, List[Rule]]       — technique_id -> rules
+    Self-targeting: hx-swap="outerHTML" on #detection-section-inner
+#}
+{% from "macros/icons.html" import icon %}
+
+<div id="detection-section-inner">
+
+{#  We show a row for every affected system (so users can mark per-system),
+    then any additional systems that already have a detection but aren't
+    in affected_systems (edge case: host deleted after detection marked).
+    Jinja2 doesn't allow dict mutation, so we iterate both sources. #}
+{% set ns = namespace(shown=[]) %}
+
+{# ── 1. Iterate affected systems ─────────────────────────────────────── #}
+{% if affected_systems %}
+  <div style="display:flex;flex-direction:column;gap:0.75rem;">
+
+  {% for sys_id, sys_name in affected_systems.items() %}
+    {% set ns.shown = ns.shown + [sys_id] %}
+    {% set det = system_detections.get(sys_id) %}
+    {% include "partials/_det_system_row.html" %}
+  {% endfor %}
+
+  {# ── 2. Extra systems already marked but not in affected_systems ── #}
+  {% for sys_id, det in system_detections.items() %}
+    {% if sys_id not in ns.shown and sys_id != '' %}
+      {% set ns.shown = ns.shown + [sys_id] %}
+      {% set sys_name = sys_id %}
+      {% include "partials/_det_system_row.html" %}
+    {% endif %}
+  {% endfor %}
+
+  </div>
+
+{% else %}
+  {# ── No affected hosts: single global detection ──────────────────── #}
+  {% set global_det = system_detections.get('') %}
+  {% if global_det %}
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">
+      <div>
+        <span class="badge badge-success" style="font-size:0.85rem;display:inline-flex;align-items:center;gap:0.3rem;margin-bottom:0.35rem;">
+          {{ icon('shield-check','14') }} Detection In Place
+        </span>
+        {% if global_det.rule_ref %}<p style="margin:0.2rem 0 0;font-size:0.85rem;color:var(--color-muted);"><strong>Rule:</strong> {{ global_det.rule_ref }}</p>{% endif %}
+        {% if global_det.note %}<p style="margin:0.2rem 0 0;font-size:0.85rem;color:var(--color-muted);">{{ global_det.note }}</p>{% endif %}
+      </div>
+      <button class="btn btn-secondary btn-sm"
+              hx-delete="/api/inventory/cve/{{ cve_id }}/detect?system_id="
+              hx-target="#detection-section-inner"
+              hx-swap="outerHTML"
+              hx-confirm="Remove this global detection marker?">
+        {{ icon('x','14') }} Remove
+      </button>
+    </div>
+  {% else %}
+    <p style="margin:0 0 0.75rem;font-size:0.88rem;color:var(--color-muted);">
+      No affected hosts in inventory. You can still record a general detection.
+    </p>
+    <button class="btn btn-sm btn-secondary" id="global-det-btn"
+            onclick="this.style.display='none';document.getElementById('global-det-form').style.display='flex';">
+      {{ icon('plus','14') }} Mark as Detected
+    </button>
+    {% include "partials/_det_mark_form.html" %}
+  {% endif %}
+{% endif %}
+
+</div>

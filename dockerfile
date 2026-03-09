@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma
+RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma /opt/repos/cisa /opt/repos/mappings
 
 # ─── DATA REPOS ───────────────────
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
@@ -56,6 +56,14 @@ RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubuserc
     curl -sSL -o /opt/repos/mitre/mobile-attack.json https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json && \
     curl -sSL -o /opt/repos/mitre/ics-attack.json https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json && \
     curl -sSL -o /opt/repos/mitre/pre-attack.json https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json
+
+# ─── CVE / VULNERABILITY DATA ─────
+RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
+        https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json || \
+    echo "WARN: CISA KEV download failed (air-gap build) — file will be absent at runtime" && \
+    curl -sSL -o /opt/repos/mappings/attack-to-cve.json \
+        https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/main/mappings/attack-to-cve.json || \
+    echo "WARN: ATT&CK-to-CVE mapping download failed (air-gap build) — file will be absent at runtime"
 
 # Copy application code and VERSION file
 COPY app/ /app/app/
