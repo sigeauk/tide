@@ -4,6 +4,7 @@ inventory_engine.py - Asset Inventory & CVE Mapping Engine (Phase 2: Enterprise)
 from __future__ import annotations
 import json, logging, os, re, shutil, xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
+import threading
 from app.config import get_settings
 from app.models.inventory import (
     AffectedHost, CveMatch, CveOverviewStats, Host, HostCreate, HostSummary,
@@ -41,26 +42,42 @@ def _load_cisa_kev():
     logger.warning("No CISA KEV file available.")
     return []
 
+_mitre_cve_map_cache: Optional[Dict] = None
+_mitre_cve_map_loaded: bool = False
+
 def _load_mitre_cve_map():
+    global _mitre_cve_map_cache, _mitre_cve_map_loaded
+    if _mitre_cve_map_loaded:
+        return _mitre_cve_map_cache or {}
     for p in ["/app/data/attack-to-cve.json", "/opt/repos/mappings/attack-to-cve.json"]:
         if os.path.exists(p):
             try:
                 with open(p, "r", encoding="utf-8") as fh:
                     raw = json.load(fh)
                 if not raw:
+                    _mitre_cve_map_loaded = True
+                    _mitre_cve_map_cache = {}
                     return {}
                 first_key = next(iter(raw))
                 if first_key.upper().startswith("CVE-"):
-                    return {k.upper(): v for k, v in raw.items()}
-                inverted = {}
-                for tid, cve_list in raw.items():
-                    for cve_id in cve_list:
-                        inverted.setdefault(cve_id.upper(), [])
-                        if tid not in inverted[cve_id.upper()]:
-                            inverted[cve_id.upper()].append(tid)
-                return inverted
+                    _mitre_cve_map_cache = {k.upper(): v for k, v in raw.items()}
+                else:
+                    inverted = {}
+                    for tid, cve_list in raw.items():
+                        for cve_id in cve_list:
+                            inverted.setdefault(cve_id.upper(), [])
+                            if tid not in inverted[cve_id.upper()]:
+                                inverted[cve_id.upper()].append(tid)
+                    _mitre_cve_map_cache = inverted
+                _mitre_cve_map_loaded = True
+                return _mitre_cve_map_cache
             except Exception as exc:
                 logger.warning(f"Failed to load MITRE CVE map from {p}: {exc}")
+                _mitre_cve_map_loaded = True   # don't retry on every call
+                _mitre_cve_map_cache = {}
+                return {}
+    _mitre_cve_map_loaded = True
+    _mitre_cve_map_cache = {}
     return {}
 
 _TECHNIQUE_NAMES = {
@@ -364,7 +381,8 @@ def parse_nessus_xml(xml_bytes, system_id):
 # --- CVE Matching ---
 _CVE_RANSOMWARE_YES = {"known", "yes", "true"}
 
-def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, techniques=None, detection=None, system_detections=None):
+def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, techniques=None,
+                       detection=None, system_detections=None, threat_actors=None):
     """Build a CveMatch from a raw KEV dict."""
     ransomware_raw = (kev.get("knownRansomwareCampaignUse") or "").lower()
     return CveMatch(
@@ -380,13 +398,117 @@ def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, technique
         matched_software=matched_software or [],
         affected_hosts=affected_hosts or [],
         techniques=techniques or [],
+        threat_actors=threat_actors or [],
         detection=detection,
         system_detections=system_detections or {},
     )
 
-def _match_software_against_kev(software_list, kev_entries):
-    """Returns {cve_id: matched_software_names} for software that matches KEV entries."""
+
+_octi_warmup_started: bool = False
+_octi_warmup_lock = threading.Lock()
+
+
+def _ensure_opencti_index_warm() -> bool:
+    """
+    Return True if the OpenCTI bulk index is already cached.
+    If not, start a one-shot background thread to warm it and return False
+    so the caller can skip the enrichment for this request.
+    """
+    from app.version_gate import fetch_opencti_vuln_index, _octi_bulk_cache
+    global _octi_warmup_started
+    if _octi_bulk_cache is not None:
+        return True
+    with _octi_warmup_lock:
+        if not _octi_warmup_started:
+            _octi_warmup_started = True
+            t = threading.Thread(target=fetch_opencti_vuln_index, daemon=True, name="octi-warmup")
+            t.start()
+            logger.info("[opencti-index] Background warm-up started")
+    return False
+
+
+def _match_software_against_opencti(
+    software_list: list,
+    host_sw_cpes: List[str],
+) -> Dict[str, Dict]:
+    """
+    Match host software CPEs against the OpenCTI vulnerability index using strict
+    CPE identity (part/vendor/product) matching.
+
+    Returns {cve_id: {description, cvss_score, actors, matched_software}} for
+    every CVE in OpenCTI whose affected-software CPEs identity-match at least
+    one host CPE. Version filtering is applied where OpenCTI provides version data.
+
+    This is intentionally separate from _match_software_against_kev so the KEV
+    overview page is unaffected.
+    """
+    from app.version_gate import fetch_opencti_vuln_index, Cpe, _evaluate_opencti_ranges
+
+    if not _ensure_opencti_index_warm():
+        return {}   # cache still warming in background — skip enrichment this request
+
+    index = fetch_opencti_vuln_index()
+    if not index or not host_sw_cpes:
+        return {}
+
+    # Parse host CPEs once and map cpe_str -> software names (a CPE may appear once)
+    host_parsed: List[tuple] = [(Cpe.parse(c), c) for c in host_sw_cpes if c]
+    cpe_to_sw: Dict[str, List[str]] = {}
+    for sw in software_list:
+        if sw.cpe:
+            cpe_to_sw.setdefault(sw.cpe, []).append(sw.name)
+
+    results: Dict[str, Dict] = {}
+    for cve_id, vuln in index.items():
+        cpe_ranges = vuln.get("cpe_ranges", [])
+        if not cpe_ranges:
+            continue
+
+        # Use the existing CPE-identity + version-range evaluator
+        match_result = _evaluate_opencti_ranges(cpe_ranges, host_sw_cpes)
+        if match_result is not True:
+            continue
+
+        # Identify which software names contributed to the match
+        matched_names: List[str] = []
+        for r in cpe_ranges:
+            nvd_cpe = Cpe.parse(r.get("cpe23Uri", ""))
+            for hcpe, hcpe_str in host_parsed:
+                if nvd_cpe.identity_matches(hcpe):
+                    for name in cpe_to_sw.get(hcpe_str, []):
+                        if name not in matched_names:
+                            matched_names.append(name)
+
+        if matched_names:
+            results[cve_id] = {
+                "description": vuln.get("description", ""),
+                "cvss_score": vuln.get("cvss_score"),
+                "actors": vuln.get("actors", []),
+                "matched_software": matched_names,
+            }
+
+    logger.debug("[opencti-match] %d CVEs matched via CPE identity", len(results))
+    return results
+
+def _match_software_against_kev(
+    software_list,
+    kev_entries,
+    host_os: str = "",
+    apply_version_gate: bool = True,
+) -> Dict[str, List[str]]:
+    """
+    Returns {cve_id: matched_software_names} for software that matches KEV entries.
+
+    When apply_version_gate=True (default) and host_os is provided, Windows OS-level
+    CVEs that do not affect the host's specific build number are suppressed to
+    eliminate false positives caused by simple keyword matching.
+    """
+    from app.version_gate import should_include_match
+
     matches: Dict[str, List[str]] = {}
+    # Collect all CPEs from this host's software list once for the version gate
+    host_sw_cpes: List[str] = [sw.cpe for sw in software_list if sw.cpe]
+
     for kev in kev_entries:
         cve_id = kev.get("cveID", "")
         vendor_proj = (kev.get("vendorProject") or "").lower()
@@ -399,11 +521,21 @@ def _match_software_against_kev(software_list, kev_entries):
             matched = ((sw_cpe and sw_cpe in notes) or
                        (sw_vendor and sw_vendor in vendor_proj) or
                        (product and (product in sw_name or sw_name in product)))
-            if matched:
-                if cve_id not in matches:
-                    matches[cve_id] = [sw.name]
-                elif sw.name not in matches[cve_id]:
-                    matches[cve_id].append(sw.name)
+            if not matched:
+                continue
+
+            # Version gate: suppress CVEs whose version ranges don't cover this build
+            if apply_version_gate and cve_id:
+                matched_cpe = [sw.cpe] if sw.cpe else []
+                if not should_include_match(
+                    cve_id, kev, matched_cpe, host_sw_cpes
+                ):
+                    continue
+
+            if cve_id not in matches:
+                matches[cve_id] = [sw.name]
+            elif sw.name not in matches[cve_id]:
+                matches[cve_id].append(sw.name)
     return matches
 
 def get_host_vulnerabilities(host_id):
@@ -413,58 +545,151 @@ def get_host_vulnerabilities(host_id):
     software = list_host_software(host_id)
     if not software:
         return []
-    kev = _load_cisa_kev()
-    if not kev:
-        return []
-    matched_map = _match_software_against_kev(software, kev)
+
     detections = list_cve_detections()
-    kev_by_id = {k.get("cveID", ""): k for k in kev}
+    host_sw_cpes: List[str] = [sw.cpe for sw in software if sw.cpe]
+
+    # --- KEV keyword matching (existing) ---
+    kev = _load_cisa_kev()
+    kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
+    matched_map: Dict[str, List[str]] = {}
+    if kev:
+        matched_map = _match_software_against_kev(software, kev, host_os=host.os or "")
+
+    # --- OpenCTI CPE identity matching (enrichment) ---
+    octi_map = _match_software_against_opencti(software, host_sw_cpes)
+
+    # Merge: collect all CVE IDs from both sources
+    all_cve_ids = set(matched_map) | set(octi_map)
     out = []
-    for cve_id, sw_names in matched_map.items():
+    for cve_id in all_cve_ids:
         kev_entry = kev_by_id.get(cve_id, {})
+        octi_vuln = octi_map.get(cve_id, {})
+        actors = octi_vuln.get("actors", [])
         cve_dets = detections.get(cve_id, {})
         any_det = next(iter(cve_dets.values()), None)
-        out.append(_kev_to_cve_match(kev_entry, matched_software=sw_names,
-                                     detection=any_det, system_detections=cve_dets))
-    return sorted(out, key=lambda m: m.date_added, reverse=True)
+
+        # Merge software name lists from both sources
+        kev_sw = matched_map.get(cve_id, [])
+        octi_sw = octi_vuln.get("matched_software", [])
+        sw_names = list(dict.fromkeys(kev_sw + [n for n in octi_sw if n not in kev_sw]))
+
+        if kev_entry:
+            # CVE is in CISA KEV — use KEV metadata, enrich with OpenCTI actors
+            out.append(_kev_to_cve_match(
+                kev_entry,
+                matched_software=sw_names,
+                techniques=get_cve_techniques(cve_id) if cve_id in matched_map else [],
+                detection=any_det,
+                system_detections=cve_dets,
+                threat_actors=actors,
+            ))
+        else:
+            # CVE is in OpenCTI but not in CISA KEV — synthesise a CveMatch
+            desc = octi_vuln.get("description", "")
+            out.append(CveMatch(
+                cve_id=cve_id,
+                vendor_project="OpenCTI",
+                product=", ".join(sw_names) or "Unknown",
+                vulnerability_name=desc[:120] if desc else cve_id,
+                short_description=desc,
+                date_added="",
+                due_date="",
+                known_ransomware=False,
+                matched_software=sw_names,
+                threat_actors=actors,
+                detection=any_det,
+                system_detections=cve_dets,
+            ))
+
+    return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
 
 def get_system_vulnerabilities(system_id):
     system = get_system(system_id)
     if not system:
         return []
     kev = _load_cisa_kev()
-    if not kev:
-        return []
-    kev_by_id = {k.get("cveID", ""): k for k in kev}
+    kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
     detections = list_cve_detections()
-    combined_sw: Dict[str, List[str]] = {}     # cve_id -> sw names
+    combined_sw: Dict[str, List[str]] = {}          # cve_id -> sw names
     combined_hosts: Dict[str, List[AffectedHost]] = {}
+    combined_actors: Dict[str, List[str]] = {}      # cve_id -> actor names
+
     for host in list_hosts(system_id):
         software = list_host_software(host.id)
         if not software:
             continue
-        host_matches = _match_software_against_kev(software, kev)
+        host_sw_cpes: List[str] = [sw.cpe for sw in software if sw.cpe]
         ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
                           system_id=system.id, system_name=system.name)
-        for cve_id, sw_names in host_matches.items():
+
+        # KEV keyword matches for this host
+        kev_matches: Dict[str, List[str]] = {}
+        if kev:
+            kev_matches = _match_software_against_kev(software, kev, host_os=host.os or "")
+
+        # OpenCTI CPE-identity matches for this host
+        octi_matches = _match_software_against_opencti(software, host_sw_cpes)
+
+        for cve_id in set(kev_matches) | set(octi_matches):
+            sw_names = list(dict.fromkeys(
+                kev_matches.get(cve_id, []) +
+                [n for n in octi_matches.get(cve_id, {}).get("matched_software", [])
+                 if n not in kev_matches.get(cve_id, [])]
+            ))
+            actors = octi_matches.get(cve_id, {}).get("actors", [])
+
             if cve_id not in combined_hosts:
                 combined_hosts[cve_id] = [ah]
-                combined_sw[cve_id] = list(sw_names)
+                combined_sw[cve_id] = sw_names
+                combined_actors[cve_id] = actors
             else:
                 if not any(a.host_id == host.id for a in combined_hosts[cve_id]):
                     combined_hosts[cve_id].append(ah)
                 for sn in sw_names:
                     if sn not in combined_sw[cve_id]:
                         combined_sw[cve_id].append(sn)
+                for ac in actors:
+                    if ac not in combined_actors[cve_id]:
+                        combined_actors[cve_id].append(ac)
+
     out = []
     for cve_id, hosts_list in combined_hosts.items():
         kev_entry = kev_by_id.get(cve_id, {})
+        octi_desc = ""
         cve_dets = detections.get(cve_id, {})
         any_det = next(iter(cve_dets.values()), None)
-        out.append(_kev_to_cve_match(kev_entry, affected_hosts=hosts_list,
-                                     matched_software=combined_sw.get(cve_id, []),
-                                     detection=any_det, system_detections=cve_dets))
-    return sorted(out, key=lambda m: m.date_added, reverse=True)
+        actors = combined_actors.get(cve_id, [])
+
+        if kev_entry:
+            out.append(_kev_to_cve_match(
+                kev_entry,
+                affected_hosts=hosts_list,
+                matched_software=combined_sw.get(cve_id, []),
+                detection=any_det,
+                system_detections=cve_dets,
+                threat_actors=actors,
+            ))
+        else:
+            # OpenCTI-only CVE
+            sw_names = combined_sw.get(cve_id, [])
+            out.append(CveMatch(
+                cve_id=cve_id,
+                vendor_project="OpenCTI",
+                product=", ".join(sw_names) or "Unknown",
+                vulnerability_name=cve_id,
+                short_description="",
+                date_added="",
+                due_date="",
+                known_ransomware=False,
+                matched_software=sw_names,
+                affected_hosts=hosts_list,
+                threat_actors=actors,
+                detection=any_det,
+                system_detections=cve_dets,
+            ))
+
+    return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
 
 def get_all_cve_overview():
     """Return all KEV entries. Matched entries (with affected hosts) come first."""
@@ -479,7 +704,7 @@ def get_all_cve_overview():
             software = list_host_software(host.id)
             if not software:
                 continue
-            matches = _match_software_against_kev(software, kev_entries)
+            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
             ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
                               system_id=system.id, system_name=system.name)
             for cve_id in matches:
@@ -512,7 +737,7 @@ def get_cve_detail(cve_id):
     for system in list_systems():
         for host in list_hosts(system.id):
             software = list_host_software(host.id)
-            matches = _match_software_against_kev(software, kev_entries)
+            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
             if cve_id.upper() in {k.upper() for k in matches}:
                 match_key = next(k for k in matches if k.upper() == cve_id.upper())
                 if not any(a.host_id == host.id for a in all_affected):
@@ -573,7 +798,7 @@ def get_inventory_stats() -> InventoryStats:
             sw = list_host_software(host.id)
             if not sw:
                 continue
-            m = _match_software_against_kev(sw, kev)
+            m = _match_software_against_kev(sw, kev, host_os=host.os or "")
             if m:
                 affected_hosts_set.add(host.id)
                 matched_cves.update(m.keys())
@@ -600,7 +825,7 @@ def get_cve_overview_stats() -> CveOverviewStats:
             sw = list_host_software(host.id)
             if not sw:
                 continue
-            m = _match_software_against_kev(sw, kev)
+            m = _match_software_against_kev(sw, kev, host_os=host.os or "")
             if m:
                 affected_hosts_set.add(host.id)
                 affected_cves.update(m.keys())

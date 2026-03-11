@@ -177,6 +177,7 @@ class CveMatch(BaseModel):
     matched_software: List[str] = Field(default_factory=list)
     affected_hosts: List["AffectedHost"] = Field(default_factory=list)
     techniques: List[MitreTechnique] = Field(default_factory=list)
+    threat_actors: List[str] = Field(default_factory=list)          # actor names from OpenCTI
     detection: Optional["VulnDetection"] = None        # any detection exists (for overview badge)
     system_detections: Dict[str, "VulnDetection"] = Field(default_factory=dict)  # system_id -> detection
 

@@ -143,6 +143,17 @@ class Settings(BaseSettings):
         alias="CISA_KEV_OVERRIDE_PATH"
     )
 
+    # --- NVD VERSION-RANGE CACHE (baked into image at build time) ---
+    # Layout: /opt/repos/nvd/{year}/CVE-YYYY-NNNNN.json  (per-CVE files)
+    #      or /opt/repos/nvd/nvdcve-2.0-{year}.json      (combined year files)
+    #      or /opt/repos/nvd/windows11-{year}.json        (Windows-only combined)
+    # Set NVD_CACHE_PATH=/app/data/nvd in .env to use a runtime-writable path
+    # for over-the-air updates via a 1-way diode.
+    nvd_cache_path: str = Field(
+        default="/opt/repos/nvd",
+        alias="NVD_CACHE_PATH"
+    )
+
     # --- RULE LOGGING ---
     # Host path from .env (displayed on settings page for SIEM agent reference)
     rule_log_host_path: str = Field(default="/app/data/log/rules", alias="RULE_LOG_PATH")

@@ -36,6 +36,9 @@ pysigma-pipeline-sysmon>=2.0.0
 sigma-cli>=2.0.0
 pyyaml>=6.0.1
 
+# --- Version comparison (CPE / NVD range matching) ---
+packaging>=23.0
+
 # --- Build Tools ---
 wheel>=0.46.2
 
