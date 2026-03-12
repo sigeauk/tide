@@ -899,6 +899,7 @@ def create_app() -> FastAPI:
         """Settings page - configure integrations, logging, and system health."""
         import os
         from app import sigma_helper as sigma_mod
+        from app.inventory_engine import list_classifications
         app_settings = db.get_all_settings()
         env_settings = get_settings()
 
@@ -923,6 +924,7 @@ def create_app() -> FastAPI:
                 "repo_status": repo_status,
                 "sigma_indices": sigma_mod.get_elastic_indices(),
                 "sigma_spaces": sigma_mod.get_kibana_spaces(),
+                "classifications": list_classifications(),
             }
         )
     

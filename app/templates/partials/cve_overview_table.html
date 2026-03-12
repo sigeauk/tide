@@ -1,7 +1,7 @@
 
 {# Partial: cve_overview_table.html
    Context:
-     cves          (List[CveMatch])  — ALL KEV entries, matched first
+     cves          (List[CveMatch])  — ALL CVE entries, matched first
      matched_count (int)
      systems       (List[System])    — for system filter dropdown
 #}
@@ -12,14 +12,53 @@
 {# ── Toolbar: system filter + sort controls ─────────────────────────────── #}
 <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;padding:0.75rem 1rem;border-bottom:var(--border-card);">
     {% if systems %}
-    <select id="filter-system" class="form-input" style="max-width:220px;font-size:0.82rem;"
-            onchange="filterCveCards()">
-        <option value="">All Systems</option>
-        {% for s in systems %}
-        <option value="{{ s.id }}">{{ s.name }}</option>
-        {% endfor %}
-    </select>
+    <div class="filter-multi" style="position:relative;">
+        <button class="form-input" style="max-width:220px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
+                onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
+            {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span style="margin-left:auto;">▾</span>
+        </button>
+        <div class="filter-multi__dropdown hidden" id="sys-filter-dropdown"
+             style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem;">
+            {% for s in systems %}
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;white-space:nowrap;">
+                <input type="checkbox" class="sys-filter-cb" value="{{ s.id }}" onchange="filterCveCards()" checked> {{ s.name }}
+            </label>
+            {% endfor %}
+            <hr style="margin:0.3rem 0;border-color:var(--color-border);">
+            <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
+                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
+                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+            </div>
+        </div>
+    </div>
     {% endif %}
+
+    <div class="filter-multi" style="position:relative;">
+        <button class="form-input" style="max-width:200px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
+                onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
+            {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span style="margin-left:auto;">▾</span>
+        </button>
+        <div class="filter-multi__dropdown hidden" id="cov-filter-dropdown"
+             style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:180px;box-shadow:var(--shadow);margin-top:0.25rem;">
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
+                <input type="checkbox" class="cov-filter-cb" value="detected" onchange="filterCveCards()" checked> Has Rules
+            </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
+                <input type="checkbox" class="cov-filter-cb" value="nocover" onchange="filterCveCards()" checked> No Rules
+            </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
+                <input type="checkbox" class="cov-filter-cb" value="available" onchange="filterCveCards()" checked> Available
+            </label>
+            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
+                <input type="checkbox" class="cov-filter-cb" value="unaffected" onchange="filterCveCards()" checked> Unaffected
+            </label>
+            <hr style="margin:0.3rem 0;border-color:var(--color-border);">
+            <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
+                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
+                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+            </div>
+        </div>
+    </div>
 
     <select id="sort-field" class="form-input" style="max-width:160px;font-size:0.82rem;"
             onchange="sortCveCards()">
@@ -45,24 +84,49 @@
 <div class="cve-list" id="cve-card-list" style="padding:0.75rem 1rem;">
 {% for cve in cves %}
 {% set matched = cve.affected_hosts | length > 0 %}
+{% set has_rules = cve.detections | length > 0 %}
 
 {# Build system_ids string for data-systems attribute #}
-{% set ns = namespace(sys_ids=[], sys_seen=[], all_det=true, any_det=false) %}
+{% set ns = namespace(sys_ids=[], sys_seen=[]) %}
 {% for h in cve.affected_hosts %}
   {% if h.system_id not in ns.sys_seen %}
     {% set ns.sys_seen = ns.sys_seen + [h.system_id] %}
     {% set ns.sys_ids = ns.sys_ids + [h.system_id] %}
-    {% if h.system_id in cve.system_detections %}
-      {% set ns.any_det = true %}
-    {% else %}
-      {% set ns.all_det = false %}
-    {% endif %}
   {% endif %}
 {% endfor %}
 
-<div class="cve-card-item {% if matched %}cve-card-item--matched{% endif %}"
+{# Determine coverage status for border colour and filtering #}
+{% if not matched and has_rules %}
+  {% set coverage_class = 'cve-card-item--available' %}
+  {% set coverage_status = 'available' %}
+{% elif not matched %}
+  {% set coverage_class = 'cve-card-item--unaffected' %}
+  {% set coverage_status = 'unaffected' %}
+{% elif matched and has_rules %}
+  {# Check actual applied coverage across affected hosts #}
+  {% set ns_cov = namespace(covered=0) %}
+  {% for h in cve.affected_hosts %}
+    {% if h.coverage_status == 'amber' %}{% set ns_cov.covered = ns_cov.covered + 1 %}{% endif %}
+  {% endfor %}
+  {% if ns_cov.covered >= cve.affected_hosts | length %}
+    {% set coverage_class = 'cve-card-item--detected' %}
+    {% set coverage_status = 'detected' %}
+  {% elif ns_cov.covered > 0 %}
+    {% set coverage_class = 'cve-card-item--partial' %}
+    {% set coverage_status = 'partial' %}
+  {% else %}
+    {% set coverage_class = 'cve-card-item--nocover' %}
+    {% set coverage_status = 'nocover' %}
+  {% endif %}
+{% else %}
+  {% set coverage_class = 'cve-card-item--nocover' %}
+  {% set coverage_status = 'nocover' %}
+{% endif %}
+
+<div class="cve-card-item {{ coverage_class }}"
      data-matched="{{ '1' if matched else '0' }}"
      data-systems="{{ ns.sys_ids | join(',') }}"
+     data-coverage="{{ coverage_status }}"
      data-cve-id="{{ cve.cve_id }}"
      data-name="{{ cve.vulnerability_name }}"
      data-vendor="{{ cve.vendor_project }}"
@@ -72,7 +136,7 @@
     {# Left: CVE ID #}
     <div class="cve-card-item__id">
         <a href="/cve/{{ cve.cve_id }}"
-           class="{% if matched %}cve-matched{% else %}cve-unmatched{% endif %}">
+           class="{% if coverage_status == 'detected' %}cve-detected{% elif coverage_status == 'partial' %}cve-partial{% elif matched %}cve-matched{% else %}cve-unmatched{% endif %}">
             {{ cve.cve_id }}
         </a>
         {% if cve.known_ransomware %}
@@ -97,45 +161,41 @@
 
     {# Right: systems + detection #}
     <div class="cve-card-item__right">
-        {# Affected system pills #}
+        {# Affected system/host count pills #}
         {% if cve.affected_hosts %}
         <div class="cve-card-item__systems">
-            {% set shown = namespace(ids=[]) %}
-            {% for h in cve.affected_hosts %}
-              {% if h.system_id not in shown.ids %}
-                {% set shown.ids = shown.ids + [h.system_id] %}
-                {% set has_det = h.system_id in cve.system_detections %}
-                <a href="/systems/{{ h.system_id }}"
-                   class="mitre-pill mitre-sm {% if has_det %}mitre-covered{% else %}mitre-gap{% endif %}"
-                   title="{% if has_det %}Detection recorded{% else %}No detection{% endif %} — {{ h.system_name }}">
-                    {% if has_det %}{{ icon('shield-check','9') }}{% else %}{{ icon('alert-triangle','9') }}{% endif %}
-                    {{ h.system_name }}
-                </a>
-              {% endif %}
-            {% endfor %}
+            {% set ns_sys = namespace(ids=[]) %}
+            {% for h in cve.affected_hosts %}{% if h.system_id not in ns_sys.ids %}{% set ns_sys.ids = ns_sys.ids + [h.system_id] %}{% endif %}{% endfor %}
+            {% if coverage_status == 'detected' %}
+            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% elif coverage_status == 'partial' %}
+            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% else %}
+            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(220,38,38,.1);color:var(--color-danger);border:1px solid rgba(220,38,38,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+            </span>
+            {% endif %}
         </div>
         {% endif %}
 
         {# Detection badge #}
         <div class="cve-card-item__badges">
-            {% if matched %}
-              {% if ns.all_det and ns.sys_seen | length > 0 %}
-                <span class="status-pill status-enabled" title="All affected systems have detections">
-                    {{ icon('shield-check','11') }} Detected
+            {% if coverage_status == 'detected' %}
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(34,197,94,.12);color:var(--color-success);border:1px solid rgba(34,197,94,.3);" title="All hosts monitored">
+                    {{ icon('shield','10') }} Monitored
                 </span>
-              {% elif ns.any_det %}
-                <span class="status-pill" style="background:var(--color-warning-bg);color:var(--color-warning-text);border-color:var(--color-warning);" title="Partial coverage">
-                    {{ icon('shield','11') }} Partial
+            {% elif coverage_status == 'partial' %}
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(234,179,8,.12);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
+                    {{ icon('shield','10') }} Partial
                 </span>
-              {% else %}
-                <span class="status-pill" style="background:rgba(220,38,38,.12);color:var(--color-danger);border-color:rgba(220,38,38,.3);" title="No detection mapped for affected systems">
-                    {{ icon('shield-off','11') }} No Cover
+            {% elif matched %}
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(220,38,38,.12);color:var(--color-danger);border-color:rgba(220,38,38,.3);" title="No detection rules recorded">
+                    {{ icon('shield-off','10') }} No Rules
                 </span>
-              {% endif %}
-            {% elif cve.detection %}
-              <span class="status-pill status-enabled" title="{{ cve.detection.rule_ref or '' }}">
-                  {{ icon('shield-check','11') }} Detected
-              </span>
             {% endif %}
         </div>
     </div>
@@ -145,24 +205,57 @@
 
 <script>
 (function(){
-  let sortAsc = true;
-  let sortField = 'matched';
+  let sortAsc = false;
+  let sortField = 'cve_id';
 
   function getCards() {
     return Array.from(document.querySelectorAll('#cve-card-list .cve-card-item'));
   }
 
+  // Close filter dropdowns when clicking outside
+  document.addEventListener('click', function(e) {
+    document.querySelectorAll('.filter-multi__dropdown').forEach(function(dd) {
+      if (!dd.classList.contains('hidden') && !dd.parentElement.contains(e.target)) {
+        dd.classList.add('hidden');
+      }
+    });
+  });
+
   window.filterCveCards = function() {
     const q = (document.getElementById('kev-search')?.value || '').toLowerCase();
     const matchedOnly = document.getElementById('filter-matched')?.checked;
-    const sysFilter = document.getElementById('filter-system')?.value || '';
+
+    // Multi-select system filter
+    const sysCbs = document.querySelectorAll('.sys-filter-cb');
+    const selectedSys = Array.from(sysCbs).filter(c => c.checked).map(c => c.value);
+    const allSysChecked = selectedSys.length === sysCbs.length;
+
+    // Multi-select coverage filter
+    const covCbs = document.querySelectorAll('.cov-filter-cb');
+    const selectedCov = Array.from(covCbs).filter(c => c.checked).map(c => c.value);
+    const allCovChecked = selectedCov.length === covCbs.length;
+
+    // Update labels
+    const sysLabel = document.getElementById('sys-filter-label');
+    if (sysLabel) sysLabel.textContent = allSysChecked ? 'All Systems' : selectedSys.length + ' System' + (selectedSys.length !== 1 ? 's' : '');
+    const covLabel = document.getElementById('cov-filter-label');
+    if (covLabel) covLabel.textContent = allCovChecked ? 'All Coverage' : selectedCov.length + ' Selected';
+
     let visible = 0;
     getCards().forEach(card => {
       const text = card.textContent.toLowerCase();
       const isMatched = card.dataset.matched === '1';
       const systems = card.dataset.systems || '';
-      const showSys = !sysFilter || systems.split(',').includes(sysFilter);
-      const show = text.includes(q) && (!matchedOnly || isMatched) && showSys;
+      const coverage = card.dataset.coverage || '';
+
+      // System filter: card matches if any of its systems is in the checked set
+      const cardSystems = systems ? systems.split(',') : [];
+      const showSys = allSysChecked || (cardSystems.length === 0 && allSysChecked) || cardSystems.some(s => selectedSys.includes(s));
+
+      // Coverage filter
+      const showCov = allCovChecked || selectedCov.includes(coverage);
+
+      const show = text.includes(q) && (!matchedOnly || isMatched) && showSys && showCov;
       card.style.display = show ? '' : 'none';
       if (show) visible++;
     });
@@ -203,7 +296,13 @@
     window.sortCveCards();
   };
 
-  // Initial sort: matched first
+  // Set initial sort dropdown to CVE ID and direction icon
+  const sortSel = document.getElementById('sort-field');
+  if (sortSel) sortSel.value = 'cve_id';
+  const dirIcon = document.getElementById('sort-dir-icon');
+  if (dirIcon) dirIcon.textContent = '▲';
+
+  // Initial sort: CVE ID newest (descending)
   window.sortCveCards();
 })();
 </script>
@@ -211,7 +310,7 @@
 {% else %}
 <div class="empty-output" style="padding:3rem 1rem;">
     {{ icon('shield-check','48') }}
-    <p style="margin-top:1rem;">No CISA KEV data loaded.</p>
-    <p class="text-sm">Use <strong>Import KEV</strong> above to load the catalogue.</p>
+    <p style="margin-top:1rem;">No CISA CVE data loaded.</p>
+    <p class="text-sm">Use <strong>Import CVE</strong> above to load the catalogue.</p>
 </div>
 {% endif %}

@@ -52,9 +52,13 @@
         </select>
     </div>
 
-    <div class="sigma-select-group">
+    <div class="sigma-select-group" style="position:relative;">
         <label title="Custom pipelines — click to toggle, applied in selection order">Custom Pipelines</label>
-        <div id="pipeline-multiselect" class="pipeline-multiselect">
+        <button type="button" id="pipeline-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._togglePipelineDropdown()">
+            <span id="pipeline-dropdown-label">None selected</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="pipeline-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
             {% for pl in pipeline_files %}
             <div class="pipeline-option" data-value="{{ pl.filename }}" onclick="window._togglePipelineOption(this)">
                 <span class="pipeline-option-check">&#10003;</span>
@@ -470,8 +474,28 @@ window.initSigmaPage = function(retryCount = 0) {
         var combined = window._pipelineSelection.join(',');
         var hidden = document.getElementById('form-pipeline-file');
         if (hidden) hidden.value = combined;
+        // Update dropdown button label
+        var label = document.getElementById('pipeline-dropdown-label');
+        if (label) {
+            var count = window._pipelineSelection.length;
+            label.textContent = count === 0 ? 'None selected' : count + ' pipeline' + (count !== 1 ? 's' : '') + ' selected';
+        }
         return combined;
     };
+
+    window._togglePipelineDropdown = function() {
+        var dd = document.getElementById('pipeline-multiselect');
+        if (dd) dd.style.display = dd.style.display === 'none' ? '' : 'none';
+    };
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        var dd = document.getElementById('pipeline-multiselect');
+        var btn = document.getElementById('pipeline-dropdown-btn');
+        if (dd && dd.style.display !== 'none' && !dd.contains(e.target) && btn !== e.target && !btn.contains(e.target)) {
+            dd.style.display = 'none';
+        }
+    });
 
     window._syncPipelineFiles();
 

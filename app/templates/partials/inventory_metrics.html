@@ -6,28 +6,28 @@
 
 <div class="metric-card">
     <p class="metric-value">{{ stats.environment_count }}</p>
-    <p class="metric-label">Environments</p>
+    <p class="metric-label">Systems</p>
     <p class="metric-sub">{{ icon_text('layout','Enterprise segments','14') }}</p>
 </div>
 <div class="metric-card">
     <p class="metric-value">{{ stats.host_count }}</p>
-    <p class="metric-label">Hosts</p>
+    <p class="metric-label">Devices</p>
     <p class="metric-sub">{{ icon_text('server','Physical & virtual','14') }}</p>
 </div>
 <div class="metric-card">
     <p class="metric-value">{{ stats.software_count }}</p>
-    <p class="metric-label">Software</p>
+    <p class="metric-label">Packages</p>
     <p class="metric-sub">{{ icon_text('package','Installed packages','14') }}</p>
 </div>
 <div class="metric-card">
     <p class="metric-value {{ 'danger' if stats.unique_vuln_count > 0 else '' }}">{{ stats.unique_vuln_count }}</p>
-    <p class="metric-label">KEV Matches</p>
+    <p class="metric-label">CVE Matches</p>
     <p class="metric-sub">{{ icon_text('bug','Unique CVEs matched','14') }}</p>
 </div>
 <div class="metric-card">
     <p class="metric-value {{ 'danger' if stats.affected_host_count > 0 else '' }}">{{ stats.affected_host_count }}</p>
-    <p class="metric-label">Affected Hosts</p>
-    <p class="metric-sub">{{ icon_text('alert-triangle','Hosts with KEV match','14') }}</p>
+    <p class="metric-label">Affected Devices</p>
+    <p class="metric-sub">{{ icon_text('alert-triangle','Devices with CVE match','14') }}</p>
 </div>
 <div class="metric-card">
     <p class="metric-value" style="font-size: {% if stats.last_scan %}0.75rem{% else %}1.5rem{% endif %};">

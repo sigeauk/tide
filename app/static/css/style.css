@@ -1192,6 +1192,7 @@ a:hover { color: var(--color-primary); }
 .system-card__classification {
   display: inline-flex;
   align-items: center;
+  gap: 0.3rem;
   font-size: 0.65rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -1236,6 +1237,32 @@ a:hover { color: var(--color-primary); }
 
 
 /* ================================================================
+ * MULTI-SELECT FILTER DROPDOWNS
+ * ================================================================ */
+.hidden { display: none !important; }
+
+.filter-multi {
+  position: relative;
+  display: inline-block;
+}
+
+.filter-multi__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  background: var(--color-bg-surface);
+  border: var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: 0.5rem;
+  min-width: 200px;
+  box-shadow: var(--shadow);
+  margin-top: 0.25rem;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* ================================================================
  * CVE LIST CARDS  (horizontal, like promo-card but compact)
  * ================================================================ */
 .cve-list {
@@ -1267,6 +1294,26 @@ a:hover { color: var(--color-primary); }
   border-left: 3px solid var(--color-danger);
 }
 
+.cve-card-item--detected {
+  border-left: 3px solid var(--color-success);
+}
+
+.cve-card-item--partial {
+  border-left: 3px solid var(--color-warning);
+}
+
+.cve-card-item--nocover {
+  border-left: 3px solid var(--color-danger);
+}
+
+.cve-card-item--unaffected {
+  border-left: 3px solid var(--color-primary);
+}
+
+.cve-card-item--available {
+  border-left: 3px solid var(--color-info, #3b82f6);
+}
+
 .cve-card-item__id {
   font-family: "SF Mono", "Fira Code", Consolas, monospace;
   font-weight: 700;
@@ -1285,6 +1332,8 @@ a:hover { color: var(--color-primary); }
 }
 
 .cve-card-item__id a.cve-matched { color: var(--color-danger); }
+.cve-card-item__id a.cve-detected { color: var(--color-success); }
+.cve-card-item__id a.cve-partial { color: var(--color-warning); }
 .cve-card-item__id a.cve-unmatched { color: var(--color-primary); }
 
 .cve-card-item__body {
@@ -1369,6 +1418,7 @@ a:hover { color: var(--color-primary); }
   position: relative;
   transition: all var(--transition-fast);
   box-shadow: var(--shadow-sm);
+  min-height: 160px;
 }
 
 .host-card:hover {
@@ -1411,6 +1461,9 @@ a:hover { color: var(--color-primary); }
   display: flex;
   align-items: center;
   gap: 0.3rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .host-card__footer {
@@ -1420,7 +1473,7 @@ a:hover { color: var(--color-primary); }
   flex-wrap: wrap;
   border-top: 1px solid var(--color-border-muted);
   padding-top: 0.45rem;
-  margin-top: 0.15rem;
+  margin-top: auto;
 }
 
 .host-card__footer-actions {
@@ -1514,7 +1567,10 @@ a:hover { color: var(--color-primary); }
 }
 
 .sw-card:hover { background: var(--color-bg-action-hover); }
-.sw-card--kev  { border-left-color: var(--color-danger); }
+.sw-card--clean  { border-left-color: var(--color-success); }
+.sw-card--covered { border-left-color: var(--color-warning); }
+.sw-card--cve  { border-left-color: var(--color-danger); }
+.sw-card--selected { outline: 2px solid var(--color-accent, hsl(220,85%,55%)); outline-offset: -1px; }
 
 .sw-card__header {
   display: flex;
@@ -1657,6 +1713,9 @@ a:hover { color: var(--color-primary); }
 
 .aff-host-card--covered  { border-left-color: var(--color-success); }
 .aff-host-card--no-cover { border-left-color: var(--color-danger); }
+.aff-host-card--red      { border-left-color: var(--color-danger); }
+.aff-host-card--amber    { border-left-color: var(--color-warning); }
+.aff-host-card--green    { border-left-color: var(--color-success); }
 
 .aff-host-card__name {
   font-size: 0.88rem;
@@ -1672,6 +1731,9 @@ a:hover { color: var(--color-primary); }
 
 .aff-host-card--covered  .aff-host-card__name { color: var(--color-success); }
 .aff-host-card--no-cover .aff-host-card__name { color: var(--color-danger); }
+.aff-host-card--red      .aff-host-card__name { color: var(--color-danger); }
+.aff-host-card--amber    .aff-host-card__name { color: var(--color-warning-text, #b45309); }
+.aff-host-card--green    .aff-host-card__name { color: var(--color-success); }
 
 .aff-host-card__system {
   font-size: 0.73rem;
@@ -4545,6 +4607,51 @@ body.light {
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(1rem); }
   to   { opacity: 1; transform: translateX(0); }
+}
+
+/* ================================================================
+ * GENERIC CARD  (Layer 2 — bg-surface)
+ * ================================================================ */
+.card {
+  background: var(--color-bg-surface);
+  border: var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+/* ================================================================
+ * BADGES
+ * ================================================================ */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.badge-success {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success);
+}
+.badge-warning {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning);
+}
+.badge-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger);
+}
+.badge-neutral {
+  background: var(--color-bg-action);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-muted);
 }
 
 @keyframes fadeIn {

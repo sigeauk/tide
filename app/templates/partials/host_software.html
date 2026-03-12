@@ -7,19 +7,51 @@
 {% from "macros/icons.html" import icon %}
 
 {% if software %}
+{# Build sets: all vulnerable sw names, and covered (detection applied to THIS host/system) sw names #}
 {% set matched_sw_names = vulns | map(attribute='matched_software') | sum(start=[]) | list %}
+{% set ns_covered = namespace(names=[]) %}
+{% for v in vulns %}
+  {% set ns_applied = namespace(found=false) %}
+  {% for det in v.detections %}
+    {% for ad in det.applied_to %}
+      {% if ad.host_id == host.id or ad.system_id == host.system_id %}
+        {% set ns_applied.found = true %}
+      {% endif %}
+    {% endfor %}
+  {% endfor %}
+  {% if ns_applied.found %}
+    {% for sw_name in v.matched_software %}
+      {% if sw_name not in ns_covered.names %}
+        {% set ns_covered.names = ns_covered.names + [sw_name] %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+
 <div class="sw-list">
 {% for sw in software %}
 
-<div class="sw-card {% if sw.name in matched_sw_names %}sw-card--kev{% endif %}" id="sw-row-{{ sw.id }}">
+{% if sw.name in ns_covered.names %}
+  {% set sw_class = 'sw-card--covered' %}
+{% elif sw.name in matched_sw_names %}
+  {% set sw_class = 'sw-card--cve' %}
+{% else %}
+  {% set sw_class = 'sw-card--clean' %}
+{% endif %}
+
+<div class="sw-card {{ sw_class }}" id="sw-row-{{ sw.id }}">
 
     <!-- Display mode -->
     <div id="sw-display-{{ sw.id }}">
         <div class="sw-card__header">
             <span class="sw-card__name" title="{{ sw.name }}">{{ sw.name }}</span>
-            {% if sw.name in matched_sw_names %}
-            <span class="badge badge-danger" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="Matched in CISA KEV">
-                {{ icon('bug', '10') }} KEV
+            {% if sw.name in ns_covered.names %}
+            <span class="badge badge-warning" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="CVE matched — detection in place">
+                {{ icon('shield-check', '10') }} Monitored
+            </span>
+            {% elif sw.name in matched_sw_names %}
+            <span class="badge badge-danger" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="Matched in CISA CVE">
+                {{ icon('bug', '10') }} CVE
             </span>
             {% endif %}
             <span class="badge badge-neutral" style="font-size:0.68rem;">{{ sw.source }}</span>
@@ -97,6 +129,6 @@
 {% else %}
 <div style="text-align:center;padding:3rem 1rem;color:var(--color-text-muted);">
     {{ icon('package', '40') }}
-    <p style="margin-top:0.75rem;font-size:0.9rem;">No software installed on this host.</p>
+    <p style="margin-top:0.75rem;font-size:0.9rem;">No packages installed on this device.</p>
 </div>
 {% endif %}

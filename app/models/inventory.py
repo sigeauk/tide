@@ -13,6 +13,16 @@ from datetime import datetime
 
 
 # ---------------------------------------------------------------------------
+# Classification
+# ---------------------------------------------------------------------------
+
+class Classification(BaseModel):
+    id: Optional[str] = None
+    name: str
+    color: str = "#6b7280"
+
+
+# ---------------------------------------------------------------------------
 # System (Enterprise Environment)
 # ---------------------------------------------------------------------------
 
@@ -69,6 +79,8 @@ class HostSummary(BaseModel):
     host: Host
     software_count: int
     vuln_count: int
+    detected_count: int = 0             # CVEs that have at least one detection rule
+    software_names: List[str] = Field(default_factory=list)  # for context-aware search
 
 
 # ---------------------------------------------------------------------------
@@ -144,19 +156,34 @@ class AffectedHost(BaseModel):
     ip_address: Optional[str] = None
     system_id: str
     system_name: str
+    coverage_status: str = "red"        # 'green' | 'red' | 'amber'
+    software_count: int = 0
+    source: str = "manual"
+    applied_rule_names: List[str] = Field(default_factory=list)  # rule names providing coverage
 
     @property
     def display_label(self) -> str:
         return f"{self.name} ({self.system_name})"
 
 
+class AppliedDetection(BaseModel):
+    """Tier 3: A detection rule applied to a specific system or host."""
+    id: Optional[str] = None
+    detection_id: str
+    system_id: Optional[str] = None
+    host_id: Optional[str] = None
+    applied_at: Optional[datetime] = None
+
+
 class VulnDetection(BaseModel):
-    """Marks a CVE as having a detection in place (manually asserted)."""
+    """A detection rule recorded against a CVE (does not imply coverage)."""
+    id: Optional[str] = None
     cve_id: str
-    system_id: str = ""                 # empty = applies to all systems
-    note: Optional[str] = None          # free-text note about the detection
     rule_ref: Optional[str] = None      # e.g. Sigma rule title or ID
+    note: Optional[str] = None          # free-text note about the detection
+    source: str = "manual"               # "manual" | "technique"
     created_at: Optional[datetime] = None
+    applied_to: List["AppliedDetection"] = Field(default_factory=list)  # Tier 3 applications
 
 
 class CveMatch(BaseModel):
@@ -178,8 +205,7 @@ class CveMatch(BaseModel):
     affected_hosts: List["AffectedHost"] = Field(default_factory=list)
     techniques: List[MitreTechnique] = Field(default_factory=list)
     threat_actors: List[str] = Field(default_factory=list)          # actor names from OpenCTI
-    detection: Optional["VulnDetection"] = None        # any detection exists (for overview badge)
-    system_detections: Dict[str, "VulnDetection"] = Field(default_factory=dict)  # system_id -> detection
+    detections: List["VulnDetection"] = Field(default_factory=list)     # detection rules recorded
 
 
 class InventoryStats(BaseModel):
@@ -212,3 +238,72 @@ class SystemSummary(BaseModel):
     host_count: int
     vuln_count: int
     software_count: int = 0
+    worst_status: str = "green"         # 'green' | 'amber' | 'red' (worst-case RAG across all hosts)
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical Platform Model (CPE-to-CVE Engine)
+# ---------------------------------------------------------------------------
+
+class ComponentModel(BaseModel):
+    """A hardware or software component attached to a Device."""
+    id: Optional[str] = None
+    device_id: Optional[str] = None
+    component_type: str = "a"           # "h" (HW), "a" (SW), "o" (OS)
+    name: str
+    version: Optional[str] = None
+    vendor: Optional[str] = None
+    cpe: Optional[str] = None
+    source: str = "manual"
+    created_at: Optional[datetime] = None
+
+
+class ComponentCreate(BaseModel):
+    name: str
+    version: Optional[str] = None
+    vendor: Optional[str] = None
+    cpe: Optional[str] = None
+    source: str = "manual"
+    component_type: str = "a"
+
+
+class DeviceModel(BaseModel):
+    """A physical or virtual device within a Platform."""
+    id: Optional[str] = None
+    platform_id: Optional[str] = None
+    name: str
+    device_type: str = ""
+    cpe: Optional[str] = None
+    components: List[ComponentModel] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+
+
+class DeviceCreate(BaseModel):
+    name: str
+    device_type: str = ""
+    ip_address: Optional[str] = None
+    os: Optional[str] = None
+    hardware_vendor: Optional[str] = None
+    model: Optional[str] = None
+    cpe: Optional[str] = None
+    source: str = "manual"
+
+
+class PlatformModel(BaseModel):
+    """
+    A named collection of Devices — the root of the hierarchy.
+    Maps to the existing System / Environment concept.
+    """
+    id: Optional[str] = None
+    name: str
+    description: Optional[str] = None
+    classification: Optional[str] = None
+    devices: List[DeviceModel] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class PlatformCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    classification: Optional[str] = None

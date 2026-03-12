@@ -50,7 +50,7 @@
         <td style="padding:0.4rem 0.5rem;font-weight:500;">
             {{ sw.name }}
             {% if is_vuln %}
-            <span class="badge badge-danger" style="margin-left:0.4rem;font-size:0.7rem;">KEV</span>
+            <span class="badge badge-danger" style="margin-left:0.4rem;font-size:0.7rem;">CVE</span>
             {% endif %}
         </td>
         <td style="padding:0.4rem 0.5rem;color:var(--color-muted);">{{ sw.version or '—' }}</td>
@@ -77,7 +77,7 @@
 {% else %}
 <div style="text-align:center;padding:2rem;color:var(--color-muted);font-size:0.9rem;">
     {{ icon('package', '36') }}
-    <p style="margin-top:0.5rem;">No software recorded yet.</p>
+    <p style="margin-top:0.5rem;">No packages recorded yet.</p>
     <p style="font-size:0.82rem;">Add manually or upload a Nessus file.</p>
 </div>
 {% endif %}

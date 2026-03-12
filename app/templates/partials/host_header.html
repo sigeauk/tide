@@ -1,4 +1,4 @@
-{# Partial: host_header.html — re-rendered after host edit
+{# Partial: host_header.html — re-rendered after device edit
    Context: host, system, software (list), vulns (list), user #}
 {% from "macros/icons.html" import icon %}
 <div id="host-header">
@@ -7,6 +7,9 @@
             <h1 style="margin:0;font-size:1.6rem;font-weight:700;">
                 {{ icon('server', '24') }} {{ host.name }}
             </h1>
+            {% if system and system.classification %}
+            <span class="system-card__classification" style="background:{{ clf_color }}20;color:{{ clf_color }};border-color:{{ clf_color }}40;margin-top:0.35rem;">{{ icon('lock', '10') }} {{ system.classification }}</span>
+            {% endif %}
             {% if host.ip_address %}
             <p style="margin:0.3rem 0 0;color:var(--color-muted);font-family:monospace;font-size:0.9rem;">{{ host.ip_address }}</p>
             {% endif %}
@@ -17,11 +20,11 @@
         <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
             <button class="btn btn-secondary btn-sm"
                     onclick="document.getElementById('edit-host-modal').style.display='flex'">
-                {{ icon('edit-2', '14') }} Edit Host
+                {{ icon('edit-2', '14') }} Edit Device
             </button>
             <button class="btn btn-primary btn-sm"
                     onclick="document.getElementById('add-sw-modal').style.display='flex'">
-                {{ icon('plus', '16') }} Add Software
+                {{ icon('plus', '16') }} Add Package
             </button>
         </div>
     </div>
@@ -29,11 +32,11 @@
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:2rem;">
         <div class="metric-card" style="text-align:center;">
             <div class="metric-value" style="color:var(--color-primary);">{{ software | length }}</div>
-            <div class="metric-label">Software</div>
+            <div class="metric-label">Packages</div>
         </div>
         <div class="metric-card" style="text-align:center;">
             <div class="metric-value" style="{% if vulns %}color:var(--color-danger);{% else %}color:var(--color-success);{% endif %}">{{ vulns | length }}</div>
-            <div class="metric-label">KEV Matches</div>
+            <div class="metric-label">CVE Matches</div>
         </div>
         <div class="metric-card" style="text-align:center;">
             <div class="metric-value" style="font-size:1rem;">{{ host.source }}</div>

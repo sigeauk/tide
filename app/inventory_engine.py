@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import threading
 from app.config import get_settings
 from app.models.inventory import (
-    AffectedHost, CveMatch, CveOverviewStats, Host, HostCreate, HostSummary,
+    AffectedHost, AppliedDetection, Classification, CveMatch, CveOverviewStats, Host, HostCreate, HostSummary,
     HostUpdate, InventoryStats, MitreTechnique, SoftwareCreate, SoftwareInventory,
     SoftwareUpdate, System, SystemCreate, SystemSummary, SystemUpdate, VulnDetection,
 )
@@ -29,18 +29,57 @@ def _row_to_software(r):
     return SoftwareInventory(id=r[0], host_id=r[1], system_id=r[2], name=r[3],
                              version=r[4], vendor=r[5], cpe=r[6], source=r[7], created_at=r[8])
 
+_cisa_kev_cache: Optional[list] = None
+_cisa_kev_mtime: Optional[float] = None
+_cisa_kev_path_used: Optional[str] = None
+
 def _load_cisa_kev():
+    global _cisa_kev_cache, _cisa_kev_mtime, _cisa_kev_path_used
     settings = get_settings()
     for path in [settings.cisa_kev_override_path, settings.cisa_kev_path]:
         if path and os.path.exists(path):
             try:
+                mtime = os.path.getmtime(path)
+                if _cisa_kev_cache is not None and _cisa_kev_path_used == path and _cisa_kev_mtime == mtime:
+                    return _cisa_kev_cache
                 with open(path, "r", encoding="utf-8") as fh:
                     data = json.load(fh)
-                    return data.get("vulnerabilities", data if isinstance(data, list) else [])
+                    result = data.get("vulnerabilities", data if isinstance(data, list) else [])
+                    _cisa_kev_cache = result
+                    _cisa_kev_mtime = mtime
+                    _cisa_kev_path_used = path
+                    return result
             except Exception as exc:
                 logger.warning(f"Failed to load CISA KEV from {path}: {exc}")
     logger.warning("No CISA KEV file available.")
     return []
+
+
+def _list_all_hosts_by_system() -> Dict[str, List]:
+    """Load all hosts grouped by system_id in one query."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts ORDER BY name"
+        ).fetchall()
+    result: Dict[str, list] = {}
+    for r in rows:
+        h = _row_to_host(r)
+        result.setdefault(h.system_id, []).append(h)
+    return result
+
+
+def _list_all_software_by_host() -> Dict[str, List]:
+    """Load all software grouped by host_id in one query."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at "
+            "FROM software_inventory WHERE host_id IS NOT NULL ORDER BY name"
+        ).fetchall()
+    result: Dict[str, list] = {}
+    for r in rows:
+        sw = _row_to_software(r)
+        result.setdefault(sw.host_id, []).append(sw)
+    return result
 
 _mitre_cve_map_cache: Optional[Dict] = None
 _mitre_cve_map_loaded: bool = False
@@ -159,6 +198,39 @@ def remove_cve_technique_override(cve_id: str, technique_id: str) -> bool:
     except Exception as exc:
         logger.warning(f"remove_cve_technique_override failed: {exc}")
         return False
+
+# --- Classification CRUD ---
+def list_classifications() -> List[Classification]:
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT id, name, color FROM classifications ORDER BY name").fetchall()
+    return [Classification(id=r[0], name=r[1], color=r[2]) for r in rows]
+
+def get_classification_color(name: Optional[str]) -> Optional[str]:
+    """Return the hex colour for a classification name, or None."""
+    if not name:
+        return None
+    with _get_conn() as conn:
+        r = conn.execute("SELECT color FROM classifications WHERE name = ?", [name]).fetchone()
+    return r[0] if r else None
+
+def add_classification(name: str, color: str = "#6b7280") -> Classification:
+    with _get_conn() as conn:
+        row = conn.execute(
+            "INSERT INTO classifications (name, color) VALUES (?, ?) RETURNING id, name, color",
+            [name.strip(), color.strip()]).fetchone()
+    return Classification(id=row[0], name=row[1], color=row[2])
+
+def delete_classification(cls_id: str) -> bool:
+    with _get_conn() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM classifications WHERE id = ?", [cls_id]).fetchone()[0]
+        if before == 0:
+            return False
+        # Clear classification from any systems using it
+        row = conn.execute("SELECT name FROM classifications WHERE id = ?", [cls_id]).fetchone()
+        if row:
+            conn.execute("UPDATE systems SET classification = NULL WHERE classification = ?", [row[0]])
+        conn.execute("DELETE FROM classifications WHERE id = ?", [cls_id])
+    return True
 
 # --- System CRUD ---
 def list_systems():
@@ -357,10 +429,10 @@ def parse_nessus_xml(xml_bytes, system_id):
                 vm = re.search(r"(?:Version|Ver)\s*:\s*([\d][^\s]*)", po, re.IGNORECASE)
                 if nm: software_name = nm.group(1).strip()
                 if vm: software_version = vm.group(1).strip()
-            if not software_name:
-                pn = item.get("pluginName", "")
-                if pn and "?" not in pn:
-                    software_name = pn.strip()
+            # Only import items that have a CPE or an explicit software name
+            # from plugin_output. Do NOT fall back to pluginName — those are
+            # audit/info plugin titles (e.g. "Microsoft Windows SMB Shares
+            # Enumeration") and are not actual software.
             if not software_name:
                 continue
             key = (software_name.lower(), (software_version or "").lower())
@@ -382,7 +454,7 @@ def parse_nessus_xml(xml_bytes, system_id):
 _CVE_RANSOMWARE_YES = {"known", "yes", "true"}
 
 def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, techniques=None,
-                       detection=None, system_detections=None, threat_actors=None):
+                       detections=None, threat_actors=None):
     """Build a CveMatch from a raw KEV dict."""
     ransomware_raw = (kev.get("knownRansomwareCampaignUse") or "").lower()
     return CveMatch(
@@ -399,8 +471,7 @@ def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, technique
         affected_hosts=affected_hosts or [],
         techniques=techniques or [],
         threat_actors=threat_actors or [],
-        detection=detection,
-        system_detections=system_detections or {},
+        detections=detections or [],
     )
 
 
@@ -414,7 +485,7 @@ def _ensure_opencti_index_warm() -> bool:
     If not, start a one-shot background thread to warm it and return False
     so the caller can skip the enrichment for this request.
     """
-    from app.version_gate import fetch_opencti_vuln_index, _octi_bulk_cache
+    from app.engine.sync_manager import fetch_opencti_vuln_index, _octi_bulk_cache
     global _octi_warmup_started
     if _octi_bulk_cache is not None:
         return True
@@ -442,7 +513,8 @@ def _match_software_against_opencti(
     This is intentionally separate from _match_software_against_kev so the KEV
     overview page is unaffected.
     """
-    from app.version_gate import fetch_opencti_vuln_index, Cpe, _evaluate_opencti_ranges
+    from app.engine.sync_manager import fetch_opencti_vuln_index, evaluate_opencti_ranges
+    from app.engine.cpe_validator import Cpe
 
     if not _ensure_opencti_index_warm():
         return {}   # cache still warming in background — skip enrichment this request
@@ -465,7 +537,7 @@ def _match_software_against_opencti(
             continue
 
         # Use the existing CPE-identity + version-range evaluator
-        match_result = _evaluate_opencti_ranges(cpe_ranges, host_sw_cpes)
+        match_result = evaluate_opencti_ranges(cpe_ranges, host_sw_cpes)
         if match_result is not True:
             continue
 
@@ -503,33 +575,41 @@ def _match_software_against_kev(
     CVEs that do not affect the host's specific build number are suppressed to
     eliminate false positives caused by simple keyword matching.
     """
-    from app.version_gate import should_include_match
+    from app.engine.cpe_validator import should_include_match, Cpe
 
     matches: Dict[str, List[str]] = {}
-    # Collect all CPEs from this host's software list once for the version gate
-    host_sw_cpes: List[str] = [sw.cpe for sw in software_list if sw.cpe]
+    # Only software WITH a CPE can participate in matching — items without a
+    # CPE have no verifiable identity and would cause massive false positives.
+    sw_with_cpe = [sw for sw in software_list if sw.cpe]
+    if not sw_with_cpe:
+        return matches
+    host_sw_cpes: List[str] = [sw.cpe for sw in sw_with_cpe]
+
+    # Pre-parse CPEs once to avoid repeated parsing in the inner loop
+    sw_parsed = []
+    for sw in sw_with_cpe:
+        cpe_obj = Cpe.parse(sw.cpe)
+        sw_parsed.append((sw, sw.cpe.lower(),
+                          (cpe_obj.vendor or "").lower() if cpe_obj else "",
+                          (cpe_obj.product or "").lower() if cpe_obj else ""))
 
     for kev in kev_entries:
         cve_id = kev.get("cveID", "")
         vendor_proj = (kev.get("vendorProject") or "").lower()
         product = (kev.get("product") or "").lower()
         notes = (kev.get("notes") or "").lower()
-        for sw in software_list:
-            sw_cpe = (sw.cpe or "").lower()
-            sw_vendor = (sw.vendor or "").lower()
-            sw_name = sw.name.lower()
-            matched = ((sw_cpe and sw_cpe in notes) or
-                       (sw_vendor and sw_vendor in vendor_proj) or
-                       (product and (product in sw_name or sw_name in product)))
-            if not matched:
+        for sw, sw_cpe_lower, cpe_vendor, cpe_product in sw_parsed:
+            # Match via CPE string appearing in KEV notes
+            cpe_in_notes = sw_cpe_lower in notes
+            # Match via CPE vendor+product identity against KEV vendor/product
+            identity_match = (cpe_vendor and cpe_vendor == vendor_proj and
+                              cpe_product and cpe_product == product)
+            if not (cpe_in_notes or identity_match):
                 continue
 
             # Version gate: suppress CVEs whose version ranges don't cover this build
             if apply_version_gate and cve_id:
-                matched_cpe = [sw.cpe] if sw.cpe else []
-                if not should_include_match(
-                    cve_id, kev, matched_cpe, host_sw_cpes
-                ):
+                if not should_include_match(cve_id, kev, [sw.cpe], host_sw_cpes):
                     continue
 
             if cve_id not in matches:
@@ -547,6 +627,10 @@ def get_host_vulnerabilities(host_id):
         return []
 
     detections = list_cve_detections()
+    applied_map = _load_applied_detections()
+    # Enrich detections with applied_to so templates can check per-host coverage
+    for dets in detections.values():
+        _enrich_detections_with_applied(dets, applied_map)
     host_sw_cpes: List[str] = [sw.cpe for sw in software if sw.cpe]
 
     # --- KEV keyword matching (existing) ---
@@ -566,8 +650,7 @@ def get_host_vulnerabilities(host_id):
         kev_entry = kev_by_id.get(cve_id, {})
         octi_vuln = octi_map.get(cve_id, {})
         actors = octi_vuln.get("actors", [])
-        cve_dets = detections.get(cve_id, {})
-        any_det = next(iter(cve_dets.values()), None)
+        cve_dets = detections.get(cve_id, [])
 
         # Merge software name lists from both sources
         kev_sw = matched_map.get(cve_id, [])
@@ -580,8 +663,7 @@ def get_host_vulnerabilities(host_id):
                 kev_entry,
                 matched_software=sw_names,
                 techniques=get_cve_techniques(cve_id) if cve_id in matched_map else [],
-                detection=any_det,
-                system_detections=cve_dets,
+                detections=cve_dets,
                 threat_actors=actors,
             ))
         else:
@@ -598,8 +680,7 @@ def get_host_vulnerabilities(host_id):
                 known_ransomware=False,
                 matched_software=sw_names,
                 threat_actors=actors,
-                detection=any_det,
-                system_detections=cve_dets,
+                detections=cve_dets,
             ))
 
     return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
@@ -614,9 +695,10 @@ def get_system_vulnerabilities(system_id):
     combined_sw: Dict[str, List[str]] = {}          # cve_id -> sw names
     combined_hosts: Dict[str, List[AffectedHost]] = {}
     combined_actors: Dict[str, List[str]] = {}      # cve_id -> actor names
+    all_software = _list_all_software_by_host()
 
     for host in list_hosts(system_id):
-        software = list_host_software(host.id)
+        software = all_software.get(host.id, list_host_software(host.id))
         if not software:
             continue
         host_sw_cpes: List[str] = [sw.cpe for sw in software if sw.cpe]
@@ -657,8 +739,7 @@ def get_system_vulnerabilities(system_id):
     for cve_id, hosts_list in combined_hosts.items():
         kev_entry = kev_by_id.get(cve_id, {})
         octi_desc = ""
-        cve_dets = detections.get(cve_id, {})
-        any_det = next(iter(cve_dets.values()), None)
+        cve_dets = detections.get(cve_id, [])
         actors = combined_actors.get(cve_id, [])
 
         if kev_entry:
@@ -666,8 +747,7 @@ def get_system_vulnerabilities(system_id):
                 kev_entry,
                 affected_hosts=hosts_list,
                 matched_software=combined_sw.get(cve_id, []),
-                detection=any_det,
-                system_detections=cve_dets,
+                detections=cve_dets,
                 threat_actors=actors,
             ))
         else:
@@ -685,8 +765,7 @@ def get_system_vulnerabilities(system_id):
                 matched_software=sw_names,
                 affected_hosts=hosts_list,
                 threat_actors=actors,
-                detection=any_det,
-                system_detections=cve_dets,
+                detections=cve_dets,
             ))
 
     return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
@@ -697,17 +776,28 @@ def get_all_cve_overview():
     if not kev_entries:
         return []
     detections = list_cve_detections()
+    applied_map = _load_applied_detections()
+    systems = list_systems()
+    all_hosts = _list_all_hosts_by_system()
+    all_software = _list_all_software_by_host()
+    # Enrich detections with applied_to
+    for cve_id_key, dets in detections.items():
+        _enrich_detections_with_applied(dets, applied_map)
     # Build map: cve_id -> List[AffectedHost]
     affected_by_cve: Dict[str, List[AffectedHost]] = {}
-    for system in list_systems():
-        for host in list_hosts(system.id):
-            software = list_host_software(host.id)
+    for system in systems:
+        for host in all_hosts.get(system.id, []):
+            software = all_software.get(host.id, [])
             if not software:
                 continue
             matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
-            ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
-                              system_id=system.id, system_name=system.name)
             for cve_id in matches:
+                cve_dets = detections.get(cve_id, [])
+                status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map)
+                ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
+                                  system_id=system.id, system_name=system.name,
+                                  coverage_status=status,
+                                  applied_rule_names=rule_names)
                 affected_by_cve.setdefault(cve_id, [])
                 if not any(a.host_id == host.id for a in affected_by_cve[cve_id]):
                     affected_by_cve[cve_id].append(ah)
@@ -715,9 +805,8 @@ def get_all_cve_overview():
     for kev in kev_entries:
         cve_id = kev.get("cveID", "")
         hosts = affected_by_cve.get(cve_id, [])
-        cve_dets = detections.get(cve_id, {})
-        any_det = next(iter(cve_dets.values()), None)
-        row = _kev_to_cve_match(kev, affected_hosts=hosts, detection=any_det, system_detections=cve_dets)
+        cve_dets = detections.get(cve_id, [])
+        row = _kev_to_cve_match(kev, affected_hosts=hosts, detections=cve_dets)
         if hosts:
             matched_rows.append(row)
         else:
@@ -732,44 +821,122 @@ def get_cve_detail(cve_id):
     if not kev_entry:
         return None
     detections = list_cve_detections()
+    applied_map = _load_applied_detections()
+    cve_dets = detections.get(cve_id.upper(), [])
+    _enrich_detections_with_applied(cve_dets, applied_map)
     all_affected: List[AffectedHost] = []
     matched_sw: List[str] = []
+    all_hosts = _list_all_hosts_by_system()
+    all_software = _list_all_software_by_host()
     for system in list_systems():
-        for host in list_hosts(system.id):
-            software = list_host_software(host.id)
+        for host in all_hosts.get(system.id, []):
+            software = all_software.get(host.id, [])
             matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
             if cve_id.upper() in {k.upper() for k in matches}:
                 match_key = next(k for k in matches if k.upper() == cve_id.upper())
                 if not any(a.host_id == host.id for a in all_affected):
+                    status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map)
                     all_affected.append(AffectedHost(
                         host_id=host.id, name=host.name, ip_address=host.ip_address,
-                        system_id=system.id, system_name=system.name))
+                        system_id=system.id, system_name=system.name,
+                        coverage_status=status,
+                        software_count=len(software),
+                        source=host.source,
+                        applied_rule_names=rule_names))
                 for sw_name in matches[match_key]:
                     if sw_name not in matched_sw:
                         matched_sw.append(sw_name)
     return _kev_to_cve_match(kev_entry, affected_hosts=all_affected,
                              matched_software=matched_sw,
                              techniques=get_cve_techniques(cve_id),
-                             detection=next(iter(detections.get(cve_id.upper(), {}).values()), None),
-                             system_detections=detections.get(cve_id.upper(), {}))
+                             detections=cve_dets)
 
 # --- Summaries ---
 def get_system_summaries():
+    systems = list_systems()
+    if not systems:
+        return []
+    all_hosts = _list_all_hosts_by_system()
+    all_software = _list_all_software_by_host()
+    kev = _load_cisa_kev()
+    detections = list_cve_detections()
+    applied_map = _load_applied_detections()
     summaries = []
-    for system in list_systems():
-        hosts = list_hosts(system.id)
-        vulns = get_system_vulnerabilities(system.id)
-        sw_count = sum(len(list_host_software(h.id)) for h in hosts)
+    for system in systems:
+        hosts = all_hosts.get(system.id, [])
+        sw_count = sum(len(all_software.get(h.id, [])) for h in hosts)
+        # Count unique CVEs affecting this system with one pass
+        vuln_cves: set = set()
+        # Track per-host vuln/detected counts for worst-case RAG
+        has_red = False
+        has_amber = False
+        for host in hosts:
+            software = all_software.get(host.id, [])
+            if not software:
+                continue
+            host_vulns: set = set()
+            if kev:
+                m = _match_software_against_kev(software, kev, host_os=host.os or "")
+                host_vulns.update(m.keys())
+                vuln_cves.update(m.keys())
+            host_sw_cpes = [sw.cpe for sw in software if sw.cpe]
+            octi = _match_software_against_opencti(software, host_sw_cpes)
+            host_vulns.update(octi.keys())
+            vuln_cves.update(octi.keys())
+            if host_vulns:
+                # Check if all CVEs on this host have an applied detection
+                host_detected = 0
+                for cve_id in host_vulns:
+                    for det in detections.get(cve_id, []):
+                        if any(ad.host_id == host.id or ad.system_id == system.id for ad in applied_map.get(det.id, [])):
+                            host_detected += 1
+                            break
+                if host_detected >= len(host_vulns):
+                    has_amber = True
+                else:
+                    has_red = True
+        if has_red:
+            worst_status = "red"
+        elif has_amber:
+            worst_status = "amber"
+        else:
+            worst_status = "green"
         summaries.append(SystemSummary(
-            system=system, host_count=len(hosts), vuln_count=len(vulns), software_count=sw_count))
+            system=system, host_count=len(hosts), vuln_count=len(vuln_cves),
+            software_count=sw_count, worst_status=worst_status))
     return summaries
 
 def get_host_summaries(system_id):
+    hosts = list_hosts(system_id)
+    if not hosts:
+        return []
+    all_software = _list_all_software_by_host()
+    kev = _load_cisa_kev()
+    detections = list_cve_detections()
+    applied_map = _load_applied_detections()
     summaries = []
-    for host in list_hosts(system_id):
-        software = list_host_software(host.id)
-        vulns = get_host_vulnerabilities(host.id)
-        summaries.append(HostSummary(host=host, software_count=len(software), vuln_count=len(vulns)))
+    for host in hosts:
+        software = all_software.get(host.id, [])
+        vuln_count = 0
+        detected_count = 0
+        if software:
+            vuln_cves: set = set()
+            if kev:
+                m = _match_software_against_kev(software, kev, host_os=host.os or "")
+                vuln_cves.update(m.keys())
+            host_sw_cpes = [sw.cpe for sw in software if sw.cpe]
+            octi = _match_software_against_opencti(software, host_sw_cpes)
+            vuln_cves.update(octi.keys())
+            vuln_count = len(vuln_cves)
+            # Only count as detected if a detection is actually applied to this host or its system
+            for cve_id in vuln_cves:
+                for det in detections.get(cve_id, []):
+                    if any(ad.host_id == host.id or ad.system_id == system_id for ad in applied_map.get(det.id, [])):
+                        detected_count += 1
+                        break
+        sw_names = [sw.name for sw in software] if software else []
+        summaries.append(HostSummary(host=host, software_count=len(software), vuln_count=vuln_count,
+                                     detected_count=detected_count, software_names=sw_names))
     return summaries
 
 # --- Stats for Dashboard ---
@@ -793,9 +960,11 @@ def get_inventory_stats() -> InventoryStats:
                               software_count=sw_count, last_scan=last_scan)
     affected_hosts_set: set = set()
     matched_cves: set = set()
+    all_hosts = _list_all_hosts_by_system()
+    all_software = _list_all_software_by_host()
     for system in list_systems():
-        for host in list_hosts(system.id):
-            sw = list_host_software(host.id)
+        for host in all_hosts.get(system.id, []):
+            sw = all_software.get(host.id, [])
             if not sw:
                 continue
             m = _match_software_against_kev(sw, kev, host_os=host.os or "")
@@ -808,8 +977,11 @@ def get_inventory_stats() -> InventoryStats:
         last_scan=last_scan,
     )
 
-def get_cve_overview_stats() -> CveOverviewStats:
-    """Stats for the CVE Overview header cards."""
+def get_cve_overview_stats(cves=None) -> CveOverviewStats:
+    """Stats for the CVE Overview header cards.
+    If *cves* (output of get_all_cve_overview) is passed, derive stats from it
+    to avoid recomputing the expensive host/software matching.
+    """
     kev = _load_cisa_kev()
     total_kev = len(kev)
     if not total_kev:
@@ -817,18 +989,32 @@ def get_cve_overview_stats() -> CveOverviewStats:
     # Count ransomware
     ransomware_count = sum(1 for k in kev
                           if (k.get("knownRansomwareCampaignUse") or "").lower() in _CVE_RANSOMWARE_YES)
-    # Build affected host set
-    affected_cves: set = set()
-    affected_hosts_set: set = set()
-    for system in list_systems():
-        for host in list_hosts(system.id):
-            sw = list_host_software(host.id)
-            if not sw:
-                continue
-            m = _match_software_against_kev(sw, kev, host_os=host.os or "")
-            if m:
-                affected_hosts_set.add(host.id)
-                affected_cves.update(m.keys())
+
+    if cves is not None:
+        # Derive from pre-computed overview data
+        affected_cves: set = set()
+        affected_hosts_set: set = set()
+        for c in cves:
+            if c.affected_hosts:
+                affected_cves.add(c.cve_id)
+                for h in c.affected_hosts:
+                    affected_hosts_set.add(h.host_id)
+    else:
+        # Fallback: compute from scratch with batch loading
+        affected_cves = set()
+        affected_hosts_set = set()
+        all_hosts = _list_all_hosts_by_system()
+        all_software = _list_all_software_by_host()
+        for system in list_systems():
+            for host in all_hosts.get(system.id, []):
+                sw = all_software.get(host.id, [])
+                if not sw:
+                    continue
+                m = _match_software_against_kev(sw, kev, host_os=host.os or "")
+                if m:
+                    affected_hosts_set.add(host.id)
+                    affected_cves.update(m.keys())
+
     detections = list_cve_detections()
     detected_count = len(detections)
     ransomware_cves = {k.get("cveID", "") for k in kev
@@ -841,51 +1027,50 @@ def get_cve_overview_stats() -> CveOverviewStats:
     )
 
 # --- Detection CRUD ---
-def list_cve_detections() -> Dict[str, Dict[str, VulnDetection]]:
-    """Returns {cve_id: {system_id: VulnDetection}} for all asserted detections."""
+def list_cve_detections() -> Dict[str, List[VulnDetection]]:
+    """Returns {cve_id: [VulnDetection, ...]} for all recorded detection rules."""
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT cve_id, system_id, note, rule_ref, created_at FROM vuln_detections"
+                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections"
             ).fetchall()
-        result: Dict[str, Dict[str, VulnDetection]] = {}
+        result: Dict[str, List[VulnDetection]] = {}
         for r in rows:
-            cve_id, sys_id = r[0], r[1]
-            result.setdefault(cve_id, {})[sys_id] = VulnDetection(
-                cve_id=cve_id, system_id=sys_id, note=r[2], rule_ref=r[3], created_at=r[4])
+            det = VulnDetection(id=r[0], cve_id=r[1], rule_ref=_resolve_rule_ref(r[2]), note=r[3], source=r[4], created_at=r[5])
+            result.setdefault(r[1], []).append(det)
         return result
     except Exception as exc:
         logger.warning(f"list_cve_detections error: {exc}")
         return {}
 
-def get_cve_detection(cve_id: str, system_id: str = '') -> Optional[VulnDetection]:
+def get_cve_detections(cve_id: str) -> List[VulnDetection]:
+    """Return all detection entries for a given CVE."""
     try:
         with _get_conn() as conn:
-            r = conn.execute(
-                "SELECT cve_id, system_id, note, rule_ref, created_at FROM vuln_detections WHERE cve_id = ? AND system_id = ?",
-                [cve_id.upper(), system_id]).fetchone()
-        return VulnDetection(cve_id=r[0], system_id=r[1], note=r[2], rule_ref=r[3], created_at=r[4]) if r else None
+            rows = conn.execute(
+                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections WHERE cve_id = ? ORDER BY created_at",
+                [cve_id.upper()]).fetchall()
+        return [VulnDetection(id=r[0], cve_id=r[1], rule_ref=_resolve_rule_ref(r[2]), note=r[3], source=r[4], created_at=r[5]) for r in rows]
     except Exception as exc:
-        logger.warning(f"get_cve_detection error: {exc}")
-        return None
+        logger.warning(f"get_cve_detections error: {exc}")
+        return []
 
-def mark_cve_detected(cve_id: str, system_id: str = '', note: Optional[str] = None, rule_ref: Optional[str] = None) -> VulnDetection:
+def add_cve_detection(cve_id: str, rule_ref: Optional[str] = None, note: Optional[str] = None, source: str = "manual") -> Optional[VulnDetection]:
+    """Add a new detection entry for a CVE. Returns the created entry."""
     cve_id = cve_id.upper()
     with _get_conn() as conn:
-        conn.execute("""
-            INSERT INTO vuln_detections (cve_id, system_id, note, rule_ref)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (cve_id, system_id) DO UPDATE SET note=excluded.note, rule_ref=excluded.rule_ref
-        """, [cve_id, system_id, note, rule_ref])
-    return get_cve_detection(cve_id, system_id)
+        row = conn.execute(
+            "INSERT INTO vuln_detections (cve_id, rule_ref, note, source) VALUES (?, ?, ?, ?) RETURNING id, cve_id, rule_ref, note, source, created_at",
+            [cve_id, rule_ref, note, source]).fetchone()
+    if row:
+        return VulnDetection(id=row[0], cve_id=row[1], rule_ref=row[2], note=row[3], source=row[4], created_at=row[5])
+    return None
 
-def unmark_cve_detected(cve_id: str, system_id: str = '') -> bool:
-    cve_id = cve_id.upper()
+def remove_cve_detection(detection_id: str) -> bool:
+    """Remove a single detection entry by its ID."""
     with _get_conn() as conn:
-        before = conn.execute(
-            "SELECT COUNT(*) FROM vuln_detections WHERE cve_id = ? AND system_id = ?",
-            [cve_id, system_id]).fetchone()[0]
-        conn.execute("DELETE FROM vuln_detections WHERE cve_id = ? AND system_id = ?", [cve_id, system_id])
+        before = conn.execute("SELECT COUNT(*) FROM vuln_detections WHERE id = ?", [detection_id]).fetchone()[0]
+        conn.execute("DELETE FROM vuln_detections WHERE id = ?", [detection_id])
     return before > 0
 
 def get_rules_for_cve_techniques(cve_id: str) -> Dict[str, list]:
@@ -899,6 +1084,166 @@ def get_rules_for_cve_techniques(cve_id: str) -> Dict[str, list]:
         if rules:
             result[t.technique_id] = rules
     return result
+
+
+def get_all_siem_rules() -> list:
+    """Return a lightweight list of ALL SIEM rules [{rule_id, name}] for dropdowns."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            "SELECT rule_id, name FROM detection_rules ORDER BY name"
+        ).fetchall()
+    return [{"rule_id": r[0], "name": r[1]} for r in rows]
+
+
+# --- Tier 3: Applied Detection CRUD ---
+
+def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id: Optional[str] = None) -> Optional[AppliedDetection]:
+    """Apply a detection rule to a system or individual host (Tier 3).
+    When system_id is given, creates per-host rows for every host in that system
+    so that coverage can be managed individually per host."""
+    if not system_id and not host_id:
+        return None
+    last: Optional[AppliedDetection] = None
+    with _get_conn() as conn:
+        if host_id:
+            dup = conn.execute(
+                "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
+                [detection_id, host_id]).fetchone()
+            if dup:
+                return AppliedDetection(id=dup[0], detection_id=detection_id, host_id=host_id)
+            row = conn.execute(
+                "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                [detection_id, host_id]).fetchone()
+            if row:
+                return AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
+        elif system_id:
+            # Remove any old system-level row (system_id set, host_id NULL)
+            conn.execute(
+                "DELETE FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL",
+                [detection_id, system_id])
+            # Expand to per-host rows so each host can be managed individually
+            host_rows = conn.execute(
+                "SELECT id FROM hosts WHERE system_id = ?", [system_id]
+            ).fetchall()
+            for (hid,) in host_rows:
+                dup = conn.execute(
+                    "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
+                    [detection_id, hid]).fetchone()
+                if dup:
+                    last = AppliedDetection(id=dup[0], detection_id=detection_id, host_id=hid)
+                    continue
+                row = conn.execute(
+                    "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                    [detection_id, hid]).fetchone()
+                if row:
+                    last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
+    return last
+
+
+def remove_applied_detection(applied_id: str) -> bool:
+    """Remove an applied detection entry by its ID."""
+    with _get_conn() as conn:
+        before = conn.execute("SELECT COUNT(*) FROM applied_detections WHERE id = ?", [applied_id]).fetchone()[0]
+        conn.execute("DELETE FROM applied_detections WHERE id = ?", [applied_id])
+    return before > 0
+
+
+def remove_detection_for_system(detection_id: str, system_id: str) -> int:
+    """Remove applied detection rows for all hosts in a system. Returns count removed."""
+    with _get_conn() as conn:
+        host_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
+        if not host_ids:
+            return 0
+        placeholders = ",".join("?" for _ in host_ids)
+        count = conn.execute(
+            f"DELETE FROM applied_detections WHERE detection_id = ? AND host_id IN ({placeholders})",
+            [detection_id] + host_ids).rowcount
+    return count
+
+
+def _load_applied_detections() -> Dict[str, List[AppliedDetection]]:
+    """Load all applied detections keyed by detection_id for fast lookup.
+    Migrates any legacy system-level rows (system_id set, host_id NULL) to per-host rows."""
+    try:
+        with _get_conn() as conn:
+            # Migrate legacy system-level rows to per-host rows
+            legacy = conn.execute(
+                "SELECT id, detection_id, system_id FROM applied_detections WHERE system_id IS NOT NULL AND host_id IS NULL"
+            ).fetchall()
+            for leg_id, det_id, sys_id in legacy:
+                host_ids = [r[0] for r in conn.execute(
+                    "SELECT id FROM hosts WHERE system_id = ?", [sys_id]).fetchall()]
+                for hid in host_ids:
+                    dup = conn.execute(
+                        "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
+                        [det_id, hid]).fetchone()
+                    if not dup:
+                        conn.execute(
+                            "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?)",
+                            [det_id, hid])
+                conn.execute("DELETE FROM applied_detections WHERE id = ?", [leg_id])
+
+            rows = conn.execute(
+                "SELECT id, detection_id, system_id, host_id, applied_at FROM applied_detections"
+            ).fetchall()
+        result: Dict[str, List[AppliedDetection]] = {}
+        for r in rows:
+            ad = AppliedDetection(id=r[0], detection_id=r[1], system_id=r[2], host_id=r[3], applied_at=r[4])
+            result.setdefault(r[1], []).append(ad)
+        return result
+    except Exception as exc:
+        logger.warning(f"_load_applied_detections error: {exc}")
+        return {}
+
+
+def _compute_coverage_status(host_id: str, system_id: str,
+                             cve_detections: List[VulnDetection],
+                             applied_map: Dict[str, List[AppliedDetection]]) -> Tuple[str, List[str]]:
+    """Compute traffic-light status for a host against a CVE's detections.
+    Returns (status, rule_names) where status is 'red'|'amber' and rule_names are applied rule labels."""
+    if not cve_detections:
+        return "red", []
+    applied_names: List[str] = []
+    for det in cve_detections:
+        for ad in applied_map.get(det.id, []):
+            if ad.host_id == host_id:
+                label = det.note or _resolve_rule_ref(det.rule_ref) or "Rule"
+                if label not in applied_names:
+                    applied_names.append(label)
+    if applied_names:
+        return "amber", applied_names
+    return "red", []
+
+
+def _resolve_rule_ref(rule_ref: Optional[str]) -> Optional[str]:
+    """If rule_ref looks like a UUID/rule_id, look up the human-readable name
+    from detection_rules. Otherwise return as-is."""
+    if not rule_ref:
+        return None
+    # Quick heuristic: UUIDs are 32+ hex chars with dashes
+    stripped = rule_ref.replace("-", "")
+    if len(stripped) >= 32 and all(c in '0123456789abcdefABCDEF' for c in stripped):
+        try:
+            with _get_conn() as conn:
+                row = conn.execute(
+                    "SELECT name FROM detection_rules WHERE rule_id = ?", [rule_ref]
+                ).fetchone()
+            if row and row[0]:
+                return row[0]
+        except Exception:
+            pass
+    return rule_ref
+
+
+def _enrich_detections_with_applied(detections: List[VulnDetection],
+                                    applied_map: Dict[str, List[AppliedDetection]]) -> List[VulnDetection]:
+    """Attach applied_to entries to each VulnDetection."""
+    for det in detections:
+        det.applied_to = applied_map.get(det.id, [])
+    return detections
 
 # --- CISA Feed ---
 def save_mitre_cve_map(json_bytes: bytes) -> int:
@@ -946,4 +1291,9 @@ def ingest_cisa_feed(json_bytes):
             os.remove(tmp)
         raise RuntimeError(f"Failed to persist CISA KEV override: {exc}") from exc
     logger.info(f"CISA KEV override written: {count} entries to {override_path}")
+    # Invalidate memory cache so next load picks up the new file
+    global _cisa_kev_cache, _cisa_kev_mtime, _cisa_kev_path_used
+    _cisa_kev_cache = None
+    _cisa_kev_mtime = None
+    _cisa_kev_path_used = None
     return count

@@ -1,0 +1,27 @@
+{# Partial: classification_list.html
+   Context: classifications (List[Classification])
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if classifications %}
+<div style="display:flex;flex-direction:column;gap:0.4rem;">
+    {% for clf in classifications %}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.4rem 0.6rem;background:var(--color-bg-layer-2);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:{{ clf.color }};flex-shrink:0;"></span>
+            <span style="font-size:0.85rem;font-weight:600;">{{ clf.name }}</span>
+        </div>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/api/inventory/classifications/{{ clf.id }}"
+                hx-target="#clf-list"
+                hx-swap="innerHTML"
+                hx-confirm="Delete classification '{{ clf.name }}'? Systems using it will be unclassified."
+                style="padding:0.15rem 0.4rem;font-size:0.7rem;">
+            {{ icon('trash-2', '11') }}
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p style="font-size:0.85rem;color:var(--color-muted);text-align:center;padding:1rem 0;">No classifications defined.</p>
+{% endif %}

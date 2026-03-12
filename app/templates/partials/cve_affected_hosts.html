@@ -1,0 +1,249 @@
+{# Partial: cve_affected_hosts.html
+   Context:
+     cve               CveMatch
+     cve_id            str
+     detections        List[VulnDetection]  (with applied_to populated)
+     grouped_systems   List[dict]           — [{system_id, system_name, hosts: [AffectedHost]}]
+     user              CurrentUser
+   Wrapped in div#cve-affected-section on the page, or swapped via HTMX.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if grouped_systems %}
+<div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+    <h2 class="section-title">{{ icon('server','16') }} Affected Devices</h2>
+
+    <!-- Traffic Light Legend -->
+    <div class="det-color-key" style="margin-bottom:1rem;">
+        <span class="det-color-key__label">Coverage Status</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-warning);"></span> Amber — Detection applied</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-danger);"></span> Red — At risk</span>
+    </div>
+
+    <!-- Search bar -->
+    <div style="margin-bottom:0.75rem;">
+        <input id="affected-search" class="form-input" type="search" placeholder="Search by hostname or IP…"
+               oninput="filterAffectedDevices()" style="max-width:320px;font-size:0.85rem;">
+        <span id="affected-search-count" style="font-size:0.8rem;color:var(--color-text-muted);margin-left:0.5rem;"></span>
+    </div>
+
+    {% if cve.matched_software %}
+    <div style="margin-bottom:1rem;font-size:0.82rem;color:var(--color-text-muted);">
+        {{ icon('package','12') }} Matched packages: {{ cve.matched_software | join(', ') }}
+    </div>
+    {% endif %}
+
+    {% for grp in grouped_systems %}
+    <div class="card" style="padding:1rem;margin-bottom:1rem;background:var(--color-bg-surface);">
+        <!-- System header -->
+        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap;">
+            <a href="/systems/{{ grp.system_id }}" style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
+                {{ icon('layers','14') }} {{ grp.system_name }}
+            </a>
+            <span class="badge badge-neutral" style="font-size:0.72rem;">{{ grp.hosts | length }} host{{ 's' if grp.hosts | length != 1 }}</span>
+
+            {# System-level: applied badges + apply/remove for all hosts #}
+            {% if detections %}
+            <div style="margin-left:auto;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+
+                {# Show detections applied to ALL hosts in this system with a Remove All button #}
+                {% set ns_applied_all = namespace(items=[]) %}
+                {% set ns_unapplied = namespace(items=[]) %}
+                {% for det in detections %}
+                  {% set ns_check = namespace(all_covered=true, any_covered=false) %}
+                  {% for h in grp.hosts %}
+                    {% set ns_h = namespace(has=false) %}
+                    {% for ad in det.applied_to %}{% if ad.host_id == h.host_id %}{% set ns_h.has = true %}{% endif %}{% endfor %}
+                    {% if ns_h.has %}{% set ns_check.any_covered = true %}{% endif %}
+                    {% if not ns_h.has %}{% set ns_check.all_covered = false %}{% endif %}
+                  {% endfor %}
+                  {% if ns_check.all_covered and ns_check.any_covered %}
+                    {% set ns_applied_all.items = ns_applied_all.items + [det] %}
+                  {% endif %}
+                  {% if not ns_check.all_covered %}
+                    {% set ns_unapplied.items = ns_unapplied.items + [det] %}
+                  {% endif %}
+                {% endfor %}
+
+                {# Badges for system-wide applied detections with remove-all button #}
+                {% for det in ns_applied_all.items %}
+                <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
+                    {{ icon('check','10') }} {{ det.note[:30] if det.note else det.rule_ref[:30] if det.rule_ref else 'Rule' }}
+                    <button class="btn btn-danger btn-sm"
+                            hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}/apply-system/{{ grp.system_id }}"
+                            hx-target="#cve-affected-section"
+                            hx-swap="innerHTML"
+                            hx-confirm="Remove this detection from all hosts in {{ grp.system_name }}?"
+                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                        {{ icon('x','9') }}
+                    </button>
+                </span>
+                {% endfor %}
+                {% if ns_unapplied.items %}
+                <form style="display:inline-flex;align-items:center;gap:0.3rem;"
+                      hx-post="/api/inventory/cve/{{ cve_id }}/detect/__DET_ID__/apply"
+                      hx-target="#cve-affected-section"
+                      hx-swap="innerHTML"
+                      onsubmit="var sel=this.querySelector('select');if(!sel.value){event.preventDefault();return;}this.action=this.getAttribute('hx-post').replace('__DET_ID__',sel.value);this.setAttribute('hx-post',this.action);">
+                    <input type="hidden" name="system_id" value="{{ grp.system_id }}">
+                    <select class="form-input" style="font-size:0.72rem;padding:0.15rem 0.4rem;max-width:200px;">
+                        <option value="">Apply rule…</option>
+                        {% for det in ns_unapplied.items %}
+                        <option value="{{ det.id }}">{{ det.note[:35] if det.note else det.rule_ref[:35] if det.rule_ref else 'Rule' }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.68rem;padding:0.15rem 0.4rem;">
+                        {{ icon('shield-check','10') }} Apply
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Host cards grid -->
+        <div class="host-card-grid">
+            {% for h in grp.hosts %}
+            <div class="host-card aff-host-card--{{ h.coverage_status }}" style="min-height:140px;"
+                 data-aff-name="{{ h.name | lower }}" data-aff-ip="{{ (h.ip_address or '') | lower }}">
+                <!-- Traffic light badge -->
+                <div class="host-card__badge">
+                    {% if h.coverage_status == 'amber' %}
+                    <span class="badge badge-warning" style="font-size:0.7rem;">{{ icon('shield-check','10') }} Monitored</span>
+                    {% elif h.coverage_status == 'red' %}
+                    <span class="badge badge-danger" style="font-size:0.7rem;">{{ icon('alert-triangle','10') }} At Risk</span>
+                    {% endif %}
+                </div>
+
+                <!-- Host name -->
+                <a href="/hosts/{{ h.host_id }}" class="host-card__title">
+                    {{ icon('server','14') }} {{ h.name }}
+                </a>
+
+                <!-- Meta -->
+                <div class="host-card__meta">
+                    {% if h.ip_address %}
+                    <span class="host-card__meta-row">{{ icon('wifi','11') }} <span style="font-family:monospace;">{{ h.ip_address }}</span></span>
+                    {% endif %}
+                </div>
+
+                <!-- Monitored-by attribution -->
+
+                <!-- Footer -->
+                <div class="host-card__footer">
+                    <span class="status-pill" style="font-size:0.69rem;padding:0.1rem 0.45rem;">
+                        {{ icon('package','10') }} {{ h.software_count }} pkg
+                    </span>
+                    <span class="badge badge-neutral" style="font-size:0.69rem;">{{ h.source }}</span>
+                </div>
+
+                {# Per-host: applied badges with remove, plus apply dropdown for red hosts #}
+                {% if detections %}
+                <div style="border-top:1px solid var(--color-border-muted);padding-top:0.4rem;margin-top:0.4rem;">
+                    {# Show applied detections with remove #}
+                    {% set ns_shown_dets = namespace(ids=[]) %}
+                    {% for det in detections %}
+                    {% for ad in det.applied_to %}
+                    {% if ad.host_id == h.host_id and det.id not in ns_shown_dets.ids %}
+                    {% set ns_shown_dets.ids = ns_shown_dets.ids + [det.id] %}
+                    <span class="badge badge-success" style="font-size:0.62rem;display:inline-flex;align-items:center;gap:0.2rem;margin-bottom:0.2rem;">
+                        {{ icon('check','9') }} {{ det.note[:20] if det.note else det.rule_ref[:20] if det.rule_ref else 'Rule' }}
+                        <button class="btn btn-danger btn-sm"
+                                hx-delete="/api/inventory/applied-detection/{{ ad.id }}?cve_id={{ cve_id }}"
+                                hx-target="#cve-affected-section"
+                                hx-swap="innerHTML"
+                                hx-confirm="Remove detection from {{ h.name }}?"
+                                style="padding:0 0.15rem;font-size:0.55rem;line-height:1;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                            {{ icon('x','8') }}
+                        </button>
+                    </span>
+                    {% endif %}
+                    {% endfor %}
+                    {% endfor %}
+
+                    {# Apply dropdown for hosts with unapplied detections #}
+                    {% if detections %}
+                    {% set ns_host_unapplied = namespace(items=[]) %}
+                    {% for det in detections %}
+                      {% set ns_ha = namespace(applied=false) %}
+                      {% for ad in det.applied_to %}{% if ad.host_id == h.host_id %}{% set ns_ha.applied = true %}{% endif %}{% endfor %}
+                      {% if not ns_ha.applied %}
+                        {% set ns_host_unapplied.items = ns_host_unapplied.items + [det] %}
+                      {% endif %}
+                    {% endfor %}
+                    {% if ns_host_unapplied.items %}
+                    <form style="display:flex;align-items:center;gap:0.25rem;margin-top:0.25rem;"
+                          hx-post="/api/inventory/cve/{{ cve_id }}/detect/__DET_ID__/apply"
+                          hx-target="#cve-affected-section"
+                          hx-swap="innerHTML"
+                          onsubmit="var sel=this.querySelector('select');if(!sel.value){event.preventDefault();return;}this.action=this.getAttribute('hx-post').replace('__DET_ID__',sel.value);this.setAttribute('hx-post',this.action);">
+                        <input type="hidden" name="host_id" value="{{ h.host_id }}">
+                        <select class="form-input" style="font-size:0.65rem;padding:0.1rem 0.3rem;max-width:140px;">
+                            <option value="">Apply…</option>
+                            {% for det in ns_host_unapplied.items %}
+                            <option value="{{ det.id }}">{{ det.note[:25] if det.note else det.rule_ref[:25] if det.rule_ref else 'Rule' }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:0.1rem 0.3rem;">
+                            {{ icon('shield-check','9') }}
+                        </button>
+                    </form>
+                    {% endif %}
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% elif cve.affected_hosts %}
+{# Fallback: ungrouped hosts #}
+<div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+    <h2 class="section-title">Affected Devices</h2>
+    <div class="aff-host-grid">
+        {% for h in cve.affected_hosts %}
+        <a href="/hosts/{{ h.host_id }}" class="aff-host-card aff-host-card--{{ h.coverage_status }}">
+            <div class="aff-host-card__name">{{ icon('server','13') }} {{ h.name }}</div>
+            <div class="aff-host-card__system">{{ icon('layers','10') }} {{ h.system_name }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<script>
+// Fix HTMX dynamic detection_id in apply forms
+document.addEventListener('htmx:configRequest', function(e) {
+    var form = e.detail.elt.closest('form');
+    if (!form) return;
+    var path = e.detail.path;
+    if (path && path.indexOf('__DET_ID__') !== -1) {
+        var sel = form.querySelector('select');
+        if (sel && sel.value) {
+            e.detail.path = path.replace('__DET_ID__', sel.value);
+        } else {
+            e.preventDefault();
+        }
+    }
+});
+// Affected devices search filter
+function filterAffectedDevices() {
+    var q = (document.getElementById('affected-search').value || '').toLowerCase();
+    var cards = document.querySelectorAll('#cve-affected-section .host-card[data-aff-name]');
+    var visible = 0;
+    cards.forEach(function(card) {
+        var text = (card.dataset.affName || '') + ' ' + (card.dataset.affIp || '');
+        var show = !q || text.indexOf(q) !== -1;
+        card.style.display = show ? '' : 'none';
+        if (show) visible++;
+    });
+    var countEl = document.getElementById('affected-search-count');
+    if (q) {
+        countEl.textContent = visible + ' of ' + cards.length + ' shown';
+    } else {
+        countEl.textContent = '';
+    }
+}
+</script>

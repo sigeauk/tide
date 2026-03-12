@@ -15,7 +15,7 @@
             <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Vendor / Product</th>
             <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Added</th>
             <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Due Date</th>
-            <th style="padding:0.5rem 0.75rem;">Matched Software</th>
+            <th style="padding:0.5rem 0.75rem;">Matched Packages</th>
             <th style="padding:0.5rem 0.75rem;white-space:nowrap;">Ransomware</th>
         </tr>
     </thead>
@@ -63,13 +63,13 @@
     {{ icon('shield-check', '48') }}
     <p style="margin-top:1rem;font-size:0.95rem;">
         {% if system %}
-        No CISA KEV matches for <strong>{{ system.name }}</strong>.
+        No CISA CVE matches for <strong>{{ system.name }}</strong>.
         {% else %}
-        No CISA KEV matches found across your inventory.
+        No CISA CVE matches found across your inventory.
         {% endif %}
     </p>
     <p style="font-size:0.82rem;">
-        Add software to your inventory and ensure the CISA KEV data file is loaded.
+        Add packages to your inventory and ensure the CISA CVE data file is loaded.
     </p>
 </div>
 {% endif %}

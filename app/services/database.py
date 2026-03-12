@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 13
 
 
 class DatabaseService:
@@ -377,6 +377,76 @@ class DatabaseService:
             """)
             self._set_schema_version(conn, 10)
             logger.info("Migration 10: Created cve_technique_overrides table")
+
+        # Migration 11: Custom classifications table
+        if current_version < 11:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS classifications (
+                    id   VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name VARCHAR NOT NULL UNIQUE,
+                    color VARCHAR NOT NULL DEFAULT '#6b7280'
+                )
+            """)
+            # Seed default government classifications
+            for name, color in [
+                ('Official',     '#22c55e'),
+                ('Confidential', '#f59e0b'),
+                ('Secret',       '#ef4444'),
+                ('Top Secret',   '#dc2626'),
+            ]:
+                conn.execute(
+                    "INSERT INTO classifications (name, color) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [name, color],
+                )
+            self._set_schema_version(conn, 11)
+            logger.info("Migration 11: Created classifications table with defaults")
+
+        # Migration 12: Restructure vuln_detections to allow multiple detections per CVE
+        if current_version < 12:
+            conn.execute("CREATE TABLE IF NOT EXISTS vuln_detections_v12_tmp AS SELECT * FROM vuln_detections")
+            conn.execute("DROP TABLE IF EXISTS vuln_detections")
+            conn.execute("""
+                CREATE TABLE vuln_detections (
+                    id          VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    cve_id      VARCHAR NOT NULL,
+                    rule_ref    VARCHAR,
+                    note        TEXT,
+                    source      VARCHAR DEFAULT 'manual',
+                    created_at  TIMESTAMP DEFAULT now()
+                )
+            """)
+            # Migrate existing rows: split comma-separated rule_refs into individual rows
+            old_rows = conn.execute("SELECT cve_id, rule_ref, note, created_at FROM vuln_detections_v12_tmp").fetchall()
+            for row in old_rows:
+                cve_id, rule_ref, note, created_at = row
+                if rule_ref:
+                    for ref in rule_ref.split(','):
+                        ref = ref.strip()
+                        if ref:
+                            conn.execute(
+                                "INSERT INTO vuln_detections (cve_id, rule_ref, note, source, created_at) VALUES (?, ?, ?, 'manual', ?)",
+                                [cve_id, ref, note, created_at])
+                else:
+                    conn.execute(
+                        "INSERT INTO vuln_detections (cve_id, rule_ref, note, source, created_at) VALUES (?, ?, ?, 'manual', ?)",
+                        [cve_id, rule_ref, note, created_at])
+            conn.execute("DROP TABLE IF EXISTS vuln_detections_v12_tmp")
+            self._set_schema_version(conn, 12)
+            logger.info("Migration 12: vuln_detections restructured for multi-detection per CVE")
+
+        # Migration 13: Track which detections are applied to systems/hosts (Tier 3)
+        if current_version < 13:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS applied_detections (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    detection_id  VARCHAR NOT NULL,
+                    system_id     VARCHAR,
+                    host_id       VARCHAR,
+                    applied_at    TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 13)
+            logger.info("Migration 13: Created applied_detections table for Tier 3 coverage")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     

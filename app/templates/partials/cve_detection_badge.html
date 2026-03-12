@@ -1,73 +1,94 @@
 
 {#  Partial: partials/cve_detection_badge.html
-    Context (from page or API render):
+    Context:
       cve_id            str
-      system_detections Dict[str, VulnDetection]   — system_id -> detection
-      affected_systems  Dict[str, str]              — system_id -> system_name
+      detections        List[VulnDetection]        — all detection entries for this CVE
       technique_rules   Dict[str, List[Rule]]       — technique_id -> rules
+      all_siem_rules    List[dict]                  — [{rule_id, name}] all SIEM rules
     Self-targeting: hx-swap="outerHTML" on #detection-section-inner
 #}
 {% from "macros/icons.html" import icon %}
 
 <div id="detection-section-inner">
 
-{#  We show a row for every affected system (so users can mark per-system),
-    then any additional systems that already have a detection but aren't
-    in affected_systems (edge case: host deleted after detection marked).
-    Jinja2 doesn't allow dict mutation, so we iterate both sources. #}
-{% set ns = namespace(shown=[]) %}
-
-{# ── 1. Iterate affected systems ─────────────────────────────────────── #}
-{% if affected_systems %}
-  <div style="display:flex;flex-direction:column;gap:0.75rem;">
-
-  {% for sys_id, sys_name in affected_systems.items() %}
-    {% set ns.shown = ns.shown + [sys_id] %}
-    {% set det = system_detections.get(sys_id) %}
-    {% include "partials/_det_system_row.html" %}
-  {% endfor %}
-
-  {# ── 2. Extra systems already marked but not in affected_systems ── #}
-  {% for sys_id, det in system_detections.items() %}
-    {% if sys_id not in ns.shown and sys_id != '' %}
-      {% set ns.shown = ns.shown + [sys_id] %}
-      {% set sys_name = sys_id %}
-      {% include "partials/_det_system_row.html" %}
-    {% endif %}
-  {% endfor %}
-
-  </div>
-
-{% else %}
-  {# ── No affected hosts: single global detection ──────────────────── #}
-  {% set global_det = system_detections.get('') %}
-  {% if global_det %}
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:0.75rem;flex-wrap:wrap;">
-      <div>
-        <span class="badge badge-success" style="font-size:0.85rem;display:inline-flex;align-items:center;gap:0.3rem;margin-bottom:0.35rem;">
-          {{ icon('shield-check','14') }} Detection In Place
-        </span>
-        {% if global_det.rule_ref %}<p style="margin:0.2rem 0 0;font-size:0.85rem;color:var(--color-muted);"><strong>Rule:</strong> {{ global_det.rule_ref }}</p>{% endif %}
-        {% if global_det.note %}<p style="margin:0.2rem 0 0;font-size:0.85rem;color:var(--color-muted);">{{ global_det.note }}</p>{% endif %}
+{% if detections %}
+<div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
+  {% for det in detections %}
+  <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);">
+    <div style="flex:1;min-width:0;">
+      {% if det.note %}
+      <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ det.note }}">
+        {{ icon('file-code','13') }} {{ det.note }}
       </div>
-      <button class="btn btn-secondary btn-sm"
-              hx-delete="/api/inventory/cve/{{ cve_id }}/detect?system_id="
-              hx-target="#detection-section-inner"
-              hx-swap="outerHTML"
-              hx-confirm="Remove this global detection marker?">
-        {{ icon('x','14') }} Remove
+      {% elif det.rule_ref %}
+      <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ det.rule_ref }}">
+        {{ icon('file-code','13') }} {{ det.rule_ref }}
+      </div>
+      {% endif %}
+      <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:0.2rem;">
+        {{ det.source }}
+      </div>
+    </div>
+    <button class="btn btn-danger btn-sm"
+            hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}"
+            hx-target="#detection-section-inner"
+            hx-swap="outerHTML"
+            hx-confirm="Remove this detection entry?"
+            style="padding:0.2rem 0.4rem;font-size:0.7rem;">
+      {{ icon('x','12') }}
+    </button>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:1.5rem 1rem;color:var(--color-text-muted);">
+  {{ icon('shield-off','28') }}
+  <p style="margin:0.5rem 0 0;font-size:0.85rem;">No detection rules recorded for this CVE.</p>
+</div>
+{% endif %}
+
+<!-- Add Detection Form -->
+<div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
+  <button class="btn btn-sm btn-secondary" id="add-det-btn"
+          onclick="this.style.display='none';document.getElementById('add-det-form').style.display='flex';">
+    {{ icon('plus','14') }} Add Detection Rule
+  </button>
+  <form id="add-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+        hx-post="/api/inventory/cve/{{ cve_id }}/detect"
+        hx-target="#detection-section-inner"
+        hx-swap="outerHTML"
+        hx-on::after-request="this.reset();document.getElementById('add-det-btn').style.display='inline-flex';">
+
+    {# All SIEM rules dropdown #}
+    {% if all_siem_rules %}
+    <select class="form-input" style="font-size:0.82rem;" id="siem-rule-select"
+            onchange="var f=this.closest('form'),v=this.value;if(v){f.querySelector('[name=rule_ref]').value=v;f.querySelector('[name=source]').value='siem';}else{f.querySelector('[name=source]').value='manual';}">
+      <option value="">— Select a SIEM rule —</option>
+      {% if technique_rules %}
+      <optgroup label="★ Mapped to this CVE">
+        {% for tid, rules in technique_rules.items() %}
+          {% for r in rules %}<option value="{{ r.name }}">{{ r.name }} ({{ tid }})</option>{% endfor %}
+        {% endfor %}
+      </optgroup>
+      {% endif %}
+      <optgroup label="All SIEM Rules">
+        {% for r in all_siem_rules %}<option value="{{ r.name }}">{{ r.name }}</option>{% endfor %}
+      </optgroup>
+    </select>
+    {% endif %}
+
+    <input class="form-input" name="rule_ref" placeholder="Rule name / reference…" style="font-size:0.85rem;">
+    <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
+    <input type="hidden" name="source" value="manual">
+
+    <div style="display:flex;gap:0.5rem;">
+      <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
+      <button type="button" class="btn btn-secondary btn-sm"
+              onclick="this.closest('form').style.display='none';document.getElementById('add-det-btn').style.display='inline-flex';">
+        Cancel
       </button>
     </div>
-  {% else %}
-    <p style="margin:0 0 0.75rem;font-size:0.88rem;color:var(--color-muted);">
-      No affected hosts in inventory. You can still record a general detection.
-    </p>
-    <button class="btn btn-sm btn-secondary" id="global-det-btn"
-            onclick="this.style.display='none';document.getElementById('global-det-form').style.display='flex';">
-      {{ icon('plus','14') }} Mark as Detected
-    </button>
-    {% include "partials/_det_mark_form.html" %}
-  {% endif %}
-{% endif %}
+  </form>
+</div>
 
 </div>

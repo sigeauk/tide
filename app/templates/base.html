@@ -34,6 +34,32 @@
     
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- Global Modal Container (for rule detail modals triggered from MITRE pills etc.) -->
+    <div id="modal-container"></div>
+
+    <!-- HTMX global error handler (stale-page / network errors) -->
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Network-level failure (connection lost, timeout)
+        document.body.addEventListener('htmx:sendError', function() {
+            if (typeof showToast === 'function') {
+                showToast('Connection lost — please refresh the page.', 'error');
+            } else {
+                window.location.reload();
+            }
+        });
+        // Server returned non-2xx (e.g. 401 slipped through without HX-Redirect)
+        document.body.addEventListener('htmx:responseError', function(evt) {
+            var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
+            if (status === 401 || status === 403) {
+                window.location.href = '/login';
+            } else if (typeof showToast === 'function') {
+                showToast('Request failed (HTTP ' + status + '). Try refreshing.', 'error');
+            }
+        });
+    });
+    </script>
     
     {% block scripts %}{% endblock %}
 </body>

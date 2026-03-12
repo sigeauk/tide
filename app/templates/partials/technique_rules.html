@@ -5,7 +5,12 @@
     {% for rule in rules %}
     <div class="rule-item">
         <div class="rule-header">
-            <span class="rule-name">{{ rule.name }}</span>
+            <span class="rule-name"
+                  style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;"
+                  hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
+                  hx-target="#modal-container"
+                  hx-swap="innerHTML"
+                  title="View rule details">{{ rule.name }}</span>
             <span class="severity-badge severity-{{ rule.severity.value | lower }}">
                 {{ rule.severity.value | capitalize }}
             </span>

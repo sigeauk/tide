@@ -8,26 +8,32 @@
 
     <!-- Breadcrumb -->
     <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
-        <a href="/systems" style="color:inherit;text-decoration:none;">Environments</a>
+        <a href="/systems" style="color:inherit;text-decoration:none;">Systems</a>
         <span style="margin:0 0.4rem;">›</span>
         <a href="/systems/{{ system.id }}" style="color:inherit;text-decoration:none;">{{ system.name }}</a>
         <span style="margin:0 0.4rem;">›</span>
         <span>{{ host.name }}</span>
     </nav>
 
-    <!-- Host header (editable) -->
+    <!-- Device header (editable) -->
     {% include "partials/host_header.html" %}
 
     <!-- Two-column layout -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;">
 
-        <!-- Software Section -->
+        <!-- Packages Section -->
         <div style="min-width:0;overflow:hidden;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
                 <h2 class="section-title" style="font-size:1.1rem;">
-                    {{ icon('package', '18') }} Installed Software
+                    {{ icon('package', '18') }} Packages
                 </h2>
             </div>
+            <!-- Package search bar -->
+            <input id="pkg-search" class="form-input" type="search"
+                   placeholder="Search packages…"
+                   oninput="filterPackages()"
+                   style="width:100%;font-size:0.85rem;margin-bottom:0.5rem;">
+            <input type="hidden" id="pkg-cve-link" value="on">
             <div class="card" style="padding:1rem;" id="software-section">
                 {% include "partials/host_software.html" %}
             </div>
@@ -37,7 +43,7 @@
         <div style="min-width:0;overflow:hidden;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0.75rem;">
                 <h2 class="section-title" style="font-size:1.1rem;">
-                    {{ icon('alert-triangle', '18') }} KEV Matches
+                    {{ icon('alert-triangle', '18') }} CVE Matches
                 </h2>
                 {% if vulns %}
                 <a href="/cve-overview" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
@@ -45,21 +51,98 @@
                 </a>
                 {% endif %}
             </div>
-            <div class="card" style="padding:1rem;max-height:72vh;overflow-y:auto;">
+            <div id="cve-filter-status" style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:0.4rem;display:none;"></div>
+            <div class="card" style="padding:1rem;max-height:72vh;overflow-y:auto;" id="cve-matches-card">
                 {% include "partials/host_cve_matches.html" %}
             </div>
         </div>
 
     </div><!-- /grid -->
 
+<script>
+/* Package search: filter the software list */
+function filterPackages() {
+    var q = (document.getElementById('pkg-search').value || '').toLowerCase();
+    var cards = document.querySelectorAll('#software-section .sw-card');
+    cards.forEach(function(card) {
+        var name = (card.querySelector('.sw-card__name') || {}).textContent || '';
+        var meta = (card.querySelector('.sw-card__meta') || {}).textContent || '';
+        var cpe = (card.querySelector('.sw-card__cpe') || {}).textContent || '';
+        var text = (name + ' ' + meta + ' ' + cpe).toLowerCase();
+        card.style.display = (!q || text.indexOf(q) !== -1) ? '' : 'none';
+    });
+    filterCvesByVisiblePackages();
+}
+
+function selectPackage(card) {
+    var wasSelected = card.classList.contains('sw-card--selected');
+    document.querySelectorAll('#software-section .sw-card').forEach(function(c) { c.classList.remove('sw-card--selected'); });
+    if (!wasSelected) card.classList.add('sw-card--selected');
+    filterCvesByVisiblePackages();
+}
+
+/* Enable package-click → CVE filtering on page load */
+(function() {
+    document.querySelectorAll('#software-section .sw-card').forEach(function(card) {
+        card.style.cursor = 'pointer';
+        card.onclick = function() { selectPackage(this); };
+    });
+})();
+
+function filterCvesByVisiblePackages() {
+    var selected = document.querySelector('#software-section .sw-card--selected');
+    var cveCards = document.querySelectorAll('#cve-matches-card .cve-mini-card');
+    var status = document.getElementById('cve-filter-status');
+    if (selected) {
+        var pkgName = (selected.querySelector('.sw-card__name') || {}).textContent.trim().toLowerCase();
+        var shown = 0;
+        cveCards.forEach(function(c) {
+            var badges = c.querySelectorAll('.badge.badge-neutral');
+            var match = false;
+            badges.forEach(function(b) { if (b.textContent.trim().toLowerCase() === pkgName) match = true; });
+            c.style.display = match ? '' : 'none';
+            if (match) shown++;
+        });
+        if (status) { status.textContent = 'Showing ' + shown + ' CVE(s) for "' + pkgName + '"'; status.style.display = ''; }
+    } else {
+        // Show only CVEs matching any visible package
+        var visiblePkgs = [];
+        document.querySelectorAll('#software-section .sw-card').forEach(function(card) {
+            if (card.style.display !== 'none') {
+                var n = (card.querySelector('.sw-card__name') || {}).textContent.trim().toLowerCase();
+                if (n) visiblePkgs.push(n);
+            }
+        });
+        var q = (document.getElementById('pkg-search').value || '').toLowerCase();
+        if (!q) {
+            cveCards.forEach(function(c) { c.style.display = ''; });
+            if (status) status.style.display = 'none';
+        } else {
+            var shown = 0;
+            cveCards.forEach(function(c) {
+                var badges = c.querySelectorAll('.badge.badge-neutral');
+                var match = false;
+                badges.forEach(function(b) {
+                    var bText = b.textContent.trim().toLowerCase();
+                    if (visiblePkgs.indexOf(bText) !== -1) match = true;
+                });
+                c.style.display = match ? '' : 'none';
+                if (match) shown++;
+            });
+            if (status) { status.textContent = 'Filtered: ' + shown + ' CVE(s) matching visible packages'; status.style.display = ''; }
+        }
+    }
+}
+</script>
+
 </div><!-- /container -->
 
-<!-- ── Edit Host Modal ────────────────────────────────────────────── -->
+<!-- ── Edit Device Modal ────────────────────────────────────────────── -->
 <div id="edit-host-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
-            <h3 class="modal-title">{{ icon('edit-2','16') }} Edit Host</h3>
+            <h3 class="modal-title">{{ icon('edit-2','16') }} Edit Device</h3>
             <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-host-modal').style.display='none'">&#x2715;</button>
         </div>
@@ -69,7 +152,7 @@
               hx-on::after-request="document.getElementById('edit-host-modal').style.display='none'"
               style="display:flex;flex-direction:column;gap:1rem;">
             <div>
-                <label class="form-label">Hostname <span style="color:var(--color-danger)">*</span></label>
+                <label class="form-label">Device Name <span style="color:var(--color-danger)">*</span></label>
                 <input name="name" class="form-input" required value="{{ host.name }}">
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
@@ -101,12 +184,12 @@
     </div>
 </div>
 
-<!-- ── Add Software Modal ─────────────────────────────────────────── -->
+<!-- ── Add Package Modal ─────────────────────────────────────────── -->
 <div id="add-sw-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <h3 style="margin:0 0 1rem;font-size:1.1rem;font-weight:600;">
-            Add Software — {{ host.name }}
+            Add Package — {{ host.name }}
         </h3>
         <form hx-post="/api/inventory/hosts/{{ host.id }}/software"
               hx-target="#software-section"
@@ -134,7 +217,7 @@
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;">
                 <button type="button" class="btn btn-secondary"
                         onclick="document.getElementById('add-sw-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Add Software</button>
+                <button type="submit" class="btn btn-primary">Add Package</button>
             </div>
         </form>
     </div>

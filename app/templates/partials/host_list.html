@@ -11,8 +11,8 @@
 {% if nessus_hosts is defined %}
 <div class="alert alert-success" style="margin-bottom:0.75rem;padding:0.6rem 1rem;border-radius:var(--radius-md);background:rgba(var(--color-success-rgb,34,197,94),.12);border:1px solid rgba(var(--color-success-rgb,34,197,94),.3);font-size:0.85rem;">
     {{ icon('check-circle', '14') }}
-    Nessus import complete: <strong>{{ nessus_hosts }}</strong> host{% if nessus_hosts != 1 %}s{% endif %} created,
-    <strong>{{ nessus_records }}</strong> software record{% if nessus_records != 1 %}s{% endif %} added.
+    Nessus import complete: <strong>{{ nessus_hosts }}</strong> device{% if nessus_hosts != 1 %}s{% endif %} created,
+    <strong>{{ nessus_records }}</strong> package record{% if nessus_records != 1 %}s{% endif %} added.
     {% if nessus_warnings %}
     <details style="margin-top:0.4rem;"><summary style="cursor:pointer;color:var(--color-warning);">{{ nessus_warnings | length }} warning{% if nessus_warnings | length != 1 %}s{% endif %}</summary>
     <ul style="margin:0.4rem 0 0 1rem;padding:0;">{% for w in nessus_warnings %}<li>{{ w }}</li>{% endfor %}</ul>
@@ -23,34 +23,57 @@
 
 {% if host_summaries %}
 
-<!-- Search bar -->
-<div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;">
-    <input id="host-search" class="form-input" type="search" placeholder="Search by name, IP or OS…"
+<!-- Search bar + filters + sorting -->
+<div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+    <input id="host-search" class="form-input" type="search" placeholder="Search by name, IP, OS or package…"
            oninput="filterHosts()" style="max-width:320px;font-size:0.85rem;">
+    <select id="host-cve-filter" class="form-input" style="max-width:180px;font-size:0.82rem;" onchange="filterHosts()">
+        <option value="all">Vulnerability Status</option>
+        <option value="cve">CVE Found</option>
+        <option value="clean">Clean</option>
+    </select>
+    <select id="host-sort" class="form-input" style="max-width:160px;font-size:0.82rem;" onchange="sortHosts()">
+        <option value="name">Sort: Name</option>
+        <option value="vuln">Sort: CVE Count</option>
+        <option value="status">Sort: Status</option>
+    </select>
+    <button id="host-sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleHostSortDir()" title="Toggle sort direction">
+        <span id="host-sort-dir-icon">▲</span>
+    </button>
     <span id="host-search-count" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
 </div>
 
 <div class="host-card-grid" id="host-card-grid">
     {% for hs in host_summaries %}
     {% set h = hs.host %}
+    {# RAG status: 0=green, 1=amber, 2=red #}
+    {% if hs.vuln_count == 0 %}{% set rag = 0 %}{% elif hs.detected_count >= hs.vuln_count %}{% set rag = 1 %}{% else %}{% set rag = 2 %}{% endif %}
     <div class="host-card"
          data-name="{{ h.name | lower }}"
-         data-ip="{{ h.ip_address or '' }}"
-         data-os="{{ h.os or '' | lower }}">
-
-        <!-- CVE count badge (top-right) -->
+         data-ip="{{ (h.ip_address or '') | lower }}"
+         data-os="{{ h.os or '' | lower }}"
+         data-cve="{{ 'cve' if hs.vuln_count > 0 else 'clean' }}"
+         data-vuln-count="{{ hs.vuln_count }}"
+         data-rag="{{ rag }}"
+         data-software="{{ hs.software_names | join(',') | lower }}">
+        <!-- CVE count badge (top-right) — RAG -->
         <div class="host-card__badge">
-            {% if hs.vuln_count > 0 %}
-            <span class="badge badge-danger" style="font-size:0.7rem;">{{ hs.vuln_count }} KEV</span>
-            {% else %}
+            {% if rag == 0 %}
             <span class="badge badge-success" style="font-size:0.7rem;">Clean</span>
+            {% elif rag == 1 %}
+            <span class="badge badge-warning" style="font-size:0.7rem;">{{ hs.vuln_count }} CVE{{ 's' if hs.vuln_count != 1 }} — Monitored</span>
+            {% else %}
+            <span class="badge badge-danger" style="font-size:0.7rem;">{{ hs.vuln_count }} CVE{{ 's' if hs.vuln_count != 1 }} — At Risk</span>
             {% endif %}
         </div>
-
-        <!-- Hostname link -->
         <a href="/hosts/{{ h.id }}" class="host-card__title">
             {{ icon('server', '14') }} {{ h.name }}
         </a>
+
+        <!-- Classification pill (inherited from system) -->
+        {% if sys_classification is defined and sys_classification %}
+        <span class="system-card__classification" style="background:{{ sys_clf_color }}20;color:{{ sys_clf_color }};border-color:{{ sys_clf_color }}40;font-size:0.6rem;padding:0.1rem 0.4rem;">{{ icon('lock', '9') }} {{ sys_classification }}</span>
+        {% endif %}
 
         <!-- Meta info -->
         <div class="host-card__meta">
@@ -70,13 +93,13 @@
         <!-- Footer: stats + source + delete -->
         <div class="host-card__footer">
             <span class="status-pill" style="font-size:0.69rem;padding:0.1rem 0.45rem;">
-                {{ icon('package', '10') }} {{ hs.software_count }} SW
+                {{ icon('package', '10') }} {{ hs.software_count }} pkg
             </span>
             <span class="badge badge-neutral" style="font-size:0.69rem;">{{ h.source }}</span>
             <div class="host-card__footer-actions">
                 <button class="btn btn-danger btn-sm"
                         hx-delete="/api/inventory/hosts/{{ h.id }}?system_id={{ system_id }}"
-                        hx-confirm="Delete host '{{ h.name }}' and all its software?"
+                        hx-confirm="Delete device '{{ h.name }}' and all its packages?"
                         hx-target="#hosts-section"
                         hx-swap="innerHTML"
                         style="padding:0.2rem 0.5rem;font-size:0.72rem;">
@@ -92,11 +115,14 @@
 <script>
 function filterHosts() {
     var q = document.getElementById('host-search').value.toLowerCase();
+    var cveFilter = document.getElementById('host-cve-filter').value;
     var cards = document.querySelectorAll('#host-card-grid .host-card');
     var visible = 0;
     cards.forEach(function(card) {
-        var text = (card.dataset.name || '') + ' ' + (card.dataset.ip || '') + ' ' + (card.dataset.os || '');
-        if (!q || text.indexOf(q) !== -1) {
+        var text = (card.dataset.name || '') + ' ' + (card.dataset.ip || '') + ' ' + (card.dataset.os || '') + ' ' + (card.dataset.software || '');
+        var textMatch = !q || text.indexOf(q) !== -1;
+        var cveMatch = cveFilter === 'all' || card.dataset.cve === cveFilter;
+        if (textMatch && cveMatch) {
             card.style.display = '';
             visible++;
         } else {
@@ -104,18 +130,39 @@ function filterHosts() {
         }
     });
     var countEl = document.getElementById('host-search-count');
-    if (q) {
+    if (q || cveFilter !== 'all') {
         countEl.textContent = visible + ' of ' + cards.length + ' shown';
     } else {
         countEl.textContent = '';
     }
+}
+var hostSortAsc = true;
+function sortHosts() {
+    var field = (document.getElementById('host-sort') || {}).value || 'name';
+    var grid = document.getElementById('host-card-grid');
+    if (!grid) return;
+    var cards = Array.from(grid.querySelectorAll('.host-card'));
+    cards.sort(function(a, b) {
+        var cmp = 0;
+        if (field === 'name') cmp = (a.dataset.name || '').localeCompare(b.dataset.name || '');
+        else if (field === 'vuln') cmp = parseInt(a.dataset.vulnCount || 0) - parseInt(b.dataset.vulnCount || 0);
+        else if (field === 'status') cmp = parseInt(a.dataset.rag || 0) - parseInt(b.dataset.rag || 0);
+        return hostSortAsc ? cmp : -cmp;
+    });
+    cards.forEach(function(c) { grid.appendChild(c); });
+}
+function toggleHostSortDir() {
+    hostSortAsc = !hostSortAsc;
+    var icon = document.getElementById('host-sort-dir-icon');
+    if (icon) icon.textContent = hostSortAsc ? '▲' : '▼';
+    sortHosts();
 }
 </script>
 
 {% else %}
 <div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
     {{ icon('server', '40') }}
-    <p style="margin-top:1rem;">No hosts yet.</p>
-    <p style="font-size:0.85rem;">Upload a Nessus scan or add hosts manually.</p>
+    <p style="margin-top:1rem;">No devices yet.</p>
+    <p style="font-size:0.85rem;">Upload a Nessus scan or add devices manually.</p>
 </div>
 {% endif %}

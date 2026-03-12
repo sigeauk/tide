@@ -39,6 +39,13 @@
         </svg>
         Sigma
     </button>
+    <button class="settings-tab" data-tab="classifications" onclick="switchTab('classifications')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+        </svg>
+        Classifications
+    </button>
 </div>
 
 <div class="settings-panel active" id="tab-logging">
@@ -255,6 +262,39 @@
                 <div style="background: var(--color-bg-action); padding: 0.75rem; border-radius: 4px; border-left: 3px solid var(--color-primary);">
                     <strong>Pro Tip:</strong> You can select these pipelines directly from the <strong>Sigma Converter</strong> page via the "Custom Pipeline" dropdown to apply your mappings on-the-fly.
                 </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="settings-panel" id="tab-classifications">
+    <div class="preferences-grid">
+        <div class="preference-card" style="grid-column: 1 / -1;">
+            <div class="preference-header">
+                {{ icon('tag', '18') }}
+                <h2 class="preference-title">Manage Classifications</h2>
+            </div>
+            <p class="preference-desc" style="margin:0 0 1rem;max-width:80ch;">
+                Classifications are applied to systems to indicate handling restrictions. Changes here apply across all systems.
+            </p>
+
+            <!-- Add new classification form -->
+            <form hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful){this.reset();}"
+                  style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
+                <input type="text" name="name" class="form-input" placeholder="Classification name" required
+                       style="min-width:160px;max-width:220px;font-size:0.85rem;">
+                <input type="color" name="color" value="#6b7280" title="Pick a colour"
+                       style="width:36px;height:36px;border:var(--border-card);border-radius:var(--radius-sm);cursor:pointer;padding:2px;">
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Add</button>
+            </form>
+
+            <!-- Classification list (HTMX target) -->
+            <div id="clf-list"
+                 hx-get="/api/inventory/classifications"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                {% include "partials/classification_list.html" %}
             </div>
         </div>
     </div>

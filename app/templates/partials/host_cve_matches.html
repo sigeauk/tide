@@ -24,7 +24,7 @@
 
 <div class="cve-mini-list">
 {% for vuln in vulns %}
-{% set has_det = vuln.detection is not none %}
+{% set has_det = vuln.detections | length > 0 %}
 <div class="cve-mini-card {% if has_det %}cve-mini-card--detected{% elif vuln.known_ransomware %}cve-mini-card--no-cover{% endif %}">
 
     <div class="cve-mini-card__id">
@@ -37,11 +37,13 @@
 
             {% if has_det %}
             <span class="status-pill status-enabled" style="font-size:0.69rem;padding:0.1rem 0.4rem;">
-                {{ icon('shield-check', '10') }} Detected
+                {{ icon('shield-check', '10') }} {{ vuln.detections | length }} Rule{{ 's' if vuln.detections | length != 1 }}
             </span>
-            {% if vuln.detection.rule_ref %}
-            <span style="font-size:0.7rem;color:var(--color-text-muted);" title="{{ vuln.detection.rule_ref }}">
-                {{ icon('link', '9') }} {{ vuln.detection.rule_ref }}
+            {% set _det0 = vuln.detections[0] %}
+            {% set _det0_label = _det0.note or _det0.rule_ref or '' %}
+            {% if _det0_label %}
+            <span style="font-size:0.7rem;color:var(--color-text-muted);" title="{{ _det0_label }}">
+                {{ icon('link', '9') }} {{ _det0_label }}
             </span>
             {% endif %}
             {% else %}
@@ -78,6 +80,6 @@
 {% else %}
 <div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
     {{ icon('shield-check', '40') }}
-    <p style="margin-top:0.75rem;font-size:0.9rem;">No CISA KEV matches for <strong>{{ host.name }}</strong>.</p>
+    <p style="margin-top:0.75rem;font-size:0.9rem;">No CISA CVE matches for <strong>{{ host.name }}</strong>.</p>
 </div>
 {% endif %}

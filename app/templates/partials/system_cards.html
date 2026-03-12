@@ -21,10 +21,12 @@
     {% set s = summary.system %}
     <div class="system-card">
 
-        <!-- Status badge (top-right) -->
+        <!-- Status badge (top-right) — RAG worst-case -->
         <div class="system-card__badge">
-            {% if summary.vuln_count > 0 %}
-            <span class="badge badge-danger">{{ summary.vuln_count }} CVE{% if summary.vuln_count != 1 %}s{% endif %}</span>
+            {% if summary.worst_status == 'red' %}
+            <span class="badge badge-danger">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — At Risk</span>
+            {% elif summary.worst_status == 'amber' %}
+            <span class="badge badge-warning">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — Monitored</span>
             {% else %}
             <span class="badge badge-success">Clean</span>
             {% endif %}
@@ -38,8 +40,9 @@
 
         <!-- Classification pill -->
         {% if s.classification %}
+        {% set clf_color = clf_colors.get(s.classification, '#6b7280') if clf_colors is defined and clf_colors else '#6b7280' %}
         <div>
-            <span class="system-card__classification">{{ icon('lock', '10') }} {{ s.classification }}</span>
+            <span class="system-card__classification" style="background:{{ clf_color }}20;color:{{ clf_color }};border-color:{{ clf_color }}40;">{{ icon('lock', '10') }} {{ s.classification }}</span>
         </div>
         {% endif %}
 
@@ -50,7 +53,7 @@
 
         <!-- Stats footer -->
         <div class="system-card__footer">
-            <span class="system-card__stat">{{ icon('server', '13') }} {{ summary.host_count }} host{% if summary.host_count != 1 %}s{% endif %}</span>
+            <span class="system-card__stat">{{ icon('server', '13') }} {{ summary.host_count }} device{% if summary.host_count != 1 %}s{% endif %}</span>
             <span class="system-card__stat">{{ icon('bug', '13') }} {{ summary.vuln_count }} vuln{% if summary.vuln_count != 1 %}s{% endif %}</span>
             <span class="system-card__stat">{{ icon('package', '13') }} {{ summary.software_count }} pkg</span>
         </div>
@@ -65,6 +68,6 @@
 <div class="empty-output" style="padding:4rem 2rem;">
     {{ icon('monitor', '48') }}
     <p style="margin-top:1rem;font-size:1rem;">No systems yet.</p>
-    <p class="text-sm">Click <strong>Add Environment</strong> to create your first enterprise environment.</p>
+    <p class="text-sm">Click <strong>Add System</strong> to create your first enterprise system.</p>
 </div>
 {% endif %}

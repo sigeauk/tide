@@ -21,15 +21,23 @@
             {% if cve.known_ransomware %}
             <span class="badge badge-danger" style="font-size:0.8rem;">{{ icon('zap','14') }} Ransomware</span>
             {% endif %}
+
+            {# Affected counts #}
+            {% set sys_ids = [] %}
+            {% for h in cve.affected_hosts %}{% if h.system_id not in sys_ids %}{% set _ = sys_ids.append(h.system_id) %}{% endif %}{% endfor %}
             {% if cve.affected_hosts %}
             <span class="badge badge-danger" style="font-size:0.8rem;">
-                {{ icon('alert-triangle','14') }} {{ cve.affected_hosts | length }} Affected Host{% if cve.affected_hosts | length != 1 %}s{% endif %}
+                {{ icon('alert-triangle','14') }} Affects {{ sys_ids | length }} System{{ 's' if sys_ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% else %}
             <span class="badge badge-success" style="font-size:0.8rem;">{{ icon('shield-check','14') }} No Matches</span>
             {% endif %}
-            {% if cve.detection %}
-            <span class="badge badge-success" style="font-size:0.8rem;">{{ icon('shield-check','14') }} Detection In Place</span>
+
+            {# Rules count — only show if CVE matches inventoried infrastructure #}
+            {% if cve.detections and cve.affected_hosts %}
+            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-primary);border:1px solid rgba(59,130,246,.3);">
+                {{ icon('shield','14') }} {{ cve.detections | length }} Rule{{ 's' if cve.detections | length != 1 }} Available
+            </span>
             {% endif %}
         </div>
         <p style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">{{ cve.vulnerability_name }}</p>
@@ -67,70 +75,34 @@
         {% endif %}
     </div>
 
-    <!-- ATT&CK Techniques (moved above detection) -->
-    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
-        <h2 class="section-title">MITRE ATT&amp;CK Techniques</h2>
-        {% include "partials/cve_mitre_section.html" %}
+    <!-- Dual-column: MITRE Techniques (left) + Detection Rules (right) -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;">
+        <div class="card" style="padding:1.25rem;">
+            <h2 class="section-title">{{ icon('crosshair','16') }} MITRE ATT&amp;CK Techniques</h2>
+            {% include "partials/cve_mitre_section.html" %}
+        </div>
+        <div class="card" style="padding:1.25rem;">
+            <h2 class="section-title">{{ icon('shield','16') }} Detection Rules</h2>
+            {% include "partials/cve_detection_badge.html" %}
+        </div>
     </div>
 
-    <!-- Detection Card -->
-    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
-        <h2 class="section-title">Detection Status</h2>
-        {# Badge uses top-level context vars: cve_id, system_detections, affected_systems, technique_rules #}
-        {% include "partials/cve_detection_badge.html" %}
+    <!-- Affected Devices — grouped by System -->
+    <div id="cve-affected-section">
+        {% include "partials/cve_affected_hosts.html" %}
     </div>
-
-    <!-- Affected Hosts -->
-    {% if cve.affected_hosts %}
-    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
-        <h2 class="section-title">Affected Hosts</h2>
-
-        <!-- Color key -->
-        <div class="det-color-key" style="margin-bottom:1rem;">
-            <span class="det-color-key__label">Key:</span>
-            <span class="det-color-key__item">
-                <span class="det-color-key__swatch" style="background:var(--color-success);"></span> System has detection
-            </span>
-            <span class="det-color-key__item">
-                <span class="det-color-key__swatch" style="background:var(--color-danger);"></span> No detection on system
-            </span>
-        </div>
-
-        <div class="aff-host-grid">
-            {% for h in cve.affected_hosts %}
-            {% set covered = h.system_id in system_detections %}
-            <a href="/hosts/{{ h.host_id }}"
-               class="aff-host-card {% if covered %}aff-host-card--covered{% else %}aff-host-card--no-cover{% endif %}">
-                <div class="aff-host-card__name">
-                    {{ icon('server', '13') }} {{ h.name }}
-                </div>
-                {% if h.system_name %}
-                <div class="aff-host-card__system">
-                    {{ icon('layers', '10') }} {{ h.system_name }}
-                </div>
-                {% endif %}
-                {% if covered %}
-                <div style="margin-top:0.3rem;">
-                    <span class="status-pill status-enabled" style="font-size:0.67rem;padding:0.08rem 0.35rem;">
-                        {{ icon('shield-check','9') }} Detected
-                    </span>
-                </div>
-                {% endif %}
-            </a>
-            {% endfor %}
-        </div>
-
-        {% if cve.matched_software %}
-        <div style="margin-top:0.75rem;font-size:0.82rem;color:var(--color-text-muted);">
-            Matched software: {{ cve.matched_software | join(', ') }}
-        </div>
-        {% endif %}
-    </div>
-    {% endif %}
 
 </div><!-- /container -->
 
 <!-- Required for mitre_pill slide panel -->
 <div id="slide-panel-container"></div>
+
+<style>
+@media (max-width: 768px) {
+    div[style*="grid-template-columns:1fr 1fr"] {
+        grid-template-columns: 1fr !important;
+    }
+}
+</style>
 {% endblock %}
 
