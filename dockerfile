@@ -65,16 +65,6 @@ RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
         https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/main/mappings/attack-to-cve.json || \
     echo "WARN: ATT&CK-to-CVE mapping download failed (air-gap build) — file will be absent at runtime"
 
-# ─── NVD VERSION-RANGE DATA (Windows CPEs — build-time best-effort) ────────
-# Downloads NVD 2.0 CVE records for all Windows 11/10/Server CPEs so the
-# version gate can compare build numbers without needing internet at runtime.
-# Results are stored as per-year JSON files in /opt/repos/nvd/.
-# If the download fails (air-gap build) the version gate degrades gracefully
-# to OpenCTI live queries and CPE-version heuristics.
-COPY scripts/fetch_nvd_windows.py /tmp/fetch_nvd_windows.py
-RUN python /tmp/fetch_nvd_windows.py /opt/repos/nvd || \
-    echo "WARN: NVD Windows data download failed — version gate will use OpenCTI/heuristic fallback"
-
 # Copy application code and VERSION file
 COPY app/ /app/app/
 COPY VERSION /app/VERSION
