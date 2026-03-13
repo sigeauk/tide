@@ -22,6 +22,21 @@
             <span class="badge badge-danger" style="font-size:0.8rem;">{{ icon('zap','14') }} Ransomware</span>
             {% endif %}
 
+            {# Report button #}
+            <div style="margin-left:auto;">
+                <button class="btn btn-secondary btn-sm"
+                        onclick="openExportModal()"
+                        title="Generate CVE audit report"
+                        style="display:flex;align-items:center;gap:0.375rem;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export Report
+                </button>
+            </div>
+
             {# Affected counts #}
             {% set sys_ids = [] %}
             {% for h in cve.affected_hosts %}{% if h.system_id not in sys_ids %}{% set _ = sys_ids.append(h.system_id) %}{% endif %}{% endfor %}
@@ -104,5 +119,85 @@
     }
 }
 </style>
+<!-- ── Export Report Modal ────────────────────────────────────── -->
+<div id="export-modal-overlay"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
+            z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+                border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
+                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
+                Export CVE Audit Report
+            </h3>
+            <button onclick="closeExportModal()"
+                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    title="Close">&#x2715;</button>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
+            <select id="modal-format"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="pdf">PDF</option>
+                <option value="markdown">Markdown</option>
+            </select>
+        </div>
+        <div style="margin-bottom:1.5rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
+            <select id="modal-classification"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                {% for clf in classification_options %}
+                <option value="{{ clf }}">{{ clf }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
+            <button onclick="closeExportModal()" class="btn btn-secondary"
+                    style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
+            <button onclick="confirmExport()" class="btn btn-primary"
+                    style="font-size:0.85rem; padding:0.45rem 1.25rem;">Download</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openExportModal() {
+    document.getElementById('export-modal-overlay').style.display = 'flex';
+}
+function closeExportModal() {
+    document.getElementById('export-modal-overlay').style.display = 'none';
+}
+function confirmExport() {
+    var format         = document.getElementById('modal-format').value;
+    var classification = document.getElementById('modal-classification').value;
+    var params = new URLSearchParams();
+    params.set('format', format);
+    params.set('classification', classification);
+    // Include search filter if present
+    var searchInput = document.getElementById('affected-search');
+    var q = searchInput ? searchInput.value.trim() : '';
+    if (q) params.set('search', q);
+    closeExportModal();
+    window.location.href = '/api/inventory/cve/{{ cve.cve_id }}/report?' + params.toString();
+}
+document.addEventListener('click', function(e) {
+    var overlay = document.getElementById('export-modal-overlay');
+    if (overlay && e.target === overlay) closeExportModal();
+});
+</script>
 {% endblock %}
 

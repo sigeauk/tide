@@ -1,0 +1,85 @@
+{# Partial: tactic_mitre_section.html
+   Context: step (BaselineTactic with techniques list), technique_rules (dict)
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+<h2 class="section-title">{{ icon('crosshair','16') }} MITRE ATT&amp;CK Techniques</h2>
+
+{% if step.techniques %}
+<div class="mitre-pills-wrap" style="gap:0.5rem;margin-bottom:1rem;">
+    {% for t in step.techniques %}
+    <div style="display:inline-flex;align-items:center;gap:0.3rem;vertical-align:middle;" id="tech-row-{{ t.id }}">
+        {% set tr = technique_rules.get(t.technique_id | upper, {}) if technique_rules is defined else {} %}
+        {# Display mode #}
+        <span class="tech-display-{{ t.id }}">
+            {{ mitre_pill(t.technique_id, covered=tr.get('has_detection', false), rule_count=tr.get('rule_count', 0)) }}
+            <button class="btn btn-secondary btn-sm"
+                    onclick="document.querySelectorAll('.tech-display-{{ t.id }}').forEach(function(el){el.style.display='none'});document.getElementById('tech-edit-{{ t.id }}').style.display='inline-flex';"
+                    style="padding:0.15rem 0.35rem;font-size:0.65rem;line-height:1;border-radius:3px;"
+                    title="Edit technique">
+                {{ icon('pencil', '10') }}
+            </button>
+            <button class="btn btn-danger btn-sm"
+                    hx-delete="/api/baselines/tactics/{{ step.id }}/techniques/{{ t.id }}"
+                    hx-target="#step-mitre-section"
+                    hx-swap="innerHTML"
+                    hx-confirm="Remove {{ t.technique_id }}?"
+                    style="padding:0.15rem 0.35rem;font-size:0.65rem;line-height:1;border-radius:3px;"
+                    title="Remove technique">
+                {{ icon('x', '10') }}
+            </button>
+        </span>
+        {# Edit mode #}
+        <form id="tech-edit-{{ t.id }}" style="display:none;align-items:center;gap:0.3rem;"
+              hx-put="/api/baselines/tactics/{{ step.id }}/techniques/{{ t.id }}"
+              hx-target="#step-mitre-section"
+              hx-swap="innerHTML">
+            <input class="form-input" name="technique_id" value="{{ t.technique_id }}"
+                   style="font-size:0.78rem;padding:0.2rem 0.4rem;width:130px;"
+                   pattern="T\d{4}(\.\d{3})?" title="e.g. T1566.001" required>
+            <button type="submit" class="btn btn-primary btn-sm" style="padding:0.15rem 0.4rem;font-size:0.65rem;">
+                {{ icon('check', '10') }}
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm"
+                    onclick="document.getElementById('tech-edit-{{ t.id }}').style.display='none';document.querySelectorAll('.tech-display-{{ t.id }}').forEach(function(el){el.style.display=''});"
+                    style="padding:0.15rem 0.35rem;font-size:0.65rem;">
+                {{ icon('x', '10') }}
+            </button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:2rem 1rem;color:var(--color-text-muted);">
+    {{ icon('crosshair', '32') }}
+    <p style="margin-top:0.75rem;font-size:0.88rem;">No ATT&amp;CK technique mappings yet.</p>
+</div>
+{% endif %}
+
+{% if step.technique_id %}
+<div style="font-size:0.78rem;color:var(--color-text-muted);margin-bottom:0.75rem;">
+    {{ icon('info','11') }} Legacy technique: <code style="font-size:0.75rem;padding:0.1rem 0.3rem;background:var(--bg-tertiary);border-radius:0.2rem;">{{ step.technique_id }}</code>
+</div>
+{% endif %}
+
+<!-- Add technique form -->
+<div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;border-top:1px solid var(--color-border-muted);padding-top:0.75rem;">
+    <span style="font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">Add Technique:</span>
+    <form style="display:flex;gap:0.4rem;align-items:center;"
+          hx-post="/api/baselines/tactics/{{ step.id }}/techniques"
+          hx-target="#step-mitre-section"
+          hx-swap="innerHTML"
+          hx-on::after-request="this.reset();">
+        <input class="form-input"
+               name="technique_id"
+               placeholder="e.g. T1566.001"
+               style="font-size:0.78rem;padding:0.25rem 0.5rem;width:160px;"
+               pattern="T\d{4}(\.\d{3})?"
+               title="MITRE technique ID, e.g. T1566 or T1566.001"
+               required>
+        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
+            {{ icon('plus', '12') }} Add
+        </button>
+    </form>
+</div>

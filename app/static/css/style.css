@@ -42,6 +42,16 @@
   --color-bg-layer-5:     #282e36;
   --color-bg-layer-5-hover:#2d333b;
 
+  /* ── Semantic elevation tiers (progressive lightening) ── */
+  --bg-base:              var(--color-bg-base);
+  --bg-level-1-card:      var(--color-bg-surface);
+  --bg-level-2-subcard:   var(--color-bg-action);
+  --bg-level-3-inner:     var(--color-bg-layer-4);
+  --bg-level-4-button:    var(--color-bg-layer-5);
+
+  /* Surface-alt: used for inner nested cards (alias for level-3) */
+  --color-surface-alt:    var(--bg-level-3-inner);
+
   /* ── Depth highlights (simulated top-edge light) ── */
   --color-highlight-1:    #2d333b;
   --color-highlight-2:    #3b434d;
@@ -521,7 +531,6 @@ a:hover { color: var(--color-primary); }
   padding: 0.75rem;
   border-radius: var(--radius-md);
   color: var(--color-primary);
-  opacity: 0.6;
   text-decoration: none;
   transition: all var(--transition-fast);
   margin-bottom: 0.25rem;
@@ -536,13 +545,12 @@ a:hover { color: var(--color-primary); }
 
 .nav-item:hover {
   background-color: var(--color-bg-surface-hover);
-  opacity: 1;
+  color: var(--color-primary);
 }
 
 .nav-item.active {
   background-color: var(--color-primary-muted);
   color: var(--color-primary);
-  opacity: 1;
 }
 
 .nav-icon {
@@ -602,7 +610,7 @@ a:hover { color: var(--color-primary); }
   background: var(--color-bg-layer-5) !important;
   border: 1px solid var(--color-border) !important;
   border-top: 1px solid var(--color-highlight-3) !important;
-  color: var(--color-text) !important;
+  color: var(--color-primary) !important;
   padding: 0.5rem 0.75rem !important;
   border-radius: var(--radius-md) !important;
   font-size: 0.875rem !important;
@@ -672,6 +680,8 @@ a:hover { color: var(--color-primary); }
 .sidebar:hover { width: var(--sidebar-width-collapsed) !important; }
 .sidebar:hover .sidebar-title,
 .sidebar:hover .nav-label { opacity: 0 !important; }
+/* Keep flyout child labels visible when sidebar is collapsed */
+.sidebar:not(.expanded) .nav-group__items .nav-label { opacity: 1 !important; }
 .app-layout:has(.sidebar:hover) .main-content { margin-left: var(--sidebar-width-collapsed) !important; }
 
 .sidebar.expanded { width: var(--sidebar-width-expanded) !important; }
@@ -1716,6 +1726,7 @@ a:hover { color: var(--color-primary); }
 .aff-host-card--red      { border-left-color: var(--color-danger); }
 .aff-host-card--amber    { border-left-color: var(--color-warning); }
 .aff-host-card--green    { border-left-color: var(--color-success); }
+.aff-host-card--grey     { border-left-color: var(--color-text-muted, #8b949e); }
 
 .aff-host-card__name {
   font-size: 0.88rem;
@@ -1734,6 +1745,7 @@ a:hover { color: var(--color-primary); }
 .aff-host-card--red      .aff-host-card__name { color: var(--color-danger); }
 .aff-host-card--amber    .aff-host-card__name { color: var(--color-warning-text, #b45309); }
 .aff-host-card--green    .aff-host-card__name { color: var(--color-success); }
+.aff-host-card--grey     .aff-host-card__name { color: var(--color-text-muted, #8b949e); }
 
 .aff-host-card__system {
   font-size: 0.73rem;
@@ -2571,12 +2583,12 @@ body.light {
   --color-bg-base-alt:     #eef1f5;
   --color-bg-surface:      #ffffff;
   --color-bg-surface-hover:#f6f8fa;
-  --color-bg-action:       #ffffff;
-  --color-bg-action-hover: #f6f8fa;
-  --color-bg-layer-4:      #ffffff;
-  --color-bg-layer-4-hover:#f6f8fa;
-  --color-bg-layer-5:      #ffffff;
-  --color-bg-layer-5-hover:#f6f8fa;
+  --color-bg-action:       #f0f2f5;
+  --color-bg-action-hover: #e8eaed;
+  --color-bg-layer-4:      #e4e7eb;
+  --color-bg-layer-4-hover:#dcdfe3;
+  --color-bg-layer-5:      #d8dbe0;
+  --color-bg-layer-5-hover:#d0d3d8;
 
   --color-highlight-1: #ffffff;
   --color-highlight-2: #ffffff;
@@ -4653,6 +4665,122 @@ body.light {
   color: var(--color-text-muted);
   border: 1px solid var(--color-border-muted);
 }
+.badge-grey {
+  background: rgba(139, 148, 158, 0.1);
+  color: var(--color-text-muted, #8b949e);
+  border: 1px solid rgba(139, 148, 158, 0.35);
+}
+
+/* ── Nav Groups — OpenCTI accordion ─────── */
+
+/* The trigger button uses .nav-item so it inherits all top-level styling.
+   We just need to position the chevron on the far right. */
+.nav-group__trigger {
+  justify-content: flex-start;
+}
+.nav-group__trigger .nav-label {
+  flex: 1;
+  text-align: left;
+}
+.nav-group__chevron {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  stroke: currentColor;
+  fill: none;
+  opacity: 0.5;
+  transition: transform 0.25s ease, opacity 0.2s ease;
+  margin-left: auto;
+}
+.nav-group__trigger:hover .nav-group__chevron { opacity: 1; }
+.nav-group.collapsed .nav-group__chevron { transform: rotate(-90deg); }
+
+/* Child items container — smooth expand/collapse */
+.nav-group__items {
+  overflow: hidden;
+  max-height: 500px;
+  transition: max-height 0.3s ease, opacity 0.25s ease;
+  opacity: 1;
+}
+.nav-group.collapsed .nav-group__items {
+  max-height: 0;
+  opacity: 0;
+}
+/* Override collapsed animation for flyout in collapsed sidebar */
+.sidebar:not(.expanded) .nav-group.collapsed > .nav-group__items {
+  max-height: none;
+  opacity: 1;
+  overflow: visible;
+}
+
+/* Child links — indented, accent colored */
+.nav-child {
+  display: flex;
+  align-items: center;
+  padding: 0.5rem 0.75rem 0.5rem 3rem;
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+  margin-bottom: 0.125rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.nav-child .nav-label {
+  opacity: 0;
+  transition: opacity var(--transition-normal);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.sidebar.expanded .nav-child .nav-label { opacity: 1; }
+.nav-child:hover {
+  background-color: var(--color-bg-surface-hover);
+  color: var(--color-primary-hover);
+}
+.nav-child.active {
+  background-color: var(--color-primary-muted);
+  color: var(--color-primary);
+}
+
+/* Collapsed sidebar: hide group triggers' nav-label and chevron */
+.sidebar:not(.expanded) .nav-group__chevron { display: none; }
+/* Suppress tooltip on group triggers in collapsed mode — they show flyout submenus instead */
+.sidebar:not(.expanded) .nav-group__trigger[data-tooltip]::after {
+  display: none !important;
+  content: '' !important;
+  opacity: 0 !important;
+  visibility: hidden !important;
+}
+/* Collapsed sidebar: flyout submenu on hover */
+.sidebar:not(.expanded) .nav-group__items {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  min-width: 180px;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  padding: 0.35rem;
+  z-index: 10000;
+  max-height: none;
+  opacity: 1;
+}
+.sidebar:not(.expanded) .nav-group {
+  position: relative;
+}
+.sidebar:not(.expanded) .nav-group:hover > .nav-group__items {
+  display: block;
+}
+.sidebar:not(.expanded) .nav-child {
+  padding: 0.5rem 0.75rem;
+}
+.sidebar:not(.expanded) .nav-child .nav-label {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* Show the trigger tooltip in collapsed mode (inherits from .nav-item[data-tooltip]) */
 
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -4662,4 +4790,37 @@ body.light {
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ================================================================
+ * PROGRESSIVE DEPTH — Baseline Detail & nested cards
+ *
+ *   Page bg (--bg-base)  →  Tactic container .card (level-1)
+ *     →  Technique card .cve-card-item (level-2)
+ *       →  Inner detail elements (level-3)
+ *         →  Buttons / inputs (level-4)
+ * ================================================================ */
+
+/* Technique cards nested inside a .card (tactic container) lift to level-2 */
+.card .cve-card-item {
+  background: var(--bg-level-2-subcard);
+}
+.card .cve-card-item:hover {
+  background: var(--color-bg-action-hover);
+}
+
+/* Inner cards nested 2 levels deep (e.g. detection rule cards inside a card section) */
+.card .card {
+  background: var(--bg-level-2-subcard);
+}
+.card .card .card {
+  background: var(--bg-level-3-inner);
+}
+
+/* Host cards inside a card section lift to level-2 (already using --color-bg-action) */
+.card .host-card {
+  background: var(--bg-level-2-subcard);
+}
+.card .host-card:hover {
+  background: var(--color-bg-action-hover);
 }

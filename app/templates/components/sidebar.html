@@ -1,6 +1,7 @@
 <!--
-Collapsible Sidebar Component with SVG Icons
-Icons use currentColor so they inherit text color from CSS
+OpenCTI-Style Accordion Sidebar — Grouped Navigation
+Top-level items (standalone + group headers) share identical styling.
+Children are indented, slightly muted, icon-free.
 -->
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
@@ -9,6 +10,7 @@ Icons use currentColor so they inherit text color from CSS
     </div>
     
     <nav class="sidebar-nav">
+        <!-- ── Standalone ── -->
         <a href="/" class="nav-item {% if active_page == 'home' %}active{% endif %}" data-tooltip="Home">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
@@ -23,41 +25,6 @@ Icons use currentColor so they inherit text color from CSS
             <span class="nav-label">Dashboard</span>
         </a>
         
-        <a href="/rules" class="nav-item {% if active_page == 'rules' %}active{% endif %}" data-tooltip="Rule Health">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
-            </svg>
-            <span class="nav-label">Rule Health</span>
-        </a>
-        
-        <a href="/promotion" class="nav-item {% if active_page == 'promotion' %}active{% endif %}" data-tooltip="Promotion">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><path d="m16 12-4-4-4 4"/><path d="M12 16V8"/>
-            </svg>
-            <span class="nav-label">Promotion</span>
-        </a>
-        
-        <a href="/threats" class="nav-item {% if active_page == 'threats' %}active{% endif %}" data-tooltip="Threats">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
-            </svg>
-            <span class="nav-label">Threats</span>
-        </a>
-        
-        <a href="/heatmap" class="nav-item {% if active_page == 'heatmap' %}active{% endif %}" data-tooltip="Heatmap">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/><path d="M15 3v18"/>
-            </svg>
-            <span class="nav-label">Heatmap</span>
-        </a>
-        
-        <a href="/sigma" class="nav-item {% if active_page == 'sigma' %}active{% endif %}" data-tooltip="Sigma">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 7V4H6l6 8-6 8h12v-3"/>
-            </svg>
-            <span class="nav-label">Sigma</span>
-        </a>
-
         <a href="/systems" class="nav-item {% if active_page == 'systems' %}active{% endif %}" data-tooltip="Systems">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
@@ -66,14 +33,65 @@ Icons use currentColor so they inherit text color from CSS
             <span class="nav-label">Systems</span>
         </a>
 
-        <a href="/cve-overview" class="nav-item {% if active_page == 'cve_overview' %}active{% endif %}" data-tooltip="CVE Overview">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m8 2 1.88 1.88"/><path d="M14.12 3.88 16 2"/>
-                <path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"/>
-                <path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"/>
-            </svg>
-            <span class="nav-label">CVE Overview</span>
-        </a>
+        <!-- ── Risk & Baselines ── -->
+        <div class="nav-group" id="nav-group-risk">
+            <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-risk')" data-tooltip="Risk &amp; Baselines">
+                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
+                </svg>
+                <span class="nav-label">Risks</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
+                <a href="/cve-overview" class="nav-child {% if active_page == 'cve_overview' %}active{% endif %}">
+                    <span class="nav-label">CVE Overview</span>
+                </a>
+                <a href="/baselines" class="nav-child {% if active_page == 'baselines' %}active{% endif %}">
+                    <span class="nav-label">Baselines</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- ── Rules ── -->
+        <div class="nav-group" id="nav-group-rules">
+            <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-rules')" data-tooltip="Rules">
+                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
+                </svg>
+                <span class="nav-label">Rules</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
+                <a href="/rules" class="nav-child {% if active_page == 'rules' %}active{% endif %}">
+                    <span class="nav-label">Rule Health</span>
+                </a>
+                <a href="/promotion" class="nav-child {% if active_page == 'promotion' %}active{% endif %}">
+                    <span class="nav-label">Promotion</span>
+                </a>
+                <a href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">
+                    <span class="nav-label">Sigma</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- ── Threats ── -->
+        <div class="nav-group" id="nav-group-threats">
+            <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-threats')" data-tooltip="Threats">
+                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+                </svg>
+                <span class="nav-label">Threats</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
+                <a href="/threats" class="nav-child {% if active_page == 'threats' %}active{% endif %}">
+                    <span class="nav-label">Threat Landscape</span>
+                </a>
+                <a href="/heatmap" class="nav-child {% if active_page == 'heatmap' %}active{% endif %}">
+                    <span class="nav-label">Heatmap</span>
+                </a>
+            </div>
+        </div>
     </nav>
     
     <div class="sidebar-footer">
@@ -122,4 +140,28 @@ Icons use currentColor so they inherit text color from CSS
         </button>
     </div>
 </aside>
+
+<script>
+function toggleNavGroup(id) {
+    var el = document.getElementById(id);
+    if (el) el.classList.toggle('collapsed');
+    // Persist state
+    try {
+        var key = 'nav_' + id;
+        localStorage.setItem(key, el.classList.contains('collapsed') ? '1' : '0');
+    } catch(e) {}
+}
+// Restore collapsed state on load
+document.addEventListener('DOMContentLoaded', function() {
+    ['nav-group-risk','nav-group-rules','nav-group-threats'].forEach(function(id) {
+        try {
+            var saved = localStorage.getItem('nav_' + id);
+            if (saved === '1') {
+                var el = document.getElementById(id);
+                if (el) el.classList.add('collapsed');
+            }
+        } catch(e) {}
+    });
+});
+</script>
 

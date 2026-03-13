@@ -106,6 +106,13 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
+
+    # Seed default baselines if not already present
+    try:
+        from app.inventory_engine import seed_default_playbooks as seed_default_baselines
+        seed_default_baselines()
+    except Exception as e:
+        logger.warning(f"Failed to seed default baselines: {e}")
     
     # Pre-load Sigma rules cache to avoid slow first page load
     # This takes ~6 seconds but happens during startup, not during user request

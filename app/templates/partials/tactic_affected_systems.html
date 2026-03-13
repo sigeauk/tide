@@ -1,0 +1,180 @@
+{# Partial: tactic_affected_systems.html
+   Context:
+     step_id           str (tactic_id passed as step_id for compat)
+     affected_systems  list[dict] — [{system_id, system_name, status, matched_rules,
+                                      blind_spot_reason, applied_dets, unapplied_dets}]
+     blind_spots       list[BlindSpot]
+#}
+{% from "macros/icons.html" import icon %}
+
+<div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+    <h2 class="section-title">{{ icon('layers','16') }} Applied Systems</h2>
+
+    <!-- Legend -->
+    <div class="det-color-key" style="margin-bottom:1rem;">
+        <span class="det-color-key__label">Coverage Status</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-success);"></span> Green — Detected</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-warning);"></span> Amber — Blind Spot</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-danger);"></span> Red — Missing</span>
+    </div>
+
+    {% if affected_systems %}
+    <div class="host-card-grid">
+        {% for sys in affected_systems %}
+        <div class="host-card aff-host-card--{{ sys.status }}" style="min-height:100px;">
+            <!-- Status badge -->
+            <div class="host-card__badge">
+                {% if sys.status == 'green' %}
+                <span class="badge badge-success" style="font-size:0.7rem;">{{ icon('shield-check','10') }} Detected</span>
+                {% elif sys.status == 'amber' %}
+                <span class="badge badge-warning" style="font-size:0.7rem;">{{ icon('eye-off','10') }} Blind Spot</span>
+                {% else %}
+                <span class="badge badge-danger" style="font-size:0.7rem;">{{ icon('alert-triangle','10') }} Missing</span>
+                {% endif %}
+            </div>
+
+            <!-- System name -->
+            <a href="/systems/{{ sys.system_id }}" class="host-card__title">
+                {{ icon('layers','14') }} {{ sys.system_name }}
+            </a>
+
+            <!-- Matched rules -->
+            {% if sys.matched_rules %}
+            <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                {{ icon('shield-check','10') }} {{ sys.matched_rules | join(', ') }}
+            </div>
+            {% endif %}
+
+            <!-- Applied detection badges with remove -->
+            {% if sys.applied_dets %}
+            <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.35rem;">
+                {% for ad in sys.applied_dets %}
+                <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
+                    {{ icon('check','10') }} {{ ad.label[:30] }}
+                    <button class="btn btn-danger btn-sm"
+                            hx-delete="/api/baselines/tactics/{{ step_id }}/detections/{{ ad.id }}/apply-system/{{ sys.system_id }}"
+                            hx-target="#step-affected-section"
+                            hx-swap="innerHTML"
+                            hx-confirm="Remove this detection from {{ sys.system_name }}?"
+                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                        {{ icon('x','9') }}
+                    </button>
+                </span>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Apply detection dropdown for unapplied detections -->
+            {% if sys.unapplied_dets %}
+            <div style="margin-top:0.35rem;">
+                <form style="display:flex;align-items:center;gap:0.3rem;"
+                      hx-post="/api/baselines/tactics/{{ step_id }}/detections/__DET_ID__/apply"
+                      hx-target="#step-affected-section"
+                      hx-swap="innerHTML"
+                      onsubmit="var sel=this.querySelector('select');if(!sel.value){event.preventDefault();return;}this.setAttribute('hx-post',this.getAttribute('hx-post').replace('__DET_ID__',sel.value));">
+                    <input type="hidden" name="system_id" value="{{ sys.system_id }}">
+                    <select class="form-input" style="font-size:0.72rem;padding:0.15rem 0.4rem;max-width:200px;">
+                        <option value="">Apply rule…</option>
+                        {% for ud in sys.unapplied_dets %}
+                        <option value="{{ ud.id }}">{{ ud.label[:35] }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.68rem;padding:0.15rem 0.4rem;">
+                        {{ icon('shield-check','10') }} Apply
+                    </button>
+                </form>
+            </div>
+            {% endif %}
+
+            <!-- Blind spot reason -->
+            {% if sys.status == 'amber' and sys.blind_spot_reason %}
+            <div style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;margin-top:0.15rem;">
+                {{ icon('info','10') }} {{ sys.blind_spot_reason }}
+                {% for bs in blind_spots %}
+                {% if bs.system_id == sys.system_id %}
+                <button class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                        hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=tactic&entity_id={{ step_id }}"
+                        hx-target="#step-affected-section" hx-swap="innerHTML"
+                        hx-confirm="Remove blind spot for {{ sys.system_name }}?">{{ icon('x','9') }}</button>
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- Log blind spot for red systems -->
+            {% if sys.status == 'red' %}
+            <div style="margin-top:0.35rem;">
+                <button class="btn btn-sm" style="font-size:0.65rem;padding:0.15rem 0.4rem;color:var(--color-text-muted);border-color:var(--color-border-muted);"
+                        onclick="openStepBlindSpotModal('{{ step_id }}','{{ sys.system_id }}','{{ sys.system_name }}')">
+                    {{ icon('eye-off','10') }} Log Blind Spot
+                </button>
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p style="color:var(--color-text-muted);font-size:0.85rem;text-align:center;padding:1rem;">
+        No systems have this baseline applied yet.
+    </p>
+    {% endif %}
+</div>
+
+<!-- Step Blind Spot Modal -->
+<div id="step-bs-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('step-bs-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
+            Documenting a known blind spot for <strong id="step-bs-target"></strong>.
+            Status will change to <span class="badge badge-warning" style="font-size:0.7rem;">Amber</span>.
+        </p>
+        <form hx-post="/api/blind-spots"
+              hx-target="#step-affected-section"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('step-bs-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <input type="hidden" name="entity_type" value="tactic">
+            <input type="hidden" name="entity_id" value="">
+            <input type="hidden" name="system_id" value="">
+            <div>
+                <label class="form-label">Reason <span style="color:var(--color-danger)">*</span></label>
+                <textarea name="reason" class="form-input" rows="3" required
+                          placeholder="Why can't this technique be monitored on this system?"></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('step-bs-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Blind Spot</button>
+            </div>
+        </form>
+    </div>
+</div>
+<script>
+function openStepBlindSpotModal(stepId, systemId, systemName) {
+    var m = document.getElementById('step-bs-modal');
+    m.querySelector('[name=entity_id]').value = stepId;
+    m.querySelector('[name=system_id]').value = systemId;
+    m.querySelector('#step-bs-target').textContent = systemName;
+    m.querySelector('[name=reason]').value = '';
+    m.style.display = 'flex';
+}
+// Fix HTMX dynamic detection_id in apply forms
+document.addEventListener('htmx:configRequest', function(e) {
+    var form = e.detail.elt.closest('form');
+    if (!form) return;
+    var path = e.detail.path;
+    if (path && path.indexOf('__DET_ID__') !== -1) {
+        var sel = form.querySelector('select');
+        if (sel && sel.value) {
+            e.detail.path = path.replace('__DET_ID__', sel.value);
+        } else {
+            e.preventDefault();
+        }
+    }
+});
+</script>

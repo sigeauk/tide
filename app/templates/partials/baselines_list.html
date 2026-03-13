@@ -1,0 +1,68 @@
+{# Partial: baselines_list.html — CVE-overview-style row list
+   Context: baselines (list[dict]) from get_baselines_overview()
+     Each dict: id, name, description, step_count, detection_count, system_count, worst_status
+#}
+{% from "macros/icons.html" import icon %}
+
+{% if baselines %}
+<div class="card" style="padding:0;overflow:hidden;">
+    <div class="cve-list" style="padding:0.75rem 1rem;">
+    {% for bl in baselines %}
+    <div class="cve-card-item {% if bl.worst_status == 'red' %}cve-card-item--nocover{% elif bl.worst_status == 'amber' %}cve-card-item--detected{% else %}cve-card-item--unaffected{% endif %}"
+         style="cursor:pointer;" onclick="window.location='/baselines/{{ bl.id }}'">
+
+        {# Left: RAG dot + name #}
+        <div class="cve-card-item__id" style="min-width:220px;">
+            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0;
+                {% if bl.worst_status == 'red' %}background:var(--color-danger);
+                {% elif bl.worst_status == 'amber' %}background:var(--color-warning);
+                {% elif bl.worst_status == 'green' %}background:var(--color-success);
+                {% else %}background:var(--color-border);{% endif %}"
+                title="{% if bl.worst_status == 'red' %}Not covered{% elif bl.worst_status == 'amber' %}Blind spots{% elif bl.worst_status == 'green' %}Fully covered{% else %}Not applied{% endif %}">
+            </span>
+            <a href="/baselines/{{ bl.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;
+                {% if bl.worst_status == 'red' %}color:var(--color-danger);
+                {% elif bl.worst_status == 'amber' %}color:var(--color-warning);
+                {% elif bl.worst_status == 'green' %}color:var(--color-success);
+                {% else %}color:var(--color-primary);{% endif %}"
+               onclick="event.stopPropagation();">
+                {{ bl.name }}
+            </a>
+        </div>
+
+        {# Body: description #}
+        <div class="cve-card-item__body">
+            <div class="cve-card-item__desc">{{ bl.description[:120] if bl.description else 'No description.' }}</div>
+        </div>
+
+        {# Right: summary pills #}
+        <div class="cve-card-item__right">
+            <div class="cve-card-item__systems">
+                {% if bl.system_count > 0 %}
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.25);">
+                    {{ icon('layers','10') }} Applied to {{ bl.system_count }} System{{ 's' if bl.system_count != 1 }}
+                </span>
+                {% else %}
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(107,114,128,.1);color:var(--color-text-muted);border:1px solid rgba(107,114,128,.25);">
+                    {{ icon('layers','10') }} Not Applied
+                </span>
+                {% endif %}
+            </div>
+            <div class="cve-card-item__badges">
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">
+                    {{ icon('shield','10') }} {{ bl.detection_count }} Rule{{ 's' if bl.detection_count != 1 }} Mapped
+                </span>
+                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(107,114,128,.08);color:var(--color-text-muted);border:1px solid rgba(107,114,128,.2);">
+                    {{ icon('crosshair','10') }} {{ bl.tactic_count }} Technique{{ 's' if bl.tactic_count != 1 }}
+                </span>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card" style="padding:2.5rem;text-align:center;">
+    <p style="color:var(--color-muted);margin:0;">No baselines yet. Create one to start validating detection coverage.</p>
+</div>
+{% endif %}

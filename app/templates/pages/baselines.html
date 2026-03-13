@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}Baselines | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ icon('shield-alert','24') }} Baselines</h1>
+        <p class="page-subtitle">Threat-based baselines — validate detection coverage across systems.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+        <button class="btn btn-primary btn-sm"
+                onclick="document.getElementById('add-baseline-modal').style.display='flex'">
+            {{ icon('plus', '14') }} New Baseline
+        </button>
+    </div>
+</div>
+
+<!-- Metric cards -->
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ baselines | length }}</p>
+        <p class="metric-label">Total Baselines</p>
+        <p class="metric-sub">{{ icon_text('book-open','Baselines defined','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_tactics = namespace(total=0) %}
+        {% for bl in baselines %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
+        <p class="metric-value">{{ ns_tactics.total }}</p>
+        <p class="metric-label">Techniques Defined</p>
+        <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_sys = namespace(total=0) %}
+        {% for bl in baselines %}{% set ns_sys.total = ns_sys.total + bl.system_count %}{% endfor %}
+        <p class="metric-value">{{ ns_sys.total }}</p>
+        <p class="metric-label">System Assignments</p>
+        <p class="metric-sub">{{ icon_text('layers','Baselines applied','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_dets = namespace(total=0) %}
+        {% for bl in baselines %}{% set ns_dets.total = ns_dets.total + bl.detection_count %}{% endfor %}
+        <p class="metric-value {{ 'success' if ns_dets.total > 0 else '' }}">{{ ns_dets.total }}</p>
+        <p class="metric-label">Rules Mapped</p>
+        <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_red = namespace(count=0) %}
+        {% for bl in baselines %}{% if bl.worst_status == 'red' %}{% set ns_red.count = ns_red.count + 1 %}{% endif %}{% endfor %}
+        <p class="metric-value {{ 'danger' if ns_red.count > 0 else 'success' }}">{{ ns_red.count }}</p>
+        <p class="metric-label">Uncovered</p>
+        <p class="metric-sub">{{ icon_text('alert-triangle','Baselines with gaps','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_green = namespace(count=0) %}
+        {% for bl in baselines %}{% if bl.worst_status == 'green' %}{% set ns_green.count = ns_green.count + 1 %}{% endif %}{% endfor %}
+        <p class="metric-value {{ 'success' if ns_green.count > 0 else '' }}">{{ ns_green.count }}</p>
+        <p class="metric-label">Fully Covered</p>
+        <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
+    </div>
+</div>
+
+<!-- Baselines list -->
+<div id="baselines-list">
+    {% include "partials/baselines_list.html" %}
+</div>
+
+<!-- ── Add Baseline Modal ────────────────────────────────── -->
+<div id="add-baseline-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">New Baseline</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('add-baseline-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-post="/api/baselines"
+              hx-target="#baselines-list"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-baseline-modal').style.display='none';this.reset()"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label class="form-label">Baseline Name <span style="color:var(--color-danger)">*</span></label>
+                <input name="name" class="form-input" required placeholder="e.g. Insider Threat (Data Exfiltration)">
+            </div>
+            <div>
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-input" rows="3" placeholder="Describe the threat scenario this baseline validates…"></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('add-baseline-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

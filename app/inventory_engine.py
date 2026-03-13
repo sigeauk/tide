@@ -7,9 +7,12 @@ from typing import Dict, List, Optional, Tuple
 import threading
 from app.config import get_settings
 from app.models.inventory import (
-    AffectedHost, AppliedDetection, Classification, CveMatch, CveOverviewStats, Host, HostCreate, HostSummary,
-    HostUpdate, InventoryStats, MitreTechnique, SoftwareCreate, SoftwareInventory,
-    SoftwareUpdate, System, SystemCreate, SystemSummary, SystemUpdate, VulnDetection,
+    AffectedHost, AppliedDetection, Baseline, BaselineCreate, BaselineTactic, BlindSpot, Classification, CveMatch,
+    CveOverviewStats, Host, HostCreate, HostSummary, HostUpdate, InventoryStats, MitreTechnique, SoftwareCreate,
+    SoftwareInventory, SoftwareUpdate, System, SystemBaseline, SystemCreate, SystemSummary, SystemUpdate,
+    TacticDetection, TacticTechnique, VulnDetection,
+    # backward compat aliases
+    Playbook, PlaybookCreate, PlaybookStep, StepDetection, StepTechnique,
 )
 logger = logging.getLogger(__name__)
 
@@ -783,6 +786,8 @@ def get_all_cve_overview():
     # Enrich detections with applied_to
     for cve_id_key, dets in detections.items():
         _enrich_detections_with_applied(dets, applied_map)
+    # Load all CVE blind spots once
+    all_blind_spots = _load_all_blind_spots("cve")
     # Build map: cve_id -> List[AffectedHost]
     affected_by_cve: Dict[str, List[AffectedHost]] = {}
     for system in systems:
@@ -793,7 +798,8 @@ def get_all_cve_overview():
             matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
             for cve_id in matches:
                 cve_dets = detections.get(cve_id, [])
-                status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map)
+                cve_bs = all_blind_spots.get(cve_id, [])
+                status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map, cve_bs)
                 ah = AffectedHost(host_id=host.id, name=host.name, ip_address=host.ip_address,
                                   system_id=system.id, system_name=system.name,
                                   coverage_status=status,
@@ -824,6 +830,7 @@ def get_cve_detail(cve_id):
     applied_map = _load_applied_detections()
     cve_dets = detections.get(cve_id.upper(), [])
     _enrich_detections_with_applied(cve_dets, applied_map)
+    cve_blind_spots = get_blind_spots("cve", cve_id.upper())
     all_affected: List[AffectedHost] = []
     matched_sw: List[str] = []
     all_hosts = _list_all_hosts_by_system()
@@ -835,7 +842,7 @@ def get_cve_detail(cve_id):
             if cve_id.upper() in {k.upper() for k in matches}:
                 match_key = next(k for k in matches if k.upper() == cve_id.upper())
                 if not any(a.host_id == host.id for a in all_affected):
-                    status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map)
+                    status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map, cve_blind_spots)
                     all_affected.append(AffectedHost(
                         host_id=host.id, name=host.name, ip_address=host.ip_address,
                         system_id=system.id, system_name=system.name,
@@ -1201,16 +1208,22 @@ def _load_applied_detections() -> Dict[str, List[AppliedDetection]]:
 
 def _compute_coverage_status(host_id: str, system_id: str,
                              cve_detections: List[VulnDetection],
-                             applied_map: Dict[str, List[AppliedDetection]]) -> Tuple[str, List[str]]:
+                             applied_map: Dict[str, List[AppliedDetection]],
+                             blind_spots: Optional[List[BlindSpot]] = None) -> Tuple[str, List[str]]:
     """Compute traffic-light status for a host against a CVE's detections.
-    Returns (status, rule_names) where status is 'red'|'amber' and rule_names are applied rule labels."""
+    Returns (status, rule_names) where status is 'red'|'amber'|'grey' and rule_names are applied rule labels."""
+    # Check for blind spots first
+    if blind_spots:
+        for bs in blind_spots:
+            if bs.host_id == host_id:
+                return "grey", []
     if not cve_detections:
         return "red", []
     applied_names: List[str] = []
     for det in cve_detections:
         for ad in applied_map.get(det.id, []):
             if ad.host_id == host_id:
-                label = det.note or _resolve_rule_ref(det.rule_ref) or "Rule"
+                label = _resolve_rule_ref(det.rule_ref) or det.note or "Rule"
                 if label not in applied_names:
                     applied_names.append(label)
     if applied_names:
@@ -1244,6 +1257,25 @@ def _enrich_detections_with_applied(detections: List[VulnDetection],
     for det in detections:
         det.applied_to = applied_map.get(det.id, [])
     return detections
+
+
+def _load_all_blind_spots(entity_type: str) -> Dict[str, List[BlindSpot]]:
+    """Load all blind spots of a given type, grouped by entity_id."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+                "FROM blind_spots WHERE entity_type = ?",
+                [entity_type],
+            ).fetchall()
+        result: Dict[str, List[BlindSpot]] = {}
+        for r in rows:
+            bs = BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
+                           host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7])
+            result.setdefault(r[2], []).append(bs)
+        return result
+    except Exception:
+        return {}
 
 # --- CISA Feed ---
 def save_mitre_cve_map(json_bytes: bytes) -> int:
@@ -1297,3 +1329,1092 @@ def ingest_cisa_feed(json_bytes):
     _cisa_kev_mtime = None
     _cisa_kev_path_used = None
     return count
+
+
+# ---------------------------------------------------------------------------
+# Report Data Builders
+# ---------------------------------------------------------------------------
+
+def build_system_report_data(system_id: str) -> Optional[Dict]:
+    """Build all data needed for System detail reports (CISO + Technical)."""
+    system = get_system(system_id)
+    if not system:
+        return None
+
+    kev = _load_cisa_kev()
+    kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
+    detections = list_cve_detections()
+    applied_map = _load_applied_detections()
+    for dets in detections.values():
+        _enrich_detections_with_applied(dets, applied_map)
+
+    all_software = _list_all_software_by_host()
+    hosts = list_hosts(system_id)
+
+    # Load all CVE blind spots once
+    all_blind_spots = _load_all_blind_spots("cve")
+
+    # Build per-host vulnerability data with full RAG status
+    host_rows: List[Dict] = []
+    all_cves: Dict[str, Dict] = {}  # cve_id -> {kev_entry, hosts: [...], detections, techniques}
+
+    for host in hosts:
+        software = all_software.get(host.id, [])
+        host_cves: List[Dict] = []
+        if software and kev:
+            matches = _match_software_against_kev(software, kev, host_os=host.os or "")
+            for cve_id, sw_names in matches.items():
+                cve_dets = detections.get(cve_id, [])
+                cve_bs = all_blind_spots.get(cve_id, [])
+                status, rule_names = _compute_coverage_status(host.id, system_id, cve_dets, applied_map, cve_bs)
+                host_cves.append({
+                    "cve_id": cve_id,
+                    "status": status,
+                    "rule_names": rule_names,
+                    "sw_names": sw_names,
+                })
+                if cve_id not in all_cves:
+                    kev_entry = kev_by_id.get(cve_id, {})
+                    techniques = get_cve_techniques(cve_id)
+                    all_cves[cve_id] = {
+                        "cve_id": cve_id,
+                        "vulnerability_name": kev_entry.get("vulnerabilityName", cve_id),
+                        "vendor_project": kev_entry.get("vendorProject", ""),
+                        "product": kev_entry.get("product", ""),
+                        "short_description": kev_entry.get("shortDescription", ""),
+                        "known_ransomware": (kev_entry.get("knownRansomwareCampaignUse", "") or "").lower() in ("known", "yes"),
+                        "date_added": kev_entry.get("dateAdded", ""),
+                        "techniques": [{"id": t.technique_id, "name": t.name, "has_detection": t.has_detection} for t in techniques],
+                        "detections": [{"rule_ref": d.rule_ref, "note": d.note, "source": d.source} for d in cve_dets],
+                        "hosts_red": [],
+                        "hosts_amber": [],
+                        "hosts_grey": [],
+                    }
+                if status == "red":
+                    all_cves[cve_id]["hosts_red"].append({"name": host.name, "ip": host.ip_address or ""})
+                elif status == "grey":
+                    all_cves[cve_id]["hosts_grey"].append({
+                        "name": host.name, "ip": host.ip_address or "",
+                        "reason": next((bs.reason for bs in cve_bs if bs.host_id == host.id), ""),
+                    })
+                else:
+                    all_cves[cve_id]["hosts_amber"].append({
+                        "name": host.name, "ip": host.ip_address or "", "rule_names": rule_names,
+                    })
+
+        red_count = sum(1 for c in host_cves if c["status"] == "red")
+        amber_count = sum(1 for c in host_cves if c["status"] == "amber")
+        grey_count = sum(1 for c in host_cves if c["status"] == "grey")
+        if not host_cves:
+            rag = "green"
+        elif red_count == 0 and grey_count == 0:
+            rag = "amber"
+        elif red_count == 0:
+            rag = "grey"
+        else:
+            rag = "red"
+
+        host_rows.append({
+            "name": host.name,
+            "ip": host.ip_address or "",
+            "os": host.os or "",
+            "rag": rag,
+            "cve_count": len(host_cves),
+            "red_count": red_count,
+            "amber_count": amber_count,
+            "grey_count": grey_count,
+            "cves": host_cves,
+        })
+
+    # Metrics
+    total_hosts = len(hosts)
+    total_cves = len(all_cves)
+    red_hosts = sum(1 for h in host_rows if h["rag"] == "red")
+    amber_hosts = sum(1 for h in host_rows if h["rag"] == "amber")
+    green_hosts = sum(1 for h in host_rows if h["rag"] == "green")
+    grey_hosts = sum(1 for h in host_rows if h["rag"] == "grey")
+    total_red_pairs = sum(len(c["hosts_red"]) for c in all_cves.values())
+    total_amber_pairs = sum(len(c["hosts_amber"]) for c in all_cves.values())
+    total_grey_pairs = sum(len(c["hosts_grey"]) for c in all_cves.values())
+
+    # Top 5 critical CVEs by number of at-risk hosts
+    sorted_cves = sorted(all_cves.values(), key=lambda c: len(c["hosts_red"]), reverse=True)
+    top5 = sorted_cves[:5]
+
+    return {
+        "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
+        "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "total_hosts": total_hosts,
+        "total_cves": total_cves,
+        "red_hosts": red_hosts,
+        "amber_hosts": amber_hosts,
+        "green_hosts": green_hosts,
+        "grey_hosts": grey_hosts,
+        "total_red_pairs": total_red_pairs,
+        "total_amber_pairs": total_amber_pairs,
+        "total_grey_pairs": total_grey_pairs,
+        "coverage_ratio": round(total_amber_pairs / (total_amber_pairs + total_red_pairs) * 100) if (total_amber_pairs + total_red_pairs) else 100,
+        "top5_cves": top5,
+        "host_rows": host_rows,
+        "all_cves": sorted_cves,
+        "baselines": get_system_baselines(system_id),
+    }
+
+
+def build_cve_report_data(cve_id: str, search_filter: str = "") -> Optional[Dict]:
+    """Build all data needed for the CVE Audit Report."""
+    kev_entries = _load_cisa_kev()
+    kev_entry = next((k for k in kev_entries if k.get("cveID", "").upper() == cve_id.upper()), None)
+    if not kev_entry:
+        return None
+
+    detections_map = list_cve_detections()
+    applied_map = _load_applied_detections()
+    cve_dets = detections_map.get(cve_id.upper(), [])
+    _enrich_detections_with_applied(cve_dets, applied_map)
+
+    techniques = get_cve_techniques(cve_id)
+    technique_rules = get_rules_for_cve_techniques(cve_id)
+    cve_blind_spots = get_blind_spots("cve", cve_id.upper())
+
+    # Build affected systems/hosts matrix
+    all_hosts_by_sys = _list_all_hosts_by_system()
+    all_software = _list_all_software_by_host()
+    systems_map: Dict[str, Dict] = {}
+
+    for system in list_systems():
+        for host in all_hosts_by_sys.get(system.id, []):
+            # Apply search filter
+            if search_filter:
+                q = search_filter.lower()
+                if q not in host.name.lower() and q not in (host.ip_address or "").lower():
+                    continue
+            software = all_software.get(host.id, [])
+            if not software:
+                continue
+            matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
+            if cve_id.upper() not in {k.upper() for k in matches}:
+                continue
+            status, rule_names = _compute_coverage_status(host.id, system.id, cve_dets, applied_map, cve_blind_spots)
+            bs_reason = next((bs.reason for bs in cve_blind_spots if bs.host_id == host.id), "")
+            if system.id not in systems_map:
+                systems_map[system.id] = {
+                    "system_name": system.name,
+                    "system_id": system.id,
+                    "hosts": [],
+                }
+            systems_map[system.id]["hosts"].append({
+                "name": host.name,
+                "ip": host.ip_address or "",
+                "os": host.os or "",
+                "status": status,
+                "rule_names": rule_names,
+                "blind_spot_reason": bs_reason,
+            })
+
+    grouped_systems = sorted(systems_map.values(), key=lambda s: s["system_name"])
+
+    total_hosts = sum(len(s["hosts"]) for s in grouped_systems)
+    red_count = sum(1 for s in grouped_systems for h in s["hosts"] if h["status"] == "red")
+    amber_count = sum(1 for s in grouped_systems for h in s["hosts"] if h["status"] == "amber")
+    grey_count = sum(1 for s in grouped_systems for h in s["hosts"] if h["status"] == "grey")
+
+    kev_ransomware = (kev_entry.get("knownRansomwareCampaignUse", "") or "").lower() in ("known", "yes")
+
+    return {
+        "cve_id": cve_id.upper(),
+        "vulnerability_name": kev_entry.get("vulnerabilityName", cve_id),
+        "vendor_project": kev_entry.get("vendorProject", ""),
+        "product": kev_entry.get("product", ""),
+        "short_description": kev_entry.get("shortDescription", ""),
+        "date_added": kev_entry.get("dateAdded", ""),
+        "due_date": kev_entry.get("dueDate", ""),
+        "known_ransomware": kev_ransomware,
+        "notes": kev_entry.get("notes", ""),
+        "is_kev": True,
+        "techniques": [{"id": t.technique_id, "name": t.name, "has_detection": t.has_detection, "rule_count": t.rule_count} for t in techniques],
+        "detections": [{"rule_ref": d.rule_ref, "note": d.note, "source": d.source} for d in cve_dets],
+        "technique_rules": {tid: [{"name": r.name, "severity": getattr(r, "severity", "")} for r in rules] for tid, rules in technique_rules.items()},
+        "grouped_systems": grouped_systems,
+        "total_systems": len(grouped_systems),
+        "total_hosts": total_hosts,
+        "red_count": red_count,
+        "amber_count": amber_count,
+        "grey_count": grey_count,
+        "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Baselines — Engine
+# ---------------------------------------------------------------------------
+
+def list_playbooks() -> List[Playbook]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, name, description, created_at, updated_at FROM playbooks ORDER BY name"
+        ).fetchall()
+    result = []
+    for r in rows:
+        pb = Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+        pb.tactics = _get_playbook_steps(r[0])
+        result.append(pb)
+    return result
+
+
+def get_baselines_overview() -> List[Dict]:
+    """Efficient overview of all baselines for the listing page.
+
+    Returns a list of dicts with:
+      id, name, description, step_count, detection_count,
+      system_count, worst_status ('green'|'amber'|'red'|'grey'|None)
+    Uses a single DB connection for all queries.
+    """
+    with _get_conn() as conn:
+        # All playbooks
+        pbs = conn.execute(
+            "SELECT id, name, description FROM playbooks ORDER BY name"
+        ).fetchall()
+        if not pbs:
+            return []
+        pb_ids = [r[0] for r in pbs]
+        placeholders = ",".join("?" for _ in pb_ids)
+
+        # Step counts per playbook
+        step_rows = conn.execute(
+            f"SELECT playbook_id, COUNT(*) FROM playbook_steps WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
+            pb_ids,
+        ).fetchall()
+        step_counts = dict(step_rows)
+
+        # Tactic counts per playbook (distinct tactics)
+        tactic_rows = conn.execute(
+            f"SELECT playbook_id, COUNT(DISTINCT COALESCE(NULLIF(tactic,''),'Other')) "
+            f"FROM playbook_steps WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
+            pb_ids,
+        ).fetchall()
+        tactic_counts = dict(tactic_rows)
+
+        # Detection counts per playbook (via step_detections)
+        det_rows = conn.execute(
+            f"SELECT ps.playbook_id, COUNT(DISTINCT sd.id) "
+            f"FROM playbook_steps ps JOIN step_detections sd ON sd.step_id = ps.id "
+            f"WHERE ps.playbook_id IN ({placeholders}) GROUP BY ps.playbook_id",
+            pb_ids,
+        ).fetchall()
+        det_counts = dict(det_rows)
+
+        # System counts per playbook
+        sys_rows = conn.execute(
+            f"SELECT playbook_id, COUNT(DISTINCT system_id) FROM system_baselines "
+            f"WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
+            pb_ids,
+        ).fetchall()
+        sys_counts = dict(sys_rows)
+
+        # Compute worst-case RAG per playbook for baselines with applied systems
+        # Load all step IDs per playbook
+        all_steps = conn.execute(
+            f"SELECT id, playbook_id FROM playbook_steps WHERE playbook_id IN ({placeholders})",
+            pb_ids,
+        ).fetchall()
+        step_to_pb = {r[0]: r[1] for r in all_steps}
+        all_step_ids = list(step_to_pb.keys())
+
+        # Load detection rule_refs per step
+        step_det_refs = {}
+        if all_step_ids:
+            sp = ",".join("?" for _ in all_step_ids)
+            sd_rows = conn.execute(
+                f"SELECT step_id, rule_ref FROM step_detections WHERE step_id IN ({sp})",
+                all_step_ids,
+            ).fetchall()
+            for sid, rref in sd_rows:
+                step_det_refs.setdefault(sid, set()).add(rref.lower() if rref else "")
+
+        # Load blind spots for tactics
+        bs_rows = conn.execute(
+            "SELECT entity_id, system_id FROM blind_spots WHERE entity_type = 'tactic'"
+        ).fetchall()
+        step_blind_spots = {}
+        for eid, sid in bs_rows:
+            step_blind_spots.setdefault(eid, set()).add(sid)
+
+        # Load all system_baselines
+        sb_rows = conn.execute(
+            f"SELECT playbook_id, system_id FROM system_baselines WHERE playbook_id IN ({placeholders})",
+            pb_ids,
+        ).fetchall()
+        pb_systems = {}
+        for pbid, sid in sb_rows:
+            pb_systems.setdefault(pbid, set()).add(sid)
+
+        # Load hosts per system and applied rules per system (for systems in baselines)
+        all_system_ids = set()
+        for sids in pb_systems.values():
+            all_system_ids |= sids
+
+        system_applied_rules = {}
+        if all_system_ids:
+            sid_list = list(all_system_ids)
+            sp = ",".join("?" for _ in sid_list)
+            # Batch: get all hosts for all relevant systems in one query
+            all_host_rows = conn.execute(
+                f"SELECT id, system_id FROM hosts WHERE system_id IN ({sp})", sid_list,
+            ).fetchall()
+            sys_hosts = {}
+            all_host_ids = []
+            for hid, sid in all_host_rows:
+                sys_hosts.setdefault(sid, []).append(hid)
+                all_host_ids.append(hid)
+
+            # Batch: get all applied detection IDs for all hosts in one query
+            host_det_map = {}  # host_id -> set(detection_id)
+            if all_host_ids:
+                hp = ",".join("?" for _ in all_host_ids)
+                ad_rows = conn.execute(
+                    f"SELECT host_id, detection_id FROM applied_detections WHERE host_id IN ({hp})",
+                    all_host_ids,
+                ).fetchall()
+                all_det_ids = set()
+                for hid, did in ad_rows:
+                    host_det_map.setdefault(hid, set()).add(did)
+                    all_det_ids.add(did)
+
+                # Batch: get all rule_refs for all detection IDs in one query
+                det_to_rule = {}
+                if all_det_ids:
+                    det_list = list(all_det_ids)
+                    dp = ",".join("?" for _ in det_list)
+                    vd_rows = conn.execute(
+                        f"SELECT id, rule_ref FROM vuln_detections WHERE id IN ({dp})",
+                        det_list,
+                    ).fetchall()
+                    for did, rref in vd_rows:
+                        if rref:
+                            det_to_rule[did] = rref.lower()
+
+                # Build system_applied_rules from batch results
+                for sid in all_system_ids:
+                    names = set()
+                    for hid in sys_hosts.get(sid, []):
+                        for did in host_det_map.get(hid, set()):
+                            rref = det_to_rule.get(did)
+                            if rref:
+                                names.add(rref)
+                    system_applied_rules[sid] = names
+            else:
+                for sid in all_system_ids:
+                    system_applied_rules[sid] = set()
+
+    # Compute worst status per playbook
+    # Priority: red > amber > green
+    STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2}
+
+    results = []
+    for pb_id, pb_name, pb_desc in pbs:
+        system_ids = pb_systems.get(pb_id, set())
+        step_ids_for_pb = [sid for sid, pid in step_to_pb.items() if pid == pb_id]
+        worst = "green"
+
+        if system_ids and step_ids_for_pb:
+            for step_id in step_ids_for_pb:
+                det_refs = step_det_refs.get(step_id, set())
+                bs_systems = step_blind_spots.get(step_id, set())
+                for sys_id in system_ids:
+                    if sys_id in bs_systems:
+                        status = "amber"
+                    elif det_refs and (det_refs & system_applied_rules.get(sys_id, set())):
+                        status = "green"
+                    else:
+                        status = "red"
+                    if STATUS_PRIORITY.get(status, 3) < STATUS_PRIORITY.get(worst, 3):
+                        worst = status
+                    if worst == "red":
+                        break
+                if worst == "red":
+                    break
+        elif not system_ids:
+            worst = None  # Not applied to any system
+
+        results.append({
+            "id": pb_id,
+            "name": pb_name,
+            "description": pb_desc or "",
+            "step_count": step_counts.get(pb_id, 0),
+            "tactic_count": tactic_counts.get(pb_id, 0),
+            "detection_count": det_counts.get(pb_id, 0),
+            "system_count": sys_counts.get(pb_id, 0),
+            "worst_status": worst,
+        })
+    return results
+
+
+def get_playbook_header(playbook_id: str) -> Optional[Playbook]:
+    """Lightweight playbook fetch — no steps loaded. For breadcrumbs etc."""
+    with _get_conn() as conn:
+        r = conn.execute(
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?",
+            [playbook_id],
+        ).fetchone()
+    if not r:
+        return None
+    return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+
+
+def get_playbook(playbook_id: str) -> Optional[Playbook]:
+    with _get_conn() as conn:
+        r = conn.execute(
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?",
+            [playbook_id],
+        ).fetchone()
+    if not r:
+        return None
+    pb = Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+    pb.tactics = _get_playbook_steps(playbook_id)
+    return pb
+
+
+def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic "
+            "FROM playbook_steps WHERE playbook_id = ? ORDER BY step_number",
+            [playbook_id],
+        ).fetchall()
+        if not rows:
+            return []
+
+        step_ids = [r[0] for r in rows]
+        sp = ",".join("?" for _ in step_ids)
+
+        # Batch: all techniques for all steps
+        tech_rows = conn.execute(
+            f"SELECT id, step_id, technique_id FROM step_techniques WHERE step_id IN ({sp}) ORDER BY technique_id",
+            step_ids,
+        ).fetchall()
+        step_techs = {}
+        for tid, sid, techid in tech_rows:
+            step_techs.setdefault(sid, []).append(StepTechnique(id=tid, step_id=sid, technique_id=techid))
+
+        # Batch: all detections for all steps
+        det_rows = conn.execute(
+            f"SELECT id, step_id, rule_ref, note, source FROM step_detections WHERE step_id IN ({sp}) ORDER BY rule_ref",
+            step_ids,
+        ).fetchall()
+        step_dets = {}
+        for did, sid, rref, note, source in det_rows:
+            step_dets.setdefault(sid, []).append(
+                StepDetection(id=did, step_id=sid, rule_ref=rref or "", note=note or "", source=source or "manual")
+            )
+
+    steps = []
+    for r in rows:
+        step_id = r[0]
+        step = PlaybookStep(
+            id=step_id, playbook_id=r[1], step_number=r[2], title=r[3],
+            technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
+            tactic=r[7] or "",
+        )
+        step.techniques = step_techs.get(step_id, [])
+        step.detections = step_dets.get(step_id, [])
+        steps.append(step)
+    return steps
+
+
+def _get_step_techniques(step_id: str) -> List[StepTechnique]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, step_id, technique_id FROM step_techniques WHERE step_id = ? ORDER BY technique_id",
+            [step_id],
+        ).fetchall()
+    return [StepTechnique(id=r[0], step_id=r[1], technique_id=r[2]) for r in rows]
+
+
+def _get_step_detections(step_id: str) -> List[StepDetection]:
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, step_id, rule_ref, note, source FROM step_detections WHERE step_id = ? ORDER BY rule_ref",
+            [step_id],
+        ).fetchall()
+    return [StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual") for r in rows]
+
+
+def create_playbook(name: str, description: str = "") -> Playbook:
+    with _get_conn() as conn:
+        r = conn.execute(
+            "INSERT INTO playbooks (name, description) VALUES (?, ?) RETURNING id, name, description, created_at, updated_at",
+            [name, description],
+        ).fetchone()
+    return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+
+
+def update_playbook(playbook_id: str, name: str = None, description: str = None) -> Optional[Playbook]:
+    """Update editable fields on a playbook (baseline)."""
+    with _get_conn() as conn:
+        sets, vals = [], []
+        if name is not None:
+            sets.append("name = ?"); vals.append(name)
+        if description is not None:
+            sets.append("description = ?"); vals.append(description)
+        if sets:
+            vals.append(playbook_id)
+            conn.execute(f"UPDATE playbooks SET {', '.join(sets)} WHERE id = ?", vals)
+    return get_playbook(playbook_id)
+
+
+def generate_baseline_from_actor(
+    actor_name: str,
+    ttps: list,
+    technique_tactic_map: dict,
+    technique_name_map: dict,
+    baseline_name: str = "",
+    description: str = "",
+) -> Playbook:
+    """Create a Baseline Playbook from a Threat Actor's MITRE technique set.
+
+    Uses a single DB connection for the entire operation to avoid
+    per-step connection overhead.
+    """
+    from app.api.heatmap import get_tactic_display
+
+    name = baseline_name.strip() if baseline_name.strip() else f"{actor_name} Baseline"
+    desc = description.strip() if description.strip() else f"Auto-generated from {actor_name} threat profile ({len(ttps)} techniques)."
+
+    sorted_ttps = sorted(set(t.strip().upper() for t in ttps if t.strip()))
+
+    with _get_conn() as conn:
+        # Create playbook
+        pb_row = conn.execute(
+            "INSERT INTO playbooks (name, description) VALUES (?, ?) "
+            "RETURNING id, name, description, created_at, updated_at",
+            [name, desc],
+        ).fetchone()
+        playbook = Playbook(id=pb_row[0], name=pb_row[1], description=pb_row[2] or "",
+                            created_at=pb_row[3], updated_at=pb_row[4])
+
+        # Insert all steps + junction rows in the same connection
+        for idx, tech_id in enumerate(sorted_ttps, start=1):
+            raw_tactic = technique_tactic_map.get(tech_id, "")
+            tactic_display = get_tactic_display(raw_tactic)
+            tech_name = technique_name_map.get(tech_id, tech_id)
+            title = f"{tech_id} — {tech_name}" if tech_name != tech_id else tech_id
+            tactic_val = tactic_display if tactic_display != "Other" else ""
+
+            step_row = conn.execute(
+                "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                [playbook.id, idx, title, tech_id, "", "", tactic_val],
+            ).fetchone()
+            step_id = step_row[0]
+
+            conn.execute(
+                "INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)",
+                [step_id, tech_id],
+            )
+
+    return playbook
+
+
+def delete_playbook(playbook_id: str) -> bool:
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM playbook_steps WHERE playbook_id = ?", [playbook_id])
+        conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
+        cnt = conn.execute("DELETE FROM playbooks WHERE id = ?", [playbook_id]).rowcount
+    return cnt > 0
+
+
+def add_playbook_step(playbook_id: str, step_number: int, title: str,
+                      technique_id: str = "", required_rule: str = "",
+                      description: str = "", tactic: str = "") -> PlaybookStep:
+    with _get_conn() as conn:
+        r = conn.execute(
+            "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, playbook_id, step_number, title, technique_id, required_rule, description, tactic",
+            [playbook_id, step_number, title, technique_id, required_rule, description, tactic],
+        ).fetchone()
+    step = PlaybookStep(id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
+                        technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
+                        tactic=r[7] or "")
+    # Auto-populate junction tables from legacy single fields
+    if technique_id.strip():
+        add_step_technique(step.id, technique_id.strip())
+        step.techniques = _get_step_techniques(step.id)
+    return step
+
+
+def delete_playbook_step(step_id: str) -> bool:
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM step_techniques WHERE step_id = ?", [step_id])
+        conn.execute("DELETE FROM step_detections WHERE step_id = ?", [step_id])
+        cnt = conn.execute("DELETE FROM playbook_steps WHERE id = ?", [step_id]).rowcount
+    return cnt > 0
+
+
+def apply_baseline(system_id: str, playbook_id: str) -> SystemBaseline:
+    with _get_conn() as conn:
+        dup = conn.execute(
+            "SELECT id FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
+            [system_id, playbook_id],
+        ).fetchone()
+        if dup:
+            return SystemBaseline(id=dup[0], system_id=system_id, playbook_id=playbook_id)
+        r = conn.execute(
+            "INSERT INTO system_baselines (system_id, playbook_id) VALUES (?, ?) "
+            "RETURNING id, system_id, playbook_id, applied_at",
+            [system_id, playbook_id],
+        ).fetchone()
+    return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
+
+
+def remove_baseline(system_id: str, playbook_id: str) -> bool:
+    with _get_conn() as conn:
+        cnt = conn.execute(
+            "DELETE FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
+            [system_id, playbook_id],
+        ).rowcount
+    return cnt > 0
+
+
+def get_system_baselines(system_id: str) -> List[Dict]:
+    """Return playbooks applied to a system with step-level RAG coverage."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT sb.id, sb.playbook_id, sb.applied_at, p.name, p.description "
+            "FROM system_baselines sb JOIN playbooks p ON p.id = sb.playbook_id "
+            "WHERE sb.system_id = ? ORDER BY p.name",
+            [system_id],
+        ).fetchall()
+
+    # Get all detection rules with names — for matching required_rule against applied detections
+    all_rules = _get_all_rule_names()
+
+    # Get all applied detections for this system's hosts
+    hosts = list_hosts(system_id)
+    host_ids = {h.id for h in hosts}
+
+    applied_rules = _get_applied_rule_names_for_hosts(host_ids)
+
+    # Load blind spots for all tactics in one pass
+    all_step_blind_spots = _load_all_blind_spots("tactic")
+
+    result = []
+    for sb_id, pb_id, applied_at, pb_name, pb_desc in rows:
+        steps = _get_playbook_steps(pb_id)
+        step_results = []
+        covered = 0
+        blind_spot_count = 0
+        for step in steps:
+            # Check blind spot first
+            step_bs = all_step_blind_spots.get(step.id, [])
+            has_blind_spot = any(bs.system_id == system_id for bs in step_bs)
+            bs_reason = next((bs.reason for bs in step_bs if bs.system_id == system_id), "")
+
+            # Check if any detection rule for this step is applied
+            # Use step_detections for coverage matching
+            det_refs = {d.rule_ref.lower() for d in step.detections if d.rule_ref}
+            is_applied = bool(det_refs & applied_rules) if det_refs else False
+
+            if has_blind_spot:
+                status = "amber"
+                blind_spot_count += 1
+            elif is_applied:
+                status = "green"
+                covered += 1
+            else:
+                status = "red"
+
+            step_results.append({
+                "step_id": step.id,
+                "step_number": step.step_number,
+                "title": step.title,
+                "tactic": step.tactic,
+                "technique_id": step.technique_id,
+                "description": step.description,
+                "status": status,
+                "blind_spot_reason": bs_reason,
+                "techniques": [{"technique_id": t.technique_id} for t in step.techniques],
+                "detections": [{"rule_ref": d.rule_ref, "note": d.note} for d in step.detections],
+            })
+        total = len(steps)
+        pct = round(covered / total * 100) if total else 0
+        result.append({
+            "baseline_id": sb_id,
+            "playbook_id": pb_id,
+            "playbook_name": pb_name,
+            "playbook_description": pb_desc or "",
+            "applied_at": applied_at,
+            "tactics": step_results,
+            "total_steps": total,
+            "covered_steps": covered,
+            "grey_steps": blind_spot_count,
+            "coverage_pct": pct,
+        })
+    return result
+
+
+def _get_all_rule_names() -> Dict[str, str]:
+    """Return {rule_name_lower: rule_id} for all detection rules."""
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute("SELECT rule_id, name FROM detection_rules").fetchall()
+        return {r[1].lower(): r[0] for r in rows if r[1]}
+    except Exception:
+        return {}
+
+
+def _get_applied_rule_names_for_hosts(host_ids: set) -> set:
+    """Return a set of lowercased rule names / rule_refs applied to any of the given hosts."""
+    if not host_ids:
+        return set()
+    try:
+        with _get_conn() as conn:
+            # Get detection_ids with at least one applied_detection for these hosts
+            placeholders = ",".join("?" for _ in host_ids)
+            applied_det_ids = conn.execute(
+                f"SELECT DISTINCT detection_id FROM applied_detections WHERE host_id IN ({placeholders})",
+                list(host_ids),
+            ).fetchall()
+            det_ids = [r[0] for r in applied_det_ids]
+            if not det_ids:
+                return set()
+            # Get vuln_detection rule_refs and notes for these detection IDs
+            placeholders2 = ",".join("?" for _ in det_ids)
+            vuln_rows = conn.execute(
+                f"SELECT rule_ref, note FROM vuln_detections WHERE id IN ({placeholders2})",
+                det_ids,
+            ).fetchall()
+            names = set()
+            for rule_ref, note in vuln_rows:
+                if rule_ref:
+                    names.add(rule_ref.lower())
+                    resolved = _resolve_rule_ref(rule_ref)
+                    if resolved:
+                        names.add(resolved.lower())
+                if note:
+                    names.add(note.lower())
+            # Also pull in detection_rules names from the applied chain
+            dr_rows = conn.execute(
+                "SELECT DISTINCT dr.name FROM detection_rules dr "
+                "JOIN vuln_detections vd ON vd.rule_ref = dr.rule_id "
+                f"WHERE vd.id IN ({placeholders2})",
+                det_ids,
+            ).fetchall()
+            for (name,) in dr_rows:
+                if name:
+                    names.add(name.lower())
+            # Also check step_detections (tactic detections applied to hosts)
+            step_rows = conn.execute(
+                f"SELECT rule_ref, note FROM step_detections WHERE id IN ({placeholders2})",
+                det_ids,
+            ).fetchall()
+            for rule_ref, note in step_rows:
+                if rule_ref:
+                    names.add(rule_ref.lower())
+                    resolved = _resolve_rule_ref(rule_ref)
+                    if resolved:
+                        names.add(resolved.lower())
+                if note:
+                    names.add(note.lower())
+        return names
+    except Exception as exc:
+        logger.warning(f"_get_applied_rule_names_for_hosts error: {exc}")
+        return set()
+
+
+def seed_default_playbooks():
+    """Seed the two default playbooks if they don't already exist."""
+    existing = list_playbooks()
+    existing_names = {p.name for p in existing}
+
+    if "Insider Threat (Data Exfiltration)" not in existing_names:
+        pb = create_playbook("Insider Threat (Data Exfiltration)",
+                             "Detect and respond to insider threat data exfiltration scenarios.")
+        add_playbook_step(pb.id, 1, "Unauthorized Hardware Attachment", "T1200", "USB_Storage_Detected",
+                          "Detect unauthorized USB or hardware device connections.", tactic="Initial Access")
+        add_playbook_step(pb.id, 2, "Privilege Escalation via Auth Account", "T1078", "Admin_Logon_Anomaly",
+                          "Detect anomalous admin logon events.", tactic="Privilege Escalation")
+        add_playbook_step(pb.id, 3, "Data Compressed for Exfiltration", "T1560", "Archive_Tool_Execution",
+                          "Detect execution of archive/compression tools.", tactic="Collection")
+        add_playbook_step(pb.id, 4, "Data Transfer to External Device", "T1052", "Large_File_Copy_USB",
+                          "Detect large file transfers to removable media.", tactic="Exfiltration")
+        logger.info("Seeded default playbook: Insider Threat (Data Exfiltration)")
+
+    if "Ransomware Precursor (Lateral Movement)" not in existing_names:
+        pb = create_playbook("Ransomware Precursor (Lateral Movement)",
+                             "Detect early indicators of ransomware lateral movement chains.")
+        add_playbook_step(pb.id, 1, "Internal Net Service Scanning", "T1046", "Internal_Port_Scan_Detected",
+                          "Detect internal network service scanning activity.", tactic="Discovery")
+        add_playbook_step(pb.id, 2, "Lateral Movement via SMB/RPC", "T1021.002", "PsExec_Lateral_Movement",
+                          "Detect lateral movement using PsExec or SMB/RPC services.", tactic="Lateral Movement")
+        add_playbook_step(pb.id, 3, "Credential Dumping", "T1003", "LSASS_Memory_Access",
+                          "Detect LSASS memory access for credential harvesting.", tactic="Credential Access")
+        add_playbook_step(pb.id, 4, "Delete Backups / Inhibit Recovery", "T1490", "VSSAdmin_Shadow_Delete",
+                          "Detect backup deletion via VSSAdmin or similar tools.", tactic="Impact")
+        logger.info("Seeded default playbook: Ransomware Precursor (Lateral Movement)")
+
+    # Backfill tactics on existing steps that are missing them
+    _backfill_step_tactics()
+
+
+def _backfill_step_tactics():
+    """Assign tactics to existing playbook steps that have technique_id but no tactic."""
+    # Map technique prefixes to tactics based on known MITRE mappings
+    _TECHNIQUE_TACTIC_MAP = {
+        "T1200": "Initial Access", "T1078": "Privilege Escalation",
+        "T1560": "Collection", "T1052": "Exfiltration",
+        "T1046": "Discovery", "T1021": "Lateral Movement",
+        "T1003": "Credential Access", "T1490": "Impact",
+        "T1190": "Initial Access", "T1566": "Initial Access",
+        "T1059": "Execution", "T1053": "Execution",
+        "T1547": "Persistence", "T1098": "Persistence",
+        "T1548": "Privilege Escalation", "T1134": "Privilege Escalation",
+        "T1070": "Defense Evasion", "T1027": "Defense Evasion",
+        "T1110": "Credential Access", "T1558": "Credential Access",
+        "T1083": "Discovery", "T1018": "Discovery",
+        "T1071": "Command and Control", "T1105": "Command and Control",
+        "T1048": "Exfiltration", "T1041": "Exfiltration",
+    }
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, technique_id FROM playbook_steps WHERE (tactic IS NULL OR tactic = '') AND technique_id != ''"
+        ).fetchall()
+        for step_id, tech_id in rows:
+            base_tech = tech_id.split(".")[0] if tech_id else ""
+            tactic = _TECHNIQUE_TACTIC_MAP.get(tech_id, _TECHNIQUE_TACTIC_MAP.get(base_tech, "Other"))
+            conn.execute("UPDATE playbook_steps SET tactic = ? WHERE id = ?", [tactic, step_id])
+        if rows:
+            logger.info(f"Backfilled tactics on {len(rows)} playbook steps")
+
+
+# ---------------------------------------------------------------------------
+# Step-level CRUD (multi-technique, multi-detection)
+# ---------------------------------------------------------------------------
+
+def add_step_technique(step_id: str, technique_id: str) -> StepTechnique:
+    with _get_conn() as conn:
+        dup = conn.execute(
+            "SELECT id FROM step_techniques WHERE step_id = ? AND technique_id = ?",
+            [step_id, technique_id],
+        ).fetchone()
+        if dup:
+            return StepTechnique(id=dup[0], step_id=step_id, technique_id=technique_id)
+        r = conn.execute(
+            "INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?) RETURNING id",
+            [step_id, technique_id],
+        ).fetchone()
+    return StepTechnique(id=r[0], step_id=step_id, technique_id=technique_id)
+
+
+def remove_step_technique(technique_row_id: str) -> bool:
+    with _get_conn() as conn:
+        cnt = conn.execute("DELETE FROM step_techniques WHERE id = ?", [technique_row_id]).rowcount
+    return cnt > 0
+
+
+def update_step_technique(technique_row_id: str, technique_id: str) -> Optional[StepTechnique]:
+    with _get_conn() as conn:
+        r = conn.execute(
+            "UPDATE step_techniques SET technique_id = ? WHERE id = ? RETURNING id, step_id, technique_id",
+            [technique_id, technique_row_id],
+        ).fetchone()
+    if not r:
+        return None
+    return StepTechnique(id=r[0], step_id=r[1], technique_id=r[2])
+
+
+def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual") -> StepDetection:
+    with _get_conn() as conn:
+        r = conn.execute(
+            "INSERT INTO step_detections (step_id, rule_ref, note, source) VALUES (?, ?, ?, ?) "
+            "RETURNING id, step_id, rule_ref, note, source",
+            [step_id, rule_ref, note, source],
+        ).fetchone()
+    return StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual")
+
+
+def remove_step_detection(detection_row_id: str) -> bool:
+    with _get_conn() as conn:
+        cnt = conn.execute("DELETE FROM step_detections WHERE id = ?", [detection_row_id]).rowcount
+    return cnt > 0
+
+
+def update_playbook_step(step_id: str, title: str = None, tactic: str = None,
+                         description: str = None, step_number: int = None) -> Optional[PlaybookStep]:
+    """Update editable fields on a playbook step."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT playbook_id FROM playbook_steps WHERE id = ?", [step_id]).fetchone()
+        if not row:
+            return None
+        sets, vals = [], []
+        if title is not None:
+            sets.append("title = ?"); vals.append(title)
+        if tactic is not None:
+            sets.append("tactic = ?"); vals.append(tactic)
+        if description is not None:
+            sets.append("description = ?"); vals.append(description)
+        if step_number is not None:
+            sets.append("step_number = ?"); vals.append(step_number)
+        if sets:
+            vals.append(step_id)
+            conn.execute(f"UPDATE playbook_steps SET {', '.join(sets)} WHERE id = ?", vals)
+    return get_playbook_step(step_id)
+
+
+def get_playbook_step(step_id: str) -> Optional[PlaybookStep]:
+    """Get a single step with its techniques and detections."""
+    with _get_conn() as conn:
+        r = conn.execute(
+            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic "
+            "FROM playbook_steps WHERE id = ?",
+            [step_id],
+        ).fetchone()
+    if not r:
+        return None
+    step = PlaybookStep(
+        id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
+        technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
+        tactic=r[7] or "",
+    )
+    step.techniques = _get_step_techniques(step_id)
+    step.detections = _get_step_detections(step_id)
+    return step
+
+
+def get_step_affected_systems(step_id: str) -> List[Dict]:
+    """Get systems where the baseline containing this tactic is applied, with per-system RAG status.
+    RAG logic: GREEN = all detections directly applied OR rule-name match (detected)
+               AMBER = some detections directly applied (known gap)
+               RED   = no detections applied (missing)
+               GREY  = blind spot documented
+    Also returns per-system applied_dets / unapplied_dets for the apply-to-system UI."""
+    step = get_playbook_step(step_id)
+    if not step:
+        return []
+    # Find which systems have this playbook applied
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT sb.system_id, s.name FROM system_baselines sb "
+            "JOIN systems s ON s.id = sb.system_id "
+            "WHERE sb.playbook_id = ? ORDER BY s.name",
+            [step.playbook_id],
+        ).fetchall()
+    if not rows:
+        return []
+
+    # Gather all detection rule refs for this step
+    det_rule_refs = {d.rule_ref.lower() for d in step.detections if d.rule_ref}
+
+    # Pre-load applied_detections for this step's detection IDs
+    det_ids = [d.id for d in step.detections]
+    applied_host_map: Dict[str, set] = {}  # {detection_id: set(host_id)}
+    if det_ids:
+        with _get_conn() as conn:
+            ph = ",".join("?" for _ in det_ids)
+            ad_rows = conn.execute(
+                f"SELECT detection_id, host_id FROM applied_detections WHERE detection_id IN ({ph})",
+                det_ids,
+            ).fetchall()
+        for det_id, host_id in ad_rows:
+            applied_host_map.setdefault(det_id, set()).add(host_id)
+
+    # Load blind spots for this tactic
+    blind_spots = get_blind_spots("tactic", step_id)
+
+    result = []
+    for system_id, system_name in rows:
+        hosts = list_hosts(system_id)
+        host_ids = {h.id for h in hosts}
+        applied_rules = _get_applied_rule_names_for_hosts(host_ids)
+
+        # Check legacy rule-name matching
+        is_name_matched = bool(det_rule_refs & applied_rules) if det_rule_refs else False
+
+        # Check direct application: detection applied to ALL hosts in system
+        sys_applied = []
+        sys_unapplied = []
+        for d in step.detections:
+            det_hosts = applied_host_map.get(d.id, set())
+            if host_ids and all(h in det_hosts for h in host_ids):
+                sys_applied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
+            else:
+                sys_unapplied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
+
+        # Check for blind spot on this system
+        has_blind_spot = any(bs.system_id == system_id for bs in blind_spots)
+        bs_reason = next((bs.reason for bs in blind_spots if bs.system_id == system_id), "")
+
+        if has_blind_spot:
+            status = "amber"
+        elif sys_applied or is_name_matched:
+            status = "green"
+        else:
+            status = "red"
+
+        result.append({
+            "system_id": system_id,
+            "system_name": system_name,
+            "host_count": len(hosts),
+            "status": status,
+            "blind_spot_reason": bs_reason,
+            "matched_rules": sorted(det_rule_refs & applied_rules) if is_name_matched else [],
+            "applied_dets": sys_applied,
+            "unapplied_dets": sys_unapplied,
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Negative Coverage / Known Blind Spots
+# ---------------------------------------------------------------------------
+
+def add_blind_spot(entity_type: str, entity_id: str, reason: str,
+                   system_id: str = None, host_id: str = None,
+                   created_by: str = "") -> BlindSpot:
+    """Record a known blind spot (negative coverage)."""
+    with _get_conn() as conn:
+        r = conn.execute(
+            "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at",
+            [entity_type, entity_id, system_id, host_id, reason, created_by],
+        ).fetchone()
+    return BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
+                     host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7])
+
+
+def remove_blind_spot(blind_spot_id: str) -> bool:
+    with _get_conn() as conn:
+        cnt = conn.execute("DELETE FROM blind_spots WHERE id = ?", [blind_spot_id]).rowcount
+    return cnt > 0
+
+
+def get_blind_spots(entity_type: str, entity_id: str) -> List[BlindSpot]:
+    """Get all blind spots for a given entity (CVE or step)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+            "FROM blind_spots WHERE entity_type = ? AND entity_id = ? ORDER BY created_at",
+            [entity_type, entity_id],
+        ).fetchall()
+    return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
+                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7]) for r in rows]
+
+
+def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
+    """Get all blind spots affecting a system (by system_id or by host_id belonging to system)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+            "FROM blind_spots WHERE system_id = ? ORDER BY created_at",
+            [system_id],
+        ).fetchall()
+        host_rows = conn.execute(
+            "SELECT bs.id, bs.entity_type, bs.entity_id, bs.system_id, bs.host_id, bs.reason, bs.created_by, bs.created_at "
+            "FROM blind_spots bs JOIN hosts h ON h.id = bs.host_id WHERE h.system_id = ? ORDER BY bs.created_at",
+            [system_id],
+        ).fetchall()
+    all_rows = {r[0]: r for r in rows}
+    for r in host_rows:
+        all_rows[r[0]] = r
+    return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
+                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7]) for r in all_rows.values()]

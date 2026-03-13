@@ -4,8 +4,8 @@ Returns HTML partials for HTMX swapping.
 Export endpoints return downloadable PDF or Markdown files.
 """
 
-from fastapi import APIRouter, Request, Query, HTTPException
-from fastapi.responses import HTMLResponse, Response
+from fastapi import APIRouter, Request, Query, HTTPException, Form
+from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from typing import List, Optional, Set, Dict
 import io
 import os
@@ -405,3 +405,50 @@ def export_threat_report(
             "Content-Length": str(len(pdf_bytes)),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Generate Assurance Baseline from Threat Actor(s)
+# ---------------------------------------------------------------------------
+
+@router.post("/generate-baseline")
+def generate_baseline_from_heatmap(
+    request: Request,
+    db: DbDep,
+    user: CurrentUser,
+    actor_names: str = Form(...),
+    baseline_name: str = Form(""),
+    description: str = Form(""),
+):
+    """Create a Baseline from one or more Threat Actors' MITRE techniques."""
+    from app.inventory_engine import generate_baseline_from_actor
+
+    names = [n.strip() for n in actor_names.split(",") if n.strip()]
+    if not names:
+        raise HTTPException(status_code=400, detail="No actor names provided")
+
+    all_actors = db.get_threat_actors()
+    selected = [a for a in all_actors if a.name in names]
+    if not selected:
+        raise HTTPException(status_code=404, detail="No matching actors found")
+
+    # Merge TTPs from all selected actors
+    merged_ttps = []
+    for actor in selected:
+        merged_ttps.extend(actor.ttps)
+
+    technique_tactic_map = db.get_technique_map()
+    technique_name_map = db.get_technique_names()
+
+    display_name = names[0] if len(names) == 1 else f"{len(names)} Actors"
+
+    baseline = generate_baseline_from_actor(
+        actor_name=display_name,
+        ttps=merged_ttps,
+        technique_tactic_map=technique_tactic_map,
+        technique_name_map=technique_name_map,
+        baseline_name=baseline_name,
+        description=description,
+    )
+
+    return RedirectResponse(url=f"/baselines/{baseline.id}", status_code=303)

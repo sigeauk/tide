@@ -19,6 +19,18 @@
         </p>
     </div>
     <div style="display:flex;gap:0.5rem;flex-shrink:0;align-items:flex-start;padding-top:0.5rem;">
+        <!-- Report button -->
+        <button class="btn btn-secondary btn-sm"
+                onclick="openExportModal()"
+                title="Generate system report"
+                style="display:flex;align-items:center;gap:0.375rem;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/>
+                <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            Export Report
+        </button>
         <button class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('edit-env-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
@@ -62,12 +74,14 @@
 
 <!-- Devices Table -->
 <div class="card" style="padding:1.25rem;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
+         onclick="var b=document.getElementById('devices-body');var c=document.getElementById('devices-chevron');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('server', '18') }} Devices</h2>
-        <div style="display:flex;gap:0.5rem;">
+        <div style="display:flex;align-items:center;gap:0.5rem;">
             <!-- Nessus Upload -->
             <label class="btn btn-secondary btn-sm" for="nessus-upload"
-                   title="Upload a .nessus or .xml scan file to auto-populate devices and packages">
+                   title="Upload a .nessus or .xml scan file to auto-populate devices and packages"
+                   onclick="event.stopPropagation();">
                 {{ icon('upload', '14') }} Upload Nessus
             </label>
             <input id="nessus-upload" type="file" accept=".nessus,.xml" style="display:none"
@@ -79,16 +93,29 @@
                    name="file">
             <!-- Add device manually -->
             <button class="btn btn-primary btn-sm"
-                    onclick="document.getElementById('add-host-modal').style.display='flex'">
+                    onclick="event.stopPropagation();document.getElementById('add-host-modal').style.display='flex'">
                 {{ icon('plus', '14') }} Add Device
             </button>
+            <span id="devices-chevron" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '18') }}</span>
         </div>
     </div>
-    <div id="hosts-section">
-        {% set system_id = system.id %}
-        {% set sys_classification = system.classification %}
-        {% set sys_clf_color = clf_colors.get(system.classification, '') if clf_colors is defined and clf_colors and system.classification else '' %}
-        {% include "partials/host_list.html" %}
+    <div id="devices-body" style="display:none;margin-top:1rem;">
+        <div id="hosts-section">
+            {% set system_id = system.id %}
+            {% set sys_classification = system.classification %}
+            {% set sys_clf_color = clf_colors.get(system.classification, '') if clf_colors is defined and clf_colors and system.classification else '' %}
+            {% include "partials/host_list.html" %}
+        </div>
+    </div>
+</div>
+
+<!-- ── Baseline Coverage Section ─────────────────────────────── -->
+<div class="card" style="padding:1.25rem;margin-top:1.5rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('check-square', '18') }} Baseline Coverage</h2>
+    </div>
+    <div id="baseline-coverage">
+        {% include "partials/baseline_coverage.html" %}
     </div>
 </div>
 
@@ -167,4 +194,98 @@
         </form>
     </div>
 </div>
+<!-- ── Export Report Modal ────────────────────────────────────── -->
+<div id="export-modal-overlay"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
+            z-index:1000; align-items:center; justify-content:center;">
+    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+                border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
+                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
+                Export System Report
+            </h3>
+            <button onclick="closeExportModal()"
+                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    title="Close">&#x2715;</button>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
+            <select id="modal-format"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="pdf">PDF</option>
+                <option value="markdown">Markdown</option>
+            </select>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
+            <select id="modal-classification"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                {% for clf in classification_options %}
+                <option value="{{ clf }}">{{ clf }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div style="margin-bottom:1.5rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Audience</label>
+            <select id="modal-audience"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="executive">Executive / CISO</option>
+                <option value="technical">Technical / Engineer</option>
+            </select>
+        </div>
+        <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
+            <button onclick="closeExportModal()" class="btn btn-secondary"
+                    style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
+            <button onclick="confirmExport()" class="btn btn-primary"
+                    style="font-size:0.85rem; padding:0.45rem 1.25rem;">Download</button>
+        </div>
+    </div>
+</div>
+
+<!-- Required for mitre_pill slide panel -->
+<div id="slide-panel-container"></div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openExportModal() {
+    document.getElementById('export-modal-overlay').style.display = 'flex';
+}
+function closeExportModal() {
+    document.getElementById('export-modal-overlay').style.display = 'none';
+}
+function confirmExport() {
+    var format         = document.getElementById('modal-format').value;
+    var classification = document.getElementById('modal-classification').value;
+    var audience       = document.getElementById('modal-audience').value;
+    var params = new URLSearchParams();
+    params.set('mode', audience);
+    params.set('format', format);
+    params.set('classification', classification);
+    closeExportModal();
+    window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
+}
+document.addEventListener('click', function(e) {
+    var overlay = document.getElementById('export-modal-overlay');
+    if (overlay && e.target === overlay) closeExportModal();
+});
+</script>
 {% endblock %}

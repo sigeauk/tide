@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 17
 
 
 class DatabaseService:
@@ -447,6 +447,123 @@ class DatabaseService:
             """)
             self._set_schema_version(conn, 13)
             logger.info("Migration 13: Created applied_detections table for Tier 3 coverage")
+
+        # Migration 14: Assurance Baselines (Threat Playbooks)
+        if current_version < 14:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS playbooks (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name          VARCHAR NOT NULL,
+                    description   VARCHAR DEFAULT '',
+                    created_at    TIMESTAMP DEFAULT now(),
+                    updated_at    TIMESTAMP DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS playbook_steps (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    playbook_id   VARCHAR NOT NULL,
+                    step_number   INTEGER NOT NULL,
+                    title         VARCHAR NOT NULL,
+                    technique_id  VARCHAR DEFAULT '',
+                    required_rule VARCHAR DEFAULT '',
+                    description   VARCHAR DEFAULT ''
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS system_baselines (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    system_id     VARCHAR NOT NULL,
+                    playbook_id   VARCHAR NOT NULL,
+                    applied_at    TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 14)
+            logger.info("Migration 14: Created playbooks, playbook_steps, system_baselines tables")
+
+        # Migration 15: Baseline-CVE parity — tactic field, multi-technique & multi-detection per step
+        if current_version < 15:
+            # Add tactic column to playbook_steps
+            try:
+                conn.execute("ALTER TABLE playbook_steps ADD COLUMN tactic VARCHAR DEFAULT ''")
+            except Exception:
+                pass  # column may already exist
+
+            # Junction table: many techniques per step
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS step_techniques (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    step_id       VARCHAR NOT NULL,
+                    technique_id  VARCHAR NOT NULL
+                )
+            """)
+
+            # Junction table: many detection rules per step (mirrors vuln_detections pattern)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS step_detections (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    step_id       VARCHAR NOT NULL,
+                    rule_ref      VARCHAR DEFAULT '',
+                    note          VARCHAR DEFAULT '',
+                    source        VARCHAR DEFAULT 'manual'
+                )
+            """)
+
+            # Migrate existing single technique_id -> step_techniques rows
+            existing_steps = conn.execute(
+                "SELECT id, technique_id FROM playbook_steps WHERE technique_id IS NOT NULL AND technique_id != ''"
+            ).fetchall()
+            for step_id, tech_id in existing_steps:
+                dup = conn.execute(
+                    "SELECT 1 FROM step_techniques WHERE step_id = ? AND technique_id = ?",
+                    [step_id, tech_id],
+                ).fetchone()
+                if not dup:
+                    conn.execute(
+                        "INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)",
+                        [step_id, tech_id],
+                    )
+
+            # Migrate existing single required_rule -> step_detections rows
+            existing_rules = conn.execute(
+                "SELECT id, required_rule FROM playbook_steps WHERE required_rule IS NOT NULL AND required_rule != ''"
+            ).fetchall()
+            for step_id, rule_ref in existing_rules:
+                dup = conn.execute(
+                    "SELECT 1 FROM step_detections WHERE step_id = ? AND rule_ref = ?",
+                    [step_id, rule_ref],
+                ).fetchone()
+                if not dup:
+                    conn.execute(
+                        "INSERT INTO step_detections (step_id, rule_ref) VALUES (?, ?)",
+                        [step_id, rule_ref],
+                    )
+
+            self._set_schema_version(conn, 15)
+            logger.info("Migration 15: Added tactic to steps, created step_techniques & step_detections tables")
+
+        # Migration 16: Negative Coverage / Known Blind Spots
+        if current_version < 16:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS blind_spots (
+                    id            VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    entity_type   VARCHAR NOT NULL,
+                    entity_id     VARCHAR NOT NULL,
+                    system_id     VARCHAR,
+                    host_id       VARCHAR,
+                    reason        VARCHAR NOT NULL,
+                    created_by    VARCHAR DEFAULT '',
+                    created_at    TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 16)
+            logger.info("Migration 16: Created blind_spots table for negative coverage tracking")
+
+        # Migration 17: Rename entity_type 'step' -> 'tactic' in blind_spots
+        if current_version < 17:
+            conn.execute("UPDATE blind_spots SET entity_type = 'tactic' WHERE entity_type = 'step'")
+            self._set_schema_version(conn, 17)
+            logger.info("Migration 17: Renamed blind_spots entity_type 'step' to 'tactic'")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     

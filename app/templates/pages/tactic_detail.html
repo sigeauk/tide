@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}{{ tactic.title }} — Technique Detail | TIDE{% endblock %}
+
+{% block content %}
+<div style="padding:1.5rem;">
+
+    <!-- Breadcrumb -->
+    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
+        <a href="/baselines" style="color:inherit;text-decoration:none;">Baselines</a>
+        <span style="margin:0 0.4rem;">›</span>
+        <a href="/baselines/{{ baseline.id }}" style="color:inherit;text-decoration:none;">{{ baseline.name }}</a>
+        <span style="margin:0 0.4rem;">›</span>
+        <span>{{ tactic.title }}</span>
+    </nav>
+
+    <!-- Header -->
+    <div style="margin-bottom:1.5rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+            <h1 style="margin:0;font-size:1.6rem;font-weight:700;color:var(--color-primary);">
+                {{ tactic.title }}
+            </h1>
+            {% if tactic.tactic %}
+            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ tactic.tactic }}</span>
+            {% endif %}
+
+            {# Edit button #}
+            <div style="margin-left:auto;">
+                <button class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('edit-tactic-modal').style.display='flex'"
+                        style="display:flex;align-items:center;gap:0.375rem;">
+                    {{ icon('pencil','14') }} Edit Technique
+                </button>
+            </div>
+
+            {# Applied systems count #}
+            {% if affected_systems %}
+            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="{{ affected_systems | length }} System{{ 's' if affected_systems | length != 1 }}">
+                {{ icon('layers','14') }} {{ affected_systems | length }}
+            </span>
+            {% endif %}
+
+            {# Rules count #}
+            {% if tactic.detections %}
+            <span class="badge" style="font-size:0.8rem;background:rgba(34,197,94,.12);color:var(--color-success);border:1px solid rgba(34,197,94,.3);" title="{{ tactic.detections | length }} Rule{{ 's' if tactic.detections | length != 1 }} Available">
+                {{ icon('shield','14') }} {{ tactic.detections | length }}
+            </span>
+            {% endif %}
+        </div>
+        {% if tactic.description %}
+        <p style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">{{ tactic.description }}</p>
+        {% endif %}
+    </div>
+
+    <!-- Info card -->
+    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+        {% if tactic.description %}
+        <p style="margin:0 0 1rem;font-size:0.92rem;line-height:1.6;color:var(--color-text);">{{ tactic.description }}</p>
+        <hr style="border:none;border-top:1px solid var(--color-border);margin-bottom:1rem;">
+        {% endif %}
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;">
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Kill Chain Phase</div>
+                <div style="font-size:0.9rem;">
+                    {% if tactic.tactic %}{{ tactic.tactic }}{% else %}<span style="color:var(--color-text-muted);">Not set</span>{% endif %}
+                </div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Techniques</div>
+                <div style="font-size:0.9rem;">{{ tactic.techniques | length }}</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Detections</div>
+                <div style="font-size:0.9rem;">{{ tactic.detections | length }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Dual-column: MITRE Techniques + Detection Rules -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;">
+        <!-- MITRE Techniques -->
+        <div class="card" style="padding:1.25rem;" id="step-mitre-section">
+            {% include "partials/tactic_mitre_section.html" %}
+        </div>
+        <!-- Detection Rules -->
+        <div class="card" style="padding:1.25rem;" id="step-detection-section"
+             hx-get="/api/baselines/tactics/{{ tactic.id }}/detections"
+             hx-trigger="stepUpdated from:body"
+             hx-swap="innerHTML">
+            {% include "partials/tactic_detection_section.html" %}
+        </div>
+    </div>
+
+    <!-- Affected Systems -->
+    <div id="step-affected-section"
+         hx-get="/api/baselines/tactics/{{ tactic.id }}/affected-systems"
+         hx-trigger="stepUpdated from:body"
+         hx-swap="innerHTML">
+        {% include "partials/tactic_affected_systems.html" %}
+    </div>
+
+</div>
+
+<!-- Required for mitre_pill slide panel -->
+<div id="slide-panel-container"></div>
+
+<!-- Edit Tactic Modal -->
+<div id="edit-tactic-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('pencil','16') }} Edit Technique</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-tactic-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-put="/api/baselines/tactics/{{ tactic.id }}"
+              hx-target="body" hx-push-url="true"
+              hx-on::after-request="document.getElementById('edit-tactic-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div>
+                <label class="form-label">Title</label>
+                <input name="title" class="form-input" value="{{ tactic.title }}">
+            </div>
+            <div>
+                <label class="form-label">Kill Chain Phase</label>
+                <select name="tactic" class="form-input">
+                    <option value="">— None —</option>
+                    {% for t in mitre_tactics %}
+                    <option value="{{ t }}" {% if tactic.tactic == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-input" rows="2">{{ tactic.description or '' }}</textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-danger btn-sm"
+                        hx-delete="/api/baselines/tactics/{{ tactic.id }}?playbook_id={{ baseline.id }}"
+                        hx-target="body" hx-push-url="/baselines/{{ baseline.id }}"
+                        hx-confirm="Delete this technique and all its mappings?"
+                        style="margin-right:auto;">
+                    {{ icon('trash-2', '14') }} Delete
+                </button>
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('edit-tactic-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+@media (max-width: 768px) {
+    div[style*="grid-template-columns:1fr 1fr"] {
+        grid-template-columns: 1fr !important;
+    }
+}
+</style>
+{% endblock %}

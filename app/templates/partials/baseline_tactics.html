@@ -1,0 +1,91 @@
+{# Partial: baseline_tactics.html — Techniques grouped by MITRE Kill Chain Phase
+   Context: baseline (Baseline with tactics list)
+#}
+{% from "macros/icons.html" import icon %}
+
+{% set KILL_CHAIN = ["Reconnaissance","Resource Development","Initial Access","Execution",
+    "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
+    "Discovery","Lateral Movement","Collection","Command and Control",
+    "Exfiltration","Impact","Other"] %}
+
+{% if baseline.tactics %}
+{# Build ordered list of phases that have techniques #}
+{% set ns = namespace(order=[]) %}
+{% for t in baseline.tactics %}
+  {% set tac = t.tactic or "Other" %}
+  {% if tac not in ns.order %}
+    {% set ns.order = ns.order + [tac] %}
+  {% endif %}
+{% endfor %}
+{# Sort by kill chain index #}
+{% set ns_sorted = namespace(phases=[]) %}
+{% for kc in KILL_CHAIN %}
+  {% if kc in ns.order %}
+    {% set ns_sorted.phases = ns_sorted.phases + [kc] %}
+  {% endif %}
+{% endfor %}
+{# Add any phases not in KILL_CHAIN at the end #}
+{% for p in ns.order %}
+  {% if p not in ns_sorted.phases %}
+    {% set ns_sorted.phases = ns_sorted.phases + [p] %}
+  {% endif %}
+{% endfor %}
+
+{% for tactic in ns_sorted.phases %}
+<div class="card" style="padding:1.25rem;margin-bottom:1rem;">
+    <!-- Kill chain phase header -->
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);">
+        <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
+            {{ icon('crosshair','14') }}
+        </span>
+        <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-primary);">{{ tactic }}</h3>
+        {% set ns_tc = namespace(count=0) %}
+        {% for s in baseline.tactics %}{% if (s.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
+        <span class="badge badge-neutral" style="font-size:0.68rem;">{{ ns_tc.count }} technique{{ 's' if ns_tc.count != 1 }}</span>
+    </div>
+
+    <!-- Techniques under this phase -->
+    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+    {% for step in baseline.tactics %}
+    {% if (step.tactic or "Other") == tactic %}
+    <div class="cve-card-item" style="cursor:pointer;padding:0.75rem 0.85rem;border-radius:var(--radius-md);"
+         onclick="window.location='/baselines/{{ baseline.id }}/tactics/{{ step.id }}'">
+        <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:0.5rem;">
+                <a href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
+                   style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;"
+                   onclick="event.stopPropagation();">{{ step.title }}</a>
+            </div>
+            {% if step.description %}
+            <div style="font-size:0.78rem;color:var(--color-muted);margin-top:0.15rem;">
+                {{ step.description[:100] }}{% if step.description|length > 100 %}…{% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {# Right: pills with hover tooltips #}
+        <div style="display:flex;gap:0.4rem;flex-shrink:0;align-items:center;">
+            {% if step.techniques is defined and step.techniques %}
+            <span class="status-pill" style="font-size:0.65rem;padding:0.1rem 0.4rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.25);"
+                  title="{{ step.techniques | length }} technique{{ 's' if step.techniques | length != 1 }}">
+                {{ icon('crosshair','9') }} {{ step.techniques | length }}
+            </span>
+            {% endif %}
+            {% if step.detections is defined and step.detections %}
+            <span class="status-pill" style="font-size:0.65rem;padding:0.1rem 0.4rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.25);"
+                  title="{{ step.detections | length }} detection{{ 's' if step.detections | length != 1 }}">
+                {{ icon('shield','9') }} {{ step.detections | length }}
+            </span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    </div>
+</div>
+{% endfor %}
+
+{% else %}
+<div class="card" style="padding:2.5rem;text-align:center;">
+    <p style="color:var(--color-muted);margin:0;">No techniques yet. Add a technique to define the kill-chain.</p>
+</div>
+{% endif %}

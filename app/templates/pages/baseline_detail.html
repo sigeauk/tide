@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}{{ baseline.name }} | Baselines | TIDE{% endblock %}
+
+{% block content %}
+<div style="padding:1.5rem;">
+
+    <!-- Breadcrumb -->
+    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
+        <a href="/baselines" style="color:inherit;text-decoration:none;">Baselines</a>
+        <span style="margin:0 0.4rem;">›</span>
+        <span>{{ baseline.name }}</span>
+    </nav>
+
+    <!-- Header -->
+    <div style="margin-bottom:1.5rem;">
+        <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+            <h1 style="margin:0;font-size:1.6rem;font-weight:700;color:var(--color-primary);">{{ baseline.name }}</h1>
+            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="{{ baseline.tactics | length }} Technique{{ 's' if baseline.tactics | length != 1 }}">
+                {{ icon('crosshair','14') }} {{ baseline.tactics | length }}
+            </span>
+            {% if applied_systems %}
+            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="Applied to {{ applied_systems | length }} System{{ 's' if applied_systems | length != 1 }}">
+                {{ icon('layers','14') }} {{ applied_systems | length }}
+            </span>
+            {% endif %}
+            <div style="margin-left:auto;display:flex;gap:0.5rem;">
+                <button class="btn btn-primary btn-sm"
+                        onclick="document.getElementById('add-tactic-modal').style.display='flex'">
+                    {{ icon('plus', '14') }} Add Technique
+                </button>
+                <button class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('edit-baseline-modal').style.display='flex'">
+                    {{ icon('pencil', '14') }} Edit
+                </button>
+            </div>
+        </div>
+        <p style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">
+            {% if baseline.description %}{{ baseline.description }}{% else %}No description.{% endif %}
+        </p>
+    </div>
+
+    <!-- Info Card: Applied Systems summary -->
+    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;">
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Techniques</div>
+                <div style="font-size:0.9rem;">{{ baseline.tactics | length }}</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Applied Systems</div>
+                <div style="font-size:0.9rem;">{{ applied_systems | length }}</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Techniques Covered</div>
+                <div style="font-size:0.9rem;">{{ tactic_groups | length }}</div>
+            </div>
+        </div>
+
+        {% if applied_systems %}
+        <div id="baseline-systems" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--color-border);">
+            <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.5rem;">Applied To</div>
+            <div style="display:flex;flex-wrap:wrap;gap:0.4rem;">
+                {% for sys in applied_systems %}
+                <span class="badge badge-neutral" style="font-size:0.75rem;display:inline-flex;align-items:center;gap:0.3rem;">
+                    <a href="/systems/{{ sys.system_id }}" style="color:inherit;text-decoration:none;">
+                        {{ icon('layers','10') }} {{ sys.system_name }}
+                    </a>
+                    <button class="btn btn-sm"
+                            hx-delete="/api/baselines/{{ baseline.id }}/apply/{{ sys.system_id }}"
+                            hx-swap="none"
+                            hx-confirm="Remove {{ sys.system_name }} from this baseline?"
+                            onclick="event.stopPropagation();"
+                            style="padding:0;background:transparent;border:none;color:var(--color-danger);cursor:pointer;line-height:1;">
+                        {{ icon('x','10') }}
+                    </button>
+                </span>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Add system -->
+        {% if all_systems %}
+        <div style="margin-top:{% if applied_systems %}0.75rem{% else %}1rem;padding-top:1rem;border-top:1px solid var(--color-border){% endif %};">
+            <form id="apply-system-form" style="display:flex;align-items:center;gap:0.5rem;"
+                  hx-post=""
+                  hx-swap="none"
+                  onsubmit="var sel=document.getElementById('apply-system-select');if(!sel.value){event.preventDefault();return;}this.setAttribute('hx-post','/api/baselines/{{ baseline.id }}/apply/'+sel.value);">
+                <select id="apply-system-select" class="form-input" style="font-size:0.82rem;flex:1;max-width:260px;">
+                    <option value="">Apply to system…</option>
+                    {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
+                    {% for sys in all_systems %}
+                    {% if sys.id not in applied_ids %}
+                    <option value="{{ sys.id }}">{{ sys.name }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.8rem;">
+                    {{ icon('plus','12') }} Apply
+                </button>
+            </form>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Tactics grouped by MITRE Tactic -->
+    <div id="baseline-tactics">
+        {% include "partials/baseline_tactics.html" %}
+    </div>
+
+</div>
+
+<!-- ── Add Technique Modal ────────────────────────────────── -->
+<div id="add-tactic-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Technique</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('add-tactic-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-post="/api/baselines/{{ baseline.id }}/tactics"
+              hx-target="#baseline-tactics"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('add-tactic-modal').style.display='none';this.reset()"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label class="form-label">Title <span style="color:var(--color-danger)">*</span></label>
+                <input name="title" class="form-input" required placeholder="e.g. Credential Dumping">
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+                <div>
+                    <label class="form-label">Kill Chain Phase <span style="color:var(--color-danger)">*</span></label>
+                    <select name="tactic" class="form-input" required>
+                        <option value="">— Select Phase —</option>
+                        {% for t in mitre_tactics %}
+                        <option value="{{ t }}">{{ t }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">MITRE Technique</label>
+                    <input name="technique_id" class="form-input" placeholder="e.g. T1003">
+                </div>
+            </div>
+            <div>
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-input" rows="2" placeholder="What this technique detects…"></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('add-tactic-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Add Technique</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Edit Baseline Modal ────────────────────────────────── -->
+<div id="edit-baseline-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('pencil','16') }} Edit Baseline</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-baseline-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-put="/api/baselines/{{ baseline.id }}"
+              hx-target="body" hx-push-url="true"
+              hx-on::after-request="document.getElementById('edit-baseline-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div>
+                <label class="form-label">Baseline Name</label>
+                <input name="name" class="form-input" value="{{ baseline.name }}">
+            </div>
+            <div>
+                <label class="form-label">Description</label>
+                <textarea name="description" class="form-input" rows="3">{{ baseline.description or '' }}</textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-danger btn-sm"
+                        hx-delete="/api/baselines/{{ baseline.id }}"
+                        hx-confirm="Delete this baseline and all its techniques?"
+                        hx-target="body" hx-push-url="/baselines"
+                        style="margin-right:auto;">
+                    {{ icon('trash-2', '14') }} Delete Baseline
+                </button>
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('edit-baseline-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<style>
+@media (max-width: 768px) {
+    div[style*="grid-template-columns:1fr 1fr"] {
+        grid-template-columns: 1fr !important;
+    }
+}
+</style>
+{% endblock %}

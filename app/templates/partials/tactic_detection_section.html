@@ -1,0 +1,86 @@
+{# Partial: tactic_detection_section.html
+   Context: step (BaselineTactic with detections list), all_siem_rules (list), technique_rules (dict)
+#}
+{% from "macros/icons.html" import icon %}
+
+<h2 class="section-title">{{ icon('shield','16') }} Detection Rules</h2>
+
+{% if step.detections %}
+<div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
+    {% for d in step.detections %}
+    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);">
+        <div style="flex:1;min-width:0;">
+            {% if d.rule_ref %}
+            <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
+                {{ icon('file-code','13') }} {{ d.rule_ref }}
+            </div>
+            {% endif %}
+            <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:0.2rem;">
+                {{ d.source }}{% if d.note %} · {{ d.note }}{% endif %}
+            </div>
+        </div>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
+                hx-target="#step-detection-section"
+                hx-swap="innerHTML"
+                hx-confirm="Remove this detection?"
+                style="padding:0.2rem 0.4rem;font-size:0.7rem;">
+            {{ icon('x','12') }}
+        </button>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:1.5rem 1rem;color:var(--color-text-muted);">
+    {{ icon('shield-off','28') }}
+    <p style="margin:0.5rem 0 0;font-size:0.85rem;">No detection rules mapped yet.</p>
+</div>
+{% endif %}
+
+<!-- Add detection form -->
+<div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
+    <button class="btn btn-sm btn-secondary" id="add-step-det-btn"
+            onclick="this.style.display='none';document.getElementById('add-step-det-form').style.display='flex';">
+        {{ icon('plus','14') }} Add Detection Rule
+    </button>
+    <form id="add-step-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+          hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+          hx-target="#step-detection-section"
+          hx-swap="innerHTML"
+          hx-on::after-request="this.reset();var b=document.getElementById('add-step-det-btn');if(b)b.style.display='inline-flex';">
+
+        {# SIEM rules dropdown with MITRE-mapped group #}
+        {% if all_siem_rules is defined and all_siem_rules %}
+        <select class="form-input" style="font-size:0.82rem;"
+                onchange="var f=this.closest('form'),v=this.value;if(v){f.querySelector('[name=rule_ref]').value=v;f.querySelector('[name=source]').value='siem';}">
+            <option value="">— Select a SIEM rule —</option>
+            {% if technique_rules is defined and technique_rules %}
+            <optgroup label="★ Mapped to techniques on this step">
+                {% for tid, tr in technique_rules.items() %}
+                  {% for r in tr.get('rules', []) %}
+                    <option value="{{ r.name }}">{{ r.name }} ({{ tid }})</option>
+                  {% endfor %}
+                {% endfor %}
+            </optgroup>
+            {% endif %}
+            <optgroup label="All SIEM Rules">
+                {% for r in all_siem_rules %}
+                <option value="{{ r.name }}">{{ r.name }}</option>
+                {% endfor %}
+            </optgroup>
+        </select>
+        {% endif %}
+
+        <input class="form-input" name="rule_ref" placeholder="Rule name / reference…" style="font-size:0.85rem;">
+        <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
+        <input type="hidden" name="source" value="manual">
+
+        <div style="display:flex;gap:0.5rem;">
+            <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
+            <button type="button" class="btn btn-secondary btn-sm"
+                    onclick="this.closest('form').style.display='none';document.getElementById('add-step-det-btn').style.display='inline-flex';">
+                Cancel
+            </button>
+        </div>
+    </form>
+</div>

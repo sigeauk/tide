@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ report.cve_id }} — CVE Audit Report</title>
+{%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
+{%- set clf_color = _clf_colors.get(report.classification or 'Official', '#1a7f37') -%}
+<style>
+/* ── Base ──────────────────────────────────────────────────────── */
+:root{--c-bg:#0f1117;--c-surface:#181b24;--c-border:#2a2d38;--c-text:#e4e6ed;--c-muted:#8b8fa3;
+  --c-primary:#3b82f6;--c-danger:#ef4444;--c-warning:#f59e0b;--c-success:#22c55e}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg);color:var(--c-text);font-family:"Liberation Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:11px;line-height:1.5}
+a{color:var(--c-primary);text-decoration:none}
+@page{
+    size:A4 landscape;
+    margin:20mm 15mm 22mm 15mm;
+    @top-center{
+        content:"{{ report.classification or 'Official' }}";
+        font-family:"Liberation Sans",Arial,sans-serif;
+        font-size:6.5pt;font-weight:700;
+        color:{{ clf_color }};
+    }
+    @bottom-center{
+        content:"TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  {{ report.classification or 'Official' }}";
+        font-family:"Liberation Sans",Arial,sans-serif;
+        font-size:6pt;color:#6e7681;
+    }
+}
+
+/* ── Layout ────────────────────────────────────────────────────── */
+.page{page-break-after:always;padding:0.5cm 0}
+.page:last-child{page-break-after:avoid}
+.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;padding-bottom:0.75rem;border-bottom:2px solid var(--c-primary)}
+.header h1{font-size:1.4rem;font-weight:700;color:var(--c-primary)}
+.header .meta{font-size:0.75rem;color:var(--c-muted);text-align:right}
+.section-title{font-size:1rem;font-weight:700;color:var(--c-text);margin:1.25rem 0 0.5rem;padding-bottom:0.3rem;border-bottom:1px solid var(--c-border)}
+
+/* ── Metrics ───────────────────────────────────────────────────── */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:0.6rem;margin-bottom:1rem}
+.metric{background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;text-align:center}
+.metric .label{font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--c-muted);margin-bottom:0.15rem}
+.metric .value{font-size:1.3rem;font-weight:700}
+.metric .value.red{color:var(--c-danger)}.metric .value.amber{color:var(--c-warning)}.metric .value.green{color:var(--c-success)}.metric .value.primary{color:var(--c-primary)}
+
+/* ── Tables ────────────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;margin-bottom:0.75rem;font-size:0.78rem}
+th,td{padding:0.35rem 0.5rem;border:1px solid var(--c-border);text-align:left;vertical-align:top}
+th{background:var(--c-surface);font-weight:600;font-size:0.7rem;text-transform:uppercase;letter-spacing:.3px;color:var(--c-muted)}
+tr:nth-child(even){background:rgba(255,255,255,.02)}
+
+/* ── Badges ────────────────────────────────────────────────────── */
+.badge{display:inline-block;padding:0.12rem 0.45rem;border-radius:4px;font-size:0.68rem;font-weight:600;line-height:1.4}
+.badge-red{background:rgba(239,68,68,.15);color:var(--c-danger);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--c-warning);border:1px solid rgba(245,158,11,.3)}
+.badge-green{background:rgba(34,197,94,.15);color:var(--c-success);border:1px solid rgba(34,197,94,.3)}
+.badge-primary{background:rgba(59,130,246,.12);color:var(--c-primary);border:1px solid rgba(59,130,246,.3)}
+
+/* ── MITRE Pill ────────────────────────────────────────────────── */
+.mitre-pill{display:inline-block;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:600;margin:0.1rem}
+.mitre-pill.covered{background:rgba(34,197,94,.15);color:var(--c-success);border:1px solid rgba(34,197,94,.3)}
+.mitre-pill.gap{background:rgba(239,68,68,.15);color:var(--c-danger);border:1px solid rgba(239,68,68,.3)}
+
+/* Info card */
+.info-card{background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.75rem 1rem;margin-bottom:1rem}
+.info-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:0.75rem}
+.info-item .info-label{font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--c-muted);margin-bottom:0.15rem}
+.info-item .info-value{font-size:0.82rem}
+
+/* Legend */
+.legend{display:flex;gap:1rem;font-size:0.7rem;margin-bottom:0.75rem;color:var(--c-muted)}
+.legend .swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:0.25rem;vertical-align:middle}
+.footer{text-align:center;font-size:0.6rem;color:var(--c-muted);padding-top:0.5rem;border-top:1px solid var(--c-border);margin-top:1rem}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ PAGE 1: CVE HEADER + IMPACT SUMMARY ═══════════ -->
+<div class="page">
+    <div class="header">
+        <div>
+            <h1>{{ report.cve_id }}</h1>
+            <div style="font-size:0.85rem;color:var(--c-muted);margin-top:0.2rem;">
+                CVE Vulnerability Impact Audit Report
+                {% if report.known_ransomware %} · <span class="badge badge-red">Ransomware</span>{% endif %}
+                {% if report.is_kev %} · <span class="badge badge-primary">CISA KEV</span>{% endif %}
+            </div>
+        </div>
+        <div class="meta">
+            <div>TIDE CVE Audit</div>
+            <div>Generated: {{ report.generated_at }}</div>
+        </div>
+    </div>
+
+    <!-- CVE Info Card -->
+    <div class="info-card">
+        {% if report.short_description %}
+        <div style="font-size:0.82rem;margin-bottom:0.75rem;line-height:1.6;">{{ report.short_description }}</div>
+        <hr style="border:none;border-top:1px solid var(--c-border);margin-bottom:0.75rem;">
+        {% endif %}
+        <div class="info-grid">
+            <div class="info-item">
+                <div class="info-label">Vendor / Product</div>
+                <div class="info-value">{{ report.vendor_project }} / {{ report.product }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Date Added</div>
+                <div class="info-value">{{ report.date_added }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Due Date</div>
+                <div class="info-value">{{ report.due_date }}</div>
+            </div>
+            <div class="info-item">
+                <div class="info-label">Ransomware</div>
+                <div class="info-value">{% if report.known_ransomware %}Yes{% else %}No{% endif %}</div>
+            </div>
+        </div>
+        {% if report.notes %}
+        <div style="margin-top:0.75rem;padding-top:0.75rem;border-top:1px solid var(--c-border);">
+            <div class="info-item">
+                <div class="info-label">Required Action</div>
+                <div class="info-value" style="color:var(--c-muted);">{{ report.notes }}</div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- RAG Legend -->
+    <div class="legend">
+        <span><span class="swatch" style="background:var(--c-danger)"></span> Red — At Risk (no active detection)</span>
+        <span><span class="swatch" style="background:var(--c-warning)"></span> Amber — Monitored (detection rule applied)</span>
+    </div>
+
+    <!-- Impact Metrics -->
+    <div class="metrics">
+        <div class="metric">
+            <div class="label">Affected Systems</div>
+            <div class="value primary">{{ report.total_systems }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Affected Hosts</div>
+            <div class="value {% if report.total_hosts > 0 %}red{% else %}green{% endif %}">{{ report.total_hosts }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">At Risk Hosts</div>
+            <div class="value red">{{ report.red_count }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Monitored Hosts</div>
+            <div class="value amber">{{ report.amber_count }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Detection Rules</div>
+            <div class="value primary">{{ report.detections|length }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">MITRE Techniques</div>
+            <div class="value primary">{{ report.techniques|length }}</div>
+        </div>
+    </div>
+
+    <!-- MITRE ATT&CK Techniques -->
+    {% if report.techniques %}
+    <h2 class="section-title">MITRE ATT&CK Techniques</h2>
+    <table>
+        <thead><tr><th>Technique ID</th><th>Name</th><th>Detection Status</th><th>Rule Count</th></tr></thead>
+        <tbody>
+            {% for t in report.techniques %}
+            <tr>
+                <td><span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}</span></td>
+                <td>{{ t.name or '—' }}</td>
+                <td>{% if t.has_detection %}<span class="badge badge-green">Covered</span>{% else %}<span class="badge badge-red">Gap</span>{% endif %}</td>
+                <td>{{ t.rule_count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <!-- Applied Protections (Detection Rules) -->
+    <h2 class="section-title">Applied Protections — Detection Rules</h2>
+    {% if report.detections %}
+    <table>
+        <thead><tr><th>Rule / Reference</th><th>Note</th><th>Source</th></tr></thead>
+        <tbody>
+            {% for d in report.detections %}
+            <tr>
+                <td style="font-weight:600;">{{ d.rule_ref or '—' }}</td>
+                <td>{{ d.note or '—' }}</td>
+                <td><span class="badge badge-primary">{{ d.source }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div style="padding:1rem;text-align:center;color:var(--c-muted);font-size:0.82rem;">
+        No detection rules are currently mapped to this CVE.
+    </div>
+    {% endif %}
+
+    <!-- Technique-Mapped SIEM Rules -->
+    {% if report.technique_rules %}
+    <h2 class="section-title">SIEM Rules Mapped via MITRE Techniques</h2>
+    <table>
+        <thead><tr><th>Technique</th><th>Rule Name</th><th>Severity</th></tr></thead>
+        <tbody>
+            {% for tid, rules in report.technique_rules.items() %}
+            {% for r in rules %}
+            <tr>
+                <td><span class="mitre-pill covered">{{ tid }}</span></td>
+                <td>{{ r.name }}</td>
+                <td>
+                    {% if r.severity %}
+                    <span class="badge {% if r.severity|lower == 'critical' %}badge-red{% elif r.severity|lower == 'high' %}badge-red{% elif r.severity|lower == 'medium' %}badge-amber{% else %}badge-green{% endif %}">{{ r.severity }}</span>
+                    {% else %}—{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<!-- ═══════════ PAGE 2: IMPACT MATRIX ═══════════ -->
+<div class="page">
+    <h2 class="section-title">Impact Matrix — Affected Systems &amp; Hosts</h2>
+
+    {% if report.grouped_systems %}
+    {% for sys in report.grouped_systems %}
+    <div style="margin-bottom:1rem;background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;">
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.4rem;">
+            <strong style="font-size:0.85rem;color:var(--c-primary);">{{ sys.system_name }}</strong>
+            <span class="badge badge-primary" style="font-size:0.62rem;">{{ sys.hosts|length }} host{{ 's' if sys.hosts|length != 1 }}</span>
+        </div>
+
+        <table style="margin-bottom:0;">
+            <thead>
+                <tr><th>Hostname</th><th>IP Address</th><th>OS</th><th>Status</th><th>Active Rule(s)</th></tr>
+            </thead>
+            <tbody>
+                {% for h in sys.hosts %}
+                <tr>
+                    <td style="font-weight:600;">{{ h.name }}</td>
+                    <td style="font-family:monospace;font-size:0.72rem;">{{ h.ip }}</td>
+                    <td>{{ h.os[:25] }}{% if h.os|length > 25 %}…{% endif %}</td>
+                    <td>
+                        {% if h.status == 'red' %}<span class="badge badge-red">At Risk</span>
+                        {% else %}<span class="badge badge-amber">Monitored</span>{% endif %}
+                    </td>
+                    <td>
+                        {% if h.rule_names %}
+                            {% for r in h.rule_names %}
+                            <span class="badge badge-primary" style="font-size:0.6rem;">{{ r }}</span>
+                            {% endfor %}
+                        {% else %}<span style="color:var(--c-muted);">—</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div style="padding:2rem;text-align:center;color:var(--c-muted);font-size:0.85rem;">
+        No affected hosts found for this CVE in the current inventory.
+    </div>
+    {% endif %}
+</div>
+
+<div class="footer">
+    TIDE — Threat Intelligence Detection Engine · CVE Audit Report · {{ report.cve_id }} · {{ report.generated_at }}
+</div>
+
+</body>
+</html>

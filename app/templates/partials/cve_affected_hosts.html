@@ -18,6 +18,7 @@
         <span class="det-color-key__label">Coverage Status</span>
         <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-warning);"></span> Amber — Detection applied</span>
         <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-danger);"></span> Red — At risk</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-text-muted);"></span> Grey — Known blind spot</span>
     </div>
 
     <!-- Search bar -->
@@ -108,12 +109,29 @@
                  data-aff-name="{{ h.name | lower }}" data-aff-ip="{{ (h.ip_address or '') | lower }}">
                 <!-- Traffic light badge -->
                 <div class="host-card__badge">
-                    {% if h.coverage_status == 'amber' %}
+                    {% if h.coverage_status == 'grey' %}
+                    <span class="badge badge-grey" style="font-size:0.7rem;">{{ icon('eye-off','10') }} Blind Spot</span>
+                    {% elif h.coverage_status == 'amber' %}
                     <span class="badge badge-warning" style="font-size:0.7rem;">{{ icon('shield-check','10') }} Monitored</span>
                     {% elif h.coverage_status == 'red' %}
                     <span class="badge badge-danger" style="font-size:0.7rem;">{{ icon('alert-triangle','10') }} At Risk</span>
                     {% endif %}
                 </div>
+
+                {# Blind spot reason tooltip #}
+                {% if h.coverage_status == 'grey' and blind_spots %}
+                {% for bs in blind_spots %}
+                {% if bs.host_id == h.host_id %}
+                <div style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;margin-top:0.15rem;">
+                    {{ icon('info','10') }} {{ bs.reason }}
+                    <button class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                            hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=cve&entity_id={{ cve_id }}"
+                            hx-target="#cve-affected-section" hx-swap="innerHTML"
+                            hx-confirm="Remove blind spot for {{ h.name }}?">{{ icon('x','9') }}</button>
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% endif %}
 
                 <!-- Host name -->
                 <a href="/hosts/{{ h.host_id }}" class="host-card__title">
@@ -192,6 +210,16 @@
                     {% endif %}
                 </div>
                 {% endif %}
+
+                {# Log Blind Spot button — only for red (at-risk) hosts without existing blind spot #}
+                {% if h.coverage_status == 'red' %}
+                <div style="border-top:1px dashed var(--color-border-muted);padding-top:0.35rem;margin-top:0.35rem;">
+                    <button class="btn btn-sm" style="font-size:0.65rem;padding:0.15rem 0.4rem;color:var(--color-text-muted);border-color:var(--color-border-muted);"
+                            onclick="openBlindSpotModal('cve','{{ cve_id }}','{{ h.system_id }}','{{ h.host_id }}','{{ h.name }}')">
+                        {{ icon('eye-off','10') }} Log Blind Spot
+                    </button>
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -246,4 +274,51 @@ function filterAffectedDevices() {
         countEl.textContent = '';
     }
 }
+// Blind spot modal
+function openBlindSpotModal(entityType, entityId, systemId, hostId, hostName) {
+    var m = document.getElementById('blind-spot-modal');
+    m.querySelector('[name=entity_type]').value = entityType;
+    m.querySelector('[name=entity_id]').value = entityId;
+    m.querySelector('[name=system_id]').value = systemId || '';
+    m.querySelector('[name=host_id]').value = hostId || '';
+    m.querySelector('#bs-modal-target').textContent = hostName || entityId;
+    m.querySelector('[name=reason]').value = '';
+    m.style.display = 'flex';
+}
 </script>
+
+<!-- Blind Spot Modal -->
+<div id="blind-spot-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('blind-spot-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
+            Documenting a known blind spot for <strong id="bs-modal-target"></strong>.
+            This will change the host status to <span class="badge badge-grey" style="font-size:0.7rem;">Grey</span> (accepted risk).
+        </p>
+        <form hx-post="/api/blind-spots"
+              hx-target="#cve-affected-section"
+              hx-swap="innerHTML"
+              hx-on::after-request="document.getElementById('blind-spot-modal').style.display='none'"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <input type="hidden" name="entity_type" value="">
+            <input type="hidden" name="entity_id" value="">
+            <input type="hidden" name="system_id" value="">
+            <input type="hidden" name="host_id" value="">
+            <div>
+                <label class="form-label">Reason <span style="color:var(--color-danger)">*</span></label>
+                <textarea name="reason" class="form-input" rows="3" required
+                          placeholder="Why can't this host be monitored? e.g. Legacy OS, no agent support, vendor appliance…"></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('blind-spot-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Log Blind Spot</button>
+            </div>
+        </form>
+    </div>
+</div>

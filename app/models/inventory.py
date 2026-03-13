@@ -307,3 +307,90 @@ class PlatformCreate(BaseModel):
     name: str
     description: Optional[str] = None
     classification: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Assurance Baselines (Threat Playbooks)
+# ---------------------------------------------------------------------------
+
+MITRE_TACTICS = [
+    "Reconnaissance", "Resource Development", "Initial Access", "Execution",
+    "Persistence", "Privilege Escalation", "Defense Evasion", "Credential Access",
+    "Discovery", "Lateral Movement", "Collection", "Command and Control",
+    "Exfiltration", "Impact", "Other",
+]
+
+
+# Aliases kept for backward compat with DB column names
+StepTechnique = None  # replaced by TacticTechnique
+StepDetection = None  # replaced by TacticDetection
+
+class TacticTechnique(BaseModel):
+    id: Optional[str] = None
+    step_id: Optional[str] = None      # DB column name kept
+    technique_id: str = ""
+
+StepTechnique = TacticTechnique  # noqa: backward compat alias
+
+
+class TacticDetection(BaseModel):
+    id: Optional[str] = None
+    step_id: Optional[str] = None      # DB column name kept
+    rule_ref: str = ""
+    note: str = ""
+    source: str = "manual"
+
+StepDetection = TacticDetection  # noqa: backward compat alias
+
+
+class BaselineTactic(BaseModel):
+    id: Optional[str] = None
+    playbook_id: Optional[str] = None  # DB column name kept
+    step_number: int = 1               # DB column name kept
+    title: str = ""
+    tactic: str = ""
+    technique_id: str = ""          # legacy single field (kept for compat)
+    required_rule: str = ""         # legacy single field (kept for compat)
+    description: str = ""
+    techniques: List[TacticTechnique] = Field(default_factory=list)
+    detections: List[TacticDetection] = Field(default_factory=list)
+
+PlaybookStep = BaselineTactic  # noqa: backward compat alias
+
+class Baseline(BaseModel):
+    id: Optional[str] = None
+    name: str = ""
+    description: str = ""
+    tactics: List[BaselineTactic] = Field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+Playbook = Baseline  # noqa: backward compat alias
+
+class BaselineCreate(BaseModel):
+    name: str
+    description: str = ""
+
+PlaybookCreate = BaselineCreate  # noqa: backward compat alias
+
+class SystemBaseline(BaseModel):
+    id: Optional[str] = None
+    system_id: str = ""
+    playbook_id: str = ""          # DB column name kept
+    applied_at: Optional[datetime] = None
+
+
+# ---------------------------------------------------------------------------
+# Negative Coverage / Known Blind Spots
+# ---------------------------------------------------------------------------
+
+class BlindSpot(BaseModel):
+    """A documented blind spot — a known gap where detection is not possible."""
+    id: Optional[str] = None
+    entity_type: str = ""       # 'cve' or 'tactic'
+    entity_id: str = ""         # cve_id or tactic_id
+    system_id: Optional[str] = None
+    host_id: Optional[str] = None
+    reason: str = ""
+    created_by: str = ""
+    created_at: Optional[datetime] = None

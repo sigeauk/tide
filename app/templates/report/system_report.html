@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ report.system.name }} — {% if report.mode == 'technical' %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}</title>
+{%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
+{%- set clf_color = _clf_colors.get(report.classification or 'Official', '#1a7f37') -%}
+<style>
+/* ── Base ──────────────────────────────────────────────────────── */
+:root{--c-bg:#0f1117;--c-surface:#181b24;--c-border:#2a2d38;--c-text:#e4e6ed;--c-muted:#8b8fa3;
+  --c-primary:#3b82f6;--c-danger:#ef4444;--c-warning:#f59e0b;--c-success:#22c55e;--c-amber:#f59e0b;}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--c-bg);color:var(--c-text);font-family:"Liberation Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:11px;line-height:1.5}
+a{color:var(--c-primary);text-decoration:none}
+@page{
+    size:A4 landscape;
+    margin:20mm 15mm 22mm 15mm;
+    @top-center{
+        content:"{{ report.classification or 'Official' }}";
+        font-family:"Liberation Sans",Arial,sans-serif;
+        font-size:6.5pt;font-weight:700;
+        color:{{ clf_color }};
+    }
+    @bottom-center{
+        content:"TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  {{ report.classification or 'Official' }}";
+        font-family:"Liberation Sans",Arial,sans-serif;
+        font-size:6pt;color:#6e7681;
+    }
+}
+
+/* ── Layout ────────────────────────────────────────────────────── */
+.page{page-break-after:always;padding:0.5cm 0}
+.page:last-child{page-break-after:avoid}
+.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;padding-bottom:0.75rem;border-bottom:2px solid var(--c-primary)}
+.header h1{font-size:1.4rem;font-weight:700;color:var(--c-primary)}
+.header .meta{font-size:0.75rem;color:var(--c-muted);text-align:right}
+.section-title{font-size:1rem;font-weight:700;color:var(--c-text);margin:1.25rem 0 0.5rem;padding-bottom:0.3rem;border-bottom:1px solid var(--c-border)}
+
+/* ── Cards / Metrics ───────────────────────────────────────────── */
+.metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:0.6rem;margin-bottom:1rem}
+.metric{background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;text-align:center}
+.metric .label{font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--c-muted);margin-bottom:0.15rem}
+.metric .value{font-size:1.3rem;font-weight:700}
+.metric .value.red{color:var(--c-danger)}.metric .value.amber{color:var(--c-warning)}.metric .value.green{color:var(--c-success)}.metric .value.primary{color:var(--c-primary)}
+
+/* ── Tables ────────────────────────────────────────────────────── */
+table{width:100%;border-collapse:collapse;margin-bottom:0.75rem;font-size:0.78rem}
+th,td{padding:0.35rem 0.5rem;border:1px solid var(--c-border);text-align:left;vertical-align:top}
+th{background:var(--c-surface);font-weight:600;font-size:0.7rem;text-transform:uppercase;letter-spacing:.3px;color:var(--c-muted)}
+tr:nth-child(even){background:rgba(255,255,255,.02)}
+
+/* ── Badges ────────────────────────────────────────────────────── */
+.badge{display:inline-block;padding:0.12rem 0.45rem;border-radius:4px;font-size:0.68rem;font-weight:600;line-height:1.4}
+.badge-red{background:rgba(239,68,68,.15);color:var(--c-danger);border:1px solid rgba(239,68,68,.3)}
+.badge-amber{background:rgba(245,158,11,.15);color:var(--c-warning);border:1px solid rgba(245,158,11,.3)}
+.badge-green{background:rgba(34,197,94,.15);color:var(--c-success);border:1px solid rgba(34,197,94,.3)}
+.badge-primary{background:rgba(59,130,246,.12);color:var(--c-primary);border:1px solid rgba(59,130,246,.3)}
+
+/* ── Pill (MITRE) ──────────────────────────────────────────────── */
+.mitre-pill{display:inline-block;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.65rem;font-weight:600;margin:0.1rem}
+.mitre-pill.covered{background:rgba(34,197,94,.15);color:var(--c-success);border:1px solid rgba(34,197,94,.3)}
+.mitre-pill.gap{background:rgba(239,68,68,.15);color:var(--c-danger);border:1px solid rgba(239,68,68,.3)}
+
+/* Coverage bar */
+.coverage-bar{width:100%;height:8px;background:var(--c-surface);border-radius:4px;overflow:hidden;margin:0.3rem 0}
+.coverage-bar .fill{height:100%;border-radius:4px}
+.coverage-bar .fill.good{background:var(--c-success)}.coverage-bar .fill.warn{background:var(--c-warning)}.coverage-bar .fill.bad{background:var(--c-danger)}
+
+/* Legend */
+.legend{display:flex;gap:1rem;font-size:0.7rem;margin-bottom:0.75rem;color:var(--c-muted)}
+.legend .swatch{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:0.25rem;vertical-align:middle}
+.footer{text-align:center;font-size:0.6rem;color:var(--c-muted);padding-top:0.5rem;border-top:1px solid var(--c-border);margin-top:1rem}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ PAGE 1: HEADER + EXECUTIVE METRICS ═══════════ -->
+<div class="page">
+    <div class="header">
+        <div>
+            <h1>{{ report.system.name }}</h1>
+            <div style="font-size:0.8rem;color:var(--c-muted);margin-top:0.2rem;">
+                {% if report.mode == 'technical' %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}
+                {% if report.system.classification %} · <span class="badge badge-primary">{{ report.system.classification }}</span>{% endif %}
+            </div>
+            {% if report.system.description %}
+            <div style="font-size:0.78rem;color:var(--c-muted);margin-top:0.3rem;">{{ report.system.description }}</div>
+            {% endif %}
+        </div>
+        <div class="meta">
+            <div>TIDE Vulnerability Report</div>
+            <div>Generated: {{ report.generated_at }}</div>
+        </div>
+    </div>
+
+    <!-- RAG Legend -->
+    <div class="legend">
+        <span><span class="swatch" style="background:var(--c-danger)"></span> Red — At Risk (CVE match, no detection)</span>
+        <span><span class="swatch" style="background:var(--c-warning)"></span> Amber — Monitored (CVE match, detection applied)</span>
+        <span><span class="swatch" style="background:var(--c-success)"></span> Green — Clean (no vulnerabilities found)</span>
+    </div>
+
+    <!-- Key Metrics -->
+    <div class="metrics">
+        <div class="metric">
+            <div class="label">Total Devices</div>
+            <div class="value primary">{{ report.total_hosts }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Unique CVEs</div>
+            <div class="value {% if report.total_cves > 0 %}red{% else %}green{% endif %}">{{ report.total_cves }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">At Risk Devices</div>
+            <div class="value red">{{ report.red_hosts }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Monitored Devices</div>
+            <div class="value amber">{{ report.amber_hosts }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Clean Devices</div>
+            <div class="value green">{{ report.green_hosts }}</div>
+        </div>
+        <div class="metric">
+            <div class="label">Coverage Ratio</div>
+            <div class="value {% if report.coverage_ratio >= 80 %}green{% elif report.coverage_ratio >= 40 %}amber{% else %}red{% endif %}">{{ report.coverage_ratio }}%</div>
+            <div class="coverage-bar"><div class="fill {% if report.coverage_ratio >= 80 %}good{% elif report.coverage_ratio >= 40 %}warn{% else %}bad{% endif %}" style="width:{{ report.coverage_ratio }}%"></div></div>
+        </div>
+    </div>
+
+    <!-- Vulnerability Coverage Ratio -->
+    <h2 class="section-title">Vulnerability Coverage Ratio</h2>
+    <table>
+        <thead>
+            <tr><th>Metric</th><th>Count</th><th>Percentage</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><span class="badge badge-amber">Amber</span> Monitored (CVE + Detection Applied)</td>
+                <td>{{ report.total_amber_pairs }}</td>
+                <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
+            </tr>
+            <tr>
+                <td><span class="badge badge-red">Red</span> At Risk (CVE + No Detection)</td>
+                <td>{{ report.total_red_pairs }}</td>
+                <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ 100 - report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <!-- Top 5 Critical CVEs -->
+    {% if report.top5_cves %}
+    <h2 class="section-title">Top 5 Critical CVEs (by At-Risk Host Count)</h2>
+    <table>
+        <thead>
+            <tr><th>CVE ID</th><th>Vulnerability</th><th>Vendor / Product</th><th>At Risk</th><th>Monitored</th><th>MITRE Techniques</th><th>Ransomware</th></tr>
+        </thead>
+        <tbody>
+            {% for cve in report.top5_cves %}
+            <tr>
+                <td style="font-weight:600;white-space:nowrap;">{{ cve.cve_id }}</td>
+                <td>{{ cve.vulnerability_name[:60] }}{% if cve.vulnerability_name|length > 60 %}…{% endif %}</td>
+                <td>{{ cve.vendor_project }} / {{ cve.product }}</td>
+                <td><span class="badge badge-red">{{ cve.hosts_red|length }}</span></td>
+                <td><span class="badge badge-amber">{{ cve.hosts_amber|length }}</span></td>
+                <td>
+                    {% for t in cve.techniques %}
+                    <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}</span>
+                    {% endfor %}
+                    {% if not cve.techniques %}<span style="color:var(--c-muted)">—</span>{% endif %}
+                </td>
+                <td>{% if cve.known_ransomware %}<span class="badge badge-red">Yes</span>{% else %}No{% endif %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+
+    <!-- Device Status Summary -->
+    <h2 class="section-title">Device Status Summary</h2>
+    <table>
+        <thead>
+            <tr><th>Device</th><th>IP Address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
+        </thead>
+        <tbody>
+            {% for h in report.host_rows %}
+            <tr>
+                <td style="font-weight:600;">{{ h.name }}</td>
+                <td style="font-family:monospace;font-size:0.72rem;">{{ h.ip }}</td>
+                <td>{{ h.os[:30] }}{% if h.os|length > 30 %}…{% endif %}</td>
+                <td>
+                    {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
+                    {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
+                    {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
+                </td>
+                <td>{{ h.cve_count }}</td>
+                <td>{{ h.red_count }}</td>
+                <td>{{ h.amber_count }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <!-- ── Baseline Coverage ──────────────────────────────────────── -->
+    {% if report.baselines %}
+    <h2 class="section-title">Baseline Coverage</h2>
+    <table>
+        <thead>
+            <tr><th>Baseline</th><th>Tactics</th><th>Covered</th><th>Gaps</th><th>Coverage</th></tr>
+        </thead>
+        <tbody>
+            {% for bl in report.baselines %}
+            <tr>
+                <td style="font-weight:600;">{{ bl.playbook_name }}</td>
+                <td>{{ bl.total_steps }}</td>
+                <td><span class="badge badge-amber">{{ bl.covered_steps }}</span></td>
+                <td><span class="badge badge-red">{{ bl.total_steps - bl.covered_steps }}</span></td>
+                <td>
+                    <span class="badge {% if bl.coverage_pct >= 75 %}badge-green{% elif bl.coverage_pct >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ bl.coverage_pct }}%</span>
+                    <div class="coverage-bar" style="margin-top:0.2rem;"><div class="fill {% if bl.coverage_pct >= 75 %}good{% elif bl.coverage_pct >= 50 %}warn{% else %}bad{% endif %}" style="width:{{ bl.coverage_pct }}%"></div></div>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+
+<!-- ═══════════ TECHNICAL DEEP DIVE PAGES ═══════════ -->
+{% if report.mode == 'technical' %}
+<div class="page">
+    <!-- ── Technical Gap List: Baseline Details ──────────────── -->
+    {% if report.baselines %}
+    <h2 class="section-title">Baseline Gap Analysis</h2>
+    {% for bl in report.baselines %}
+    <div style="margin-bottom:1rem;background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+            <strong style="font-size:0.85rem;">{{ bl.playbook_name }}</strong>
+            <span class="badge {% if bl.coverage_pct >= 75 %}badge-green{% elif bl.coverage_pct >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ bl.coverage_pct }}% covered</span>
+        </div>
+        {% if bl.playbook_description %}
+        <div style="font-size:0.72rem;color:var(--c-muted);margin-bottom:0.4rem;">{{ bl.playbook_description }}</div>
+        {% endif %}
+        <table style="margin-bottom:0;">
+            <thead><tr><th>#</th><th>Title</th><th>Technique</th><th>Required Rule</th><th>Status</th></tr></thead>
+            <tbody>
+                {% for step in bl.tactics %}
+                <tr>
+                    <td style="text-align:center;font-weight:600;">{{ step.step_number }}</td>
+                    <td>{{ step.title }}</td>
+                    <td><span class="mitre-pill {% if step.status == 'green' %}covered{% else %}gap{% endif %}">{{ step.technique_id or '—' }}</span></td>
+                    <td><code style="font-size:0.7rem;">{{ step.required_rule or '—' }}</code></td>
+                    <td>
+                        {% if step.status == 'green' %}<span class="badge badge-green">Detected</span>
+                        {% elif step.status == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
+                        {% elif step.status == 'amber' %}<span class="badge badge-amber">Known Gap</span>
+                        {% else %}<span class="badge badge-red">Missing</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    <h2 class="section-title">Comprehensive CVE Breakdown (Grouped by CVE)</h2>
+
+    {% for cve in report.all_cves %}
+    <div style="margin-bottom:1rem;background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+            <div>
+                <strong style="color:var(--c-primary);font-size:0.85rem;">{{ cve.cve_id }}</strong>
+                <span style="color:var(--c-muted);margin-left:0.5rem;font-size:0.72rem;">{{ cve.vulnerability_name[:80] }}</span>
+            </div>
+            <div style="display:flex;gap:0.3rem;">
+                {% if cve.known_ransomware %}<span class="badge badge-red">Ransomware</span>{% endif %}
+                <span class="badge badge-red">{{ cve.hosts_red|length }} At Risk</span>
+                <span class="badge badge-amber">{{ cve.hosts_amber|length }} Monitored</span>
+            </div>
+        </div>
+
+        {% if cve.short_description %}
+        <div style="font-size:0.72rem;color:var(--c-muted);margin-bottom:0.4rem;">{{ cve.short_description[:200] }}</div>
+        {% endif %}
+
+        <!-- MITRE Techniques -->
+        {% if cve.techniques %}
+        <div style="margin-bottom:0.4rem;">
+            <span style="font-size:0.65rem;color:var(--c-muted);font-weight:600;">MITRE:</span>
+            {% for t in cve.techniques %}
+            <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}{% if t.name %} {{ t.name }}{% endif %}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Detection Rules -->
+        {% if cve.detections %}
+        <div style="margin-bottom:0.4rem;">
+            <span style="font-size:0.65rem;color:var(--c-muted);font-weight:600;">Detection Rules:</span>
+            {% for d in cve.detections %}
+            <span class="badge badge-primary" style="font-size:0.62rem;">{{ d.note or d.rule_ref or 'Rule' }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <!-- Affected Hosts Table -->
+        <table style="margin-top:0.3rem;margin-bottom:0;">
+            <thead><tr><th>Host</th><th>IP</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+            <tbody>
+                {% for h in cve.hosts_red %}
+                <tr>
+                    <td>{{ h.name }}</td><td style="font-family:monospace;">{{ h.ip }}</td>
+                    <td><span class="badge badge-red">At Risk</span></td><td style="color:var(--c-muted);">—</td>
+                </tr>
+                {% endfor %}
+                {% for h in cve.hosts_amber %}
+                <tr>
+                    <td>{{ h.name }}</td><td style="font-family:monospace;">{{ h.ip }}</td>
+                    <td><span class="badge badge-amber">Monitored</span></td>
+                    <td>{% for r in h.rule_names %}<span class="badge badge-primary" style="font-size:0.6rem;">{{ r }}</span> {% endfor %}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</div>
+
+<div class="page">
+    <h2 class="section-title">Comprehensive Breakdown (Grouped by Host)</h2>
+
+    {% for h in report.host_rows %}
+    {% if h.cves %}
+    <div style="margin-bottom:0.75rem;background:var(--c-surface);border:1px solid var(--c-border);border-radius:6px;padding:0.6rem 0.75rem;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.3rem;">
+            <div>
+                <strong>{{ h.name }}</strong>
+                {% if h.ip %}<span style="font-family:monospace;color:var(--c-muted);margin-left:0.5rem;font-size:0.72rem;">{{ h.ip }}</span>{% endif %}
+                {% if h.os %}<span style="color:var(--c-muted);margin-left:0.5rem;font-size:0.72rem;">{{ h.os }}</span>{% endif %}
+            </div>
+            <div>
+                {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
+                {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
+                {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
+            </div>
+        </div>
+        <table style="margin-bottom:0;">
+            <thead><tr><th>CVE</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+            <tbody>
+                {% for c in h.cves %}
+                <tr>
+                    <td style="font-weight:600;white-space:nowrap;">{{ c.cve_id }}</td>
+                    <td>
+                        {% if c.status == 'red' %}<span class="badge badge-red">At Risk</span>
+                        {% else %}<span class="badge badge-amber">Monitored</span>{% endif %}
+                    </td>
+                    <td>
+                        {% if c.rule_names %}
+                            {% for r in c.rule_names %}<span class="badge badge-primary" style="font-size:0.6rem;">{{ r }}</span> {% endfor %}
+                        {% else %}<span style="color:var(--c-muted);">—</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endif %}
+
+<div class="footer">
+    TIDE — Threat Intelligence Detection Engine · {{ report.generated_at }} · {{ report.system.name }}
+    {% if report.system.classification %} · {{ report.system.classification }}{% endif %}
+</div>
+
+</body>
+</html>
