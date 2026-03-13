@@ -7,8 +7,8 @@
     <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
          onclick="var b=document.getElementById('bl-body-{{ loop.index }}');var c=document.getElementById('bl-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
-            <a href="/baselines/{{ bl.playbook_id }}" style="font-weight:600;color:var(--text-primary);text-decoration:none;font-size:0.95rem;" onclick="event.stopPropagation();">
-                {{ bl.playbook_name }}
+            <a href="/baselines/{{ bl.playbook_id }}" style="font-weight:600;color:var(--text-primary);text-decoration:none;font-size:0.95rem;display:inline-flex;align-items:center;gap:0.35rem;" onclick="event.stopPropagation();">
+                {{ icon('clipboard-list','14') }} {{ bl.playbook_name }}
             </a>
             <span style="font-size:0.75rem;color:var(--color-muted);">
                 {{ bl.covered_steps }}/{{ bl.total_steps }} techniques covered · {{ bl.coverage_pct }}%
@@ -70,13 +70,13 @@
                 {% if step.tactic is defined and step.tactic %}
                 <span class="badge badge-neutral" style="font-size:0.62rem;">{{ step.tactic }}</span>
                 {% endif %}
-                {# MITRE technique pills #}
+                {# MITRE technique pills - per-technique coverage from Sigma/SIEM rules #}
                 {% if step.techniques is defined and step.techniques %}
                 {% for t in step.techniques %}
-                {{ mitre_pill(t.technique_id, covered=(step.status == 'green')) }}
+                {{ mitre_pill(t.technique_id, covered=t.get('has_detection', false), rule_count=t.get('rule_count', 0)) }}
                 {% endfor %}
                 {% elif step.technique_id %}
-                {{ mitre_pill(step.technique_id, covered=(step.status == 'green')) }}
+                {{ mitre_pill(step.technique_id, covered=false) }}
                 {% endif %}
                 {# Detection rule count badge #}
                 {% if step.detections is defined and step.detections %}

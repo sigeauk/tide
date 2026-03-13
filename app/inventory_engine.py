@@ -1998,6 +1998,16 @@ def get_system_baselines(system_id: str) -> List[Dict]:
     # Load blind spots for all tactics in one pass
     all_step_blind_spots = _load_all_blind_spots("tactic")
 
+    # Load per-technique coverage data (from Sigma/SIEM rules) once
+    try:
+        from app.services.database import get_database_service
+        _db = get_database_service()
+        covered_ttps = _db.get_all_covered_ttps()
+        ttp_rule_counts = _db.get_ttp_rule_counts()
+    except Exception:
+        covered_ttps = set()
+        ttp_rule_counts = {}
+
     result = []
     for sb_id, pb_id, applied_at, pb_name, pb_desc in rows:
         steps = _get_playbook_steps(pb_id)
@@ -2033,7 +2043,14 @@ def get_system_baselines(system_id: str) -> List[Dict]:
                 "description": step.description,
                 "status": status,
                 "blind_spot_reason": bs_reason,
-                "techniques": [{"technique_id": t.technique_id} for t in step.techniques],
+                "techniques": [
+                    {
+                        "technique_id": t.technique_id,
+                        "has_detection": t.technique_id.upper() in covered_ttps,
+                        "rule_count": ttp_rule_counts.get(t.technique_id.upper(), 0),
+                    }
+                    for t in step.techniques
+                ],
                 "detections": [{"rule_ref": d.rule_ref, "note": d.note} for d in step.detections],
             })
         total = len(steps)
@@ -2323,6 +2340,9 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
 
     result = []
     for system_id, system_name in rows:
+        # Fetch system description
+        sys_obj = get_system(system_id)
+        system_description = sys_obj.description if sys_obj else ""
         hosts = list_hosts(system_id)
         host_ids = {h.id for h in hosts}
         applied_rules = _get_applied_rule_names_for_hosts(host_ids)
@@ -2354,6 +2374,7 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
         result.append({
             "system_id": system_id,
             "system_name": system_name,
+            "system_description": system_description or "",
             "host_count": len(hosts),
             "status": status,
             "blind_spot_reason": bs_reason,

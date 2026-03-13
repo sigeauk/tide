@@ -38,10 +38,10 @@
                 {{ icon('layers','14') }} {{ sys.system_name }}
             </a>
 
-            <!-- Matched rules -->
-            {% if sys.matched_rules %}
+            <!-- System description -->
+            {% if sys.system_description %}
             <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:0.25rem;">
-                {{ icon('shield-check','10') }} {{ sys.matched_rules | join(', ') }}
+                {{ sys.system_description }}
             </div>
             {% endif %}
 
