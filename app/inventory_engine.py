@@ -1264,14 +1264,16 @@ def _load_all_blind_spots(entity_type: str) -> Dict[str, List[BlindSpot]]:
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+                "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
+                "COALESCE(override_type, 'gap') "
                 "FROM blind_spots WHERE entity_type = ?",
                 [entity_type],
             ).fetchall()
         result: Dict[str, List[BlindSpot]] = {}
         for r in rows:
             bs = BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                           host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7])
+                           host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
+                           override_type=r[8])
             result.setdefault(r[2], []).append(bs)
         return result
     except Exception:
@@ -1562,6 +1564,113 @@ def list_playbooks() -> List[Playbook]:
     return result
 
 
+def get_baseline_step_coverage(baseline_id: str) -> Dict[str, List[Dict]]:
+    """Compute per-step per-system RAG status for a single baseline.
+
+    Returns {step_id: [{system_id, system_name, status}, ...]} where
+    status is one of 'green', 'amber', 'red', 'grey'.
+    """
+    with _get_conn() as conn:
+        # Applied systems
+        sys_rows = conn.execute(
+            "SELECT sb.system_id, s.name FROM system_baselines sb "
+            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ? ORDER BY s.name",
+            [baseline_id],
+        ).fetchall()
+        if not sys_rows:
+            return {}
+        system_ids = [r[0] for r in sys_rows]
+        system_names = {r[0]: r[1] for r in sys_rows}
+
+        # Steps for this baseline
+        steps = conn.execute(
+            "SELECT id FROM playbook_steps WHERE playbook_id = ?", [baseline_id]
+        ).fetchall()
+        step_ids = [r[0] for r in steps]
+        if not step_ids:
+            return {}
+
+        sp = ",".join("?" for _ in step_ids)
+
+        # Step detection IDs per step
+        sd_rows = conn.execute(
+            f"SELECT step_id, id FROM step_detections WHERE step_id IN ({sp})", step_ids
+        ).fetchall()
+        step_det_ids: Dict[str, set] = {}
+        for sid, det_id in sd_rows:
+            step_det_ids.setdefault(sid, set()).add(det_id)
+
+        # Collect all step_detection IDs across all steps
+        all_step_det_ids = set()
+        for dids in step_det_ids.values():
+            all_step_det_ids |= dids
+
+        # Blind spots for tactic entity_type
+        bs_rows = conn.execute(
+            f"SELECT entity_id, system_id, COALESCE(override_type, 'gap') FROM blind_spots "
+            f"WHERE entity_type = 'tactic' AND entity_id IN ({sp})", step_ids
+        ).fetchall()
+        step_gap: Dict[str, set] = {}
+        step_na: Dict[str, set] = {}
+        for eid, sid, otype in bs_rows:
+            if otype == "na":
+                step_na.setdefault(eid, set()).add(sid)
+            else:
+                step_gap.setdefault(eid, set()).add(sid)
+
+        # Hosts per system + applied rules per system
+        sid_ph = ",".join("?" for _ in system_ids)
+        host_rows = conn.execute(
+            f"SELECT id, system_id FROM hosts WHERE system_id IN ({sid_ph})", system_ids
+        ).fetchall()
+        sys_hosts: Dict[str, list] = {}
+        all_host_ids = []
+        for hid, sid in host_rows:
+            sys_hosts.setdefault(sid, []).append(hid)
+            all_host_ids.append(hid)
+
+        # Which step_detections are applied to which hosts?
+        # Maps: system_id -> set of step_detection_ids that are applied to at least one host
+        system_applied_det_ids: Dict[str, set] = {s: set() for s in system_ids}
+        if all_host_ids and all_step_det_ids:
+            hp = ",".join("?" for _ in all_host_ids)
+            dp = ",".join("?" for _ in all_step_det_ids)
+            ad_rows = conn.execute(
+                f"SELECT host_id, detection_id FROM applied_detections "
+                f"WHERE host_id IN ({hp}) AND detection_id IN ({dp})",
+                list(all_host_ids) + list(all_step_det_ids),
+            ).fetchall()
+            # Build host->system reverse map
+            host_to_sys: Dict[str, str] = {}
+            for hid, sid in host_rows:
+                host_to_sys[hid] = sid
+            for hid, did in ad_rows:
+                sid = host_to_sys.get(hid)
+                if sid:
+                    system_applied_det_ids[sid].add(did)
+
+    # Build per-step coverage
+    result: Dict[str, List[Dict]] = {}
+    for step_id in step_ids:
+        det_ids = step_det_ids.get(step_id, set())
+        gap_sys = step_gap.get(step_id, set())
+        na_sys = step_na.get(step_id, set())
+        entries = []
+        for sys_id in system_ids:
+            # Green = at least one of this step's detections has been applied to a host in this system
+            if det_ids and (det_ids & system_applied_det_ids.get(sys_id, set())):
+                status = "green"
+            elif sys_id in na_sys:
+                status = "grey"
+            elif sys_id in gap_sys:
+                status = "amber"
+            else:
+                status = "red"
+            entries.append({"system_id": sys_id, "system_name": system_names[sys_id], "status": status})
+        result[step_id] = entries
+    return result
+
+
 def get_baselines_overview() -> List[Dict]:
     """Efficient overview of all baselines for the listing page.
 
@@ -1621,24 +1730,30 @@ def get_baselines_overview() -> List[Dict]:
         step_to_pb = {r[0]: r[1] for r in all_steps}
         all_step_ids = list(step_to_pb.keys())
 
-        # Load detection rule_refs per step
-        step_det_refs = {}
+        # Load detection IDs per step (for applied_detections matching)
+        step_det_id_sets = {}
+        all_step_det_ids_flat = set()
         if all_step_ids:
             sp = ",".join("?" for _ in all_step_ids)
             sd_rows = conn.execute(
-                f"SELECT step_id, rule_ref FROM step_detections WHERE step_id IN ({sp})",
+                f"SELECT step_id, id FROM step_detections WHERE step_id IN ({sp})",
                 all_step_ids,
             ).fetchall()
-            for sid, rref in sd_rows:
-                step_det_refs.setdefault(sid, set()).add(rref.lower() if rref else "")
+            for sid, det_id in sd_rows:
+                step_det_id_sets.setdefault(sid, set()).add(det_id)
+                all_step_det_ids_flat.add(det_id)
 
-        # Load blind spots for tactics
+        # Load blind spots for tactics (with override_type)
         bs_rows = conn.execute(
-            "SELECT entity_id, system_id FROM blind_spots WHERE entity_type = 'tactic'"
+            "SELECT entity_id, system_id, COALESCE(override_type, 'gap') FROM blind_spots WHERE entity_type = 'tactic'"
         ).fetchall()
-        step_blind_spots = {}
-        for eid, sid in bs_rows:
-            step_blind_spots.setdefault(eid, set()).add(sid)
+        step_blind_spots = {}      # step_id -> set(system_id) for gap
+        step_na_spots = {}         # step_id -> set(system_id) for na
+        for eid, sid, otype in bs_rows:
+            if otype == "na":
+                step_na_spots.setdefault(eid, set()).add(sid)
+            else:
+                step_blind_spots.setdefault(eid, set()).add(sid)
 
         # Load all system_baselines
         sb_rows = conn.execute(
@@ -1654,7 +1769,8 @@ def get_baselines_overview() -> List[Dict]:
         for sids in pb_systems.values():
             all_system_ids |= sids
 
-        system_applied_rules = {}
+        # Build set of applied step_detection IDs per system
+        system_applied_det_ids = {}
         if all_system_ids:
             sid_list = list(all_system_ids)
             sp = ",".join("?" for _ in sid_list)
@@ -1668,48 +1784,31 @@ def get_baselines_overview() -> List[Dict]:
                 sys_hosts.setdefault(sid, []).append(hid)
                 all_host_ids.append(hid)
 
-            # Batch: get all applied detection IDs for all hosts in one query
-            host_det_map = {}  # host_id -> set(detection_id)
-            if all_host_ids:
+            # Batch: get applied_detections that match our step_detection IDs
+            host_applied_dets = {}  # host_id -> set(detection_id)
+            if all_host_ids and all_step_det_ids_flat:
                 hp = ",".join("?" for _ in all_host_ids)
+                dp = ",".join("?" for _ in all_step_det_ids_flat)
                 ad_rows = conn.execute(
-                    f"SELECT host_id, detection_id FROM applied_detections WHERE host_id IN ({hp})",
-                    all_host_ids,
+                    f"SELECT host_id, detection_id FROM applied_detections "
+                    f"WHERE host_id IN ({hp}) AND detection_id IN ({dp})",
+                    all_host_ids + list(all_step_det_ids_flat),
                 ).fetchall()
-                all_det_ids = set()
                 for hid, did in ad_rows:
-                    host_det_map.setdefault(hid, set()).add(did)
-                    all_det_ids.add(did)
+                    host_applied_dets.setdefault(hid, set()).add(did)
 
-                # Batch: get all rule_refs for all detection IDs in one query
-                det_to_rule = {}
-                if all_det_ids:
-                    det_list = list(all_det_ids)
-                    dp = ",".join("?" for _ in det_list)
-                    vd_rows = conn.execute(
-                        f"SELECT id, rule_ref FROM vuln_detections WHERE id IN ({dp})",
-                        det_list,
-                    ).fetchall()
-                    for did, rref in vd_rows:
-                        if rref:
-                            det_to_rule[did] = rref.lower()
-
-                # Build system_applied_rules from batch results
-                for sid in all_system_ids:
-                    names = set()
-                    for hid in sys_hosts.get(sid, []):
-                        for did in host_det_map.get(hid, set()):
-                            rref = det_to_rule.get(did)
-                            if rref:
-                                names.add(rref)
-                    system_applied_rules[sid] = names
-            else:
-                for sid in all_system_ids:
-                    system_applied_rules[sid] = set()
+            for sid in all_system_ids:
+                det_ids_for_sys = set()
+                for hid in sys_hosts.get(sid, []):
+                    det_ids_for_sys |= host_applied_dets.get(hid, set())
+                system_applied_det_ids[sid] = det_ids_for_sys
+        else:
+            for sid in all_system_ids:
+                system_applied_det_ids[sid] = set()
 
     # Compute worst status per playbook
-    # Priority: red > amber > green
-    STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2}
+    # Priority: red > amber > grey > green
+    STATUS_PRIORITY = {"red": 0, "amber": 1, "grey": 2, "green": 3}
 
     results = []
     for pb_id, pb_name, pb_desc in pbs:
@@ -1719,16 +1818,19 @@ def get_baselines_overview() -> List[Dict]:
 
         if system_ids and step_ids_for_pb:
             for step_id in step_ids_for_pb:
-                det_refs = step_det_refs.get(step_id, set())
+                det_ids = step_det_id_sets.get(step_id, set())
                 bs_systems = step_blind_spots.get(step_id, set())
+                na_systems = step_na_spots.get(step_id, set())
                 for sys_id in system_ids:
-                    if sys_id in bs_systems:
-                        status = "amber"
-                    elif det_refs and (det_refs & system_applied_rules.get(sys_id, set())):
+                    if det_ids and (det_ids & system_applied_det_ids.get(sys_id, set())):
                         status = "green"
+                    elif sys_id in na_systems:
+                        status = "grey"
+                    elif sys_id in bs_systems:
+                        status = "amber"
                     else:
                         status = "red"
-                    if STATUS_PRIORITY.get(status, 3) < STATUS_PRIORITY.get(worst, 3):
+                    if STATUS_PRIORITY.get(status, 4) < STATUS_PRIORITY.get(worst, 4):
                         worst = status
                     if worst == "red":
                         break
@@ -1986,14 +2088,20 @@ def get_system_baselines(system_id: str) -> List[Dict]:
             [system_id],
         ).fetchall()
 
-    # Get all detection rules with names — for matching required_rule against applied detections
-    all_rules = _get_all_rule_names()
-
-    # Get all applied detections for this system's hosts
+    # Get applied detections for this system's hosts (by step_detection ID)
     hosts = list_hosts(system_id)
     host_ids = {h.id for h in hosts}
 
-    applied_rules = _get_applied_rule_names_for_hosts(host_ids)
+    # Build set of step_detection IDs that have been applied to at least one host
+    applied_step_det_ids: set = set()
+    if host_ids:
+        with _get_conn() as conn2:
+            hp = ",".join("?" for _ in host_ids)
+            ad_rows = conn2.execute(
+                f"SELECT DISTINCT detection_id FROM applied_detections WHERE host_id IN ({hp})",
+                list(host_ids),
+            ).fetchall()
+            applied_step_det_ids = {r[0] for r in ad_rows}
 
     # Load blind spots for all tactics in one pass
     all_step_blind_spots = _load_all_blind_spots("tactic")
@@ -2013,26 +2121,42 @@ def get_system_baselines(system_id: str) -> List[Dict]:
         steps = _get_playbook_steps(pb_id)
         step_results = []
         covered = 0
-        blind_spot_count = 0
+        gap_count = 0
+        na_count = 0
         for step in steps:
-            # Check blind spot first
+            # Check blind spots — distinguish gap vs na
             step_bs = all_step_blind_spots.get(step.id, [])
-            has_blind_spot = any(bs.system_id == system_id for bs in step_bs)
-            bs_reason = next((bs.reason for bs in step_bs if bs.system_id == system_id), "")
+            sys_blind_spots = [bs for bs in step_bs if bs.system_id == system_id]
+            has_na = any(bs.override_type == "na" for bs in sys_blind_spots)
+            has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
+            bs_reason = next((bs.reason for bs in sys_blind_spots), "")
 
-            # Check if any detection rule for this step is applied
-            # Use step_detections for coverage matching
-            det_refs = {d.rule_ref.lower() for d in step.detections if d.rule_ref}
-            is_applied = bool(det_refs & applied_rules) if det_refs else False
+            # Check if any detection for this step is applied to a host on this system
+            step_det_ids = {d.id for d in step.detections}
+            is_applied = bool(step_det_ids & applied_step_det_ids) if step_det_ids else False
 
-            if has_blind_spot:
-                status = "amber"
-                blind_spot_count += 1
-            elif is_applied:
+            # 4-tier: green > grey > amber > red
+            if is_applied:
                 status = "green"
                 covered += 1
+            elif has_na:
+                status = "grey"
+                na_count += 1
+            elif has_gap:
+                status = "amber"
+                gap_count += 1
             else:
                 status = "red"
+
+            # Split detections into applied/unapplied for this system
+            step_applied = []
+            step_unapplied = []
+            for d in step.detections:
+                label = d.rule_ref or d.note or "Rule"
+                if d.id in applied_step_det_ids:
+                    step_applied.append({"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label})
+                else:
+                    step_unapplied.append({"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label})
 
             step_results.append({
                 "step_id": step.id,
@@ -2043,6 +2167,7 @@ def get_system_baselines(system_id: str) -> List[Dict]:
                 "description": step.description,
                 "status": status,
                 "blind_spot_reason": bs_reason,
+                "override_type": "na" if has_na else ("gap" if has_gap else ""),
                 "techniques": [
                     {
                         "technique_id": t.technique_id,
@@ -2051,10 +2176,14 @@ def get_system_baselines(system_id: str) -> List[Dict]:
                     }
                     for t in step.techniques
                 ],
-                "detections": [{"rule_ref": d.rule_ref, "note": d.note} for d in step.detections],
+                "detections": [{"id": d.id, "rule_ref": d.rule_ref, "note": d.note} for d in step.detections],
+                "applied_dets": step_applied,
+                "unapplied_dets": step_unapplied,
             })
         total = len(steps)
-        pct = round(covered / total * 100) if total else 0
+        # New math: Green / (Total - Grey) * 100
+        effective_total = total - na_count
+        pct = round(covered / effective_total * 100) if effective_total else (100 if total else 0)
         result.append({
             "baseline_id": sb_id,
             "playbook_id": pb_id,
@@ -2064,7 +2193,8 @@ def get_system_baselines(system_id: str) -> List[Dict]:
             "tactics": step_results,
             "total_steps": total,
             "covered_steps": covered,
-            "grey_steps": blind_spot_count,
+            "gap_steps": gap_count,
+            "na_steps": na_count,
             "coverage_pct": pct,
         })
     return result
@@ -2300,10 +2430,11 @@ def get_playbook_step(step_id: str) -> Optional[PlaybookStep]:
 
 def get_step_affected_systems(step_id: str) -> List[Dict]:
     """Get systems where the baseline containing this tactic is applied, with per-system RAG status.
-    RAG logic: GREEN = all detections directly applied OR rule-name match (detected)
-               AMBER = some detections directly applied (known gap)
-               RED   = no detections applied (missing)
-               GREY  = blind spot documented
+    4-tier RAG logic:
+      GREEN = detection rule applied (covered)
+      AMBER = user explicitly marked as known gap (override_type='gap')
+      GREY  = user explicitly marked as N/A (override_type='na')
+      RED   = no action taken (default)
     Also returns per-system applied_dets / unapplied_dets for the apply-to-system UI."""
     step = get_playbook_step(step_id)
     if not step:
@@ -2345,29 +2476,30 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
         system_description = sys_obj.description if sys_obj else ""
         hosts = list_hosts(system_id)
         host_ids = {h.id for h in hosts}
-        applied_rules = _get_applied_rule_names_for_hosts(host_ids)
 
-        # Check legacy rule-name matching
-        is_name_matched = bool(det_rule_refs & applied_rules) if det_rule_refs else False
-
-        # Check direct application: detection applied to ALL hosts in system
+        # Check direct application: detection applied to at least one host in system
         sys_applied = []
         sys_unapplied = []
         for d in step.detections:
             det_hosts = applied_host_map.get(d.id, set())
-            if host_ids and all(h in det_hosts for h in host_ids):
+            if host_ids and (det_hosts & host_ids):
                 sys_applied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
             else:
                 sys_unapplied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
 
-        # Check for blind spot on this system
-        has_blind_spot = any(bs.system_id == system_id for bs in blind_spots)
-        bs_reason = next((bs.reason for bs in blind_spots if bs.system_id == system_id), "")
+        # Check for blind spot on this system — distinguish gap vs na
+        sys_blind_spots = [bs for bs in blind_spots if bs.system_id == system_id]
+        has_na = any(bs.override_type == "na" for bs in sys_blind_spots)
+        has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
+        bs_reason = next((bs.reason for bs in sys_blind_spots), "")
 
-        if has_blind_spot:
-            status = "amber"
-        elif sys_applied or is_name_matched:
+        # 4-tier status: green > grey > amber > red
+        if sys_applied:
             status = "green"
+        elif has_na:
+            status = "grey"
+        elif has_gap:
+            status = "amber"
         else:
             status = "red"
 
@@ -2378,7 +2510,8 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
             "host_count": len(hosts),
             "status": status,
             "blind_spot_reason": bs_reason,
-            "matched_rules": sorted(det_rule_refs & applied_rules) if is_name_matched else [],
+            "override_type": "na" if has_na else ("gap" if has_gap else ""),
+            "matched_rules": [],
             "applied_dets": sys_applied,
             "unapplied_dets": sys_unapplied,
         })
@@ -2391,16 +2524,20 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
 
 def add_blind_spot(entity_type: str, entity_id: str, reason: str,
                    system_id: str = None, host_id: str = None,
-                   created_by: str = "") -> BlindSpot:
-    """Record a known blind spot (negative coverage)."""
+                   created_by: str = "", override_type: str = "gap") -> BlindSpot:
+    """Record a known blind spot (negative coverage).
+    override_type: 'gap' (amber/known gap) or 'na' (grey/not applicable)."""
+    if override_type not in ("gap", "na"):
+        override_type = "gap"
     with _get_conn() as conn:
         r = conn.execute(
-            "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by) "
-            "VALUES (?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at",
-            [entity_type, entity_id, system_id, host_id, reason, created_by],
+            "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
+            [entity_type, entity_id, system_id, host_id, reason, created_by, override_type],
         ).fetchone()
     return BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                     host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7])
+                     host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
+                     override_type=r[8] if r[8] else "gap")
 
 
 def remove_blind_spot(blind_spot_id: str) -> bool:
@@ -2413,24 +2550,28 @@ def get_blind_spots(entity_type: str, entity_id: str) -> List[BlindSpot]:
     """Get all blind spots for a given entity (CVE or step)."""
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
+            "COALESCE(override_type, 'gap') "
             "FROM blind_spots WHERE entity_type = ? AND entity_id = ? ORDER BY created_at",
             [entity_type, entity_id],
         ).fetchall()
     return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7]) for r in rows]
+                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
+                      override_type=r[8]) for r in rows]
 
 
 def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
     """Get all blind spots affecting a system (by system_id or by host_id belonging to system)."""
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at "
+            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
+            "COALESCE(override_type, 'gap') "
             "FROM blind_spots WHERE system_id = ? ORDER BY created_at",
             [system_id],
         ).fetchall()
         host_rows = conn.execute(
-            "SELECT bs.id, bs.entity_type, bs.entity_id, bs.system_id, bs.host_id, bs.reason, bs.created_by, bs.created_at "
+            "SELECT bs.id, bs.entity_type, bs.entity_id, bs.system_id, bs.host_id, bs.reason, bs.created_by, bs.created_at, "
+            "COALESCE(bs.override_type, 'gap') "
             "FROM blind_spots bs JOIN hosts h ON h.id = bs.host_id WHERE h.system_id = ? ORDER BY bs.created_at",
             [system_id],
         ).fetchall()
@@ -2438,4 +2579,5 @@ def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
     for r in host_rows:
         all_rows[r[0]] = r
     return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7]) for r in all_rows.values()]
+                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
+                      override_type=r[8]) for r in all_rows.values()]

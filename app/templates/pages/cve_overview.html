@@ -93,14 +93,14 @@ async function uploadFile(inputId, endpoint, targetId, successMsg) {
     const inp = document.getElementById(inputId);
     if (!inp || !inp.files.length) return;
     const status = document.getElementById('upload-status');
-    if (status) status.textContent = '⏳ Uploading…';
+    if (status) status.textContent = 'Uploading...';
     const fd = new FormData();
     fd.append('file', inp.files[0]);
     inp.value = ''; // reset so same file can be re-selected
     try {
         const resp = await fetch(endpoint, { method: 'POST', body: fd });
         if (resp.redirected || resp.status === 401) {
-            if (status) status.textContent = '⚠ Session expired — please reload the page.';
+            if (status) status.textContent = 'Session expired - please reload the page.';
             return;
         }
         const html = await resp.text();
@@ -110,21 +110,21 @@ async function uploadFile(inputId, endpoint, targetId, successMsg) {
                 target.innerHTML = html;
                 htmx.process(target);
             }
-            if (status) status.textContent = successMsg || '✓ Done';
+            if (status) status.textContent = successMsg || 'Done';
             setTimeout(() => { if (status) status.textContent = ''; }, 4000);
         } else {
-            if (status) status.textContent = '✗ Error: ' + (resp.status);
+            if (status) status.textContent = 'Error: ' + (resp.status);
         }
     } catch (err) {
-        if (status) status.textContent = '✗ ' + err.message;
+        if (status) status.textContent = err.message;
     }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('cisa-kev-upload').addEventListener('change', () =>
-        uploadFile('cisa-kev-upload', '/api/inventory/feed/cisa', 'cve-table-container', '✓ CVE data imported'));
+        uploadFile('cisa-kev-upload', '/api/inventory/feed/cisa', 'cve-table-container', 'CVE data imported'));
     document.getElementById('mitre-map-upload').addEventListener('change', () =>
-        uploadFile('mitre-map-upload', '/api/inventory/feed/mitre-mapping', 'upload-status', '✓ MITRE map updated'));
+        uploadFile('mitre-map-upload', '/api/inventory/feed/mitre-mapping', 'upload-status', 'MITRE map updated'));
 });
 </script>
 {% endblock %}

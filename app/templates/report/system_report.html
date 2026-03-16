@@ -207,7 +207,7 @@ tr:nth-child(even){background:rgba(255,255,255,.02)}
     <h2 class="section-title">Baseline Coverage</h2>
     <table>
         <thead>
-            <tr><th>Baseline</th><th>Tactics</th><th>Covered</th><th>Gaps</th><th>Coverage</th></tr>
+            <tr><th>Baseline</th><th>Tactics</th><th>Covered</th><th>Gaps</th><th>N/A</th><th>Coverage</th></tr>
         </thead>
         <tbody>
             {% for bl in report.baselines %}
@@ -215,7 +215,8 @@ tr:nth-child(even){background:rgba(255,255,255,.02)}
                 <td style="font-weight:600;">{{ bl.playbook_name }}</td>
                 <td>{{ bl.total_steps }}</td>
                 <td><span class="badge badge-amber">{{ bl.covered_steps }}</span></td>
-                <td><span class="badge badge-red">{{ bl.total_steps - bl.covered_steps }}</span></td>
+                <td><span class="badge badge-red">{{ bl.total_steps - bl.covered_steps - (bl.na_steps or 0) }}</span></td>
+                <td><span class="badge" style="background:rgba(128,128,128,.12);color:var(--color-muted);">{{ bl.na_steps or 0 }}</span></td>
                 <td>
                     <span class="badge {% if bl.coverage_pct >= 75 %}badge-green{% elif bl.coverage_pct >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ bl.coverage_pct }}%</span>
                     <div class="coverage-bar" style="margin-top:0.2rem;"><div class="fill {% if bl.coverage_pct >= 75 %}good{% elif bl.coverage_pct >= 50 %}warn{% else %}bad{% endif %}" style="width:{{ bl.coverage_pct }}%"></div></div>

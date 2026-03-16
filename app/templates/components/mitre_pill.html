@@ -46,7 +46,7 @@ Parameters:
     hx-swap="innerHTML"
     style="cursor: pointer;"
     {% endif %}
-    title="{{ technique_id }}{% if covered %} ✓ Covered{% else %} ✗ Gap{% endif %}{% if rule_count > 0 %} • {{ rule_count }} rule{{ 's' if rule_count > 1 else '' }}{% endif %}">
+    title="{{ technique_id }}{% if covered %} Covered{% else %} Gap{% endif %}{% if rule_count > 0 %} - {{ rule_count }} rule{{ 's' if rule_count > 1 else '' }}{% endif %}">
     {{ technique_id }}{% if rule_count > 0 %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
 </span>
 {% endmacro %}

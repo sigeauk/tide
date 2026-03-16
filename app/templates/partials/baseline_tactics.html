@@ -1,5 +1,5 @@
 {# Partial: baseline_tactics.html — Techniques grouped by MITRE Kill Chain Phase
-   Context: baseline (Baseline with tactics list)
+   Context: baseline (Baseline with tactics list), step_coverage (dict step_id -> [{system_id, system_name, status}])
 #}
 {% from "macros/icons.html" import icon %}
 
@@ -7,6 +7,8 @@
     "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
     "Discovery","Lateral Movement","Collection","Command and Control",
     "Exfiltration","Impact","Other"] %}
+
+{% set STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2, "grey": 3} %}
 
 {% if baseline.tactics %}
 {# Build ordered list of phases that have techniques #}
@@ -44,37 +46,92 @@
         <span class="badge badge-neutral" style="font-size:0.68rem;">{{ ns_tc.count }} technique{{ 's' if ns_tc.count != 1 }}</span>
     </div>
 
-    <!-- Techniques under this phase -->
+    <!-- Technique cards under this phase -->
     <div style="display:flex;flex-direction:column;gap:0.5rem;">
     {% for step in baseline.tactics %}
     {% if (step.tactic or "Other") == tactic %}
-    <div class="cve-card-item" style="cursor:pointer;padding:0.75rem 0.85rem;border-radius:var(--radius-md);"
+
+    {# Compute per-system coverage for this step #}
+    {% set cov = step_coverage.get(step.id, []) if step_coverage is defined else [] %}
+
+    {# Compute worst-case status #}
+    {% set ns_worst = namespace(val=4) %}
+    {% for c in cov %}
+      {% set p = STATUS_PRIORITY.get(c.status, 4) %}
+      {% if p < ns_worst.val %}{% set ns_worst.val = p %}{% endif %}
+    {% endfor %}
+    {% if cov %}
+      {% if ns_worst.val == 0 %}{% set worst = "red" %}
+      {% elif ns_worst.val == 1 %}{% set worst = "amber" %}
+      {% elif ns_worst.val == 2 %}{% set worst = "green" %}
+      {% else %}{% set worst = "grey" %}{% endif %}
+    {% else %}
+      {% set worst = "none" %}
+    {% endif %}
+
+    {# Count per-status #}
+    {% set ns_g = namespace(c=0) %}{% set ns_a = namespace(c=0) %}{% set ns_r = namespace(c=0) %}{% set ns_y = namespace(c=0) %}
+    {% set ns_gn = namespace(names=[]) %}{% set ns_an = namespace(names=[]) %}{% set ns_rn = namespace(names=[]) %}{% set ns_yn = namespace(names=[]) %}
+    {% for c in cov %}
+      {% if c.status == 'green' %}{% set ns_g.c = ns_g.c + 1 %}{% set ns_gn.names = ns_gn.names + [c.system_name] %}
+      {% elif c.status == 'amber' %}{% set ns_a.c = ns_a.c + 1 %}{% set ns_an.names = ns_an.names + [c.system_name] %}
+      {% elif c.status == 'red' %}{% set ns_r.c = ns_r.c + 1 %}{% set ns_rn.names = ns_rn.names + [c.system_name] %}
+      {% elif c.status == 'grey' %}{% set ns_y.c = ns_y.c + 1 %}{% set ns_yn.names = ns_yn.names + [c.system_name] %}
+      {% endif %}
+    {% endfor %}
+
+    {# Build JSON coverage data for JS filtering #}
+    {% set cov_json = [] %}
+    {% for c in cov %}
+      {% set _ = cov_json.append('{"sid":"' ~ c.system_id ~ '","n":"' ~ c.system_name ~ '","s":"' ~ c.status ~ '"}') %}
+    {% endfor %}
+
+    <div class="tech-card tech-card--{{ worst }}"
+         data-step-id="{{ step.id }}"
+         data-coverage='[{{ cov_json | join(",") }}]'
          onclick="window.location='/baselines/{{ baseline.id }}/tactics/{{ step.id }}'">
-        <div style="flex:1;min-width:0;">
+        <div class="tech-card__body">
             <div style="display:flex;align-items:center;gap:0.5rem;">
+                {% if step.technique_id %}
+                <span style="font-family:monospace;font-size:0.78rem;color:var(--color-text-muted);font-weight:600;">{{ step.technique_id }}</span>
+                <span style="color:var(--color-text-muted);font-size:0.7rem;">—</span>
+                {% endif %}
                 <a href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
-                   style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;"
+                   class="tech-card__title tech-card__title--{{ worst }}"
                    onclick="event.stopPropagation();">{{ step.title }}</a>
             </div>
             {% if step.description %}
-            <div style="font-size:0.78rem;color:var(--color-muted);margin-top:0.15rem;">
-                {{ step.description[:100] }}{% if step.description|length > 100 %}…{% endif %}
-            </div>
+            <div class="tech-card__desc">{{ step.description[:120] }}{% if step.description|length > 120 %}…{% endif %}</div>
             {% endif %}
         </div>
-        {# Right: pills with hover tooltips #}
-        <div style="display:flex;gap:0.4rem;flex-shrink:0;align-items:center;">
-            {% if step.techniques is defined and step.techniques %}
-            <span class="status-pill" style="font-size:0.65rem;padding:0.1rem 0.4rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.25);"
-                  title="{{ step.techniques | length }} technique{{ 's' if step.techniques | length != 1 }}">
-                {{ icon('crosshair','9') }} {{ step.techniques | length }}
+        {# Right: rollup counters #}
+        <div class="tech-card__rollups" data-rollups>
+            {% if ns_g.c > 0 %}
+            <span class="tech-rollup tech-rollup--green" data-rollup="green">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-success);display:inline-block;"></span> {{ ns_g.c }}
+                <span class="tech-rollup__tip">Covered: {{ ns_gn.names | join(', ') }}</span>
             </span>
             {% endif %}
-            {% if step.detections is defined and step.detections %}
-            <span class="status-pill" style="font-size:0.65rem;padding:0.1rem 0.4rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.25);"
-                  title="{{ step.detections | length }} detection{{ 's' if step.detections | length != 1 }}">
-                {{ icon('shield','9') }} {{ step.detections | length }}
+            {% if ns_a.c > 0 %}
+            <span class="tech-rollup tech-rollup--amber" data-rollup="amber">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-warning);display:inline-block;"></span> {{ ns_a.c }}
+                <span class="tech-rollup__tip">Known Gap: {{ ns_an.names | join(', ') }}</span>
             </span>
+            {% endif %}
+            {% if ns_r.c > 0 %}
+            <span class="tech-rollup tech-rollup--red" data-rollup="red">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-danger);display:inline-block;"></span> {{ ns_r.c }}
+                <span class="tech-rollup__tip">Missing: {{ ns_rn.names | join(', ') }}</span>
+            </span>
+            {% endif %}
+            {% if ns_y.c > 0 %}
+            <span class="tech-rollup tech-rollup--grey" data-rollup="grey">
+                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-muted);display:inline-block;"></span> {{ ns_y.c }}
+                <span class="tech-rollup__tip">N/A: {{ ns_yn.names | join(', ') }}</span>
+            </span>
+            {% endif %}
+            {% if not cov %}
+            <span class="badge badge-neutral" style="font-size:0.65rem;">No systems</span>
             {% endif %}
         </div>
     </div>

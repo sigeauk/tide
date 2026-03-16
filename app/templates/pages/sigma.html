@@ -691,10 +691,10 @@ window.uploadCustomPipeline = async function(inputEl) {
         const hidden = document.getElementById('form-custom-pipeline');
         if (hidden) hidden.value = data.content;
 
-        statusEl.textContent = `✓ ${data.filename} (${data.item_count} items)`;
+        statusEl.textContent = `${data.filename} (${data.item_count} items)`;
         statusEl.style.color = 'var(--color-success, #3fb950)';
     } catch (e) {
-        statusEl.textContent = `✗ ${e.message}`;
+        statusEl.textContent = `${e.message}`;
         statusEl.style.color = 'var(--color-danger, #f85149)';
         // Clear stored pipeline on error
         const hidden = document.getElementById('form-custom-pipeline');

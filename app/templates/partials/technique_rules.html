@@ -1,4 +1,5 @@
 <!-- Technique Rules List Partial -->
+{% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% if rules %}
 <div class="rules-list">
@@ -30,7 +31,7 @@
                 {{ rule.author or 'Unknown' }}
             </span>
             <span class="rule-status {{ 'enabled' if rule.enabled else 'disabled' }}" title="Status">
-                {{ '✓ Enabled' if rule.enabled else '✗ Disabled' }}
+                {% if rule.enabled %}{{ icon('check','12') }} Enabled{% else %}{{ icon('x','12') }} Disabled{% endif %}
             </span>
         </div>
         {% if rule.mitre_ids %}

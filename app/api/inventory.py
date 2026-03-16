@@ -59,6 +59,7 @@ from app.inventory_engine import (
     add_step_technique, remove_step_technique, update_step_technique,
     add_step_detection, remove_step_detection,
     update_playbook_step, get_playbook_step, get_step_affected_systems,
+    get_baseline_step_coverage,
     # Blind Spots
     add_blind_spot, remove_blind_spot, get_blind_spots,
 )
@@ -780,12 +781,14 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser):
         ).fetchall()
     applied_systems = [{"system_id": r[0], "system_name": r[1]} for r in sys_rows]
     all_systems = list_systems()
+    step_coverage = get_baseline_step_coverage(baseline_id)
     return _render("pages/baseline_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "user": user,
         "mitre_tactics": MITRE_TACTICS,
         "tactic_groups": tactic_groups,
         "applied_systems": applied_systems,
         "all_systems": all_systems,
+        "step_coverage": step_coverage,
     })
 
 
@@ -895,7 +898,7 @@ def _build_technique_rules(step):
         rules = db.get_rules_for_technique(tid, enabled_only=False)
         technique_rules[tid] = {
             "has_detection": tid in covered_ttps,
-            "rule_count": len([r for r in rules if r.enabled]),
+            "rule_count": len(rules),
             "rules": rules,
         }
     return technique_rules
@@ -1038,6 +1041,10 @@ async def api_apply_step_detection(request: Request, tactic_id: str, detection_i
     if not system_id:
         raise HTTPException(status_code=422, detail="system_id is required")
     apply_detection(detection_id, system_id=system_id)
+    # Return appropriate partial based on caller context
+    hx_target = request.headers.get("HX-Target", "")
+    if hx_target == "baseline-coverage":
+        return _render_system_baseline_coverage(request, system_id)
     return _render_tactic_affected_section(request, tactic_id)
 
 
@@ -1045,6 +1052,9 @@ async def api_apply_step_detection(request: Request, tactic_id: str, detection_i
 def api_remove_step_detection_for_system(request: Request, tactic_id: str, detection_id: str, system_id: str, user: RequireUser):
     """Remove a tactic detection from all hosts in a system."""
     remove_detection_for_system(detection_id, system_id)
+    hx_target = request.headers.get("HX-Target", "")
+    if hx_target == "baseline-coverage":
+        return _render_system_baseline_coverage(request, system_id)
     return _render_tactic_affected_section(request, tactic_id)
 
 
@@ -1054,6 +1064,15 @@ def _render_tactic_affected_section(request: Request, tactic_id: str):
     blind_spots = get_blind_spots("tactic", tactic_id)
     return _render("partials/tactic_affected_systems.html", request, {
         "step_id": tactic_id, "affected_systems": affected, "blind_spots": blind_spots,
+    })
+
+
+def _render_system_baseline_coverage(request: Request, system_id: str):
+    """Helper: re-render the baseline coverage section for a system."""
+    baselines = get_system_baselines(system_id)
+    playbooks = list_playbooks()
+    return _render("partials/baseline_coverage.html", request, {
+        "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
     })
 
 
@@ -1068,11 +1087,12 @@ def api_add_blind_spot(
     reason: str = Form(...),
     system_id: str = Form(None), host_id: str = Form(None),
     redirect_target: str = Form(""),
+    override_type: str = Form("gap"),
 ):
     username = user.username if user else ""
     add_blind_spot(entity_type, entity_id, reason,
                    system_id=system_id or None, host_id=host_id or None,
-                   created_by=username)
+                   created_by=username, override_type=override_type or "gap")
     # Return the appropriate partial based on context
     if entity_type == "cve" and entity_id:
         cve = get_cve_detail(entity_id)
@@ -1089,6 +1109,9 @@ def api_add_blind_spot(
                 "blind_spots": cve_blind_spots,
             })
     if entity_type == "tactic" and entity_id:
+        hx_target = request.headers.get("HX-Target", "")
+        if hx_target == "baseline-coverage" and system_id:
+            return _render_system_baseline_coverage(request, system_id)
         return _render_tactic_affected_section(request, entity_id)
     return HTMLResponse("")
 

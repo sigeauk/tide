@@ -1,19 +1,21 @@
 {% from "macros/icons.html" import icon %}
-{% from "components/mitre_pill.html" import mitre_pill %}
 
 {% if baselines %}
 {% for bl in baselines %}
 <div class="card" style="padding:1rem;margin-bottom:0.75rem;">
     <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
-         onclick="var b=document.getElementById('bl-body-{{ loop.index }}');var c=document.getElementById('bl-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+         onclick="var b=document.getElementById('bl-body-{{ bl.playbook_id }}');var c=document.getElementById('bl-chev-{{ bl.playbook_id }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
             <a href="/baselines/{{ bl.playbook_id }}" style="font-weight:600;color:var(--text-primary);text-decoration:none;font-size:0.95rem;display:inline-flex;align-items:center;gap:0.35rem;" onclick="event.stopPropagation();">
                 {{ icon('clipboard-list','14') }} {{ bl.playbook_name }}
             </a>
             <span style="font-size:0.75rem;color:var(--color-muted);">
-                {{ bl.covered_steps }}/{{ bl.total_steps }} techniques covered · {{ bl.coverage_pct }}%
-                {% if bl.grey_steps is defined and bl.grey_steps %}
-                · <span style="color:var(--color-warning);">{{ bl.grey_steps }} blind spot{{ 's' if bl.grey_steps != 1 }}</span>
+                {{ bl.covered_steps }}/{{ bl.total_steps - bl.na_steps }} techniques covered · {{ bl.coverage_pct }}%
+                {% if bl.gap_steps is defined and bl.gap_steps %}
+                · <span style="color:var(--color-warning);">{{ bl.gap_steps }} known gap{{ 's' if bl.gap_steps != 1 }}</span>
+                {% endif %}
+                {% if bl.na_steps is defined and bl.na_steps %}
+                · <span style="color:var(--color-muted);">{{ bl.na_steps }} N/A</span>
                 {% endif %}
             </span>
         </div>
@@ -27,7 +29,7 @@
                     style="font-size:0.75rem;">
                 {{ icon('x', '12') }} Remove
             </button>
-            <span id="bl-chev-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '16') }}</span>
+            <span id="bl-chev-{{ bl.playbook_id }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '16') }}</span>
         </div>
     </div>
     <!-- Progress bar (always visible) -->
@@ -37,70 +39,125 @@
                     transition:width 0.3s ease;"></div>
     </div>
 
-    <!-- Collapsible body (legend + techniques) -->
-    <div id="bl-body-{{ loop.index }}" style="display:none;">
-        <!-- Legend -->
-        <div class="det-color-key" style="margin-top:0.75rem;margin-bottom:0.5rem;font-size:0.72rem;">
-            <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-success);"></span> Detected</span>
-            <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:#f0ad4e;"></span> Blind Spot</span>
-            <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:#d9534f;"></span> Missing</span>
-        </div>
+    <!-- Collapsible body — tech-cards grouped by kill chain phase -->
+    <div id="bl-body-{{ bl.playbook_id }}" style="display:none;margin-top:0.75rem;">
+        {# Kill chain phase ordering #}
+        {% set KILL_CHAIN = ["Reconnaissance","Resource Development","Initial Access","Execution",
+            "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
+            "Discovery","Lateral Movement","Collection","Command and Control",
+            "Exfiltration","Impact","Other"] %}
+        {# Build ordered unique phases #}
+        {% set ns_o = namespace(order=[]) %}
+        {% for t in bl.tactics %}
+          {% set tac = t.tactic or "Other" %}
+          {% if tac not in ns_o.order %}{% set ns_o.order = ns_o.order + [tac] %}{% endif %}
+        {% endfor %}
+        {% set ns_s = namespace(phases=[]) %}
+        {% for kc in KILL_CHAIN %}
+          {% if kc in ns_o.order %}{% set ns_s.phases = ns_s.phases + [kc] %}{% endif %}
+        {% endfor %}
+        {% for p in ns_o.order %}
+          {% if p not in ns_s.phases %}{% set ns_s.phases = ns_s.phases + [p] %}{% endif %}
+        {% endfor %}
 
-        <!-- Tactics -->
-        <div style="display:flex;flex-direction:column;gap:0;">
-        {% for step in bl.tactics %}
-        <div style="display:flex;align-items:center;gap:0.75rem;padding:0.5rem 0;
-                    {% if not loop.last %}border-bottom:1px dashed var(--border-color);{% endif %}">
-            <!-- RAG indicator -->
-            {% if step.status == 'green' %}
-            <span style="width:10px;height:10px;border-radius:50%;background:var(--color-success);flex-shrink:0;" title="Detected"></span>
-            {% elif step.status == 'amber' %}
-            <span style="width:10px;height:10px;border-radius:50%;background:#f0ad4e;flex-shrink:0;" title="Blind Spot"></span>
-            {% else %}
-            <span style="width:10px;height:10px;border-radius:50%;background:#d9534f;flex-shrink:0;" title="Missing"></span>
-            {% endif %}
-            <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);min-width:24px;flex-shrink:0;">{{ step.step_number }}.</span>
-            {% if step.step_id is defined and step.step_id %}
-            <a href="/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}" style="font-size:0.85rem;color:var(--color-primary);text-decoration:none;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ step.title }}</a>
-            {% else %}
-            <span style="font-size:0.85rem;color:var(--text-primary);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ step.title }}</span>
-            {% endif %}
-            {# Right-aligned group: tactic, pills, detection count, blind spot #}
-            <span style="display:inline-flex;align-items:center;gap:0.5rem;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;">
-                {% if step.tactic is defined and step.tactic %}
-                <span class="badge badge-neutral" style="font-size:0.62rem;">{{ step.tactic }}</span>
-                {% endif %}
-                {# MITRE technique pills - per-technique coverage from Sigma/SIEM rules #}
-                {% if step.techniques is defined and step.techniques %}
-                {% for t in step.techniques %}
-                {{ mitre_pill(t.technique_id, covered=t.get('has_detection', false), rule_count=t.get('rule_count', 0)) }}
-                {% endfor %}
-                {% elif step.technique_id %}
-                {{ mitre_pill(step.technique_id, covered=false) }}
-                {% endif %}
-                {# Detection rule count badge #}
-                {% if step.detections is defined and step.detections %}
-                <span class="badge" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.2rem;
-                            background:{% if step.status == 'green' %}rgba(34,197,94,.12);color:var(--color-success);border:1px solid rgba(34,197,94,.3){% elif step.status == 'amber' %}rgba(240,173,78,.12);color:var(--color-warning);border:1px solid rgba(240,173,78,.3){% else %}rgba(217,83,79,.12);color:var(--color-danger);border:1px solid rgba(217,83,79,.3){% endif %};"
-                      title="{{ step.detections | map(attribute='rule_ref') | select | join(', ') }}">
-                    {{ icon('shield','10') }} {{ step.detections | length }}
+        {% for tactic in ns_s.phases %}
+        <div style="margin-bottom:0.75rem;">
+            <!-- Phase header -->
+            <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.4rem;padding-bottom:0.3rem;border-bottom:2px solid var(--color-info);">
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
+                    {{ icon('crosshair','12') }}
                 </span>
-                {% endif %}
-                {% if step.status == 'amber' and step.blind_spot_reason is defined and step.blind_spot_reason %}
-                <span style="font-size:0.68rem;color:var(--color-text-muted);font-style:italic;" title="{{ step.blind_spot_reason }}">
-                    {{ icon('info','10') }} {{ step.blind_spot_reason[:40] }}{% if step.blind_spot_reason|length > 40 %}…{% endif %}
-                </span>
-                {% endif %}
-                {% if step.status == 'red' and step.step_id is defined %}
-                <button class="btn btn-sm" style="font-size:0.6rem;padding:0.1rem 0.35rem;color:var(--color-text-muted);border-color:var(--color-border-muted);flex-shrink:0;"
-                        onclick="openBaselineBlindSpotModal('{{ step.step_id }}','{{ step.title }}','{{ system_id }}')">
-                    {{ icon('eye-off','9') }} Blind Spot
-                </button>
-                {% endif %}
-            </span>
+                <h4 style="margin:0;font-size:0.85rem;font-weight:700;color:var(--color-primary);">{{ tactic }}</h4>
+                {% set ns_tc = namespace(count=0) %}
+                {% for s in bl.tactics %}{% if (s.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
+                <span class="badge badge-neutral" style="font-size:0.6rem;">{{ ns_tc.count }}</span>
+            </div>
+
+            <!-- Tech cards -->
+            <div style="display:flex;flex-direction:column;gap:0.4rem;">
+            {% for step in bl.tactics %}
+            {% if (step.tactic or "Other") == tactic %}
+            <div class="tech-card tech-card--{{ step.status }}">
+                <div class="tech-card__body"
+                     style="cursor:pointer;"
+                     {% if step.step_id is defined and step.step_id %}onclick="window.location='/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}'"{% endif %}>
+                    <div style="display:flex;align-items:center;gap:0.5rem;">
+                        {% if step.technique_id %}
+                        <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">{{ step.technique_id }}</span>
+                        <span style="color:var(--color-text-muted);font-size:0.65rem;">&mdash;</span>
+                        {% endif %}
+                        {% if step.step_id is defined and step.step_id %}
+                        <a href="/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}"
+                           class="tech-card__title tech-card__title--{{ step.status }}"
+                           onclick="event.stopPropagation();">{{ step.title }}</a>
+                        {% else %}
+                        <span class="tech-card__title tech-card__title--{{ step.status }}">{{ step.title }}</span>
+                        {% endif %}
+                    </div>
+                    {% if step.description %}
+                    <div class="tech-card__desc">{{ step.description[:100] }}{% if step.description|length > 100 %}&hellip;{% endif %}</div>
+                    {% endif %}
+                </div>
+                {# Right side: status badge + applied dets + action dropdown #}
+                <div class="tech-card__rollups" style="flex-direction:column;align-items:flex-end;gap:0.25rem;">
+                    {% if step.status == 'green' %}
+                    <span class="tech-rollup tech-rollup--green">{{ icon('shield-check','10') }} Covered</span>
+                    {% elif step.status == 'amber' %}
+                    <span class="tech-rollup tech-rollup--amber" {% if step.blind_spot_reason %}title="{{ step.blind_spot_reason }}"{% endif %}>{{ icon('alert-triangle','10') }} Gap</span>
+                    {% elif step.status == 'grey' %}
+                    <span class="tech-rollup tech-rollup--grey" {% if step.blind_spot_reason %}title="{{ step.blind_spot_reason }}"{% endif %}>{{ icon('minus-circle','10') }} N/A</span>
+                    {% else %}
+                    <span class="tech-rollup tech-rollup--red">{{ icon('alert-triangle','10') }} Missing</span>
+                    {% endif %}
+                    {# Applied detection badges with remove #}
+                    {% if step.applied_dets is defined and step.applied_dets %}
+                    <div style="display:flex;flex-wrap:wrap;gap:0.2rem;">
+                        {% for ad in step.applied_dets %}
+                        <span class="badge badge-success" style="font-size:0.6rem;display:inline-flex;align-items:center;gap:0.2rem;" onclick="event.stopPropagation();">
+                            {{ icon('check','9') }} {{ ad.label[:25] }}
+                            <button class="btn btn-sm"
+                                    hx-delete="/api/baselines/tactics/{{ step.step_id }}/detections/{{ ad.id }}/apply-system/{{ system_id }}"
+                                    hx-target="#baseline-coverage"
+                                    hx-swap="innerHTML"
+                                    hx-confirm="Remove this detection?"
+                                    style="padding:0 0.15rem;font-size:0.55rem;line-height:1;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                                    onclick="event.stopPropagation();">{{ icon('x','8') }}</button>
+                        </span>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                    {# Action dropdown: on all states #}
+                    {% if step.step_id is defined %}
+                    {% set has_options = (step.unapplied_dets is defined and step.unapplied_dets) or step.status != 'green' %}
+                    {% if has_options %}
+                    <select class="form-input bl-cov-action" style="font-size:0.62rem;padding:0.1rem 0.25rem;max-width:150px;"
+                            onclick="event.stopPropagation();"
+                            data-bl-step="{{ step.step_id }}" data-bl-sys="{{ system_id }}" data-bl-title="{{ step.title }}"
+                            onchange="handleBlCoverageAction(this);">
+                        <option value="">Select action&hellip;</option>
+                        {% if step.unapplied_dets is defined and step.unapplied_dets %}
+                        <optgroup label="Apply Detection">
+                        {% for det in step.unapplied_dets %}
+                        <option value="rule:{{ det.id }}">{{ (det.rule_ref or det.note or 'Rule')[:30] }}</option>
+                        {% endfor %}
+                        </optgroup>
+                        {% endif %}
+                        {% if step.status != 'green' %}
+                        <optgroup label="Status">
+                        <option value="gap">Known Gap</option>
+                        <option value="na">N/A</option>
+                        </optgroup>
+                        {% endif %}
+                    </select>
+                    {% endif %}
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+            {% endfor %}
+            </div>
         </div>
         {% endfor %}
-    </div>
     </div>{# end bl-body #}
 </div>
 {% endfor %}
@@ -139,18 +196,38 @@ function applyBaseline() {
 </script>
 {% endif %}
 
-<!-- Baseline Blind Spot Modal -->
+<script>
+function handleBlCoverageAction(sel) {
+    var val = sel.value;
+    if (!val) return;
+    var stepId = sel.dataset.blStep;
+    var sysId = sel.dataset.blSys;
+    var title = sel.dataset.blTitle;
+    sel.value = '';
+    if (val === 'gap' || val === 'na') {
+        openBaselineBlindSpotModal(stepId, title, sysId, val);
+        return;
+    }
+    if (val.indexOf('rule:') === 0) {
+        var detId = val.substring(5);
+        htmx.ajax('POST', '/api/baselines/tactics/' + stepId + '/detections/' + detId + '/apply',
+                   {target: '#baseline-coverage', swap: 'innerHTML', values: {system_id: sysId}});
+    }
+}
+</script>
+
+<!-- Baseline Override Modal (Known Gap / N/A) -->
 <div id="baseline-bs-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
-            <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
+            <h3 class="modal-title" id="bs-bl-modal-title">{{ icon('alert-triangle','16') }} Known Gap</h3>
             <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('baseline-bs-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
-            Documenting a known blind spot for technique <strong id="bs-bl-target"></strong> on this system.
-            Status will change to <span class="badge badge-warning" style="font-size:0.7rem;">Amber</span>.
+            <span id="bs-bl-description"></span> for technique <strong id="bs-bl-target"></strong> on this system.
+            Status will change to <span id="bs-bl-badge"></span>.
         </p>
         <form hx-post="/api/blind-spots"
               hx-target="#baseline-coverage"
@@ -160,26 +237,48 @@ function applyBaseline() {
             <input type="hidden" name="entity_type" value="tactic">
             <input type="hidden" name="entity_id" value="">
             <input type="hidden" name="system_id" value="">
+            <input type="hidden" name="override_type" value="gap">
             <div>
                 <label class="form-label">Reason <span style="color:var(--color-danger)">*</span></label>
                 <textarea name="reason" class="form-input" rows="3" required
-                          placeholder="Why can't this technique be monitored on this system?"></textarea>
+                          placeholder="" id="bs-bl-reason"></textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
                 <button type="button" class="btn btn-secondary"
                         onclick="document.getElementById('baseline-bs-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Log Blind Spot</button>
+                <button type="submit" class="btn btn-primary" id="bs-bl-submit">Known Gap</button>
             </div>
         </form>
     </div>
 </div>
 <script>
-function openBaselineBlindSpotModal(stepId, stepTitle, sysId) {
+function openBaselineBlindSpotModal(stepId, stepTitle, sysId, overrideType) {
     var m = document.getElementById('baseline-bs-modal');
     m.querySelector('[name=entity_id]').value = stepId;
     m.querySelector('[name=system_id]').value = sysId;
+    m.querySelector('[name=override_type]').value = overrideType;
     m.querySelector('#bs-bl-target').textContent = stepTitle;
     m.querySelector('[name=reason]').value = '';
+
+    var title = m.querySelector('#bs-bl-modal-title');
+    var desc = m.querySelector('#bs-bl-description');
+    var badge = m.querySelector('#bs-bl-badge');
+    var submit = m.querySelector('#bs-bl-submit');
+    var reason = m.querySelector('#bs-bl-reason');
+
+    if (overrideType === 'na') {
+        title.innerHTML = 'Mark Not Applicable';
+        desc.textContent = 'Marking this technique as not applicable';
+        badge.innerHTML = '<span class="badge" style="font-size:0.7rem;background:rgba(128,128,128,.12);color:var(--color-muted);border:1px solid rgba(128,128,128,.3);">Grey (N/A)</span>';
+        submit.textContent = 'Mark N/A';
+        reason.placeholder = 'Why is this technique not applicable? (e.g., Linux system, Windows technique)';
+    } else {
+        title.innerHTML = 'Known Gap';
+        desc.textContent = 'Documenting a known coverage gap';
+        badge.innerHTML = '<span class="badge badge-warning" style="font-size:0.7rem;">Amber (Known Gap)</span>';
+        submit.textContent = 'Known Gap';
+        reason.placeholder = 'Why can\'t this technique be monitored? (e.g., No logs available, Tooling limitation)';
+    }
     m.style.display = 'flex';
 }
 </script>

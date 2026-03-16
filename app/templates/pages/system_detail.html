@@ -118,6 +118,30 @@
         {% include "partials/baseline_coverage.html" %}
     </div>
 </div>
+<script>
+/* Persist expanded baselines across HTMX swaps */
+document.addEventListener('htmx:beforeSwap', function(evt) {
+    if (evt.detail.target && evt.detail.target.id === 'baseline-coverage') {
+        window._blExpandState = [];
+        document.querySelectorAll('[id^="bl-body-"]').forEach(function(el) {
+            if (el.style.display !== 'none') {
+                window._blExpandState.push(el.id.replace('bl-body-', ''));
+            }
+        });
+    }
+});
+document.addEventListener('htmx:afterSettle', function(evt) {
+    if (evt.detail.target && evt.detail.target.id === 'baseline-coverage' && window._blExpandState) {
+        window._blExpandState.forEach(function(pbId) {
+            var body = document.getElementById('bl-body-' + pbId);
+            var chev = document.getElementById('bl-chev-' + pbId);
+            if (body) { body.style.display = ''; }
+            if (chev) { chev.style.transform = 'rotate(90deg)'; }
+        });
+        window._blExpandState = null;
+    }
+});
+</script>
 
 <!-- ── Add Device Modal ──────────────────────────────────────────── -->
 <div id="add-host-modal" class="modal-overlay" style="display:none;"

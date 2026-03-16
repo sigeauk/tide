@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 class DatabaseService:
@@ -564,6 +564,15 @@ class DatabaseService:
             conn.execute("UPDATE blind_spots SET entity_type = 'tactic' WHERE entity_type = 'step'")
             self._set_schema_version(conn, 17)
             logger.info("Migration 17: Renamed blind_spots entity_type 'step' to 'tactic'")
+
+        # Migration 18: Add override_type column to blind_spots for 4-tier status
+        if current_version < 18:
+            try:
+                conn.execute("ALTER TABLE blind_spots ADD COLUMN override_type VARCHAR DEFAULT 'gap'")
+            except Exception:
+                pass  # Column may already exist
+            self._set_schema_version(conn, 18)
+            logger.info("Migration 18: Added override_type column to blind_spots (gap|na)")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     

@@ -65,7 +65,7 @@
             onchange="var f=this.closest('form'),v=this.value;if(v){f.querySelector('[name=rule_ref]').value=v;f.querySelector('[name=source]').value='siem';}else{f.querySelector('[name=source]').value='manual';}">
       <option value="">— Select a SIEM rule —</option>
       {% if technique_rules %}
-      <optgroup label="★ Mapped to this CVE">
+      <optgroup label="Mapped to this CVE">
         {% for tid, rules in technique_rules.items() %}
           {% for r in rules %}<option value="{{ r.name }}">{{ r.name }} ({{ tid }})</option>{% endfor %}
         {% endfor %}

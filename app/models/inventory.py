@@ -392,5 +392,6 @@ class BlindSpot(BaseModel):
     system_id: Optional[str] = None
     host_id: Optional[str] = None
     reason: str = ""
+    override_type: str = "gap"  # 'gap' (amber) or 'na' (grey / not applicable)
     created_by: str = ""
     created_at: Optional[datetime] = None

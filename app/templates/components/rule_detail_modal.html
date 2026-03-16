@@ -27,7 +27,7 @@ Shows full rule information including query, field mappings, and scores.
                 <button 
                     class="btn btn-secondary btn-sm" 
                     onclick="this.closest('.modal-overlay').remove()">
-                    ✕ Close
+                    {{ icon('x','12') }} Close
                 </button>
             </div>
         </div>
@@ -63,11 +63,11 @@ Shows full rule information including query, field mappings, and scores.
                             <td>{{ mapping[1] }}</td>
                             <td class="text-center">
                                 {% if mapping[2] in ['Yes', True] %}
-                                <span class="text-success">✓</span>
+                                <span class="text-success">{{ icon('check','12') }}</span>
                                 {% elif mapping[2] == '?' %}
                                 <span class="text-warning">?</span>
                                 {% else %}
-                                <span class="text-danger">✗</span>
+                                <span class="text-danger">{{ icon('x','12') }}</span>
                                 {% endif %}
                             </td>
                             <td>{{ mapping[3] or '-' }}</td>
