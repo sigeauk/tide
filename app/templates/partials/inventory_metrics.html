@@ -30,9 +30,7 @@
     <p class="metric-sub">{{ icon_text('alert-triangle','Devices with CVE match','14') }}</p>
 </div>
 <div class="metric-card">
-    <p class="metric-value" style="font-size: {% if stats.last_scan %}0.75rem{% else %}1.5rem{% endif %};">
-        {% if stats.last_scan %}{{ stats.last_scan | string | truncate(16, end='') }}{% else %}—{% endif %}
-    </p>
-    <p class="metric-label">Last Scan</p>
-    <p class="metric-sub">{{ icon_text('clock','Most recent import','14') }}</p>
+    <p class="metric-value">{{ stats.baseline_assignment_count }}</p>
+    <p class="metric-label">Baseline Assignments</p>
+    <p class="metric-sub">{{ icon_text('clipboard-list', stats.baseline_count ~ ' baseline playbooks', '14') }}</p>
 </div>

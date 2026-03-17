@@ -721,7 +721,7 @@ def create_app() -> FastAPI:
         """Dashboard page - Aggregated overview of detection engineering posture."""
         import os
         from app.services.database import get_database_service
-        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats
+        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats, get_baselines_overview
         db = get_database_service()
         
         # Single combined query for all metrics (1 connection, 1 validation load)
@@ -743,9 +743,11 @@ def create_app() -> FastAPI:
         try:
             inventory_stats = get_inventory_stats()
             cve_stats = get_cve_overview_stats()
+            baselines_overview = get_baselines_overview()
         except Exception:
             inventory_stats = None
             cve_stats = None
+            baselines_overview = []
         
         return render_template(
             "pages/dashboard.html",
@@ -762,6 +764,7 @@ def create_app() -> FastAPI:
                 "repo_status": repo_status,
                 "inventory_stats": inventory_stats,
                 "cve_stats": cve_stats,
+                "baselines_overview": baselines_overview,
             }
         )
     

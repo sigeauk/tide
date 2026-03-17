@@ -215,6 +215,11 @@ class InventoryStats(BaseModel):
     software_count: int = 0
     unique_vuln_count: int = 0          # distinct CVE IDs matched across all hosts
     affected_host_count: int = 0        # hosts with at least one KEV match
+    baseline_count: int = 0             # total baseline playbooks
+    baseline_assignment_count: int = 0  # total baseline-to-system assignments
+    baseline_covered_pairs: int = 0     # covered (green) step-system pairs
+    baseline_total_pairs: int = 0       # all step-system pairs
+    baseline_coverage_pct: int = 0      # covered/total percent
     last_scan: Optional[str] = None     # ISO date of most recently added host
 
 
@@ -238,6 +243,8 @@ class SystemSummary(BaseModel):
     host_count: int
     vuln_count: int
     software_count: int = 0
+    baseline_count: int = 0
+    baseline_coverage_pct: int = 0
     worst_status: str = "green"         # 'green' | 'amber' | 'red' (worst-case RAG across all hosts)
 
 

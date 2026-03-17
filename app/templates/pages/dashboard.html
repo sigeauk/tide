@@ -51,6 +51,61 @@
     </div>
 </div>
 
+<!-- ═══ Baselines Section ═══ -->
+<div class="overview-section">
+    <h2>{{ icon('shield', '20') }} Baselines</h2>
+    <div class="metrics-grid">
+        {% if baselines_overview %}
+        <div class="metric-card">
+            <p class="metric-value">{{ baselines_overview | length }}</p>
+            <p class="metric-label">Total Baselines</p>
+            <p class="metric-sub">{{ icon_text('clipboard-list','Baselines defined','14') }}</p>
+        </div>
+        <div class="metric-card">
+            {% set ns_tactics = namespace(total=0) %}
+            {% for bl in baselines_overview %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
+            <p class="metric-value">{{ ns_tactics.total }}</p>
+            <p class="metric-label">Techniques Defined</p>
+            <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
+        </div>
+        <div class="metric-card">
+            {% set ns_sys = namespace(total=0) %}
+            {% for bl in baselines_overview %}{% set ns_sys.total = ns_sys.total + bl.system_count %}{% endfor %}
+            <p class="metric-value">{{ ns_sys.total }}</p>
+            <p class="metric-label">System Assignments</p>
+            <p class="metric-sub">{{ icon_text('layers','Baselines applied','14') }}</p>
+        </div>
+        <div class="metric-card">
+            {% set ns_dets = namespace(total=0) %}
+            {% for bl in baselines_overview %}{% set ns_dets.total = ns_dets.total + bl.detection_count %}{% endfor %}
+            <p class="metric-value {{ 'success' if ns_dets.total > 0 else '' }}">{{ ns_dets.total }}</p>
+            <p class="metric-label">Rules Mapped</p>
+            <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
+        </div>
+        <div class="metric-card">
+            {% set ns_red = namespace(count=0) %}
+            {% for bl in baselines_overview %}{% if bl.worst_status == 'red' %}{% set ns_red.count = ns_red.count + 1 %}{% endif %}{% endfor %}
+            <p class="metric-value {{ 'danger' if ns_red.count > 0 else 'success' }}">{{ ns_red.count }}</p>
+            <p class="metric-label">Uncovered</p>
+            <p class="metric-sub">{{ icon_text('alert-triangle','Baselines with gaps','14') }}</p>
+        </div>
+        <div class="metric-card">
+            {% set ns_green = namespace(count=0) %}
+            {% for bl in baselines_overview %}{% if bl.worst_status == 'green' %}{% set ns_green.count = ns_green.count + 1 %}{% endif %}{% endfor %}
+            <p class="metric-value {{ 'success' if ns_green.count > 0 else '' }}">{{ ns_green.count }}</p>
+            <p class="metric-label">Fully Covered</p>
+            <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
+        </div>
+        {% else %}
+        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
+            <p class="metric-value" style="font-size:1rem;">—</p>
+            <p class="metric-label">No baseline data</p>
+            <p class="metric-sub"><a href="/baselines">Go to Baselines →</a></p>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
 <!-- ═══ Connected Services ═══ -->
 <div class="overview-section">
     <h2>{{ icon('settings', '20') }} Connected Services</h2>

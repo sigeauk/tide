@@ -56,6 +56,7 @@
             <span class="system-card__stat">{{ icon('server', '13') }} {{ summary.host_count }} device{% if summary.host_count != 1 %}s{% endif %}</span>
             <span class="system-card__stat">{{ icon('bug', '13') }} {{ summary.vuln_count }} vuln{% if summary.vuln_count != 1 %}s{% endif %}</span>
             <span class="system-card__stat">{{ icon('package', '13') }} {{ summary.software_count }} pkg</span>
+            <span class="system-card__stat">{{ icon('clipboard-list', '13') }} {{ summary.baseline_count }} baseline{% if summary.baseline_count != 1 %}s{% endif %} {% if summary.baseline_count > 0 %}({{ summary.baseline_coverage_pct }}%){% endif %}</span>
         </div>
 
         <a href="/systems/{{ s.id }}" class="btn btn-secondary btn-sm btn-block">

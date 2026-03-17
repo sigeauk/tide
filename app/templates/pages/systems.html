@@ -34,6 +34,7 @@
     {% set total_hosts = summaries | sum(attribute='host_count') %}
     {% set total_vulns = summaries | sum(attribute='vuln_count') %}
     {% set total_sw    = summaries | sum(attribute='software_count') %}
+    {% set total_baselines = summaries | sum(attribute='baseline_count') %}
     <div class="metric-card">
         <p class="metric-value">{{ summaries | length }}</p>
         <p class="metric-label">Systems</p>
@@ -50,6 +51,11 @@
         <p class="metric-sub">{{ icon_text('bug', 'Unique CVEs matched', '14') }}</p>
     </div>
     <div class="metric-card">
+        <p class="metric-value">{{ total_baselines }}</p>
+        <p class="metric-label">Baseline Assignments</p>
+        <p class="metric-sub">{{ icon_text('clipboard-list', 'Applied to systems', '14') }}</p>
+    </div>
+    <div class="metric-card">
         <p class="metric-value">{{ total_sw }}</p>
         <p class="metric-label">Packages</p>
         <p class="metric-sub">{{ icon_text('package', 'Installed packages', '14') }}</p>
@@ -60,11 +66,6 @@
         </p>
         <p class="metric-label">CVE Overview</p>
         <p class="metric-sub">{{ icon_text('shield-alert', 'Full CVE catalogue', '14') }}</p>
-    </div>
-    <div class="metric-card">
-        <p class="metric-value" style="font-size:1rem;">—</p>
-        <p class="metric-label">Last Scan</p>
-        <p class="metric-sub">{{ icon_text('clock', 'Most recent import', '14') }}</p>
     </div>
 </div>
 

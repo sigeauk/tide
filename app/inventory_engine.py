@@ -868,6 +868,38 @@ def get_system_summaries():
     kev = _load_cisa_kev()
     detections = list_cve_detections()
     applied_map = _load_applied_detections()
+    # Preload baseline assignment counts per system
+    baseline_counts: dict[str, int] = {}
+    baseline_step_totals: dict[str, int] = {}
+    baseline_step_covered: dict[str, int] = {}
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                "SELECT system_id, COUNT(*) FROM system_baselines GROUP BY system_id"
+            ).fetchall()
+            step_rows = conn.execute(
+                "SELECT sb.system_id, COUNT(ps.id) "
+                "FROM system_baselines sb "
+                "JOIN playbook_steps ps ON ps.playbook_id = sb.playbook_id "
+                "GROUP BY sb.system_id"
+            ).fetchall()
+            covered_rows = conn.execute(
+                "SELECT sb.system_id, COUNT(DISTINCT sd.step_id) "
+                "FROM system_baselines sb "
+                "JOIN playbook_steps ps ON ps.playbook_id = sb.playbook_id "
+                "JOIN step_detections sd ON sd.step_id = ps.id "
+                "LEFT JOIN hosts h ON h.system_id = sb.system_id "
+                "JOIN applied_detections ad ON ad.detection_id = sd.id "
+                "  AND (ad.system_id = sb.system_id OR ad.host_id = h.id) "
+                "GROUP BY sb.system_id"
+            ).fetchall()
+        baseline_counts = {str(system_id): int(cnt) for system_id, cnt in rows}
+        baseline_step_totals = {str(system_id): int(cnt) for system_id, cnt in step_rows}
+        baseline_step_covered = {str(system_id): int(cnt) for system_id, cnt in covered_rows}
+    except Exception:
+        baseline_counts = {}
+        baseline_step_totals = {}
+        baseline_step_covered = {}
     summaries = []
     for system in systems:
         hosts = all_hosts.get(system.id, [])
@@ -908,9 +940,15 @@ def get_system_summaries():
             worst_status = "amber"
         else:
             worst_status = "green"
+        total_steps = baseline_step_totals.get(str(system.id), 0)
+        covered_steps = baseline_step_covered.get(str(system.id), 0)
+        baseline_coverage_pct = int(round((covered_steps / total_steps) * 100)) if total_steps > 0 else 0
         summaries.append(SystemSummary(
             system=system, host_count=len(hosts), vuln_count=len(vuln_cves),
-            software_count=sw_count, worst_status=worst_status))
+            software_count=sw_count,
+            baseline_count=baseline_counts.get(str(system.id), 0),
+            baseline_coverage_pct=baseline_coverage_pct,
+            worst_status=worst_status))
     return summaries
 
 def get_host_summaries(system_id):
@@ -954,6 +992,8 @@ def get_inventory_stats() -> InventoryStats:
             env_count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
             host_count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
             sw_count = conn.execute("SELECT COUNT(*) FROM software_inventory WHERE host_id IS NOT NULL").fetchone()[0]
+            baseline_count = conn.execute("SELECT COUNT(*) FROM playbooks").fetchone()[0]
+            baseline_assignment_count = conn.execute("SELECT COUNT(*) FROM system_baselines").fetchone()[0]
             last_scan_row = conn.execute(
                 "SELECT MAX(created_at) FROM hosts").fetchone()
             last_scan = str(last_scan_row[0])[:10] if last_scan_row and last_scan_row[0] else None
@@ -964,7 +1004,10 @@ def get_inventory_stats() -> InventoryStats:
     kev = _load_cisa_kev()
     if not kev:
         return InventoryStats(environment_count=env_count, host_count=host_count,
-                              software_count=sw_count, last_scan=last_scan)
+                              software_count=sw_count,
+                              baseline_count=baseline_count,
+                              baseline_assignment_count=baseline_assignment_count,
+                              last_scan=last_scan)
     affected_hosts_set: set = set()
     matched_cves: set = set()
     all_hosts = _list_all_hosts_by_system()
@@ -981,6 +1024,7 @@ def get_inventory_stats() -> InventoryStats:
     return InventoryStats(
         environment_count=env_count, host_count=host_count, software_count=sw_count,
         unique_vuln_count=len(matched_cves), affected_host_count=len(affected_hosts_set),
+        baseline_count=baseline_count, baseline_assignment_count=baseline_assignment_count,
         last_scan=last_scan,
     )
 
