@@ -1134,18 +1134,33 @@ def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id:
             host_rows = conn.execute(
                 "SELECT id FROM hosts WHERE system_id = ?", [system_id]
             ).fetchall()
-            for (hid,) in host_rows:
+            if not host_rows:
+                # No hosts in system — store a system-level row so coverage is tracked.
+                # Will be expanded to per-host rows when hosts are later added.
                 dup = conn.execute(
-                    "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
-                    [detection_id, hid]).fetchone()
-                if dup:
-                    last = AppliedDetection(id=dup[0], detection_id=detection_id, host_id=hid)
-                    continue
-                row = conn.execute(
-                    "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
-                    [detection_id, hid]).fetchone()
-                if row:
-                    last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
+                    "SELECT id FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL",
+                    [detection_id, system_id]).fetchone()
+                if not dup:
+                    row = conn.execute(
+                        "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, ?, NULL) RETURNING id, detection_id, system_id, host_id, applied_at",
+                        [detection_id, system_id]).fetchone()
+                    if row:
+                        last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
+                else:
+                    last = AppliedDetection(id=dup[0], detection_id=detection_id, system_id=system_id)
+            else:
+                for (hid,) in host_rows:
+                    dup = conn.execute(
+                        "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
+                        [detection_id, hid]).fetchone()
+                    if dup:
+                        last = AppliedDetection(id=dup[0], detection_id=detection_id, host_id=hid)
+                        continue
+                    row = conn.execute(
+                        "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                        [detection_id, hid]).fetchone()
+                    if row:
+                        last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
     return last
 
 
@@ -1158,16 +1173,20 @@ def remove_applied_detection(applied_id: str) -> bool:
 
 
 def remove_detection_for_system(detection_id: str, system_id: str) -> int:
-    """Remove applied detection rows for all hosts in a system. Returns count removed."""
+    """Remove applied detection rows for all hosts in a system (and any system-level row). Returns count removed."""
     with _get_conn() as conn:
+        count = 0
         host_ids = [r[0] for r in conn.execute(
             "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
-        if not host_ids:
-            return 0
-        placeholders = ",".join("?" for _ in host_ids)
-        count = conn.execute(
-            f"DELETE FROM applied_detections WHERE detection_id = ? AND host_id IN ({placeholders})",
-            [detection_id] + host_ids).rowcount
+        if host_ids:
+            placeholders = ",".join("?" for _ in host_ids)
+            count += conn.execute(
+                f"DELETE FROM applied_detections WHERE detection_id = ? AND host_id IN ({placeholders})",
+                [detection_id] + host_ids).rowcount
+        # Also remove system-level row (used when system has no hosts)
+        count += conn.execute(
+            "DELETE FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL",
+            [detection_id, system_id]).rowcount
     return count
 
 
@@ -1183,6 +1202,8 @@ def _load_applied_detections() -> Dict[str, List[AppliedDetection]]:
             for leg_id, det_id, sys_id in legacy:
                 host_ids = [r[0] for r in conn.execute(
                     "SELECT id FROM hosts WHERE system_id = ?", [sys_id]).fetchall()]
+                if not host_ids:
+                    continue  # Keep system-level row when system has no hosts
                 for hid in host_ids:
                     dup = conn.execute(
                         "SELECT id FROM applied_detections WHERE detection_id = ? AND host_id = ?",
@@ -1460,6 +1481,7 @@ def build_system_report_data(system_id: str) -> Optional[Dict]:
         "host_rows": host_rows,
         "all_cves": sorted_cves,
         "baselines": get_system_baselines(system_id),
+        "snapshots": get_baseline_snapshots(system_id),
     }
 
 
@@ -1543,6 +1565,124 @@ def build_cve_report_data(cve_id: str, search_filter: str = "") -> Optional[Dict
         "red_count": red_count,
         "amber_count": amber_count,
         "grey_count": grey_count,
+        "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+    }
+
+
+def build_baseline_report_data(baseline_id: str) -> Optional[Dict]:
+    """Build all data needed for a Baseline Assurance Report.
+
+    Collects the baseline definition, all applied systems, and per-system
+    step-level RAG coverage.
+    """
+    playbook = get_playbook(baseline_id)
+    if not playbook:
+        return None
+
+    # Per-step per-system RAG coverage
+    step_coverage = get_baseline_step_coverage(baseline_id)
+
+    # Collect applied systems with IDs
+    with _get_conn() as conn:
+        sys_rows = conn.execute(
+            "SELECT sb.system_id, s.name FROM system_baselines sb "
+            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ? ORDER BY s.name",
+            [baseline_id],
+        ).fetchall()
+    system_ids = [r[0] for r in sys_rows]
+    system_names = {r[0]: r[1] for r in sys_rows}
+
+    # Build per-system summary with step-level detail
+    systems = []
+    for sys_id in system_ids:
+        sys_name = system_names[sys_id]
+        covered = 0
+        gap = 0
+        red = 0
+        na = 0
+        step_details = []
+        for step in playbook.tactics:
+            cov_entries = step_coverage.get(step.id, [])
+            entry = next((e for e in cov_entries if e["system_id"] == sys_id), None)
+            status = entry["status"] if entry else "red"
+            if status == "green":
+                covered += 1
+            elif status == "amber":
+                gap += 1
+            elif status == "grey":
+                na += 1
+            else:
+                red += 1
+            step_details.append({
+                "step_id": step.id,
+                "step_number": step.step_number,
+                "title": step.title,
+                "tactic": step.tactic,
+                "status": status,
+                "applied_dets": [],
+                "blind_spot_reason": "",
+            })
+        total = len(playbook.tactics)
+        effective = total - na
+        pct = round(covered / effective * 100) if effective else (100 if total else 0)
+        systems.append({
+            "system_id": sys_id,
+            "system_name": sys_name,
+            "coverage_pct": pct,
+            "covered_steps": covered,
+            "gap_steps": gap,
+            "red_steps": red,
+            "na_steps": na,
+            "tactics": step_details,
+        })
+
+    # Enrich step details with applied_dets using get_system_baselines data
+    # This is slightly expensive but gives full detail for each system
+    for sys_info in systems:
+        sb_list = get_system_baselines(sys_info["system_id"])
+        matching = next((sb for sb in sb_list if sb["playbook_id"] == baseline_id), None)
+        if matching:
+            for step_detail in sys_info["tactics"]:
+                matching_step = next(
+                    (t for t in matching["tactics"] if t["step_id"] == step_detail["step_id"]), None
+                )
+                if matching_step:
+                    step_detail["applied_dets"] = matching_step.get("applied_dets", [])
+                    step_detail["blind_spot_reason"] = matching_step.get("blind_spot_reason", "")
+
+    # Aggregate metrics
+    total_techniques = sum(len(step.techniques) for step in playbook.tactics)
+    total_detections = sum(len(step.detections) for step in playbook.tactics)
+    avg_coverage = round(sum(s["coverage_pct"] for s in systems) / len(systems)) if systems else 0
+
+    # Build steps list for template
+    steps = []
+    for step in playbook.tactics:
+        steps.append({
+            "step_number": step.step_number,
+            "title": step.title,
+            "tactic": step.tactic,
+            "techniques": [
+                {"technique_id": t.technique_id, "has_detection": False}
+                for t in step.techniques
+            ],
+            "detections": [
+                {"rule_ref": d.rule_ref, "note": d.note}
+                for d in step.detections
+            ],
+        })
+
+    return {
+        "baseline_id": baseline_id,
+        "baseline_name": playbook.name,
+        "description": playbook.description or "",
+        "total_systems": len(systems),
+        "total_steps": len(playbook.tactics),
+        "total_techniques": total_techniques,
+        "total_detections": total_detections,
+        "avg_coverage": avg_coverage,
+        "steps": steps,
+        "systems": systems,
         "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -2103,6 +2243,14 @@ def get_system_baselines(system_id: str) -> List[Dict]:
             ).fetchall()
             applied_step_det_ids = {r[0] for r in ad_rows}
 
+    # Also include system-level applied detections (for systems with no hosts)
+    with _get_conn() as conn2:
+        sys_ad = conn2.execute(
+            "SELECT DISTINCT detection_id FROM applied_detections WHERE system_id = ? AND host_id IS NULL",
+            [system_id],
+        ).fetchall()
+        applied_step_det_ids |= {r[0] for r in sys_ad}
+
     # Load blind spots for all tactics in one pass
     all_step_blind_spots = _load_all_blind_spots("tactic")
 
@@ -2115,6 +2263,18 @@ def get_system_baselines(system_id: str) -> List[Dict]:
     except Exception:
         covered_ttps = set()
         ttp_rule_counts = {}
+
+    # Batch lookup: rule name -> (rule_id, space) for clickable rule badges
+    rule_name_lookup: Dict[str, Dict] = {}
+    try:
+        with _get_conn() as conn:
+            rrows = conn.execute(
+                "SELECT rule_id, name, space FROM detection_rules ORDER BY name"
+            ).fetchall()
+        for rid, rname, rspace in rrows:
+            rule_name_lookup[rname] = {"rule_id": rid, "space": rspace or "default"}
+    except Exception:
+        pass
 
     result = []
     for sb_id, pb_id, applied_at, pb_name, pb_desc in rows:
@@ -2153,10 +2313,14 @@ def get_system_baselines(system_id: str) -> List[Dict]:
             step_unapplied = []
             for d in step.detections:
                 label = d.rule_ref or d.note or "Rule"
+                rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
+                entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
+                         "rule_id": rule_info["rule_id"] if rule_info else None,
+                         "space": rule_info["space"] if rule_info else None}
                 if d.id in applied_step_det_ids:
-                    step_applied.append({"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label})
+                    step_applied.append(entry)
                 else:
-                    step_unapplied.append({"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label})
+                    step_unapplied.append(entry)
 
             step_results.append({
                 "step_id": step.id,
@@ -2456,15 +2620,19 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
     # Pre-load applied_detections for this step's detection IDs
     det_ids = [d.id for d in step.detections]
     applied_host_map: Dict[str, set] = {}  # {detection_id: set(host_id)}
+    applied_sys_map: Dict[str, set] = {}   # {detection_id: set(system_id)} for system-level rows
     if det_ids:
         with _get_conn() as conn:
             ph = ",".join("?" for _ in det_ids)
             ad_rows = conn.execute(
-                f"SELECT detection_id, host_id FROM applied_detections WHERE detection_id IN ({ph})",
+                f"SELECT detection_id, host_id, system_id FROM applied_detections WHERE detection_id IN ({ph})",
                 det_ids,
             ).fetchall()
-        for det_id, host_id in ad_rows:
-            applied_host_map.setdefault(det_id, set()).add(host_id)
+        for det_id, host_id, sys_id in ad_rows:
+            if host_id:
+                applied_host_map.setdefault(det_id, set()).add(host_id)
+            elif sys_id:
+                applied_sys_map.setdefault(det_id, set()).add(sys_id)
 
     # Load blind spots for this tactic
     blind_spots = get_blind_spots("tactic", step_id)
@@ -2477,12 +2645,14 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
         hosts = list_hosts(system_id)
         host_ids = {h.id for h in hosts}
 
-        # Check direct application: detection applied to at least one host in system
+        # Check direct application: detection applied to at least one host in system,
+        # or applied at system level (for systems with no hosts)
         sys_applied = []
         sys_unapplied = []
         for d in step.detections:
             det_hosts = applied_host_map.get(d.id, set())
-            if host_ids and (det_hosts & host_ids):
+            det_systems = applied_sys_map.get(d.id, set())
+            if (host_ids and (det_hosts & host_ids)) or (system_id in det_systems):
                 sys_applied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
             else:
                 sys_unapplied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
@@ -2581,3 +2751,100 @@ def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
     return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
                       host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
                       override_type=r[8]) for r in all_rows.values()]
+
+
+# ---------------------------------------------------------------------------
+# Baseline Snapshots
+# ---------------------------------------------------------------------------
+
+def create_baseline_snapshot(
+    system_id: str, baseline_id: str, label: str, captured_by: str,
+    captured_at=None,
+) -> Dict:
+    """Capture a point-in-time snapshot of baseline coverage for a system."""
+    import uuid
+    from datetime import datetime as _dt
+
+    # Calculate current coverage for this baseline
+    all_baselines = get_system_baselines(system_id)
+    bl = next((b for b in all_baselines if b["playbook_id"] == baseline_id), None)
+    if not bl:
+        return None
+
+    snap_id = str(uuid.uuid4())
+    ts = captured_at or _dt.utcnow()
+
+    count_green = bl["covered_steps"]
+    count_amber = bl.get("gap_steps", 0)
+    count_grey = bl.get("na_steps", 0)
+    count_red = bl["total_steps"] - count_green - count_amber - count_grey
+    score_pct = float(bl["coverage_pct"])
+
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO system_baseline_snapshots "
+            "(id, system_id, baseline_id, captured_at, captured_by, label, "
+            "score_percentage, count_green, count_amber, count_red, count_grey) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [snap_id, system_id, baseline_id, ts, captured_by, label,
+             score_pct, count_green, count_amber, count_red, count_grey],
+        )
+
+    return {
+        "id": snap_id, "system_id": system_id, "baseline_id": baseline_id,
+        "captured_at": ts, "captured_by": captured_by, "label": label,
+        "score_percentage": score_pct,
+        "count_green": count_green, "count_amber": count_amber,
+        "count_red": count_red, "count_grey": count_grey,
+    }
+
+
+def create_all_baseline_snapshots(
+    system_id: str, label: str, captured_by: str, captured_at=None,
+) -> List[Dict]:
+    """Snapshot all baselines applied to a system with a shared timestamp."""
+    from datetime import datetime as _dt
+
+    ts = captured_at or _dt.utcnow()
+    all_baselines = get_system_baselines(system_id)
+    results = []
+    for bl in all_baselines:
+        snap = create_baseline_snapshot(
+            system_id, bl["playbook_id"], label, captured_by, captured_at=ts,
+        )
+        if snap:
+            results.append(snap)
+    return results
+
+
+def get_baseline_snapshots(system_id: str) -> List[Dict]:
+    """Return all snapshots for a system, newest first, with baseline names."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT s.id, s.system_id, s.baseline_id, s.captured_at, s.captured_by, "
+            "s.label, s.score_percentage, s.count_green, s.count_amber, "
+            "s.count_red, s.count_grey, p.name "
+            "FROM system_baseline_snapshots s "
+            "LEFT JOIN playbooks p ON p.id = s.baseline_id "
+            "WHERE s.system_id = ? ORDER BY s.captured_at DESC",
+            [system_id],
+        ).fetchall()
+    return [
+        {
+            "id": r[0], "system_id": r[1], "baseline_id": r[2],
+            "captured_at": r[3], "captured_by": r[4], "label": r[5],
+            "score_percentage": r[6], "count_green": r[7], "count_amber": r[8],
+            "count_red": r[9], "count_grey": r[10],
+            "baseline_name": r[11] or "Deleted Baseline",
+        }
+        for r in rows
+    ]
+
+
+def delete_baseline_snapshot(snapshot_id: str) -> bool:
+    """Delete a single snapshot."""
+    with _get_conn() as conn:
+        cnt = conn.execute(
+            "DELETE FROM system_baseline_snapshots WHERE id = ?", [snapshot_id],
+        ).rowcount
+    return cnt > 0

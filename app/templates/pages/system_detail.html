@@ -50,6 +50,8 @@
     {% set host_count = host_summaries | length %}
     {% set vuln_count = host_summaries | sum(attribute='vuln_count') %}
     {% set sw_count = host_summaries | sum(attribute='software_count') %}
+    {% set bl_count = baselines | length if baselines else 0 %}
+    {% set bl_avg = ((baselines | sum(attribute='coverage_pct')) / bl_count) | round | int if bl_count > 0 else 0 %}
     <div class="metric-card">
         <div class="metric-label">{{ icon('server', '16') }} Devices</div>
         <div class="metric-value">{{ host_count }}</div>
@@ -69,6 +71,14 @@
             {% for hs in host_summaries %}{% if hs.vuln_count > 0 %}{% set rw.count = rw.count + 1 %}{% endif %}{% endfor %}
             —
         </div>
+    </div>
+    <div class="metric-card {% if bl_avg >= 75 %}metric-card--success{% elif bl_avg >= 50 %}metric-card--warning{% elif bl_count > 0 %}metric-card--danger{% endif %}">
+        <div class="metric-label">{{ icon('shield', '16') }} Baseline Compliance</div>
+        <div class="metric-value">{% if bl_count > 0 %}{{ bl_avg }}%{% else %}—{% endif %}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('check-square', '16') }} Applied Baselines</div>
+        <div class="metric-value">{{ bl_count }}</div>
     </div>
 </div>
 
@@ -111,13 +121,71 @@
 
 <!-- ── Baseline Coverage Section ─────────────────────────────── -->
 <div class="card" style="padding:1.25rem;margin-top:1.5rem;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
-        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('check-square', '18') }} Baseline Coverage</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
+         onclick="var b=document.getElementById('baselines-body');var c=document.getElementById('baselines-chevron');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('check-square', '18') }} Assurance Baselines</h2>
+        <div style="display:flex;align-items:center;gap:0.5rem;">
+            <button class="btn btn-primary btn-sm"
+                    onclick="event.stopPropagation();openSnapshotModal('all', '', '')"
+                    style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;">
+                {{ icon('camera', '14') }} Snapshot All
+            </button>
+            <span id="baselines-chevron" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '18') }}</span>
+        </div>
     </div>
-    <div id="baseline-coverage">
-        {% include "partials/baseline_coverage.html" %}
+    <div id="baselines-body" style="display:none;margin-top:1rem;">
+        <!-- Sub-tabs -->
+        <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color);margin:0 0 1rem;">
+            <button id="tab-baselines" class="btn btn-sm"
+                    onclick="switchToBaselines()"
+                    style="border:none;border-bottom:2px solid var(--color-primary);margin-bottom:-2px;border-radius:0;font-weight:600;color:var(--color-primary);background:transparent;padding:0.4rem 1rem;font-size:0.85rem;">
+                {{ icon('shield','14') }} Baselines
+            </button>
+            <button id="tab-audit-history" class="btn btn-sm"
+                    onclick="switchToAuditHistory()"
+                    style="border:none;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;font-weight:500;color:var(--color-muted);background:transparent;padding:0.4rem 1rem;font-size:0.85rem;">
+                {{ icon('clock','14') }} Audit History
+            </button>
+        </div>
+        <div id="baseline-coverage" style="">
+            {% include "partials/baseline_coverage.html" %}
+        </div>
+        <div id="audit-history-content" style="display:none;">
+        </div>
     </div>
 </div>
+<script>
+function switchToBaselines() {
+    document.getElementById('baseline-coverage').style.display = '';
+    document.getElementById('audit-history-content').style.display = 'none';
+    var tb = document.getElementById('tab-baselines');
+    var ta = document.getElementById('tab-audit-history');
+    tb.style.borderBottomColor = 'var(--color-primary)';
+    tb.style.color = 'var(--color-primary)';
+    tb.style.fontWeight = '600';
+    ta.style.borderBottomColor = 'transparent';
+    ta.style.color = 'var(--color-muted)';
+    ta.style.fontWeight = '500';
+}
+function switchToAuditHistory() {
+    document.getElementById('baseline-coverage').style.display = 'none';
+    var ah = document.getElementById('audit-history-content');
+    ah.style.display = '';
+    var tb = document.getElementById('tab-baselines');
+    var ta = document.getElementById('tab-audit-history');
+    tb.style.borderBottomColor = 'transparent';
+    tb.style.color = 'var(--color-muted)';
+    tb.style.fontWeight = '500';
+    ta.style.borderBottomColor = 'var(--color-primary)';
+    ta.style.color = 'var(--color-primary)';
+    ta.style.fontWeight = '600';
+    // Trigger HTMX load if not yet loaded
+    if (!ah.dataset.loaded) {
+        htmx.ajax('GET', '/api/baselines/system/{{ system.id }}/audit-history', {target: '#audit-history-content', swap: 'innerHTML'});
+        ah.dataset.loaded = '1';
+    }
+}
+</script>
 <script>
 /* Persist expanded baselines across HTMX swaps */
 document.addEventListener('htmx:beforeSwap', function(evt) {
@@ -274,6 +342,17 @@ document.addEventListener('htmx:afterSettle', function(evt) {
                 <option value="technical">Technical / Engineer</option>
             </select>
         </div>
+        <div style="margin-bottom:1.5rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.5rem;">Include Sections</label>
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--text-primary,#e6edf3);margin-bottom:0.4rem;cursor:pointer;">
+                <input type="checkbox" id="modal-include-devices" checked style="accent-color:var(--color-primary,#3b82f6);"> Include Devices
+            </label>
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--text-primary,#e6edf3);cursor:pointer;">
+                <input type="checkbox" id="modal-include-baselines" checked style="accent-color:var(--color-primary,#3b82f6);"> Include Baselines
+            </label>
+        </div>
         <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
             <button onclick="closeExportModal()" class="btn btn-secondary"
                     style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
@@ -300,10 +379,14 @@ function confirmExport() {
     var format         = document.getElementById('modal-format').value;
     var classification = document.getElementById('modal-classification').value;
     var audience       = document.getElementById('modal-audience').value;
+    var includeDevices   = document.getElementById('modal-include-devices').checked;
+    var includeBaselines = document.getElementById('modal-include-baselines').checked;
     var params = new URLSearchParams();
     params.set('mode', audience);
     params.set('format', format);
     params.set('classification', classification);
+    if (includeDevices) params.set('include_devices', '1');
+    if (includeBaselines) params.set('include_baselines', '1');
     closeExportModal();
     window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
 }

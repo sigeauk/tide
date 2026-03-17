@@ -33,6 +33,16 @@
             <span class="rule-status {{ 'enabled' if rule.enabled else 'disabled' }}" title="Status">
                 {% if rule.enabled %}{{ icon('check','12') }} Enabled{% else %}{{ icon('x','12') }} Disabled{% endif %}
             </span>
+            {% if rule.validation_date %}
+            {% set val_class = 'success' if rule.validation_status == 'valid' else ('warning' if rule.validation_status == 'expired' else 'danger') %}
+            <span class="rule-validated text-{{ val_class }}" title="Validated {{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}">
+                {{ icon('circle-check','12') }} {{ rule.validation_date.strftime('%Y-%m-%d') }}
+            </span>
+            {% else %}
+            <span class="rule-validated text-danger" title="Never validated">
+                {{ icon('circle-check','12') }} Never
+            </span>
+            {% endif %}
         </div>
         {% if rule.mitre_ids %}
         <div class="rule-mitre-ids">

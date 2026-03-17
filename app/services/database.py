@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 class DatabaseService:
@@ -573,6 +573,26 @@ class DatabaseService:
                 pass  # Column may already exist
             self._set_schema_version(conn, 18)
             logger.info("Migration 18: Added override_type column to blind_spots (gap|na)")
+
+        # Migration 19: Audit Snapshots — point-in-time baseline coverage
+        if current_version < 19:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS system_baseline_snapshots (
+                    id VARCHAR PRIMARY KEY,
+                    system_id VARCHAR NOT NULL,
+                    baseline_id VARCHAR NOT NULL,
+                    captured_at TIMESTAMP NOT NULL,
+                    captured_by VARCHAR,
+                    label VARCHAR,
+                    score_percentage FLOAT,
+                    count_green INTEGER DEFAULT 0,
+                    count_amber INTEGER DEFAULT 0,
+                    count_red INTEGER DEFAULT 0,
+                    count_grey INTEGER DEFAULT 0
+                )
+            """)
+            self._set_schema_version(conn, 19)
+            logger.info("Migration 19: Created system_baseline_snapshots table")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     

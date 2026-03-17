@@ -138,5 +138,35 @@ Shows full rule information including query, field mappings, and scores.
                 </div>
             </div>
         </div>
+
+        <!-- Validation -->
+        <div class="modal-section">
+            <h3 class="modal-section-subtitle">Validation</h3>
+            <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;">
+                <div style="font-size:0.85rem;color:var(--color-text-muted);">
+                    {% if rule.validation_date %}
+                        {% set val_class = 'success' if rule.validation_status == 'valid' else ('warning' if rule.validation_status == 'expired' else 'danger') %}
+                        <span style="font-weight:600;">Last Validated:</span>
+                        <span class="text-{{ val_class }}">{{ rule.validation_date.strftime('%Y-%m-%d %H:%M') }}</span>
+                        {% if rule.validated_by %}
+                        <span style="margin-left:0.5rem;">by <strong>{{ rule.validated_by }}</strong></span>
+                        {% endif %}
+                        {% if rule.validation_status == 'expired' %}
+                        <span class="badge badge-warning" style="margin-left:0.5rem;font-size:0.65rem;">Expired</span>
+                        {% endif %}
+                    {% else %}
+                        <span style="font-weight:600;">Last Validated:</span>
+                        <span class="text-danger">Never</span>
+                    {% endif %}
+                </div>
+                <button class="btn btn-primary btn-sm"
+                        hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        hx-headers='{"X-Return-Modal": "true"}'>
+                    {{ icon('circle-check','14') }} Validate Now
+                </button>
+            </div>
+        </div>
     </div>
 </div>

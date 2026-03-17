@@ -49,7 +49,7 @@ from app.inventory_engine import (
     ingest_cisa_feed, list_classifications, list_host_software, list_hosts, list_software,
     list_systems, parse_nessus_xml, remove_cve_technique_override,
     save_mitre_cve_map,
-    build_system_report_data, build_cve_report_data,
+    build_system_report_data, build_cve_report_data, build_baseline_report_data,
     # Baselines
     list_playbooks, get_playbook, get_playbook_header, get_baselines_overview,
     create_playbook, delete_playbook, update_playbook,
@@ -62,6 +62,9 @@ from app.inventory_engine import (
     get_baseline_step_coverage,
     # Blind Spots
     add_blind_spot, remove_blind_spot, get_blind_spots,
+    # Baseline Snapshots
+    create_baseline_snapshot, create_all_baseline_snapshots,
+    get_baseline_snapshots, delete_baseline_snapshot,
 )
 from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS
 
@@ -813,8 +816,15 @@ def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser):
 def api_update_baseline(
     request: Request, baseline_id: str, user: RequireUser,
     name: str = Form(...), description: str = Form(""),
+    system_id: str = Form(""),
 ):
     update_playbook(baseline_id, name=name, description=description)
+    if system_id:
+        baselines = get_system_baselines(system_id)
+        playbooks = list_playbooks()
+        return _render("partials/baseline_coverage.html", request, {
+            "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
+        })
     resp = HTMLResponse("")
     resp.headers["HX-Redirect"] = f"/baselines/{baseline_id}"
     return resp
@@ -880,6 +890,68 @@ def api_system_baseline_coverage(request: Request, system_id: str, user: Current
     playbooks = list_playbooks()
     return _render("partials/baseline_coverage.html", request, {
         "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Baseline Snapshot Routes
+# ---------------------------------------------------------------------------
+
+@router.post("/api/baselines/system/{system_id}/snapshot", response_class=HTMLResponse)
+def api_snapshot_baseline(
+    request: Request, system_id: str, user: RequireUser,
+    baseline_id: str = Form(...), label: str = Form(""),
+    captured_date: str = Form(""),
+):
+    """Capture a single baseline snapshot."""
+    from datetime import datetime as _dt
+    ts = _dt.strptime(captured_date, "%Y-%m-%d") if captured_date else None
+    create_baseline_snapshot(system_id, baseline_id, label, user.username, captured_at=ts)
+    snapshots = get_baseline_snapshots(system_id)
+    baselines = get_system_baselines(system_id)
+    return _render("partials/audit_history.html", request, {
+        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
+    })
+
+
+@router.post("/api/baselines/system/{system_id}/snapshot-all", response_class=HTMLResponse)
+def api_snapshot_all_baselines(
+    request: Request, system_id: str, user: RequireUser,
+    label: str = Form(""),
+    captured_date: str = Form(""),
+):
+    """Snapshot all applied baselines at once."""
+    from datetime import datetime as _dt
+    ts = _dt.strptime(captured_date, "%Y-%m-%d") if captured_date else None
+    create_all_baseline_snapshots(system_id, label, user.username, captured_at=ts)
+    snapshots = get_baseline_snapshots(system_id)
+    baselines = get_system_baselines(system_id)
+    return _render("partials/audit_history.html", request, {
+        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
+    })
+
+
+@router.delete("/api/baselines/snapshots/{snapshot_id}", response_class=HTMLResponse)
+def api_delete_snapshot(
+    request: Request, snapshot_id: str, user: RequireUser,
+    system_id: str = Query(...),
+):
+    """Delete a snapshot."""
+    delete_baseline_snapshot(snapshot_id)
+    snapshots = get_baseline_snapshots(system_id)
+    baselines = get_system_baselines(system_id)
+    return _render("partials/audit_history.html", request, {
+        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
+    })
+
+
+@router.get("/api/baselines/system/{system_id}/audit-history", response_class=HTMLResponse)
+def api_audit_history(request: Request, system_id: str, user: CurrentUser):
+    """Get audit history partial."""
+    snapshots = get_baseline_snapshots(system_id)
+    baselines = get_system_baselines(system_id)
+    return _render("partials/audit_history.html", request, {
+        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
     })
 
 
@@ -1165,6 +1237,8 @@ def api_system_report(
     mode: str = Query("executive", pattern="^(executive|technical)$"),
     format: str = Query("pdf", pattern="^(pdf|markdown)$"),
     classification: str = Query("Official"),
+    include_devices: str = Query("1"),
+    include_baselines: str = Query("1"),
 ):
     """Generate a System report — CISO Executive Summary or Technical Deep Dive."""
     import os
@@ -1180,6 +1254,8 @@ def api_system_report(
 
     report_data["mode"] = mode
     report_data["classification"] = classification
+    report_data["include_devices"] = include_devices == "1"
+    report_data["include_baselines"] = include_baselines == "1"
 
     safe_name = report_data["system"]["name"].replace(" ", "-").replace("/", "-")[:30]
     level_tag = "Technical" if mode == "technical" else "Executive"
@@ -1279,6 +1355,72 @@ def api_cve_report(
         raise HTTPException(status_code=500, detail="PDF generation failed. Check server logs.")
 
     filename = f"TIDE_CVE_Audit_{safe_cve}_{date_str}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+@router.get("/api/baselines/{baseline_id}/report")
+def api_baseline_report(
+    request: Request, baseline_id: str, user: CurrentUser,
+    mode: str = Query("executive", pattern="^(executive|technical)$"),
+    format: str = Query("pdf", pattern="^(pdf|markdown)$"),
+    classification: str = Query("Official"),
+):
+    """Generate a Baseline Assurance Report — PDF or Markdown."""
+    import os
+    from datetime import datetime
+    from app.services.report_generator import CLASSIFICATION_OPTIONS
+
+    if classification not in CLASSIFICATION_OPTIONS:
+        classification = CLASSIFICATION_OPTIONS[0]
+
+    report_data = build_baseline_report_data(baseline_id)
+    if not report_data:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+
+    report_data["classification"] = classification
+    report_data["audience_level"] = "CISO" if mode == "executive" else "Technical"
+
+    safe_name = report_data["baseline_name"].replace(" ", "-").replace("/", "-")[:30]
+    level_tag = "Technical" if mode == "technical" else "Executive"
+    date_str = datetime.utcnow().strftime("%Y%m%d")
+
+    if format == "markdown":
+        md = _generate_baseline_markdown(report_data, classification)
+        filename = f"TIDE_BaselineReport_{level_tag}_{safe_name}_{date_str}.md"
+        content = md.encode("utf-8")
+        return Response(
+            content=content,
+            media_type="text/markdown; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": str(len(content)),
+            },
+        )
+
+    # PDF via WeasyPrint
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+    try:
+        from weasyprint import HTML as WeasyprintHTML
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
+        template = env.get_template("report/baseline_report.html")
+        html_str = template.render(report=report_data)
+        pdf_bytes = WeasyprintHTML(string=html_str).write_pdf()
+    except ImportError:
+        logger.error("WeasyPrint is not installed in this environment")
+        raise HTTPException(status_code=500, detail="PDF generation requires WeasyPrint. Check server installation.")
+    except Exception as exc:
+        logger.exception(f"PDF generation failed: {exc}")
+        raise HTTPException(status_code=500, detail="PDF generation failed. Check server logs.")
+
+    filename = f"TIDE_BaselineReport_{level_tag}_{safe_name}_{date_str}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1512,6 +1654,85 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
                 rules = ", ".join(h.get("rule_names", [])) or "—"
                 lines.append(f"| {h['name']} | {h['ip']} | {h.get('os', '')[:25]} | {status} | {rules} |")
             lines.append("")
+
+    lines += [
+        "---",
+        f"*{classification} — Report generated by TIDE — Threat Intelligence Detection Engineering*",
+    ]
+    return "\n".join(lines)
+
+
+def _generate_baseline_markdown(data: dict, classification: str) -> str:
+    """Generate a Markdown baseline assurance report."""
+    audience = data.get("audience_level", "Technical")
+    lines = [
+        f"<!-- {classification} -->",
+        "",
+        f"# {data['baseline_name']} — Baseline Assurance Report",
+        "",
+        f"**Classification:** {classification}",
+        f"**Generated:** {data['generated_at']}",
+        f"**Audience:** {audience}",
+        "",
+    ]
+    if data.get("description"):
+        lines += [f"> {data['description']}", ""]
+
+    lines += [
+        "---",
+        "",
+        "## Executive Summary",
+        "",
+        "| Metric | Value |",
+        "|--------|-------|",
+        f"| Applied Systems | {data['total_systems']} |",
+        f"| Tactic Steps | {data['total_steps']} |",
+        f"| Mapped Techniques | {data['total_techniques']} |",
+        f"| Average Coverage | {data['avg_coverage']}% |",
+        f"| Detection Rules | {data['total_detections']} |",
+        "",
+    ]
+
+    if data.get("steps"):
+        lines += [
+            "## Baseline Definition — Tactic Steps",
+            "",
+            "| # | Title | Tactic | Techniques | Detections |",
+            "|---|-------|--------|------------|------------|",
+        ]
+        for s in data["steps"]:
+            techs = ", ".join(f"`{t['technique_id']}`" for t in s.get("techniques", [])) or "—"
+            dets = ", ".join(d.get("rule_ref") or d.get("note", "—") for d in s.get("detections", [])) or "None"
+            lines.append(f"| {s['step_number']} | {s['title']} | {s.get('tactic', '—')} | {techs} | {dets} |")
+        lines.append("")
+
+    if data.get("systems"):
+        lines += [
+            "## System Compliance Matrix",
+            "",
+            "| System | Coverage | Green | Amber | Red | N/A |",
+            "|--------|----------|-------|-------|-----|-----|",
+        ]
+        for sys in data["systems"]:
+            lines.append(
+                f"| {sys['system_name']} | {sys['coverage_pct']}% | "
+                f"{sys['covered_steps']} | {sys['gap_steps']} | "
+                f"{sys['red_steps']} | {sys['na_steps']} |"
+            )
+        lines.append("")
+
+        if audience != "CISO":
+            lines += ["## Per-System Coverage Detail", ""]
+            for sys in data["systems"]:
+                lines.append(f"### {sys['system_name']} ({sys['coverage_pct']}%)")
+                lines.append("")
+                lines.append("| # | Step | Tactic | Status | Applied Detections |")
+                lines.append("|---|------|--------|--------|--------------------|")
+                for t in sys.get("tactics", []):
+                    status = {"green": "Covered", "amber": "Known Gap", "grey": "N/A", "red": "Missing"}.get(t["status"], t["status"])
+                    dets = ", ".join(d.get("label", d.get("rule_ref", "—")) for d in t.get("applied_dets", [])) or "—"
+                    lines.append(f"| {t['step_number']} | {t['title']} | {t.get('tactic', '—')} | {status} | {dets} |")
+                lines.append("")
 
     lines += [
         "---",

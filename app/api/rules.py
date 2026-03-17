@@ -110,6 +110,7 @@ def validate_rule(
     rule_id: str,
     db: DbDep,
     user: RequireUser,
+    settings: SettingsDep,
     space: str = Query("default"),
 ):
     """Mark a rule as validated by the current user."""
@@ -123,6 +124,14 @@ def validate_rule(
     rule = db.get_rule_by_id(rule_id, space)
     
     templates = request.app.state.templates
+
+    # If called from the modal, re-render the modal instead of the card
+    if request.headers.get("X-Return-Modal") == "true":
+        return templates.TemplateResponse(
+            "components/rule_detail_modal.html",
+            {"request": request, "rule": rule, "env": settings}
+        )
+
     return templates.TemplateResponse(
         "components/rule_card.html",
         {"request": request, "rule": rule}

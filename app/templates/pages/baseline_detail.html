@@ -26,6 +26,17 @@
             </span>
             {% endif %}
             <div style="margin-left:auto;display:flex;gap:0.5rem;">
+                <button class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('bl-export-modal').style.display='flex'"
+                        title="Generate baseline report"
+                        style="display:flex;align-items:center;gap:0.375rem;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="7 10 12 15 17 10"/>
+                        <line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                    Export Report
+                </button>
                 <button class="btn btn-primary btn-sm"
                         onclick="document.getElementById('add-tactic-modal').style.display='flex'">
                     {{ icon('plus', '14') }} Add Technique
@@ -313,4 +324,85 @@ document.addEventListener('click', function(e){
     }
 }
 </style>
+
+<!-- ── Export Baseline Report Modal ──────────────────────────── -->
+<div id="bl-export-modal"
+     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
+            z-index:1000; align-items:center; justify-content:center;"
+     onclick="if(event.target===this)this.style.display='none'">
+    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+                border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
+                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
+            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
+                Export Baseline Report
+            </h3>
+            <button onclick="document.getElementById('bl-export-modal').style.display='none'"
+                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    title="Close">&#x2715;</button>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
+            <select id="bl-modal-format"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="pdf">PDF</option>
+                <option value="markdown">Markdown</option>
+            </select>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
+            <select id="bl-modal-classification"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="Official">Official</option>
+                <option value="Confidential">Confidential</option>
+                <option value="Secret">Secret</option>
+                <option value="Top Secret">Top Secret</option>
+            </select>
+        </div>
+        <div style="margin-bottom:1.5rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;">Audience</label>
+            <select id="bl-modal-audience"
+                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
+                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
+                           cursor:pointer;">
+                <option value="executive">Executive / CISO</option>
+                <option value="technical">Technical / Engineer</option>
+            </select>
+        </div>
+        <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
+            <button onclick="document.getElementById('bl-export-modal').style.display='none'" class="btn btn-secondary"
+                    style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
+            <button onclick="confirmBaselineExport()" class="btn btn-primary"
+                    style="font-size:0.85rem; padding:0.45rem 1.25rem;">Download</button>
+        </div>
+    </div>
+</div>
+
+<script>
+function confirmBaselineExport() {
+    var format         = document.getElementById('bl-modal-format').value;
+    var classification = document.getElementById('bl-modal-classification').value;
+    var audience       = document.getElementById('bl-modal-audience').value;
+    var params = new URLSearchParams();
+    params.set('mode', audience);
+    params.set('format', format);
+    params.set('classification', classification);
+    document.getElementById('bl-export-modal').style.display = 'none';
+    window.location.href = '/api/baselines/{{ baseline.id }}/report?' + params.toString();
+}
+</script>
 {% endblock %}

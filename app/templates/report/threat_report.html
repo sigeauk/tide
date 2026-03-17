@@ -39,7 +39,7 @@
 @page cover {
     size: A4 portrait;
     margin: 0;
-    background-color: #0d1117;
+    background-color: #ffffff;
     @top-center    { content: none; }
     @bottom-center { content: none; }
 }
@@ -132,13 +132,13 @@ html, body {
 .cover {
     page: cover;
     page-break-after: always;
-    background: var(--navy);
+    background: #ffffff;
     display: flex;
     flex-direction: column;
     height: 297mm;
     padding: 0;
     text-align: center;
-    color: #c9d1d9;
+    color: var(--text);
 }
 
 .cover-topbar    { width: 100%; height: 12mm; background: var(--primary); flex-shrink: 0; }
@@ -156,7 +156,7 @@ html, body {
 
 .cover-tagline {
     font-size: 8pt;
-    color: #8b949e;
+    color: var(--text-3);
     text-transform: uppercase;
     letter-spacing: 0.18em;
     margin-bottom: 18mm;
@@ -164,7 +164,7 @@ html, body {
 
 .cover-rule {
     border: none;
-    border-top: 1px solid #3b434d;
+    border-top: 1px solid var(--border);
     width: 80mm;
     margin: 0 auto 16mm auto;
 }
@@ -172,26 +172,26 @@ html, body {
 .cover-title {
     font-size: 24pt;
     font-weight: 700;
-    color: #e6edf3;
+    color: var(--text);
     margin-bottom: 3mm;
     line-height: 1.2;
 }
 
 .cover-subtitle {
     font-size: 10pt;
-    color: #8b949e;
+    color: var(--text-2);
     margin-bottom: 6mm;
 }
 
 .cover-level-pill {
     display: inline-block;
-    background: #21262d;
-    color: #8b949e;
+    background: #f3f4f6;
+    color: var(--text-2);
     font-size: 7pt;
     font-weight: 600;
     padding: 1mm 5mm;
     border-radius: 3mm;
-    border: 1px solid #30363d;
+    border: 1px solid var(--border);
     text-transform: uppercase;
     letter-spacing: 0.1em;
     margin-bottom: 10mm;
@@ -214,22 +214,22 @@ html, body {
 
 .cover-actor-pill {
     display: inline-block;
-    background: var(--primary-d);
-    color: var(--primary);
+    background: #e8f1ff;
+    color: #1a4fa3;
     font-size: 7.5pt;
     font-weight: 600;
     padding: 1.5mm 4mm;
     border-radius: 3mm;
     margin: 1mm 1.5mm;
-    border: 1px solid #1e4d82;
+    border: 1px solid #aac5f0;
 }
 
 .cover-meta {
     margin-top: auto;
     padding-top: 6mm;
     font-size: 7pt;
-    color: #6e7681;
-    border-top: 1px solid #21262d;
+    color: var(--text-3);
+    border-top: 1px solid var(--border);
 }
 
 /* ══════════════════════════════════════════════════════

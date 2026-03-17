@@ -1,0 +1,93 @@
+{% from "macros/icons.html" import icon %}
+
+{% if snapshots %}
+<div style="margin-bottom:0.75rem;display:flex;align-items:center;justify-content:space-between;">
+    <span style="font-size:0.85rem;color:var(--color-text-muted);">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} recorded</span>
+    <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input id="audit-search" type="text" class="form-input" placeholder="Search label, baseline…"
+               style="font-size:0.8rem;padding:0.3rem 0.6rem;max-width:200px;"
+               oninput="filterAuditRows(this.value)">
+    </div>
+</div>
+<div style="overflow-x:auto;">
+<table class="data-table" style="width:100%;font-size:0.82rem;" id="audit-table">
+    <thead>
+        <tr>
+            <th style="white-space:nowrap;cursor:pointer;" onclick="sortAuditTable(0)">Date {{ icon('chevron-down','10') }}</th>
+            <th style="cursor:pointer;" onclick="sortAuditTable(1)">Baseline</th>
+            <th style="cursor:pointer;" onclick="sortAuditTable(2)">Label</th>
+            <th>Captured By</th>
+            <th style="text-align:center;">Score</th>
+            <th style="text-align:center;">{{ icon('shield-check','12') }}</th>
+            <th style="text-align:center;">{{ icon('alert-triangle','12') }}</th>
+            <th style="text-align:center;">{{ icon('x','12') }}</th>
+            <th style="text-align:center;">{{ icon('minus-circle','12') }}</th>
+            <th></th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for snap in snapshots %}
+        <tr class="audit-row">
+            <td style="white-space:nowrap;font-family:monospace;font-size:0.75rem;">
+                {{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}
+            </td>
+            <td style="font-weight:600;">{{ snap.baseline_name }}</td>
+            <td>
+                {% if snap.label %}
+                <span class="badge badge-primary" style="font-size:0.7rem;">{{ snap.label }}</span>
+                {% else %}—{% endif %}
+            </td>
+            <td style="color:var(--color-text-muted);">{{ snap.captured_by or '—' }}</td>
+            <td style="text-align:center;">
+                <span class="badge {% if snap.score_percentage >= 75 %}badge-success{% elif snap.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %}"
+                      style="font-size:0.72rem;">{{ snap.score_percentage | round | int }}%</span>
+            </td>
+            <td style="text-align:center;color:var(--color-success);font-weight:600;">{{ snap.count_green }}</td>
+            <td style="text-align:center;color:var(--color-warning);font-weight:600;">{{ snap.count_amber }}</td>
+            <td style="text-align:center;color:var(--color-danger);font-weight:600;">{{ snap.count_red }}</td>
+            <td style="text-align:center;color:var(--color-muted);font-weight:600;">{{ snap.count_grey }}</td>
+            <td style="text-align:right;">
+                <button class="btn btn-danger btn-sm"
+                        hx-delete="/api/baselines/snapshots/{{ snap.id }}?system_id={{ system_id }}"
+                        hx-target="#audit-history-content"
+                        hx-swap="innerHTML"
+                        hx-confirm="Delete this snapshot?"
+                        style="font-size:0.65rem;padding:0.15rem 0.4rem;">
+                    {{ icon('trash-2','10') }}
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+</div>
+
+<script>
+function filterAuditRows(q) {
+    q = q.toLowerCase();
+    document.querySelectorAll('#audit-table .audit-row').forEach(function(row) {
+        row.style.display = row.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    });
+}
+function sortAuditTable(col) {
+    var table = document.getElementById('audit-table');
+    var tbody = table.querySelector('tbody');
+    var rows = Array.from(tbody.querySelectorAll('tr'));
+    var dir = table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+    table.dataset.sortDir = dir;
+    rows.sort(function(a, b) {
+        var at = a.children[col].textContent.trim();
+        var bt = b.children[col].textContent.trim();
+        return dir === 'asc' ? at.localeCompare(bt) : bt.localeCompare(at);
+    });
+    rows.forEach(function(r) { tbody.appendChild(r); });
+}
+</script>
+
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-muted);">
+    <div style="font-size:2rem;margin-bottom:0.5rem;">{{ icon('camera','32') }}</div>
+    <p style="font-size:0.9rem;margin-bottom:0.25rem;">No audit snapshots yet</p>
+    <p style="font-size:0.8rem;">Take a snapshot from the Baselines tab to freeze coverage metrics for auditing.</p>
+</div>
+{% endif %}
