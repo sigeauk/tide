@@ -866,6 +866,56 @@ class DatabaseService:
         
         return rules, total, last_sync
     
+    def get_existing_rule_keys(self) -> set:
+        """Get set of (rule_id, space) tuples for all rules in the database.
+        Used for lazy mapping: skip Elasticsearch mapping checks for known rules."""
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT rule_id, space FROM detection_rules").fetchall()
+            return {(row[0], row[1]) for row in rows}
+    
+    def get_existing_rule_data(self) -> dict:
+        """Get existing rule scores and raw_data keyed by (rule_id, space).
+        Used to preserve mapping data for rules that skip mapping during lazy sync."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT rule_id, space, score, quality_score, meta_score, "
+                "score_mapping, score_field_type, score_search_time, score_language, "
+                "score_note, score_override, score_tactics, score_techniques, "
+                "score_author, score_highlights, raw_data "
+                "FROM detection_rules"
+            ).fetchall()
+            columns = [desc[0] for desc in conn.description]
+            result = {}
+            for row in rows:
+                d = dict(zip(columns, row))
+                key = (d['rule_id'], d['space'])
+                # Parse raw_data JSON to get results
+                raw = d.get('raw_data')
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except:
+                        raw = {}
+                d['raw_data'] = raw
+                result[key] = d
+            return result
+    
+    def move_rule_space(self, rule_id: str, from_space: str, to_space: str):
+        """Move a rule from one space to another in DuckDB (for instant UI update after promotion)."""
+        with self.get_connection() as conn:
+            # Delete any existing rule with same ID in target space (avoid PK conflict)
+            conn.execute(
+                "DELETE FROM detection_rules WHERE rule_id = ? AND space = ?",
+                [rule_id, to_space]
+            )
+            # Move the rule
+            conn.execute(
+                "UPDATE detection_rules SET space = ? WHERE rule_id = ? AND space = ?",
+                [to_space, rule_id, from_space]
+            )
+            conn.execute("CHECKPOINT")
+        logger.info(f"Moved rule {rule_id} from '{from_space}' to '{to_space}' in DB")
+    
     def get_rule_by_id(self, rule_id: str, space: str = "default") -> Optional[DetectionRule]:
         """Get a single rule by ID and space."""
         with self.get_connection() as conn:
@@ -1815,6 +1865,7 @@ class DatabaseService:
             # Merge in the field mapping results so UI can display them
             raw['results'] = row.get('results', [])
             raw['query'] = row.get('query', '')
+            raw['search_time'] = row.get('search_time', 0)
             return json.dumps(raw, default=str)
         
         df['raw_data'] = df.apply(build_raw_data, axis=1)

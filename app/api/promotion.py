@@ -154,6 +154,9 @@ async def promote_rule(
             # Save validation record
             db.save_validation(rule.name, username)
             
+            # Immediately update DuckDB: move the rule from staging to production
+            db.move_rule_space(rule_id, "staging", "production")
+            
             logger.info(f"Promoted rule '{rule.name}' to production by {username}")
             
             # Return success toast with trigger to refresh
@@ -189,6 +192,7 @@ async def sync_rules(
     user: RequireUser,
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
+    force_mapping: bool = Query(False),
 ):
     """Trigger an immediate sync of rules from Elastic."""
     import asyncio
@@ -198,9 +202,10 @@ async def sync_rules(
     _sync_status["started_at"] = None
     _sync_status["finished_at"] = None
     _sync_status["rule_count"] = 0
-    _update_sync_status("running", "Initialising sync...")
+    label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
+    _update_sync_status("running", label)
     
-    asyncio.create_task(scheduled_sync())
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping))
     
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(

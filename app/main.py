@@ -62,7 +62,7 @@ def get_last_sync_time() -> str:
     return dt.strftime("%d %b %H:%M")
 
 
-async def scheduled_sync():
+async def scheduled_sync(force_mapping=False):
     """Background task: Sync detection rules from Elastic every 60 minutes."""
     settings = get_settings()
     logger.info(f"Scheduled sync triggered (interval: {settings.sync_interval_minutes}m)")
@@ -83,7 +83,7 @@ async def scheduled_sync():
         _update_sync_status("running", "Fetching detection rules...")
         
         # Run the actual sync
-        result = await trigger_sync()
+        result = await trigger_sync(force_mapping=force_mapping)
         
         count = result if isinstance(result, int) else 0
         _update_sync_status("complete", f"Synced {count} rules from Elastic", rule_count=count)

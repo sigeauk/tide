@@ -1,0 +1,67 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<!-- Test Rule Result Popup -->
+<div class="modal-overlay" onclick="this.remove()">
+    <div class="modal-content modal-sm" onclick="event.stopPropagation()" style="max-width: 700px;">
+        <div class="modal-header">
+            <h2 class="modal-title">Test Results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
+            <button class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').remove()">
+                {{ icon('x','12') }} Close
+            </button>
+        </div>
+
+        {% if error %}
+        <div class="alert alert-danger mb-md">
+            <p>{{ icon_text('triangle-alert', 'Preview Error', '16', 'text-danger') }}</p>
+            <p style="font-size: 0.85rem; margin-top: 0.5rem;">{{ error }}</p>
+        </div>
+        {% else %}
+        <!-- Hit Count -->
+        <div class="modal-section">
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                <div class="metric-compact" style="min-width: 120px;">
+                    <div class="metric-compact-value {% if hit_count > 0 %}text-success{% else %}text-warning{% endif %}" style="font-size: 2rem;">
+                        {{ hit_count }}
+                    </div>
+                    <div class="metric-compact-label">Documents Matched</div>
+                </div>
+                <div style="font-size: 0.85rem; color: var(--color-text-muted);">
+                    <p>Query language: <strong>{{ rule.language }}</strong></p>
+                    <p>Space: <strong>{{ rule.space | capitalize }}</strong></p>
+                    <p>Time range: <strong>Last {{ lookback | default('24h') }}</strong></p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sample Results -->
+        {% if samples and samples | length > 0 %}
+        <div class="modal-section">
+            <h3 class="modal-section-subtitle">Sample Results ({{ samples | length }})</h3>
+            <div class="mapping-table-wrapper">
+                <table class="mapping-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Host</th>
+                            <th>Message / Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for sample in samples %}
+                        <tr>
+                            <td style="white-space: nowrap; font-size: 0.8rem;">{{ sample.timestamp }}</td>
+                            <td>{{ sample.host }}</td>
+                            <td style="font-size: 0.8rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis;">{{ sample.message }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% elif hit_count == 0 %}
+        <div class="alert alert-warning mb-md">
+            <p>{{ icon_text('info', 'No matching documents found in the last ' ~ (lookback | default('24h')) ~ '.', '16') }}</p>
+        </div>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>

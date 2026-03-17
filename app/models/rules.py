@@ -93,6 +93,31 @@ class DetectionRule(BaseModel):
         if self.raw_data:
             return self.raw_data.get("results", [])
         return []
+
+    @property
+    def search_time_ms(self) -> int:
+        """Get search duration in milliseconds from raw_data.
+
+        Prefers the normalized `search_time` value set during sync, with
+        fallback to Kibana execution_summary metadata.
+        """
+        if not self.raw_data:
+            return 0
+
+        try:
+            st = int(self.raw_data.get("search_time", 0) or 0)
+            if st > 0:
+                return st
+        except Exception:
+            pass
+
+        try:
+            exec_summary = self.raw_data.get("execution_summary", {}) or {}
+            last_exec = exec_summary.get("last_execution", {}) or {}
+            metrics = last_exec.get("metrics", {}) or {}
+            return int(metrics.get("total_search_duration_ms", 0) or 0)
+        except Exception:
+            return 0
     
     def score_color(self) -> str:
         """CSS color class based on score."""

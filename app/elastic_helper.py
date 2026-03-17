@@ -6,6 +6,7 @@ import re
 import json
 import uuid
 from collections import defaultdict
+from datetime import datetime
 from dotenv import load_dotenv
 from log import log_debug, log_error, log_info
 
@@ -75,6 +76,43 @@ def get_esql_index(query):
         if clean_part.lower() not in IGNORED_INDICES:
             indices.append(clean_part)
     return indices
+
+
+def get_data_view_indices(session, base_url, space, rule):
+    """Resolve index patterns from Kibana data view metadata for rules that do not carry `index`."""
+    data_view_id = rule.get("data_view_id") or rule.get("dataViewId")
+    if not data_view_id:
+        return []
+
+    if isinstance(data_view_id, list):
+        data_view_id = data_view_id[0] if data_view_id else None
+    if not data_view_id:
+        return []
+
+    if str(space).lower() == "default":
+        endpoint = f"{base_url}/api/data_views/data_view/{data_view_id}"
+    else:
+        endpoint = f"{base_url}/s/{space}/api/data_views/data_view/{data_view_id}"
+
+    try:
+        res = session.get(endpoint, timeout=10)
+        if res.status_code != 200:
+            log_debug(f"Data view lookup failed for rule '{rule.get('name', '-')}' ({data_view_id}) in space '{space}': {res.status_code}")
+            return []
+
+        data = res.json() if res.text else {}
+        dv = data.get("data_view", {}) if isinstance(data, dict) else {}
+        title = dv.get("title") or ""
+        if not title:
+            return []
+
+        indices = [p.strip() for p in str(title).split(',') if p and p.strip()]
+        if indices:
+            log_debug(f"Resolved data view indices for rule '{rule.get('name', '-')}' in space '{space}': {indices}")
+        return indices
+    except Exception as e:
+        log_debug(f"Data view lookup exception for rule '{rule.get('name', '-')}' ({data_view_id}): {e}")
+        return []
 
 def resolve_latest_index(session, base_url, pattern, direct_es=None):
     # 1. If the pattern is already concrete, return it
@@ -333,7 +371,13 @@ def calculate_score(rule_data):
     })
     return rule_data
 
-def fetch_detection_rules(url_override=None, key_override=None, check_mappings=True):
+def fetch_detection_rules(url_override=None, key_override=None, check_mappings=True, known_rule_keys=None):
+    """
+    Fetch detection rules from Kibana spaces.
+    known_rule_keys: set of (rule_id, space) tuples already in DB - skip mapping for these.
+    """
+    if known_rule_keys is None:
+        known_rule_keys = set()
     base_url = url_override or os.getenv("ELASTIC_URL")
     api_key = key_override or os.getenv("ELASTIC_API_KEY")
     kibana_spaces_raw = os.getenv("KIBANA_SPACES", "default")
@@ -386,29 +430,58 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
 
         rule_meta_list = []
         index_request_map = defaultdict(set) 
+        skipped_mapping_count = 0
 
         for r in all_rules:
             query = r.get('query', '')
             language = r.get('language', 'kuery')
+            # Use last execution metrics for dynamic search-time scoring
+            search_time = 0
+            try:
+                exec_summary = r.get('execution_summary', {}) or {}
+                last_exec = exec_summary.get('last_execution', {}) or {}
+                metrics = last_exec.get('metrics', {}) or {}
+                search_time = int(metrics.get('total_search_duration_ms', 0) or 0)
+            except Exception:
+                search_time = 0
             indices = r.get('index', []) or []
+            if not indices:
+                # Some rules reference a Kibana data view instead of an explicit `index` list.
+                indices = get_data_view_indices(session, base_url, r.get('space_id', 'default'), r)
             if language == "esql":
                 esql_indices = get_esql_index(query)
                 if esql_indices: indices = esql_indices
             
             clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
             
+            # Lazy Mapping: skip mapping check for rules already in DB
+            rule_key = (r.get('rule_id'), r.get('space_id', 'default'))
+            needs_mapping = check_mappings and rule_key not in known_rule_keys
+            
             fields = set()
-            if check_mappings:
+            if needs_mapping:
                 if language in ["kuery", "lucene"]: fields = extract_kuery_lucene(query)
                 elif language == "esql": fields = extract_esql(query)
                 elif language == "eql": fields = extract_eql(query)[0]
                 
                 for idx in clean_indices: index_request_map[idx].update(fields)
+            else:
+                if check_mappings:
+                    skipped_mapping_count += 1
 
-            rule_meta_list.append({ "raw": r, "fields": fields, "indices": clean_indices })
+            rule_meta_list.append({
+                "raw": r,
+                "fields": fields,
+                "indices": clean_indices,
+                "needs_mapping": needs_mapping,
+                "search_time": search_time,
+            })
+
+        if skipped_mapping_count:
+            log_info(f"[perf] Lazy mapping: skipped {skipped_mapping_count}/{len(all_rules)} rules (already in DB)")
 
         mapping_cache = {}
-        if check_mappings:
+        if check_mappings and index_request_map:
             mapping_cache = get_batch_mappings(session, base_url, index_request_map)
         
         processed_rules = []
@@ -463,7 +536,7 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 "tactics": ",".join(tactics),
                 "techniques": ",".join(techniques),
                 "highlighted_str": highlighted_str,
-                "search_time": 0, "language": r.get('language', 'kuery'),
+                "search_time": meta.get("search_time", 0), "language": r.get('language', 'kuery'),
                 "indices": meta["indices"],
                 "fields": list(meta["fields"]),
                 "results": results, "query": r.get('query', ''),
@@ -497,6 +570,102 @@ def get_promotion_session():
     })
     session.verify = False
     return session, base_url
+
+
+def preview_detection_rule(rule_data, space="default", lookback="24h"):
+    """
+    Test a detection rule against live Elasticsearch data using the Kibana Preview API.
+    Returns (hit_count, sample_results, error) tuple.
+    """
+    session, base_url = get_promotion_session()
+    
+    if space.lower() == "default":
+        endpoint = f"{base_url}/api/detection_engine/rules/preview"
+    else:
+        endpoint = f"{base_url}/s/{space}/api/detection_engine/rules/preview"
+    
+    # Build the preview payload based on rule language
+    language = rule_data.get("language", "kuery")
+    query = rule_data.get("query", "")
+    rule_type = rule_data.get("type", "query")
+    
+    # Map language to the correct type field for the preview API
+    type_map = {
+        "kuery": "query",
+        "lucene": "query",
+        "eql": "eql",
+        "esql": "esql",
+    }
+    preview_type = type_map.get(language, rule_type)
+    
+    # Build the payload the Preview API requires (name, description, risk_score are mandatory)
+    payload = {
+        "type": preview_type,
+        "query": query,
+        "language": language,
+        "index": rule_data.get("index", []),
+        "name": rule_data.get("name", "TIDE Preview"),
+        "description": rule_data.get("description", "Preview test from TIDE"),
+        "risk_score": rule_data.get("risk_score", 21),
+        "severity": rule_data.get("severity", "low"),
+        "interval": "5m",
+        "from": f"now-{lookback}",
+        "invocationCount": 1,
+        "timeframeEnd": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+    }
+    
+    # For EQL, include event_category_override if present
+    if language == "eql":
+        if rule_data.get("event_category_override"):
+            payload["event_category_override"] = rule_data["event_category_override"]
+    
+    # For threshold rules
+    if rule_data.get("threshold"):
+        payload["threshold"] = rule_data["threshold"]
+        payload["type"] = "threshold"
+    
+    try:
+        response = session.post(endpoint, json=payload, timeout=30)
+        
+        if response.status_code != 200:
+            error_text = response.text[:500]
+            log_error(f"Preview API error ({response.status_code}): {error_text}")
+            return 0, [], f"Preview API returned {response.status_code}: {error_text}"
+        
+        data = response.json()
+        
+        # The preview API returns logs with alerts
+        logs = data.get("logs", [])
+        alerts = []
+        
+        # Extract alerts from the preview response
+        if "previewId" in data:
+            # Newer API: alerts are in a separate search
+            preview_id = data["previewId"]
+            hit_count = data.get("totalCount", 0)
+            alerts = data.get("alerts", [])[:3]
+        else:
+            # Direct response format
+            hit_count = len(data.get("alerts", []))
+            alerts = data.get("alerts", [])[:3]
+        
+        # Simplify sample results for display
+        sample_results = []
+        for alert in alerts:
+            source = alert.get("_source", alert)
+            sample_results.append({
+                "timestamp": source.get("@timestamp", source.get("event", {}).get("created", "-")),
+                "host": source.get("host", {}).get("name", source.get("host.name", "-")) if isinstance(source.get("host"), dict) else source.get("host.name", "-"),
+                "message": (source.get("message", source.get("rule", {}).get("description", "-")) or "-")[:200],
+            })
+        
+        return hit_count, sample_results, None
+        
+    except requests.exceptions.Timeout:
+        return 0, [], "Preview API request timed out"
+    except Exception as e:
+        log_error(f"Preview rule failed: {e}")
+        return 0, [], str(e)
 
 
 def get_space_rule_ids(space):

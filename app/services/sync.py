@@ -105,10 +105,11 @@ def run_mitre_sync():
         return -1
 
 
-def run_elastic_sync():
+def run_elastic_sync(force_mapping=False):
     """
     Synchronous function to fetch rules from Elastic and save to database.
     This runs in a thread pool to avoid blocking the async event loop.
+    force_mapping: if True, skip lazy mapping and re-check all field mappings from Elastic.
     """
     # Determine the app directory (where elastic_helper.py lives)
     # sync.py is at: app/services/sync.py
@@ -127,17 +128,57 @@ def run_elastic_sync():
         os.chdir(app_dir)
         
         try:
+            import time as _time
             import elastic_helper
             from app.services.database import get_database_service
             
             db = get_database_service()
             
             logger.info("Starting Elastic sync...")
-            df = elastic_helper.fetch_detection_rules(check_mappings=True)
+            _t_start = _time.perf_counter()
+            
+            # Lazy Mapping: get existing rule data from DB so we can skip mapping for known rules
+            existing_rule_data = db.get_existing_rule_data()
+            if force_mapping:
+                existing_rule_keys = set()  # Force full mapping for all rules
+                logger.info(f"[perf] Force mapping enabled — will re-check all rules")
+            else:
+                # Only skip mapping for rules that actually HAVE stored results
+                existing_rule_keys = set()
+                for key, data in existing_rule_data.items():
+                    raw = data.get('raw_data', {})
+                    if isinstance(raw, dict) and raw.get('results'):
+                        existing_rule_keys.add(key)
+            logger.info(f"[perf] Loaded {len(existing_rule_data)} existing rules, {len(existing_rule_keys)} with mapping data, in {(_time.perf_counter() - _t_start)*1000:.0f}ms")
+            
+            _t_fetch = _time.perf_counter()
+            df = elastic_helper.fetch_detection_rules(check_mappings=True, known_rule_keys=existing_rule_keys)
             
             if df is not None and not df.empty:
+                _t_save = _time.perf_counter()
+                logger.info(f"[perf] fetch_detection_rules completed in {(_t_save - _t_fetch)*1000:.0f}ms")
                 audit_records = df.to_dict('records')
+                
+                # Lazy Mapping: restore scores and mapping data for rules that were skipped
+                restored_count = 0
+                for rec in audit_records:
+                    key = (rec.get('rule_id'), rec.get('space_id', 'default'))
+                    if key in existing_rule_data and not rec.get('results'):
+                        existing = existing_rule_data[key]
+                        # Restore mapping results from existing raw_data
+                        existing_raw = existing.get('raw_data', {})
+                        if isinstance(existing_raw, dict) and existing_raw.get('results'):
+                            rec['results'] = existing_raw['results']
+                        # Recalculate all scores so dynamic metrics (e.g. search_time) stay fresh
+                        rec = elastic_helper.calculate_score(rec)
+                        restored_count += 1
+                
+                if restored_count:
+                    logger.info(f"[perf] Lazy mapping: restored scores/mappings for {restored_count} existing rules")
+                
                 count = db.save_audit_results(audit_records)
+                logger.info(f"[perf] save_audit_results completed in {(_time.perf_counter() - _t_save)*1000:.0f}ms")
+                logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
                 # --- Subtractive sync: remove ghost rules from empty spaces ---
                 # Determine which configured spaces were NOT in the fetched data
@@ -170,11 +211,11 @@ def run_elastic_sync():
         return -1
 
 
-async def trigger_sync():
+async def trigger_sync(force_mapping=False):
     """
     Async wrapper to run the sync in a thread pool.
     Use this from async endpoints.
     """
     import asyncio
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, run_elastic_sync)
+    return await loop.run_in_executor(None, lambda: run_elastic_sync(force_mapping=force_mapping))

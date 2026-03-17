@@ -138,6 +138,66 @@ def validate_rule(
     )
 
 
+@router.post("/{rule_id}/test", response_class=HTMLResponse)
+async def test_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    settings: SettingsDep,
+    space: str = Query("default"),
+):
+    """Test a detection rule against live Elasticsearch data via the Kibana Preview API."""
+    import asyncio
+    
+    # Parse lookback from form body (sent via hx-include)
+    form = await request.form()
+    lookback = str(form.get("test-lookback", "24h"))
+    allowed = {"1h", "6h", "24h", "7d", "30d"}
+    if lookback not in allowed:
+        lookback = "24h"
+    
+    rule = db.get_rule_by_id(rule_id, space)
+    if not rule:
+        return HTMLResponse(
+            '<div class="test-result test-error">Rule not found</div>',
+            status_code=404
+        )
+    
+    if not rule.raw_data:
+        return HTMLResponse(
+            '<div class="test-result test-error">Rule data not available for testing</div>',
+            status_code=400
+        )
+    
+    try:
+        from app.elastic_helper import preview_detection_rule
+        loop = asyncio.get_event_loop()
+        hit_count, samples, error = await loop.run_in_executor(
+            None,
+            lambda: preview_detection_rule(rule.raw_data, space, lookback=lookback)
+        )
+        
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            "components/test_result_popup.html",
+            {
+                "request": request,
+                "rule": rule,
+                "hit_count": hit_count,
+                "samples": samples,
+                "error": error,
+                "lookback": lookback,
+            }
+        )
+    except Exception as e:
+        logger.exception(f"Test rule failed for {rule_id}")
+        return HTMLResponse(
+            f'<div class="test-result test-error">Error: {str(e)}</div>',
+            status_code=500
+        )
+
+
 @router.post("/sync", response_class=HTMLResponse)
 async def sync_rules(
     request: Request,
@@ -145,6 +205,7 @@ async def sync_rules(
     user: RequireUser,
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
+    force_mapping: bool = Query(False),
 ):
     """Trigger an immediate sync of rules from Elastic."""
     import asyncio
@@ -154,9 +215,10 @@ async def sync_rules(
     _sync_status["started_at"] = None
     _sync_status["finished_at"] = None
     _sync_status["rule_count"] = 0
-    _update_sync_status("running", "Initialising sync...")
+    label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
+    _update_sync_status("running", label)
     
-    asyncio.create_task(scheduled_sync())
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping))
     
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(

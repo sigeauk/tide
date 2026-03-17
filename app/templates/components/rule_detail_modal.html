@@ -100,6 +100,13 @@ Shows full rule information including query, field mappings, and scores.
                 <div class="metric-compact">
                     <div class="metric-compact-value">{{ rule.score_search_time }}/10</div>
                     <div class="metric-compact-label">Search Time</div>
+                    <div class="metric-compact-label" style="font-size:0.7rem;opacity:0.9;">
+                        {% if rule.search_time_ms > 0 %}
+                            {{ rule.search_time_ms }} ms
+                        {% else %}
+                            Never run
+                        {% endif %}
+                    </div>
                 </div>
                 <div class="metric-compact">
                     <div class="metric-compact-value">{{ rule.score_language }}/9</div>
@@ -166,6 +173,23 @@ Shows full rule information including query, field mappings, and scores.
                         hx-headers='{"X-Return-Modal": "true"}'>
                     {{ icon('circle-check','14') }} Validate Now
                 </button>
+                <select id="test-lookback" name="test-lookback" class="form-input form-select" style="width:auto;min-width:80px;font-size:0.75rem;padding:0.3rem 0.4rem;height:auto;">
+                    <option value="1h">1h</option>
+                    <option value="6h">6h</option>
+                    <option value="24h" selected>24h</option>
+                    <option value="7d">7d</option>
+                    <option value="30d">30d</option>
+                </select>
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/api/rules/{{ rule.rule_id }}/test?space={{ rule.space | default('default') }}"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        hx-include="#test-lookback"
+                        hx-indicator=".test-spinner"
+                        style="margin-left: 0;">
+                    {{ icon('zap','14') }} Test Rule
+                </button>
+                <span class="test-spinner loading-spinner" style="display:none; width:16px; height:16px;"></span>
             </div>
         </div>
     </div>

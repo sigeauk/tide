@@ -94,17 +94,40 @@
         <label class="form-label">&nbsp;</label>
         <div style="display: flex; align-items: center; gap: 0.75rem;">
             <div id="sync-status"></div>
-            <button 
-                class="btn btn-primary sync-btn"
-                hx-post="/api/rules/sync"
-                hx-target="#sync-status"
-                hx-swap="outerHTML"
-                hx-disabled-elt="this">
-                <span class="sync-default">
-                    {{ icon('refresh-cw', '16') }}
-                    <span>Sync Rules</span>
-                </span>
-            </button>
+            <div class="btn-group" style="position:relative;display:flex;align-items:stretch;height:38px;">
+                <button 
+                    class="btn btn-primary sync-btn"
+                    hx-post="/api/rules/sync"
+                    hx-target="#sync-status"
+                    hx-swap="outerHTML"
+                    hx-disabled-elt="this"
+                    style="border-top-right-radius:0;border-bottom-right-radius:0;height:100%;">
+                    <span class="sync-default">
+                        {{ icon('refresh-cw', '16') }}
+                        <span>Sync</span>
+                    </span>
+                </button>
+                <button 
+                    class="btn btn-primary sync-btn"
+                    onclick="event.stopPropagation(); var dd=this.nextElementSibling; dd.style.display = dd.style.display==='none' ? 'block' : 'none';"
+                    style="border-top-left-radius:0;border-bottom-left-radius:0;border-left:1px solid rgba(255,255,255,0.2);padding:0 0.4rem;height:100%;"
+                    type="button">
+                    {{ icon('chevron-down', '14') }}
+                </button>
+                <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-surface-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
+                    <button 
+                        class="btn btn-secondary"
+                        style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
+                        hx-post="/api/rules/sync?force_mapping=true"
+                        hx-target="#sync-status"
+                        hx-swap="outerHTML"
+                        hx-disabled-elt="this"
+                        onclick="this.closest('.sync-dropdown').style.display='none';">
+                        {{ icon('database', '14') }}
+                        <span style="margin-left:0.4rem;">Sync with Mappings</span>
+                    </button>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -133,6 +156,13 @@
 
 {% block scripts %}
 <script>
+    // Close sync dropdown on outside click
+    document.addEventListener('click', function(e) {
+        document.querySelectorAll('.sync-dropdown').forEach(function(d) {
+            if (!d.parentElement.contains(e.target)) d.style.display = 'none';
+        });
+    });
+
     document.body.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'rules-grid' || 
             event.target.classList.contains('rule-card')) {
