@@ -4,7 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.3.6] - 
+## [3.3.7] - 2026-03-18
+
+### Added
+- **Elastic Rule Testing:** Ability to test the rule against the elastic indices.
+- **Elastic Rule Syncing:**  Users can now sync rules with and without mapping the rule. Increased full sync speed.
+
+### Fixed
+- **Elastic Rule Dataviews:** Updating to get rule mappings from rules that used `dataviews` as well as `indices`.
+- **Rule Promotion:** On rule promotion, if the rule was successfully moved, it is moved in the database, without the need to sync all Elastic rules.
+
+## [3.3.6] - 2026-03-17
 
 ### Added
 - **Metric to systems:** added system page stats on baselines
