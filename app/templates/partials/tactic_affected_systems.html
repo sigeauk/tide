@@ -130,7 +130,7 @@
             <span id="step-bs-description"></span> for <strong id="step-bs-target"></strong>.
             Status will change to <span id="step-bs-badge"></span>.
         </p>
-        <form hx-post="/api/blind-spots"
+        <form method="post" hx-post="/api/blind-spots"
               hx-target="#step-affected-section"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('step-bs-modal').style.display='none'"

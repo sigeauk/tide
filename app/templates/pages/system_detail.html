@@ -385,8 +385,8 @@ function confirmExport() {
     params.set('mode', audience);
     params.set('format', format);
     params.set('classification', classification);
-    if (includeDevices) params.set('include_devices', '1');
-    if (includeBaselines) params.set('include_baselines', '1');
+    params.set('include_devices', includeDevices ? '1' : '0');
+    params.set('include_baselines', includeBaselines ? '1' : '0');
     closeExportModal();
     window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
 }

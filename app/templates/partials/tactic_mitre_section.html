@@ -66,7 +66,7 @@
 <!-- Add technique form -->
 <div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;border-top:1px solid var(--color-border-muted);padding-top:0.75rem;">
     <span style="font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">Add Technique:</span>
-    <form style="display:flex;gap:0.4rem;align-items:center;"
+    <form method="post" style="display:flex;gap:0.4rem;align-items:center;"
           hx-post="/api/baselines/tactics/{{ step.id }}/techniques"
           hx-target="#step-mitre-section"
           hx-swap="innerHTML"

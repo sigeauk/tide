@@ -243,7 +243,7 @@ document.addEventListener('click', function(e){
             <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('add-tactic-modal').style.display='none'">&#x2715;</button>
         </div>
-        <form hx-post="/api/baselines/{{ baseline.id }}/tactics"
+        <form method="post" hx-post="/api/baselines/{{ baseline.id }}/tactics"
               hx-target="#baseline-tactics"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('add-tactic-modal').style.display='none';this.reset()"

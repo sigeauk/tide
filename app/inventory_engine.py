@@ -1402,8 +1402,13 @@ def ingest_cisa_feed(json_bytes):
 # Report Data Builders
 # ---------------------------------------------------------------------------
 
-def build_system_report_data(system_id: str) -> Optional[Dict]:
-    """Build all data needed for System detail reports (CISO + Technical)."""
+def build_system_report_data(system_id: str, include_devices: bool = True) -> Optional[Dict]:
+    """Build all data needed for System detail reports (CISO + Technical).
+    
+    Args:
+        system_id: System ID to build report for
+        include_devices: If False, excludes all device/host-specific tables and metrics
+    """
     system = get_system(system_id)
     if not system:
         return None
@@ -1508,6 +1513,29 @@ def build_system_report_data(system_id: str) -> Optional[Dict]:
     sorted_cves = sorted(all_cves.values(), key=lambda c: len(c["hosts_red"]), reverse=True)
     top5 = sorted_cves[:5]
 
+    # When include_devices is False, exclude all device-specific data from the report
+    if not include_devices:
+        return {
+            "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
+            "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+            "total_hosts": 0,  # Hide device count
+            "total_cves": 0,   # Hide CVE count (it would show exposed systems without remediation)
+            "red_hosts": 0,
+            "amber_hosts": 0,
+            "green_hosts": 0,
+            "grey_hosts": 0,
+            "total_red_pairs": 0,
+            "total_amber_pairs": 0,
+            "total_grey_pairs": 0,
+            "coverage_ratio": 100,  # No device-specific coverage metrics
+            "top5_cves": [],       # Exclude device-specific CVE breakdown
+            "host_rows": [],       # Exclude all host-specific tables
+            "all_cves": [],        # Exclude device-specific CVE details
+            "baselines": get_system_baselines(system_id),   # Keep baseline data (technique-level, not device-level)
+            "snapshots": get_baseline_snapshots(system_id), # Keep historical snapshots
+        }
+    
+    # Full report when include_devices is True
     return {
         "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
         "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),

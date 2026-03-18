@@ -25,7 +25,7 @@
 @page cover {
     size: A4 portrait;
     margin: 0;
-    background-color: #0d1117;
+    background-color: #ffffff;
     @top-center    { content: none; }
     @bottom-center { content: none; }
 }
@@ -102,24 +102,24 @@ html, body {
 }
 
 /* ══════════════════════════════════════════════════════
-   COVER PAGE  (dark full-bleed — matches Threat Report)
+   COVER PAGE  (white print-friendly design)
    ══════════════════════════════════════════════════════ */
 .cover {
     page: cover;
     page-break-after: always;
-    background: var(--navy);
+    background: #ffffff;
     display: flex; flex-direction: column;
     height: 297mm; padding: 0;
-    text-align: center; color: #c9d1d9;
+    text-align: center; color: var(--text);
 }
 .cover-topbar    { width:100%; height:12mm; background:var(--primary); flex-shrink:0; }
 .cover-bottombar { width:100%; height:4mm;  background:var(--primary); flex-shrink:0; margin-top:auto; }
 .cover-body      { flex:1; display:flex; flex-direction:column; justify-content:center; padding:10mm 20mm 8mm 20mm; }
 .cover-logo      { font-size:42pt; font-weight:700; color:var(--primary); letter-spacing:0.12em; display:block; margin-bottom:2mm; }
-.cover-tagline   { font-size:8pt; color:#8b949e; text-transform:uppercase; letter-spacing:0.18em; margin-bottom:18mm; }
+.cover-tagline { font-size:8pt; color:var(--text-2); text-transform:uppercase; letter-spacing:0.18em; margin-bottom:18mm; }
 .cover-rule      { border:none; border-top:1px solid #3b434d; width:80mm; margin:0 auto 16mm auto; }
-.cover-title     { font-size:24pt; font-weight:700; color:#e6edf3; margin-bottom:3mm; line-height:1.2; }
-.cover-subtitle  { font-size:10pt; color:#8b949e; margin-bottom:6mm; }
+.cover-title     { font-size:24pt; font-weight:700; color:var(--text); margin-bottom:3mm; line-height:1.2; }
+.cover-subtitle  { font-size:10pt; color:var(--text-2); margin-bottom:6mm; }
 .cover-level-pill {
     display:inline-block; background:#21262d; color:#8b949e;
     font-size:7pt; font-weight:600; padding:1mm 5mm; border-radius:3mm;
@@ -329,6 +329,7 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
     <span><span class="swatch" style="background:var(--success)"></span> Green — Clean (no vulnerabilities found)</span>
 </div>
 
+{% if report.include_devices is not defined or report.include_devices %}
 <div class="summary-grid avoid-break">
     <div class="stat-card">
         <span class="stat-value">{{ report.total_hosts }}</span>
@@ -355,6 +356,7 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
         <span class="stat-label">Coverage Ratio</span>
     </div>
 </div>
+{% endif %}
 
 {% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
 {%- set total_bl_steps = report.baselines | sum(attribute='total_steps') -%}
@@ -638,25 +640,42 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
     {% if bl.playbook_description %}
     <div style="font-size:6.5pt;color:var(--text-3);margin-bottom:2mm;">{{ bl.playbook_description }}</div>
     {% endif %}
-    <table style="margin-bottom:0;">
-        <thead><tr><th>#</th><th>Title</th><th>Technique</th><th>Required Rule</th><th>Status</th></tr></thead>
-        <tbody>
-            {% for step in bl.tactics %}
-            <tr>
-                <td style="text-align:center;font-weight:600;">{{ step.step_number }}</td>
-                <td>{{ step.title }}</td>
-                <td><span class="mitre-pill {% if step.status == 'green' %}covered{% else %}gap{% endif %}">{{ step.technique_id or '—' }}</span></td>
-                <td style="font-family:var(--ff-mono);font-size:6pt;">{{ step.required_rule or '—' }}</td>
-                <td>
-                    {% if step.status == 'green' %}<span class="badge badge-green">Detected</span>
-                    {% elif step.status == 'grey' %}<span class="badge badge-grey">N/A</span>
-                    {% elif step.status == 'amber' %}<span class="badge badge-amber">Known Gap</span>
-                    {% else %}<span class="badge badge-red">Missing</span>{% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    {% set tactic_groups = bl.tactics | groupby('tactic') | list %}
+    {% for tactic, steps in tactic_groups | sort %}
+    <div style="margin-bottom:3mm;">
+        <div style="font-size:7pt;font-weight:600;background:var(--primary-d,#1a3a5c);color:var(--primary,#3b82f6);padding:2mm;margin-bottom:1mm;border-radius:2mm;">{{ tactic or 'Unassigned' }}</div>
+        <table style="margin-bottom:0;">
+            <thead><tr><th style="width:5%">#</th><th style="width:25%">Step</th><th style="width:20%">Technique</th><th style="width:35%">Applied Rules</th><th style="width:15%">Status</th></tr></thead>
+            <tbody>
+                {% for step in steps %}
+                <tr>
+                    <td style="text-align:center;font-weight:600;font-size:6.5pt;">{{ step.step_number }}</td>
+                    <td style="font-size:6.5pt;">{{ step.title }}</td>
+                    <td style="font-family:var(--ff-mono);font-size:6.5pt;">{{ step.technique_id or '—' }}</td>
+                    <td style="font-family:var(--ff-mono);font-size:6pt;">
+                        {% if step.applied_dets %}
+                            {{ step.applied_dets | map(attribute='rule_ref') | list | join(', ') or step.applied_dets | map(attribute='note') | list | join(', ') or '—' }}
+                        {% else %}
+                            <span style="color:var(--text-3);">—</span>
+                        {% endif %}
+                    </td>
+                    <td style="font-size:6.5pt;">
+                        {% if step.status == 'green' %}
+                            <span class="badge badge-green">Detected</span>
+                        {% elif step.status == 'grey' %}
+                            <span class="badge badge-grey">N/A</span>
+                        {% elif step.status == 'amber' %}
+                            <span class="badge badge-amber">Known Gap</span>
+                        {% else %}
+                            <span class="badge badge-red">Missing</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
 </div>
 {% endfor %}
 {% endif %}

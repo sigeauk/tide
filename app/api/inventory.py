@@ -805,6 +805,129 @@ def api_create_baseline(
     return _render("partials/baselines_list.html", request, {"baselines": baselines})
 
 
+@router.post("/api/baselines/import", response_class=HTMLResponse)
+async def api_import_baseline(
+    request: Request, user: RequireUser,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    description: str = Form(""),
+):
+    """Import a baseline from a CSV or Excel file.
+
+    Expected columns (case-insensitive, flexible naming):
+      Title | Tactic (Kill Chain Phase) | Technique (MITRE ID) | Description
+    """
+    import csv
+    import io
+    content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+    filename = (file.filename or "").lower()
+
+    # --- Parse rows from CSV or Excel ---
+    if filename.endswith((".xlsx", ".xls")):
+        try:
+            import openpyxl
+            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+            ws = wb.active
+            rows_iter = ws.iter_rows(values_only=True)
+            raw_headers = next(rows_iter, None)
+            if not raw_headers:
+                raise HTTPException(status_code=422, detail="Excel file has no header row")
+            headers = [str(h).strip().lower() if h else "" for h in raw_headers]
+            data_rows = [
+                {headers[i]: (str(cell).strip() if cell is not None else "")
+                 for i, cell in enumerate(row) if i < len(headers)}
+                for row in rows_iter
+            ]
+            wb.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Failed to parse Excel file: {exc}")
+    elif filename.endswith(".csv"):
+        try:
+            text = content.decode("utf-8-sig")
+            reader = csv.DictReader(io.StringIO(text))
+            headers = [h.strip().lower() for h in (reader.fieldnames or [])]
+            reader.fieldnames = headers
+            data_rows = [{k: (v.strip() if v else "") for k, v in row.items()} for row in reader]
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=f"Failed to parse CSV file: {exc}")
+    else:
+        raise HTTPException(status_code=422, detail="File must be .csv, .xlsx, or .xls")
+
+    if not data_rows:
+        raise HTTPException(status_code=422, detail="File contains no data rows")
+
+    # --- Map flexible column names to canonical fields ---
+    def _find_col(candidates):
+        for c in candidates:
+            if c in headers:
+                return c
+        return None
+
+    col_title = _find_col(["title", "name", "technique name", "technique_name"])
+    col_tactic = _find_col(["tactic", "kill chain phase", "kill chain", "phase",
+                            "kill_chain_phase", "mitre tactic", "mitre_tactic"])
+    col_tech = _find_col(["technique", "technique id", "technique_id", "mitre id",
+                          "mitre_id", "mitre technique", "mitre_technique", "att&ck id"])
+    col_desc = _find_col(["description", "desc", "details", "notes", "note"])
+
+    if not col_title and not col_tech:
+        raise HTTPException(
+            status_code=422,
+            detail="Could not find a 'Title' or 'Technique' column. "
+                   "Expected headers like: Title, Tactic, Technique, Description",
+        )
+
+    # --- Create baseline and add each row as a tactic/step ---
+    pb = create_playbook(name.strip(), description.strip())
+
+    from app.models.inventory import MITRE_TACTICS
+    tactic_lookup = {t.lower(): t for t in MITRE_TACTICS}
+    tactic_order = {t.lower(): i for i, t in enumerate(MITRE_TACTICS)}
+
+    # Parse all valid rows first
+    parsed_rows = []
+    for row in data_rows:
+        title = row.get(col_title, "") if col_title else ""
+        technique_id = row.get(col_tech, "") if col_tech else ""
+        raw_tactic = row.get(col_tactic, "") if col_tactic else ""
+        desc = row.get(col_desc, "") if col_desc else ""
+
+        # Skip completely empty rows
+        if not title and not technique_id:
+            continue
+
+        # Fall back: use technique ID as title if title is blank
+        if not title:
+            title = technique_id
+
+        # Normalise tactic name to canonical casing
+        tactic_val = tactic_lookup.get(raw_tactic.lower(), raw_tactic) if raw_tactic else ""
+
+        parsed_rows.append((title, technique_id, tactic_val, desc))
+
+    # Sort by kill chain phase order so step_numbers follow MITRE ordering
+    parsed_rows.sort(key=lambda r: tactic_order.get(r[2].lower(), 999))
+
+    imported = 0
+    for idx, (title, technique_id, tactic_val, desc) in enumerate(parsed_rows, start=1):
+        add_playbook_step(pb.id, idx, title, technique_id, "", desc, tactic=tactic_val or None)
+        imported += 1
+
+    if imported == 0:
+        delete_playbook(pb.id)
+        raise HTTPException(status_code=422, detail="No valid rows found in file")
+
+    baselines = get_baselines_overview()
+    resp = _render("partials/baselines_list.html", request, {"baselines": baselines})
+    resp.headers["HX-Trigger"] = "showToast"
+    return resp
+
+
 @router.delete("/api/baselines/{baseline_id}", response_class=HTMLResponse)
 def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser):
     delete_playbook(baseline_id)
@@ -848,7 +971,11 @@ def api_add_tactic(
 @router.delete("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
 def api_delete_tactic(request: Request, tactic_id: str, playbook_id: str = Query(...), user: RequireUser = None):
     delete_playbook_step(tactic_id)
-    if request.headers.get("HX-Target") == "body":
+    # When hx-target="body", HTMX does not send the HX-Target header (body has no id).
+    # An empty or absent HX-Target means we came from the tactic detail page and should
+    # navigate back to the baseline list rather than returning a bare partial.
+    hx_target = request.headers.get("HX-Target", "")
+    if not hx_target or hx_target == "body":
         resp = HTMLResponse("")
         resp.headers["HX-Redirect"] = f"/baselines/{playbook_id}"
         return resp
@@ -1248,14 +1375,18 @@ def api_system_report(
     if classification not in CLASSIFICATION_OPTIONS:
         classification = CLASSIFICATION_OPTIONS[0]
 
-    report_data = build_system_report_data(system_id)
+    # Parse query parameters
+    include_devices_flag = include_devices == "1"
+    include_baselines_flag = include_baselines == "1"
+    
+    report_data = build_system_report_data(system_id, include_devices=include_devices_flag)
     if not report_data:
         raise HTTPException(status_code=404, detail="System not found")
 
     report_data["mode"] = mode
     report_data["classification"] = classification
-    report_data["include_devices"] = include_devices == "1"
-    report_data["include_baselines"] = include_baselines == "1"
+    report_data["include_devices"] = include_devices_flag
+    report_data["include_baselines"] = include_baselines_flag
 
     safe_name = report_data["system"]["name"].replace(" ", "-").replace("/", "-")[:30]
     level_tag = "Technical" if mode == "technical" else "Executive"
@@ -1454,18 +1585,24 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| Total Devices | {data['total_hosts']} |",
-        f"| Unique CVEs | {data['total_cves']} |",
-        f"| At Risk (Red) | {data['red_hosts']} |",
-        f"| Monitored (Amber) | {data['amber_hosts']} |",
-        f"| Blind Spots (Grey) | {data.get('grey_hosts', 0)} |",
-        f"| Clean (Green) | {data['green_hosts']} |",
-        f"| Coverage Ratio | {data['coverage_ratio']}% |",
-        "",
     ]
+    
+    # Add device stats only if include_devices is True
+    if data.get("include_devices"):
+        lines += [
+            f"| Total Devices | {data['total_hosts']} |",
+            f"| Unique CVEs | {data['total_cves']} |",
+            f"| At Risk (Red) | {data['red_hosts']} |",
+            f"| Monitored (Amber) | {data['amber_hosts']} |",
+            f"| Blind Spots (Grey) | {data.get('grey_hosts', 0)} |",
+            f"| Clean (Green) | {data['green_hosts']} |",
+            f"| Coverage Ratio | {data['coverage_ratio']}% |",
+        ]
+    
+    lines.append("")
 
-    # Top 5 CVEs
-    if data.get("top5_cves"):
+    # Top 5 CVEs (only if include_devices is True)
+    if data.get("top5_cves") and data.get("include_devices"):
         lines += [
             "## Top 5 Critical CVEs",
             "",
@@ -1481,20 +1618,21 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             )
         lines.append("")
 
-    # Device Status
-    lines += [
-        "## Device Status Summary",
-        "",
-        "| Device | IP | OS | Status | CVEs | At Risk | Monitored |",
-        "|--------|----|----|--------|------|---------|-----------|",
-    ]
-    for h in data.get("host_rows", []):
-        status = {"green": "Clean", "amber": "Monitored", "red": "At Risk", "grey": "Blind Spot"}.get(h["rag"], h["rag"])
-        lines.append(
-            f"| {h['name']} | {h['ip']} | {h['os'][:30]} | {status} | "
-            f"{h['cve_count']} | {h['red_count']} | {h['amber_count']} |"
-        )
-    lines.append("")
+    # Device Status (only if include_devices is True)
+    if data.get("include_devices"):
+        lines += [
+            "## Device Status Summary",
+            "",
+            "| Device | IP | OS | Status | CVEs | At Risk | Monitored |",
+            "|--------|----|----|--------|------|---------|-----------|",
+        ]
+        for h in data.get("host_rows", []):
+            status = {"green": "Clean", "amber": "Monitored", "red": "At Risk", "grey": "Blind Spot"}.get(h["rag"], h["rag"])
+            lines.append(
+                f"| {h['name']} | {h['ip']} | {h['os'][:30]} | {status} | "
+                f"{h['cve_count']} | {h['red_count']} | {h['amber_count']} |"
+            )
+        lines.append("")
 
     # Baseline Coverage
     baselines = data.get("baselines", [])
@@ -1515,7 +1653,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
 
     # Technical detail
     if mode == "technical":
-        # Baseline gap analysis
+        # Baseline gap analysis (grouped by tactic)
         if baselines:
             lines += ["## Baseline Gap Analysis", ""]
             for bl in baselines:
@@ -1523,23 +1661,46 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                 if bl.get("playbook_description"):
                     lines.append(f"_{bl['playbook_description']}_")
                 lines.append("")
-                lines.append("| Step | Title | Technique | Required Rule | Status |")
-                lines.append("|------|-------|-----------|---------------|--------|")
+                
+                # Group steps by tactic
+                tactics_grouped = {}
                 for step in bl.get("tactics", []):
-                    if step["status"] == "grey":
-                        status = "Blind Spot"
-                    elif step["status"] == "amber":
-                        status = "Covered"
-                    else:
-                        status = "**Missing**"
-                    det_display = ", ".join(d["rule_ref"] for d in step.get("detections", []) if d.get("rule_ref")) or "—"
-                    lines.append(
-                        f"| {step['step_number']} | {step['title']} | "
-                        f"`{step['technique_id'] or '—'}` | `{det_display}` | {status} |"
-                    )
-                lines.append("")
+                    tactic = step.get("tactic") or "Unassigned"
+                    if tactic not in tactics_grouped:
+                        tactics_grouped[tactic] = []
+                    tactics_grouped[tactic].append(step)
+                
+                # Render each tactic with its steps
+                for tactic in sorted(tactics_grouped.keys()):
+                    lines.append(f"#### {tactic}")
+                    lines.append("")
+                    lines.append("| Step | Title | Technique | Applied Rules | Status |")
+                    lines.append("|------|-------|-----------|----------------|--------|")
+                    for step in tactics_grouped[tactic]:
+                        # Determine status display
+                        if step["status"] == "grey":
+                            status = "N/A"
+                        elif step["status"] == "green":
+                            status = "Detected"
+                        elif step["status"] == "amber":
+                            status = "Known Gap"
+                        else:
+                            status = "Missing"
+                        
+                        # Get applied detections (rules that are actually in place)
+                        applied_rules = step.get("applied_dets", [])
+                        applied_display = ", ".join(
+                            d.get('rule_ref') or d.get('note') or 'Rule'
+                            for d in applied_rules
+                        ) if applied_rules else "—"
+                        
+                        lines.append(
+                            f"| {step['step_number']} | {step['title']} | "
+                            f"{step['technique_id'] or '—'} | {applied_display} | {status} |"
+                        )
+                    lines.append("")
 
-        if data.get("all_cves"):
+        if data.get("all_cves") and data.get("include_devices"):
             lines += ["## CVE Breakdown (Technical Detail)", ""]
             for cve in data["all_cves"]:
                 lines.append(f"### {cve['cve_id']}")

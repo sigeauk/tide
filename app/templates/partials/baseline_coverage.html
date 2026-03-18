@@ -79,19 +79,21 @@
 
         {% for tactic in ns_s.phases %}
         <div style="margin-bottom:0.75rem;">
-            <!-- Phase header -->
-            <div style="display:flex;align-items:center;gap:0.4rem;margin-bottom:0.4rem;padding-bottom:0.3rem;border-bottom:2px solid var(--color-info);">
+            <!-- Phase header (collapsible) -->
+            <div style="display:flex;align-items:center;gap:0.4rem;padding-bottom:0.3rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
+                 onclick="var b=document.getElementById('blcov-phase-{{ bl.playbook_id }}-{{ loop.index }}');var c=document.getElementById('blcov-chev-{{ bl.playbook_id }}-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
                 <span style="display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
                     {{ icon('crosshair','12') }}
                 </span>
-                <h4 style="margin:0;font-size:0.85rem;font-weight:700;color:var(--color-primary);">{{ tactic }}</h4>
+                <h4 style="margin:0;font-size:0.85rem;font-weight:700;color:var(--color-primary);flex:1;">{{ tactic }}</h4>
                 {% set ns_tc = namespace(count=0) %}
                 {% for s in bl.tactics %}{% if (s.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
                 <span class="badge badge-neutral" style="font-size:0.6rem;">{{ ns_tc.count }}</span>
+                <span id="blcov-chev-{{ bl.playbook_id }}-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(90deg);display:flex;flex-shrink:0;">{{ icon('chevron-right', '14') }}</span>
             </div>
 
-            <!-- Tech cards -->
-            <div style="display:flex;flex-direction:column;gap:0.4rem;">
+            <!-- Tech cards (collapsible body) -->
+            <div id="blcov-phase-{{ bl.playbook_id }}-{{ loop.index }}" style="display:flex;flex-direction:column;gap:0.4rem;margin-top:0.4rem;">
             {% for step in bl.tactics %}
             {% if (step.tactic or "Other") == tactic %}
             <div class="tech-card tech-card--{{ step.status }}">
@@ -370,7 +372,7 @@ function handleBlCoverageAction(sel) {
             <span id="bs-bl-description"></span> for technique <strong id="bs-bl-target"></strong> on this system.
             Status will change to <span id="bs-bl-badge"></span>.
         </p>
-        <form hx-post="/api/blind-spots"
+        <form method="post" hx-post="/api/blind-spots"
               hx-target="#baseline-coverage"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('baseline-bs-modal').style.display='none'"

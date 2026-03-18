@@ -4,7 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.8] - 2026-03-18
+
+### Added
+- **Baselines:** Import Baseline from CSV or Excel (.xlsx/.xls). Accepts columns: Title, Tactic (Kill Chain Phase), Technique (MITRE ID), Description. Flexible column name matching (case-insensitive). New "Import" button on the Baselines page.
+- **Baselines:** Kill chain phase groups are now collapsible on both the baseline detail page and the system baseline coverage view.
+- **Baselines:** Imported baselines are now sorted by MITRE kill chain phase order.
+
 ## [3.3.7] - 2026-03-18
+
+
+### Fixed
+- **Reporting:** Removed dark background on cover for 'printability'.
+- **Reporting:** Broke techniques down by tactic.
+- **Baselines:** Deleting a tactic from the tactic detail page now correctly redirects to the baseline list instead of rendering a bare partial (header/sidebar missing). Root cause: HTMX does not send the `HX-Target` header when the target is `<body>` (which has no `id`); the server-side check was updated to treat an absent/empty `HX-Target` as a redirect signal.
+- **Baselines / System page:** Intermittent 405 errors when submitting the Known Gap or N/A override modal. Added `method="post"` native fallback to the blind-spot forms in `baseline_coverage.html` and `tactic_affected_systems.html` so the browser falls back to POST (not GET) if HTMX binding is absent at submit time.
+- **Baselines / System page:** Same `method="post"` fallback added to the Add Technique forms in `baseline_detail.html` (add-tactic modal) and `tactic_mitre_section.html` to prevent 405 errors if HTMX has not yet bound the form (e.g. long-lived page session).
 
 ### Added
 - **Elastic Rule Testing:** Ability to test the rule against the elastic indices.

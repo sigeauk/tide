@@ -34,20 +34,23 @@
 {% endfor %}
 
 {% for tactic in ns_sorted.phases %}
+{% set tactic_slug = tactic | lower | replace(' ', '-') %}
 <div class="card" style="padding:1.25rem;margin-bottom:1rem;">
-    <!-- Kill chain phase header -->
-    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.75rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);">
+    <!-- Kill chain phase header (collapsible) -->
+    <div style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
+         onclick="var b=document.getElementById('bl-phase-{{ loop.index }}');var c=document.getElementById('bl-phase-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
             {{ icon('crosshair','14') }}
         </span>
-        <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-primary);">{{ tactic }}</h3>
+        <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-primary);flex:1;">{{ tactic }}</h3>
         {% set ns_tc = namespace(count=0) %}
         {% for s in baseline.tactics %}{% if (s.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
         <span class="badge badge-neutral" style="font-size:0.68rem;">{{ ns_tc.count }} technique{{ 's' if ns_tc.count != 1 }}</span>
+        <span id="bl-phase-chev-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(90deg);display:flex;flex-shrink:0;">{{ icon('chevron-right', '16') }}</span>
     </div>
 
-    <!-- Technique cards under this phase -->
-    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+    <!-- Technique cards under this phase (collapsible body) -->
+    <div id="bl-phase-{{ loop.index }}" style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.75rem;">
     {% for step in baseline.tactics %}
     {% if (step.tactic or "Other") == tactic %}
 
