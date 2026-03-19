@@ -1926,6 +1926,60 @@ a:hover { color: var(--color-primary); }
 .sync-btn.htmx-request .sync-default { display: none; }
 .sync-btn.htmx-request .htmx-indicator svg { animation: spin 1s linear infinite; }
 
+/* ================================================================
+ * ACTION MENU — consolidates top-right page buttons
+ * ================================================================ */
+.action-menu {
+  position: relative;
+  display: inline-block;
+}
+.action-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  cursor: pointer;
+}
+.action-menu__dropdown {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 100;
+  min-width: 200px;
+  background: var(--color-bg-surface);
+  border: var(--border-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 0.35rem 0;
+  white-space: nowrap;
+}
+.action-menu.open .action-menu__dropdown {
+  display: block;
+}
+.action-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.45rem 0.85rem;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: none;
+}
+.action-menu__item:hover {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+}
+.action-menu__sep {
+  height: 1px;
+  background: var(--color-border);
+  margin: 0.25rem 0;
+}
+
 
 /* ================================================================
  * FORMS  (Layer 3 — bg-action)

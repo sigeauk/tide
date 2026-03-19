@@ -9,20 +9,21 @@
         <h1 class="page-title-hero">{{ icon('shield-alert','24') }} CVE Overview</h1>
         <p class="page-subtitle">All CISA CVE entries — matched entries shown first.</p>
     </div>
-    <div style="display:flex;gap:0.5rem;align-items:center;flex-shrink:0;flex-wrap:wrap;margin-left:auto;">
-        <!-- KEV import — uses fetch() for reliable file upload (HTMX 2.x has issues with standalone file inputs) -->
-        <label class="btn btn-secondary btn-sm" for="cisa-kev-upload" style="cursor:pointer;margin:0;">
-            {{ icon('upload', '14') }} Import CVE
-        </label>
+    <div class="action-menu" style="flex-shrink:0;margin-left:auto;">
+        <button class="btn btn-secondary btn-sm action-menu__trigger">
+            {{ icon('more-vertical', '14') }} Actions
+        </button>
+        <div class="action-menu__dropdown">
+            <label class="action-menu__item" for="cisa-kev-upload" style="cursor:pointer;margin:0;" title="Upload CISA KEV JSON file">
+                {{ icon('upload', '14') }} Import CVE
+            </label>
+            <label class="action-menu__item" for="mitre-map-upload" style="cursor:pointer;margin:0;" title="Upload attack-to-cve.json mapping file">
+                {{ icon('globe', '14') }} Upload MITRE Map
+            </label>
+        </div>
         <input id="cisa-kev-upload" type="file" accept=".json" style="display:none">
-
-        <!-- MITRE mapping upload (airgap-safe) -->
-        <label class="btn btn-secondary btn-sm" for="mitre-map-upload" style="cursor:pointer;margin:0;" title="Upload attack-to-cve.json mapping file">
-            {{ icon('map', '14') }} Upload MITRE Map
-        </label>
         <input id="mitre-map-upload" type="file" accept=".json" style="display:none">
-
-        <span id="upload-status" style="font-size:0.8rem;color:var(--color-muted);"></span>
+        <span id="upload-status" style="font-size:0.8rem;color:var(--color-muted);display:inline-flex;align-items:center;gap:0.35rem;"></span>
     </div>
 </div>
 
@@ -93,14 +94,14 @@ async function uploadFile(inputId, endpoint, targetId, successMsg) {
     const inp = document.getElementById(inputId);
     if (!inp || !inp.files.length) return;
     const status = document.getElementById('upload-status');
-    if (status) status.textContent = 'Uploading...';
+    if (status) status.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;"></span> Uploading…';
     const fd = new FormData();
     fd.append('file', inp.files[0]);
     inp.value = ''; // reset so same file can be re-selected
     try {
         const resp = await fetch(endpoint, { method: 'POST', body: fd });
         if (resp.redirected || resp.status === 401) {
-            if (status) status.textContent = 'Session expired - please reload the page.';
+            if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> Session expired — please reload the page.';
             return;
         }
         const html = await resp.text();
@@ -110,13 +111,13 @@ async function uploadFile(inputId, endpoint, targetId, successMsg) {
                 target.innerHTML = html;
                 htmx.process(target);
             }
-            if (status) status.textContent = successMsg || 'Done';
-            setTimeout(() => { if (status) status.textContent = ''; }, 4000);
+            if (status) status.innerHTML = '<span style="color:var(--color-success);">&#10003;</span> ' + (successMsg || 'Done');
+            setTimeout(() => { if (status) status.innerHTML = ''; }, 4000);
         } else {
-            if (status) status.textContent = 'Error: ' + (resp.status);
+            if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> Error: ' + (resp.status);
         }
     } catch (err) {
-        if (status) status.textContent = err.message;
+        if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> ' + err.message;
     }
 }
 

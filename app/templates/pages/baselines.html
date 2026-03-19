@@ -9,16 +9,20 @@
         <h1 class="page-title-hero">{{ icon('shield-alert','24') }} Baselines</h1>
         <p class="page-subtitle">Threat-based baselines — validate detection coverage across systems.</p>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
-        <button class="btn btn-secondary btn-sm"
-                onclick="document.getElementById('import-baseline-modal').style.display='flex'"
-                style="display:flex;align-items:center;gap:0.375rem;">
-            {{ icon('upload', '14') }} Import
+    <div class="action-menu" style="flex-shrink:0;">
+        <button class="btn btn-secondary btn-sm action-menu__trigger">
+            {{ icon('more-vertical', '14') }} Actions
         </button>
-        <button class="btn btn-primary btn-sm"
-                onclick="document.getElementById('add-baseline-modal').style.display='flex'">
-            {{ icon('plus', '14') }} New Baseline
-        </button>
+        <div class="action-menu__dropdown">
+            <button class="action-menu__item"
+                    onclick="document.getElementById('add-baseline-modal').style.display='flex'">
+                {{ icon('plus', '14') }} New Baseline
+            </button>
+            <button class="action-menu__item"
+                    onclick="document.getElementById('import-baseline-modal').style.display='flex'">
+                {{ icon('upload', '14') }} Import
+            </button>
+        </div>
     </div>
 </div>
 
@@ -27,14 +31,21 @@
     <div class="metric-card">
         <p class="metric-value">{{ baselines | length }}</p>
         <p class="metric-label">Total Baselines</p>
-        <p class="metric-sub">{{ icon_text('book-open','Baselines defined','14') }}</p>
+        <p class="metric-sub">{{ icon_text('clipboard-list','Baselines defined','14') }}</p>
+    </div>
+    <div class="metric-card">
+        {% set ns_steps = namespace(total=0) %}
+        {% for bl in baselines %}{% set ns_steps.total = ns_steps.total + bl.step_count %}{% endfor %}
+        <p class="metric-value">{{ ns_steps.total }}</p>
+        <p class="metric-label">Techniques Defined</p>
+        <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
     </div>
     <div class="metric-card">
         {% set ns_tactics = namespace(total=0) %}
         {% for bl in baselines %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
         <p class="metric-value">{{ ns_tactics.total }}</p>
-        <p class="metric-label">Techniques Defined</p>
-        <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
+        <p class="metric-label">Tactics Covered</p>
+        <p class="metric-sub">{{ icon_text('target','Kill chain phases','14') }}</p>
     </div>
     <div class="metric-card">
         {% set ns_sys = namespace(total=0) %}
@@ -51,18 +62,17 @@
         <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
     </div>
     <div class="metric-card">
-        {% set ns_red = namespace(count=0) %}
-        {% for bl in baselines %}{% if bl.worst_status == 'red' %}{% set ns_red.count = ns_red.count + 1 %}{% endif %}{% endfor %}
-        <p class="metric-value {{ 'danger' if ns_red.count > 0 else 'success' }}">{{ ns_red.count }}</p>
-        <p class="metric-label">Uncovered</p>
-        <p class="metric-sub">{{ icon_text('alert-triangle','Baselines with gaps','14') }}</p>
-    </div>
-    <div class="metric-card">
         {% set ns_green = namespace(count=0) %}
-        {% for bl in baselines %}{% if bl.worst_status == 'green' %}{% set ns_green.count = ns_green.count + 1 %}{% endif %}{% endfor %}
-        <p class="metric-value {{ 'success' if ns_green.count > 0 else '' }}">{{ ns_green.count }}</p>
-        <p class="metric-label">Fully Covered</p>
-        <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
+        {% set ns_red = namespace(count=0) %}
+        {% for bl in baselines %}
+            {% if bl.worst_status == 'green' %}{% set ns_green.count = ns_green.count + 1 %}{% endif %}
+            {% if bl.worst_status == 'red' %}{% set ns_red.count = ns_red.count + 1 %}{% endif %}
+        {% endfor %}
+        <p class="metric-value {{ 'danger' if ns_red.count > 0 else 'success' if ns_green.count > 0 else '' }}">
+            {{ ns_green.count }} / {{ baselines | length }}
+        </p>
+        <p class="metric-label">Coverage Status</p>
+        <p class="metric-sub">{{ icon_text('shield-check','Fully covered / total','14') }}</p>
     </div>
 </div>
 
@@ -118,13 +128,24 @@
               hx-target="#baselines-list"
               hx-swap="innerHTML"
               hx-encoding="multipart/form-data"
+              hx-disabled-elt="find button[type='submit']"
               hx-on::after-request="if(event.detail.successful){document.getElementById('import-baseline-modal').style.display='none';this.reset();if(typeof showToast==='function')showToast('Baseline imported successfully','success');}"
               style="display:flex;flex-direction:column;gap:1rem;">
             <div>
+                <label class="form-label">Import Into</label>
+                <select name="baseline_id" class="form-input" style="font-size:0.85rem;"
+                        onchange="var ns=document.getElementById('import-new-name');if(this.value){ns.style.display='none';ns.querySelector('input').removeAttribute('required');}else{ns.style.display='';ns.querySelector('input').setAttribute('required','');}">
+                    <option value="">— Create new baseline —</option>
+                    {% for bl in baselines %}
+                    <option value="{{ bl.id }}">{{ bl.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="import-new-name">
                 <label class="form-label">Baseline Name <span style="color:var(--color-danger)">*</span></label>
                 <input name="name" class="form-input" required placeholder="e.g. Ransomware Playbook">
             </div>
-            <div>
+            <div id="import-new-desc">
                 <label class="form-label">Description</label>
                 <textarea name="description" class="form-input" rows="2" placeholder="Optional description for this baseline…"></textarea>
             </div>
@@ -137,10 +158,13 @@
                     Accepted: .csv, .xlsx, .xls
                 </span>
             </div>
-            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;align-items:center;">
                 <button type="button" class="btn btn-secondary"
                         onclick="document.getElementById('import-baseline-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">{{ icon('upload','12') }} Import</button>
+                <button type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.4rem;">
+                    <span class="btn-text">{{ icon('upload','12') }} Import</span>
+                    <span class="htmx-indicator" style="display:inline-flex;align-items:center;gap:0.4rem;"><span class="loading-spinner" style="width:14px;height:14px;"></span> Importing…</span>
+                </button>
             </div>
         </form>
     </div>

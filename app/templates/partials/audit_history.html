@@ -1,52 +1,77 @@
 {% from "macros/icons.html" import icon %}
 
 {% if snapshots %}
+{# --- Build grouped dict: baseline_name -> list of snapshots (most recent first) --- #}
+{% set ns_groups = namespace(names=[], data={}) %}
+{% for snap in snapshots | sort(attribute='captured_at', reverse=true) %}
+    {% if snap.baseline_name not in ns_groups.names %}
+        {% set ns_groups.names = ns_groups.names + [snap.baseline_name] %}
+    {% endif %}
+{% endfor %}
+
 <div style="margin-bottom:0.75rem;display:flex;align-items:center;justify-content:space-between;">
-    <span style="font-size:0.85rem;color:var(--color-text-muted);">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} recorded</span>
+    <span style="font-size:0.85rem;color:var(--color-text-muted);">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} across {{ ns_groups.names | length }} baseline{{ 's' if ns_groups.names | length != 1 }}</span>
     <div style="display:flex;gap:0.5rem;align-items:center;">
         <input id="audit-search" type="text" class="form-input" placeholder="Search label, baseline…"
                style="font-size:0.8rem;padding:0.3rem 0.6rem;max-width:200px;"
-               oninput="filterAuditRows(this.value)">
+               oninput="filterAuditGroups(this.value)">
     </div>
 </div>
-<div style="overflow-x:auto;">
-<table class="data-table" style="width:100%;font-size:0.82rem;" id="audit-table">
-    <thead>
-        <tr>
-            <th style="white-space:nowrap;cursor:pointer;" onclick="sortAuditTable(0)">Date {{ icon('chevron-down','10') }}</th>
-            <th style="cursor:pointer;" onclick="sortAuditTable(1)">Baseline</th>
-            <th style="cursor:pointer;" onclick="sortAuditTable(2)">Label</th>
-            <th>Captured By</th>
-            <th style="text-align:center;">Score</th>
-            <th style="text-align:center;">{{ icon('shield-check','12') }}</th>
-            <th style="text-align:center;">{{ icon('alert-triangle','12') }}</th>
-            <th style="text-align:center;">{{ icon('x','12') }}</th>
-            <th style="text-align:center;">{{ icon('minus-circle','12') }}</th>
-            <th></th>
-        </tr>
-    </thead>
-    <tbody>
-        {% for snap in snapshots %}
-        <tr class="audit-row">
-            <td style="white-space:nowrap;font-family:monospace;font-size:0.75rem;">
-                {{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}
-            </td>
-            <td style="font-weight:600;">{{ snap.baseline_name }}</td>
-            <td>
-                {% if snap.label %}
-                <span class="badge badge-primary" style="font-size:0.7rem;">{{ snap.label }}</span>
-                {% else %}—{% endif %}
-            </td>
-            <td style="color:var(--color-text-muted);">{{ snap.captured_by or '—' }}</td>
-            <td style="text-align:center;">
+
+{% for bl_name in ns_groups.names %}
+{# Collect snapshots for this baseline using selectattr #}
+{% set bl_snaps = snapshots | sort(attribute='captured_at', reverse=true) | selectattr('baseline_name', 'equalto', bl_name) | list %}
+{% set latest = bl_snaps[0] %}
+
+<div class="card audit-group" data-baseline="{{ bl_name | lower }}" style="padding:0;margin-bottom:0.75rem;overflow:hidden;">
+    {# --- Collapsed header: baseline name + most recent snapshot stats --- #}
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;cursor:pointer;"
+         onclick="var b=document.getElementById('audit-grp-{{ loop.index }}');var c=document.getElementById('audit-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='flex';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+        <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
+            {{ icon('clipboard-list','14') }}
+            <span style="font-weight:600;font-size:0.9rem;">{{ bl_name }}</span>
+            <span style="font-size:0.72rem;color:var(--color-text-muted);">{{ bl_snaps | length }} snapshot{{ 's' if bl_snaps | length != 1 }}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+            {# Latest snapshot score + counts #}
+            <span class="badge {% if latest.score_percentage >= 75 %}badge-success{% elif latest.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %}"
+                  style="font-size:0.72rem;">{{ latest.score_percentage | round | int }}%</span>
+            <span style="font-size:0.72rem;display:flex;align-items:center;gap:0.5rem;">
+                <span style="color:var(--color-success);font-weight:600;" title="Covered">{{ icon('shield-check','11') }} {{ latest.count_green }}</span>
+                <span style="color:var(--color-warning);font-weight:600;" title="Gap">{{ icon('alert-triangle','11') }} {{ latest.count_amber }}</span>
+                <span style="color:var(--color-danger);font-weight:600;" title="Missing">{{ icon('x','11') }} {{ latest.count_red }}</span>
+                <span style="color:var(--color-muted);font-weight:600;" title="N/A">{{ icon('minus-circle','11') }} {{ latest.count_grey }}</span>
+            </span>
+            <span id="audit-chev-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '16') }}</span>
+        </div>
+    </div>
+
+    {# --- Expanded body: snapshot cards --- #}
+    <div id="audit-grp-{{ loop.index }}" style="display:none;flex-direction:column;gap:0.5rem;padding:0 0.75rem 0.75rem;">
+        {% for snap in bl_snaps %}
+        <div class="tech-card tech-card--{% if snap.score_percentage >= 75 %}green{% elif snap.score_percentage >= 50 %}amber{% else %}red{% endif %}" data-search="{{ snap.label or '' }} {{ snap.captured_by or '' }}">
+            <div class="tech-card__body" style="flex:1;">
+                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                    <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);">
+                        {{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}
+                    </span>
+                    {% if snap.label %}
+                    <span class="badge badge-primary" style="font-size:0.68rem;">{{ snap.label }}</span>
+                    {% endif %}
+                    {% if snap.captured_by %}
+                    <span style="font-size:0.72rem;color:var(--color-text-muted);">by {{ snap.captured_by }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="tech-card__rollups" style="flex-direction:row;align-items:center;gap:0.75rem;">
                 <span class="badge {% if snap.score_percentage >= 75 %}badge-success{% elif snap.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %}"
                       style="font-size:0.72rem;">{{ snap.score_percentage | round | int }}%</span>
-            </td>
-            <td style="text-align:center;color:var(--color-success);font-weight:600;">{{ snap.count_green }}</td>
-            <td style="text-align:center;color:var(--color-warning);font-weight:600;">{{ snap.count_amber }}</td>
-            <td style="text-align:center;color:var(--color-danger);font-weight:600;">{{ snap.count_red }}</td>
-            <td style="text-align:center;color:var(--color-muted);font-weight:600;">{{ snap.count_grey }}</td>
-            <td style="text-align:right;">
+                <span style="font-size:0.72rem;display:flex;align-items:center;gap:0.4rem;">
+                    <span style="color:var(--color-success);font-weight:600;">{{ snap.count_green }}</span>
+                    <span style="color:var(--color-warning);font-weight:600;">{{ snap.count_amber }}</span>
+                    <span style="color:var(--color-danger);font-weight:600;">{{ snap.count_red }}</span>
+                    <span style="color:var(--color-muted);font-weight:600;">{{ snap.count_grey }}</span>
+                </span>
                 <button class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/snapshots/{{ snap.id }}?system_id={{ system_id }}"
                         hx-target="#audit-history-content"
@@ -55,32 +80,25 @@
                         style="font-size:0.65rem;padding:0.15rem 0.4rem;">
                     {{ icon('trash-2','10') }}
                 </button>
-            </td>
-        </tr>
+            </div>
+        </div>
         {% endfor %}
-    </tbody>
-</table>
+    </div>
 </div>
+{% endfor %}
 
 <script>
-function filterAuditRows(q) {
+function filterAuditGroups(q) {
     q = q.toLowerCase();
-    document.querySelectorAll('#audit-table .audit-row').forEach(function(row) {
-        row.style.display = row.textContent.toLowerCase().indexOf(q) >= 0 ? '' : 'none';
+    document.querySelectorAll('.audit-group').forEach(function(grp) {
+        var match = grp.dataset.baseline.indexOf(q) >= 0;
+        if (!match) {
+            grp.querySelectorAll('.tech-card').forEach(function(card) {
+                if (card.dataset.search && card.dataset.search.toLowerCase().indexOf(q) >= 0) match = true;
+            });
+        }
+        grp.style.display = match ? '' : 'none';
     });
-}
-function sortAuditTable(col) {
-    var table = document.getElementById('audit-table');
-    var tbody = table.querySelector('tbody');
-    var rows = Array.from(tbody.querySelectorAll('tr'));
-    var dir = table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
-    table.dataset.sortDir = dir;
-    rows.sort(function(a, b) {
-        var at = a.children[col].textContent.trim();
-        var bt = b.children[col].textContent.trim();
-        return dir === 'asc' ? at.localeCompare(bt) : bt.localeCompare(at);
-    });
-    rows.forEach(function(r) { tbody.appendChild(r); });
 }
 </script>
 

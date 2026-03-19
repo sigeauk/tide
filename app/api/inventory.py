@@ -809,8 +809,9 @@ def api_create_baseline(
 async def api_import_baseline(
     request: Request, user: RequireUser,
     file: UploadFile = File(...),
-    name: str = Form(...),
+    name: str = Form(""),
     description: str = Form(""),
+    baseline_id: str = Form(""),
 ):
     """Import a baseline from a CSV or Excel file.
 
@@ -882,8 +883,17 @@ async def api_import_baseline(
                    "Expected headers like: Title, Tactic, Technique, Description",
         )
 
-    # --- Create baseline and add each row as a tactic/step ---
-    pb = create_playbook(name.strip(), description.strip())
+    # --- Create or select baseline ---
+    if baseline_id.strip():
+        pb = get_playbook(baseline_id.strip())
+        if not pb:
+            raise HTTPException(status_code=404, detail="Baseline not found")
+        start_idx = len(pb.tactics) + 1
+    else:
+        if not name.strip():
+            raise HTTPException(status_code=422, detail="Baseline name is required when creating a new baseline")
+        pb = create_playbook(name.strip(), description.strip())
+        start_idx = 1
 
     from app.models.inventory import MITRE_TACTICS
     tactic_lookup = {t.lower(): t for t in MITRE_TACTICS}
@@ -914,13 +924,20 @@ async def api_import_baseline(
     parsed_rows.sort(key=lambda r: tactic_order.get(r[2].lower(), 999))
 
     imported = 0
-    for idx, (title, technique_id, tactic_val, desc) in enumerate(parsed_rows, start=1):
+    for idx, (title, technique_id, tactic_val, desc) in enumerate(parsed_rows, start=start_idx):
         add_playbook_step(pb.id, idx, title, technique_id, "", desc, tactic=tactic_val or None)
         imported += 1
 
     if imported == 0:
-        delete_playbook(pb.id)
+        if not baseline_id.strip():
+            delete_playbook(pb.id)
         raise HTTPException(status_code=422, detail="No valid rows found in file")
+
+    # If imported into an existing baseline, redirect back to its detail page
+    if baseline_id.strip():
+        resp = HTMLResponse("")
+        resp.headers["HX-Redirect"] = f"/baselines/{pb.id}"
+        return resp
 
     baselines = get_baselines_overview()
     resp = _render("partials/baselines_list.html", request, {"baselines": baselines})

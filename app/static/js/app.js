@@ -230,6 +230,28 @@ console.debug('TIDE app.js loading...');
         document.dispatchEvent(new CustomEvent('tide:pageInit'));
     }
 
+    // Action menu: toggle on trigger click, close on outside click (one-time listener)
+    document.addEventListener('click', function(e) {
+        var trigger = e.target.closest('.action-menu__trigger');
+        if (trigger) {
+            e.stopPropagation();
+            var menu = trigger.closest('.action-menu');
+            document.querySelectorAll('.action-menu.open').forEach(function(m) {
+                if (m !== menu) m.classList.remove('open');
+            });
+            menu.classList.toggle('open');
+            return;
+        }
+        if (e.target.closest('.action-menu__item')) {
+            var openMenu = e.target.closest('.action-menu');
+            if (openMenu) openMenu.classList.remove('open');
+            return;
+        }
+        document.querySelectorAll('.action-menu.open').forEach(function(m) {
+            m.classList.remove('open');
+        });
+    });
+
     /**
      * Execute page-specific initializers
      */
