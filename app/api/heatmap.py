@@ -452,3 +452,159 @@ def generate_baseline_from_heatmap(
     )
 
     return RedirectResponse(url=f"/baselines/{baseline.id}", status_code=303)
+
+
+# ─── SYSTEM BASELINE HEATMAP ─────────────────────────────────────────────────
+
+@router.get("/system/{system_id}/matrix", response_class=HTMLResponse)
+def get_system_heatmap_matrix(
+    request: Request,
+    system_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    baseline_ids: List[str] = Query(default=[]),
+):
+    """
+    Generate a MITRE ATT&CK heatmap for a specific system's baseline techniques.
+    Colours reflect per-system coverage status (green/amber/red/grey).
+    Optionally filter by specific baseline_ids.
+    """
+    from app.inventory_engine import get_system_baselines
+
+    baselines = get_system_baselines(system_id)
+
+    # Filter to selected baselines if specified
+    if baseline_ids:
+        baselines = [bl for bl in baselines if bl["playbook_id"] in baseline_ids]
+
+    if not baselines:
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            "partials/heatmap_matrix.html",
+            {
+                "request": request,
+                "data": HeatmapData(
+                    tactics=[], matrix={},
+                    selected_actors=[], total_ttps=0,
+                    gap_count=0, covered_count=0,
+                    defense_count=0, coverage_pct=0,
+                ),
+            },
+        )
+
+    # Status to CSS class mapping for system baseline heatmap
+    STATUS_CSS = {
+        "green": "status-covered",
+        "amber": "status-amber",
+        "red": "status-gap",
+        "grey": "status-na",
+    }
+
+    STATUS_TOOLTIP = {
+        "green": "COVERED",
+        "amber": "KNOWN GAP",
+        "red": "MISSING",
+        "grey": "N/A",
+    }
+
+    # Build matrix from baseline steps
+    matrix_data: Dict[str, List] = {t: [] for t in TACTIC_ORDER + ["Other"]}
+    seen_techniques: Dict[str, dict] = {}  # technique_id -> best entry (dedup across baselines)
+
+    for bl in baselines:
+        for step in bl.get("tactics", []):
+            tech_id = (step.get("technique_id") or "").upper()
+            if not tech_id:
+                continue
+
+            status = step.get("status", "red")
+            title = step.get("title", "")
+            raw_tactic = step.get("tactic", "Other")
+
+            # Map tactic name to TACTIC_ORDER key
+            tactic = raw_tactic if raw_tactic in matrix_data else "Other"
+
+            # Dedup: keep best status (green > amber > grey > red)
+            STATUS_RANK = {"green": 3, "amber": 2, "grey": 1, "red": 0}
+            if tech_id in seen_techniques:
+                existing = seen_techniques[tech_id]
+                if STATUS_RANK.get(status, 0) > STATUS_RANK.get(existing["status"], 0):
+                    existing["status"] = status
+                # Accumulate baseline names
+                if bl["playbook_name"] not in existing["baselines"]:
+                    existing["baselines"].append(bl["playbook_name"])
+                continue
+
+            seen_techniques[tech_id] = {
+                "tech_id": tech_id,
+                "title": title,
+                "tactic": tactic,
+                "status": status,
+                "baselines": [bl["playbook_name"]],
+            }
+
+    # Build HeatmapCell-like dicts for the template
+    # We use a simple namespace object so the template can access .css_class and .tooltip
+    class _Cell:
+        """Lightweight cell for system heatmap rendering."""
+        __slots__ = ("id", "name", "tactic", "css_class", "tooltip", "rule_count")
+        def __init__(self, tech_id, name, tactic, css_class, tooltip, rule_count=0):
+            self.id = tech_id
+            self.name = name
+            self.tactic = tactic
+            self.css_class = css_class
+            self.tooltip = tooltip
+            self.rule_count = rule_count
+
+    for entry in seen_techniques.values():
+        tactic = entry["tactic"]
+        cell = _Cell(
+            tech_id=entry["tech_id"],
+            name=entry["title"],
+            tactic=tactic,
+            css_class=STATUS_CSS.get(entry["status"], "status-gap"),
+            tooltip=f'{entry["title"]} | {STATUS_TOOLTIP.get(entry["status"], "MISSING")} | Baselines: {", ".join(entry["baselines"])}',
+        )
+        matrix_data[tactic].append(cell)
+
+    # Sort cells within each tactic by technique ID
+    for tactic in matrix_data:
+        matrix_data[tactic].sort(key=lambda c: c.id)
+
+    active_tactics = [t for t in TACTIC_ORDER + ["Other"] if matrix_data[t]]
+
+    # Compute metrics
+    total = len(seen_techniques)
+    green_count = sum(1 for e in seen_techniques.values() if e["status"] == "green")
+    amber_count = sum(1 for e in seen_techniques.values() if e["status"] == "amber")
+    red_count = sum(1 for e in seen_techniques.values() if e["status"] == "red")
+    grey_count = sum(1 for e in seen_techniques.values() if e["status"] == "grey")
+    effective = total - grey_count
+    pct = int(green_count / effective * 100) if effective else 0
+
+    # Build a simple data object the template can consume
+    class _HeatmapData:
+        __slots__ = ("tactics", "matrix", "selected_actors", "total_ttps",
+                     "gap_count", "covered_count", "defense_count", "coverage_pct")
+        def __init__(self, **kw):
+            for k, v in kw.items():
+                setattr(self, k, v)
+        def get(self, key, default=None):
+            return getattr(self, key, default)
+
+    data = _HeatmapData(
+        tactics=active_tactics,
+        matrix=matrix_data,
+        selected_actors=[],  # empty to suppress OOB actor-centric metrics
+        total_ttps=total,
+        gap_count=red_count,
+        covered_count=green_count,
+        defense_count=grey_count,
+        coverage_pct=pct,
+    )
+
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        "partials/heatmap_matrix.html",
+        {"request": request, "data": data},
+    )

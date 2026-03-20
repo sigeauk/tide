@@ -195,11 +195,10 @@ def run_elastic_sync(force_mapping=False):
                 logger.info(f"Synced {count} rules from Elastic")
                 return count
             else:
-                # No rules from any space — clear everything (subtractive sync)
-                logger.warning("No rules fetched from Elastic — clearing all rules from database")
-                from app.config import get_settings
-                settings = get_settings()
-                db.delete_rules_for_spaces(settings.kibana_space_list)
+                # No rules returned from Elastic — this is likely a connectivity or auth issue.
+                # DO NOT delete existing rules — preserve the baseline to avoid data loss.
+                logger.warning("No rules fetched from Elastic — preserving existing rules in database. "
+                               "Check ELASTIC_URL, ELASTIC_API_KEY, and KIBANA_SPACES configuration.")
                 return 0
         finally:
             os.chdir(original_cwd)

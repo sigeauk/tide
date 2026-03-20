@@ -81,7 +81,8 @@
             class="btn btn-validate btn-sm"
             hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}"
             hx-target="#rule-{{ rule.rule_id }}"
-            hx-swap="outerHTML">
+            hx-swap="outerHTML"
+            hx-include="unset">
             <span class="btn-text">{{ icon_text('circle-check', 'Validate', '14') }}</span>
             <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
         </button>
@@ -89,7 +90,8 @@
             class="btn btn-logic btn-sm"
             hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
             hx-target="#modal-container"
-            hx-swap="innerHTML">
+            hx-swap="innerHTML"
+            hx-include="unset">
             {{ icon_text('clipboard-list', 'Logic', '14') }}
         </button>
         {% set card_space = rule.space | default('default') %}

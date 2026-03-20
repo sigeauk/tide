@@ -30,9 +30,23 @@
             </a>
         </div>
 
-        {# Body: description #}
-        <div class="cve-card-item__body">
-            <div class="cve-card-item__desc">{{ bl.description[:120] if bl.description else 'No description.' }}</div>
+        {# Body: description with markdown + Read More toggle #}
+        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+            {% if bl.description %}
+            <div class="cve-card-item__desc md-content" id="bl-desc-short-{{ bl.id }}">
+                {{ bl.description[:120] }}{% if bl.description | length > 120 %}&hellip;
+                <a href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-short-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-full-{{ bl.id }}').style.display='';">Read more</a>
+                {% endif %}
+            </div>
+            {% if bl.description | length > 120 %}
+            <div class="cve-card-item__desc md-content" id="bl-desc-full-{{ bl.id }}" style="display:none;">
+                {{ bl.description | md }}
+                <a href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-full-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-short-{{ bl.id }}').style.display='';">Show less</a>
+            </div>
+            {% endif %}
+            {% else %}
+            <div class="cve-card-item__desc" style="color:var(--color-muted);font-style:italic;">No description.</div>
+            {% endif %}
         </div>
 
         {# Right: compact metadata string #}

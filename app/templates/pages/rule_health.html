@@ -136,6 +136,7 @@
 <div id="rules-grid"
      hx-get="/api/rules"
      hx-trigger="load, refreshRules from:body"
+     hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_by']"
      hx-swap="innerHTML">
     <div class="empty-state">
         <div class="loading-spinner"></div>

@@ -516,7 +516,19 @@ def create_app() -> FastAPI:
         return Markup(text)
     
     templates.env.filters["highlight_query"] = highlight_query
-    
+
+    # --- Markdown filter for description fields ---
+    import markdown as _md_lib
+
+    def md_filter(text: str) -> Markup:
+        """Convert Markdown text to safe HTML."""
+        if not text:
+            return Markup("")
+        html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
+        return Markup(html)
+
+    templates.env.filters["md"] = md_filter
+
     # --- Add global template variables so all templates have access ---
     templates.env.globals["env"] = settings
     

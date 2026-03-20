@@ -1402,6 +1402,107 @@ def ingest_cisa_feed(json_bytes):
 # Report Data Builders
 # ---------------------------------------------------------------------------
 
+def _build_baseline_heatmap(baselines: List[Dict]) -> Dict:
+    """Build MITRE ATT&CK heatmap matrix from baseline coverage data.
+
+    Returns dict with: matrix, active_tactics, metrics, narrative.
+    """
+    from app.services.report_generator import TACTIC_ORDER
+
+    try:
+        from app.services.database import get_database_service
+        _db = get_database_service()
+        ttp_names = _db.get_technique_names()
+        ttp_rule_counts = _db.get_ttp_rule_counts()
+    except Exception:
+        ttp_names = {}
+        ttp_rule_counts = {}
+
+    _STATUS_PRIORITY = {"green": 0, "grey": 1, "amber": 2, "red": 3}
+    _STATUS_MAP = {"green": "covered", "grey": "na", "amber": "known-gap", "red": "gap"}
+
+    # Aggregate: (tactic, technique_id) → best status + metadata
+    cells: Dict[tuple, Dict] = {}
+
+    for bl in baselines:
+        for step in bl.get("tactics", []):
+            tid = (step.get("technique_id") or "").strip().upper()
+            tactic = step.get("tactic") or ""
+            if not tid or not tactic:
+                continue
+
+            key = (tactic, tid)
+            curr_status = step.get("status", "red")
+            rule_names = [
+                d.get("rule_ref") or d.get("note", "")
+                for d in step.get("applied_dets", [])
+                if d.get("rule_ref") or d.get("note")
+            ]
+
+            existing = cells.get(key)
+            if existing is None or _STATUS_PRIORITY.get(curr_status, 3) < _STATUS_PRIORITY.get(existing["baseline_status"], 3):
+                cells[key] = {
+                    "id": tid,
+                    "name": ttp_names.get(tid, tid),
+                    "tactic": tactic,
+                    "status": _STATUS_MAP.get(curr_status, "gap"),
+                    "baseline_status": curr_status,
+                    "rule_count": ttp_rule_counts.get(tid, 0),
+                    "rule_names": rule_names,
+                }
+
+    # Organize into matrix by tactic
+    matrix: Dict[str, list] = {t: [] for t in TACTIC_ORDER}
+    for (_tactic, _tid), cell_data in cells.items():
+        target = _tactic if _tactic in matrix else "Other"
+        matrix[target].append(cell_data)
+
+    for t in matrix:
+        matrix[t].sort(key=lambda c: c["id"])
+
+    active_tactics = [t for t in TACTIC_ORDER if matrix.get(t)]
+
+    # Metrics
+    total_techniques = len(cells)
+    covered_count = sum(1 for c in cells.values() if c["baseline_status"] == "green")
+    na_count = sum(1 for c in cells.values() if c["baseline_status"] == "grey")
+    gap_count = total_techniques - covered_count - na_count
+    effective_total = total_techniques - na_count
+    coverage_pct = round(covered_count / effective_total * 100) if effective_total else (100 if total_techniques else 0)
+
+    # Count tactics with at least one covered technique
+    monitored_tactics = len([t for t in active_tactics if any(c["baseline_status"] == "green" for c in matrix[t])])
+
+    if coverage_pct >= 75:
+        narrative = (
+            f"Detection coverage is robust. "
+            f"{monitored_tactics} tactics and {covered_count} techniques are actively monitored, "
+            f"covering {coverage_pct}% of defined threat profiles."
+        )
+    elif coverage_pct >= 40:
+        narrative = (
+            f"Coverage is moderate at {coverage_pct}%. "
+            f"Priority visibility gaps exist in specific tactics that require mitigation."
+        )
+    else:
+        narrative = (
+            f"Critical visibility gaps detected. "
+            f"Environment lacks sufficient telemetry for the majority of applied threat baselines "
+            f"({coverage_pct}% coverage)."
+        )
+
+    return {
+        "matrix": matrix,
+        "active_tactics": active_tactics,
+        "total_techniques": total_techniques,
+        "covered_techniques": covered_count,
+        "gap_techniques": gap_count,
+        "na_techniques": na_count,
+        "coverage_pct": coverage_pct,
+        "narrative": narrative,
+    }
+
+
 def build_system_report_data(system_id: str, include_devices: bool = True) -> Optional[Dict]:
     """Build all data needed for System detail reports (CISO + Technical).
     
@@ -1514,6 +1615,10 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
     top5 = sorted_cves[:5]
 
     # When include_devices is False, exclude all device-specific data from the report
+    baselines = get_system_baselines(system_id)
+    snapshots = get_baseline_snapshots(system_id)
+    heatmap = _build_baseline_heatmap(baselines)
+
     if not include_devices:
         return {
             "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
@@ -1531,8 +1636,16 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
             "top5_cves": [],       # Exclude device-specific CVE breakdown
             "host_rows": [],       # Exclude all host-specific tables
             "all_cves": [],        # Exclude device-specific CVE details
-            "baselines": get_system_baselines(system_id),   # Keep baseline data (technique-level, not device-level)
-            "snapshots": get_baseline_snapshots(system_id), # Keep historical snapshots
+            "baselines": baselines,
+            "snapshots": snapshots,
+            "baseline_matrix": heatmap["matrix"],
+            "baseline_active_tactics": heatmap["active_tactics"],
+            "baseline_narrative": heatmap["narrative"],
+            "bl_total_techniques": heatmap["total_techniques"],
+            "bl_covered_techniques": heatmap["covered_techniques"],
+            "bl_gap_techniques": heatmap["gap_techniques"],
+            "bl_na_techniques": heatmap["na_techniques"],
+            "bl_coverage_pct": heatmap["coverage_pct"],
         }
     
     # Full report when include_devices is True
@@ -1552,8 +1665,16 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
         "top5_cves": top5,
         "host_rows": host_rows,
         "all_cves": sorted_cves,
-        "baselines": get_system_baselines(system_id),
-        "snapshots": get_baseline_snapshots(system_id),
+        "baselines": baselines,
+        "snapshots": snapshots,
+        "baseline_matrix": heatmap["matrix"],
+        "baseline_active_tactics": heatmap["active_tactics"],
+        "baseline_narrative": heatmap["narrative"],
+        "bl_total_techniques": heatmap["total_techniques"],
+        "bl_covered_techniques": heatmap["covered_techniques"],
+        "bl_gap_techniques": heatmap["gap_techniques"],
+        "bl_na_techniques": heatmap["na_techniques"],
+        "bl_coverage_pct": heatmap["coverage_pct"],
     }
 
 

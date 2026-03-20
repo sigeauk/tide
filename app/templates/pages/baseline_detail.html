@@ -55,9 +55,9 @@
                 </div>
             </div>
         </div>
-        <p style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">
-            {% if baseline.description %}{{ baseline.description }}{% else %}No description.{% endif %}
-        </p>
+        <div class="md-content" style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">
+            {% if baseline.description %}{{ baseline.description | md }}{% else %}<p style="font-style:italic;">No description.</p>{% endif %}
+        </div>
     </div>
 
     <!-- Info Card: Applied Systems summary -->

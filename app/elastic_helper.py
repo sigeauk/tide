@@ -572,6 +572,44 @@ def get_promotion_session():
     return session, base_url
 
 
+def _fetch_preview_alerts(session, base_url, space, preview_id):
+    """
+    Fetch alerts from the temporary preview index after Kibana's Preview API (8.7+).
+    Returns (hit_count, alerts_list).
+    """
+    es_direct_url = os.getenv("ELASTICSEARCH_URL")
+    index = f".preview.alerts-security.alerts-{space}"
+    search_body = {
+        "query": {"match": {"kibana.alert.rule.preview_id": preview_id}},
+        "size": 3,
+        "sort": [{"@timestamp": {"order": "desc"}}],
+    }
+    # Also request total count
+    search_params = {"track_total_hits": "true"}
+
+    try:
+        if es_direct_url:
+            url = f"{es_direct_url}/{index}/_search"
+            resp = session.post(url, json=search_body, params=search_params, verify=False, timeout=15)
+        else:
+            path = f"/{index}/_search?track_total_hits=true"
+            proxy_url = f"{base_url}/api/console/proxy"
+            resp = session.post(proxy_url, json=search_body, params={"path": path, "method": "POST"}, verify=False, timeout=15)
+
+        if resp.status_code == 200:
+            result = resp.json()
+            total = result.get("hits", {}).get("total", {})
+            hit_count = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
+            hits = result.get("hits", {}).get("hits", [])
+            return hit_count, hits
+        else:
+            log_error(f"Preview alerts search failed ({resp.status_code}): {resp.text[:300]}")
+            return 0, []
+    except Exception as e:
+        log_error(f"Failed to fetch preview alerts: {e}")
+        return 0, []
+
+
 def preview_detection_rule(rule_data, space="default", lookback="24h"):
     """
     Test a detection rule against live Elasticsearch data using the Kibana Preview API.
@@ -637,15 +675,20 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
         # The preview API returns logs with alerts
         logs = data.get("logs", [])
         alerts = []
+
+        # Check preview execution logs for errors
+        for entry in logs:
+            for err in entry.get("errors", []):
+                log_error(f"Preview execution error: {err}")
         
         # Extract alerts from the preview response
         if "previewId" in data:
-            # Newer API: alerts are in a separate search
+            # Newer API (8.7+): alerts stored in a temporary index, not in the response body.
+            # We must query .preview.alerts-security.alerts-<space> to get the actual results.
             preview_id = data["previewId"]
-            hit_count = data.get("totalCount", 0)
-            alerts = data.get("alerts", [])[:3]
+            hit_count, alerts = _fetch_preview_alerts(session, base_url, space, preview_id)
         else:
-            # Direct response format
+            # Direct response format (older Kibana versions)
             hit_count = len(data.get("alerts", []))
             alerts = data.get("alerts", [])[:3]
         
