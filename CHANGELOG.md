@@ -4,11 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.11] - 2026-03-23
+
+### Fixed
+- **Baselines:** Implemented Markdown and multi-line support for Baseline descriptions.
+
+### Added
+- **Systems:** Added interactive MITRE ATT&CK® Heatmap to System Detail pages with Baseline-specific filtering.
+
+
 ## [3.3.10] - 2026-03-19
 
 ### Added
 - **Baselines:** Implemented Markdown and multi-line support for Baseline descriptions.
-- **Systems:** Added interactive MITRE ATT&CK® Heatmap to System Detail pages with Baseline-specific filtering.
 
 ## [3.3.9] - 2026-03-19
 
