@@ -4,10 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.13] - 2026-03-23
+
+### Fixed
+- **Startup:** `markdown` package import no longer crashes the app if the package is missing — falls back to plain text rendering with line breaks.
+- **Reports:** `_build_baseline_heatmap` no longer crashes system report generation if the `report_generator` import or technique DB queries fail — returns empty heatmap gracefully.
+- **Heatmap:** Unified TACTIC_ORDER to single source of truth (`report_generator.py`). Previously `heatmap.py` defined its own 12-item list missing Reconnaissance, Resource Dev, and Other — causing inconsistent tactic rendering between heatmap page and baseline reports.
+
+### Changed
+- **Sync Performance:** Parallelized Elasticsearch index mapping fetches (`get_batch_mappings`) using ThreadPoolExecutor (up to 10 concurrent). Previously fetched sequentially — one HTTP round-trip per index pattern.
+- **Sync Performance:** Parallelized Kibana data view resolution for rules without explicit index patterns. Previously resolved one-by-one inside the rule loop.
+- **CSS:** Added missing badge classes (`badge-primary`, `badge-green`, `badge-red`, `badge-amber`, `badge-info`, `badge-purple`, `badge-default`) to the main stylesheet — previously only defined inline in PDF report templates.
+- **CSS:** Added card utility classes (`card-padded`, `card-padded-sm`, `card-padded-lg`, `card-flush`, `card-mb`, `card-mt`, `card-center`) replacing inline padding/margin styles across 11 page and partial templates.
+- **CSS:** Defined legacy variable aliases (`--bg-secondary`, `--bg-tertiary`, `--border-color`, `--text-primary`, `--text-secondary`) in `:root` so inline modal styles resolve to the design system correctly.
+- **CSS:** Added `--color-muted`, `--color-danger-rgb`, `--color-success-rgb` variables.
+
 ## [3.3.12] - 2026-03-23
 
 ### Fixed
-- **CSS**: update css. 
+- **CSS**: update css.
 
 ## [3.3.11] - 2026-03-23
 

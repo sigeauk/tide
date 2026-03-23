@@ -19,12 +19,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/heatmap", tags=["heatmap"])
 
-# Tactic order for consistent display
-TACTIC_ORDER = [
-    "Initial Access", "Execution", "Persistence", "Privilege Escalation",
-    "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement",
-    "Collection", "Command and Control", "Exfiltration", "Impact"
-]
+# Tactic order for consistent display — single source of truth
+from app.services.report_generator import TACTIC_ORDER
 
 # Map STIX slugs to display titles
 SLUG_TO_TITLE = {
@@ -120,7 +116,7 @@ def get_heatmap_matrix(
         display_ttps.update(covered_ttps)
     
     # Build matrix data
-    matrix_data: Dict[str, List[HeatmapCell]] = {t: [] for t in TACTIC_ORDER + ["Other"]}
+    matrix_data: Dict[str, List[HeatmapCell]] = {t: [] for t in TACTIC_ORDER}
     
     for ttp_id in display_ttps:
         is_relevant = ttp_id in relevant_ttps
@@ -153,7 +149,7 @@ def get_heatmap_matrix(
         matrix_data[tactic].append(cell)
     
     # Filter out empty tactics
-    active_tactics = [t for t in TACTIC_ORDER + ["Other"] if matrix_data[t]]
+    active_tactics = [t for t in TACTIC_ORDER if matrix_data[t]]
     
     # Calculate metrics
     gap_count = sum(1 for t in relevant_ttps if t not in covered_ttps)
@@ -508,7 +504,7 @@ def get_system_heatmap_matrix(
     }
 
     # Build matrix from baseline steps
-    matrix_data: Dict[str, List] = {t: [] for t in TACTIC_ORDER + ["Other"]}
+    matrix_data: Dict[str, List] = {t: [] for t in TACTIC_ORDER}
     seen_techniques: Dict[str, dict] = {}  # technique_id -> best entry (dedup across baselines)
 
     for bl in baselines:
@@ -571,7 +567,7 @@ def get_system_heatmap_matrix(
     for tactic in matrix_data:
         matrix_data[tactic].sort(key=lambda c: c.id)
 
-    active_tactics = [t for t in TACTIC_ORDER + ["Other"] if matrix_data[t]]
+    active_tactics = [t for t in TACTIC_ORDER if matrix_data[t]]
 
     # Compute metrics
     total = len(seen_techniques)

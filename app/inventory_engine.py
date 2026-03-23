@@ -1407,7 +1407,15 @@ def _build_baseline_heatmap(baselines: List[Dict]) -> Dict:
 
     Returns dict with: matrix, active_tactics, metrics, narrative.
     """
-    from app.services.report_generator import TACTIC_ORDER
+    try:
+        from app.services.report_generator import TACTIC_ORDER
+    except Exception:
+        TACTIC_ORDER = [
+            "Initial Access", "Execution", "Persistence", "Privilege Escalation",
+            "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement",
+            "Collection", "Command and Control", "Exfiltration", "Impact",
+            "Reconnaissance", "Resource Dev", "Other",
+        ]
 
     try:
         from app.services.database import get_database_service
@@ -1617,7 +1625,17 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
     # When include_devices is False, exclude all device-specific data from the report
     baselines = get_system_baselines(system_id)
     snapshots = get_baseline_snapshots(system_id)
-    heatmap = _build_baseline_heatmap(baselines)
+    try:
+        heatmap = _build_baseline_heatmap(baselines)
+    except Exception as _e:
+        import logging as _log
+        _log.getLogger(__name__).warning(f"Baseline heatmap build failed: {_e}")
+        heatmap = {
+            "matrix": {}, "active_tactics": [],
+            "total_techniques": 0, "covered_techniques": 0,
+            "gap_techniques": 0, "na_techniques": 0,
+            "coverage_pct": 0, "narrative": "",
+        }
 
     if not include_devices:
         return {
