@@ -59,7 +59,7 @@
     </div>
 
     <!-- Info Card -->
-    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+    <div class="card card-padded card-mb">
         {% if cve.short_description %}
         <p style="margin:0 0 1rem;font-size:0.92rem;line-height:1.6;color:var(--color-text);">{{ cve.short_description }}</p>
         <hr style="border:none;border-top:1px solid var(--color-border);margin-bottom:1rem;">
@@ -92,11 +92,11 @@
 
     <!-- Dual-column: MITRE Techniques (left) + Detection Rules (right) -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;">
-        <div class="card" style="padding:1.25rem;">
+        <div class="card card-padded">
             <h2 class="section-title">{{ icon('crosshair','16') }} MITRE ATT&amp;CK Techniques</h2>
             {% include "partials/cve_mitre_section.html" %}
         </div>
-        <div class="card" style="padding:1.25rem;">
+        <div class="card card-padded">
             <h2 class="section-title">{{ icon('shield','16') }} Detection Rules</h2>
             {% include "partials/cve_detection_badge.html" %}
         </div>

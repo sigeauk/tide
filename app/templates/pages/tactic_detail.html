@@ -54,7 +54,7 @@
     </div>
 
     <!-- Info card -->
-    <div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+    <div class="card card-padded card-mb">
         {% if tactic.description %}
         <p style="margin:0 0 1rem;font-size:0.92rem;line-height:1.6;color:var(--color-text);">{{ tactic.description }}</p>
         <hr style="border:none;border-top:1px solid var(--color-border);margin-bottom:1rem;">
@@ -80,11 +80,11 @@
     <!-- Dual-column: MITRE Techniques + Detection Rules -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1.25rem;margin-bottom:1.5rem;">
         <!-- MITRE Techniques -->
-        <div class="card" style="padding:1.25rem;" id="step-mitre-section">
+        <div class="card card-padded" id="step-mitre-section">
             {% include "partials/tactic_mitre_section.html" %}
         </div>
         <!-- Detection Rules -->
-        <div class="card" style="padding:1.25rem;" id="step-detection-section"
+        <div class="card card-padded" id="step-detection-section"
              hx-get="/api/baselines/tactics/{{ tactic.id }}/detections"
              hx-trigger="stepUpdated from:body"
              hx-swap="innerHTML">

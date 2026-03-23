@@ -10,7 +10,7 @@
 {% from "macros/icons.html" import icon %}
 
 {% if grouped_systems %}
-<div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+<div class="card card-padded card-mb">
     <h2 class="section-title">{{ icon('server','16') }} Affected Devices</h2>
 
     <!-- Traffic Light Legend -->
@@ -35,7 +35,7 @@
     {% endif %}
 
     {% for grp in grouped_systems %}
-    <div class="card" style="padding:1rem;margin-bottom:1rem;background:var(--color-bg-surface);">
+    <div class="card card-padded-sm card-mb-sm">
         <!-- System header -->
         <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap;">
             <a href="/systems/{{ grp.system_id }}" style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
@@ -228,7 +228,7 @@
 </div>
 {% elif cve.affected_hosts %}
 {# Fallback: ungrouped hosts #}
-<div class="card" style="padding:1.25rem;margin-bottom:1.5rem;">
+<div class="card card-padded card-mb">
     <h2 class="section-title">Affected Devices</h2>
     <div class="aff-host-grid">
         {% for h in cve.affected_hosts %}

@@ -52,6 +52,17 @@
   /* Surface-alt: used for inner nested cards (alias for level-3) */
   --color-surface-alt:    var(--bg-level-3-inner);
 
+  /* ── RGB triplets (for rgba() usage in templates) ── */
+  --color-danger-rgb:     248,81,73;
+  --color-success-rgb:    63,185,80;
+
+  /* ── Legacy aliases (used in inline modal/form styles) ── */
+  --bg-secondary:         var(--color-bg-surface);
+  --bg-tertiary:          var(--color-bg-action);
+  --border-color:         var(--color-border);
+  --text-primary:         var(--color-text);
+  --text-secondary:       var(--color-text-secondary);
+
   /* ── Depth highlights (simulated top-edge light) ── */
   --color-highlight-1:    #2d333b;
   --color-highlight-2:    #3b434d;
@@ -63,6 +74,7 @@
   --color-text:           #c9d1d9;
   --color-text-secondary: #b1bac4;
   --color-text-muted:     #8b949e;
+  --color-muted:          #8b949e;
 
   --h1: 700 1.5rem/1.2 var(--ff);
   --h2: 700 1.25rem/1.2 var(--ff);
@@ -4813,6 +4825,14 @@ body.light {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
 }
+.card-padded    { padding: 1.25rem; }
+.card-padded-sm { padding: 1rem; }
+.card-padded-lg { padding: 2.5rem; }
+.card-flush     { padding: 0; overflow: hidden; }
+.card-mb        { margin-bottom: 1.5rem; }
+.card-mb-sm     { margin-bottom: 1rem; }
+.card-mt        { margin-top: 1.5rem; }
+.card-center    { text-align: center; }
 
 /* ================================================================
  * BADGES
@@ -4852,6 +4872,41 @@ body.light {
   background: rgba(139, 148, 158, 0.1);
   color: var(--color-text-muted, #8b949e);
   border: 1px solid rgba(139, 148, 158, 0.35);
+}
+.badge-primary {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  border: 1px solid var(--color-info);
+}
+.badge-green {
+  background: var(--color-success-bg);
+  color: var(--color-success-text);
+  border: 1px solid var(--color-success);
+}
+.badge-red {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger);
+}
+.badge-amber {
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  border: 1px solid var(--color-warning);
+}
+.badge-info {
+  background: var(--color-info-bg);
+  color: var(--color-info-text);
+  border: 1px solid var(--color-info);
+}
+.badge-purple {
+  background: var(--color-sev-5-bg);
+  color: var(--color-sev-5-text);
+  border: 1px solid var(--color-sev-5);
+}
+.badge-default {
+  background: var(--color-bg-action);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
 }
 
 /* ── Nav Groups — OpenCTI accordion ─────── */

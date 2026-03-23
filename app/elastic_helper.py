@@ -6,6 +6,7 @@ import re
 import json
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from dotenv import load_dotenv
 from log import log_debug, log_error, log_info
@@ -176,31 +177,25 @@ def flatten_properties(props, prefix=""):
 
 def get_batch_mappings(session, base_url, index_field_map):
     es_direct_url = os.getenv("ELASTICSEARCH_URL")
-    global_cache = {} 
-    
+    global_cache = {}
+
     unique_patterns = [i for i in index_field_map.keys() if i]
     valid_patterns = [
-        p for p in unique_patterns 
+        p for p in unique_patterns
         if p and not p.startswith('_') and p.lower() not in IGNORED_INDICES
     ]
 
-    for pattern in valid_patterns:
-        target_index = resolve_latest_index(session, base_url, pattern, es_direct_url)
-        
-        # We need to know what fields to check for this pattern
+    def _fetch_mapping_for_pattern(pattern):
+        """Fetch and validate field mappings for a single index pattern."""
         fields_to_check = list(index_field_map.get(pattern, set()))
         if not fields_to_check:
-            global_cache[pattern] = {}
-            continue
+            return pattern, {}
 
-        # --- NEW STRATEGY: FETCH FULL MAPPING ---
-        # Instead of asking "Does field X exist?", we ask "Give me ALL fields"
-        # and then we check locally. This avoids 404s on specific field endpoints.
-        
+        target_index = resolve_latest_index(session, base_url, pattern, es_direct_url)
+
         try:
-            # We use _mapping to get the full schema
             path = f"/{target_index}/_mapping?ignore_unavailable=true&allow_no_indices=true"
-            
+
             if es_direct_url:
                 full_url = f"{es_direct_url}/{target_index}/_mapping"
                 response = session.get(full_url, params={"ignore_unavailable": "true", "allow_no_indices": "true"}, verify=False, timeout=30)
@@ -212,35 +207,40 @@ def get_batch_mappings(session, base_url, index_field_map):
 
             if response.status_code == 200:
                 data = response.json()
-                
-                # 1. Flatten ALL fields from the returned index mapping
+
                 all_index_fields = {}
                 for concrete_index, index_data in data.items():
                     props = index_data.get('mappings', {}).get('properties', {})
                     if props:
-                        # Merge this index's fields into our "master list" for this pattern
                         all_index_fields.update(flatten_properties(props))
-                
-                # 2. Check strictly against the fields we need
+
                 for f in fields_to_check:
                     if f in all_index_fields:
                         found_mappings[f] = all_index_fields[f]
-                    # We do NOT mark missing here yet, handled by UI logic
-            
+
             elif response.status_code == 404:
-                # If the INDEX itself returns 404, then it truly doesn't exist
                 log_debug(f"   Index not found (404): {target_index}")
             else:
                 log_error(f"   Failed mapping fetch for {pattern}: {response.status_code}")
 
-            if found_mappings:
-                pass  # Mapping verification successful
-            
-            global_cache[pattern] = found_mappings
+            return pattern, found_mappings
 
         except Exception as e:
             log_error(f"   Exception for {pattern}: {e}")
-            global_cache[pattern] = {}
+            return pattern, {}
+
+    # Fetch all index mappings in parallel (requests.Session is thread-safe for reads)
+    workers = min(10, len(valid_patterns)) if valid_patterns else 1
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_fetch_mapping_for_pattern, p): p for p in valid_patterns}
+        for fut in as_completed(futures):
+            try:
+                pattern, mappings = fut.result()
+                global_cache[pattern] = mappings
+            except Exception as e:
+                pattern = futures[fut]
+                log_error(f"   Thread exception for {pattern}: {e}")
+                global_cache[pattern] = {}
 
     return global_cache
 
@@ -429,10 +429,35 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 page += 1
 
         rule_meta_list = []
-        index_request_map = defaultdict(set) 
+        index_request_map = defaultdict(set)
         skipped_mapping_count = 0
 
-        for r in all_rules:
+        # --- Batch data view resolution: resolve all data-view rules in parallel ---
+        dv_tasks = []
+        for i, r in enumerate(all_rules):
+            has_explicit_index = r.get('index') and len(r.get('index', [])) > 0
+            if not has_explicit_index and (r.get('data_view_id') or r.get('dataViewId')):
+                dv_tasks.append((i, r.get('space_id', 'default'), r))
+
+        if dv_tasks:
+            dv_results = {}
+            workers = min(10, len(dv_tasks))
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(get_data_view_indices, session, base_url, space, rule): idx
+                    for idx, space, rule in dv_tasks
+                }
+                for fut in as_completed(futures):
+                    rule_idx = futures[fut]
+                    try:
+                        dv_results[rule_idx] = fut.result()
+                    except Exception:
+                        dv_results[rule_idx] = []
+            log_info(f"[perf] Resolved {len(dv_tasks)} data view lookups in parallel")
+        else:
+            dv_results = {}
+
+        for i, r in enumerate(all_rules):
             query = r.get('query', '')
             language = r.get('language', 'kuery')
             # Use last execution metrics for dynamic search-time scoring
@@ -446,24 +471,24 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
                 search_time = 0
             indices = r.get('index', []) or []
             if not indices:
-                # Some rules reference a Kibana data view instead of an explicit `index` list.
-                indices = get_data_view_indices(session, base_url, r.get('space_id', 'default'), r)
+                # Use pre-resolved data view indices (fetched in parallel above)
+                indices = dv_results.get(i, [])
             if language == "esql":
                 esql_indices = get_esql_index(query)
                 if esql_indices: indices = esql_indices
-            
+
             clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
-            
+
             # Lazy Mapping: skip mapping check for rules already in DB
             rule_key = (r.get('rule_id'), r.get('space_id', 'default'))
             needs_mapping = check_mappings and rule_key not in known_rule_keys
-            
+
             fields = set()
             if needs_mapping:
                 if language in ["kuery", "lucene"]: fields = extract_kuery_lucene(query)
                 elif language == "esql": fields = extract_esql(query)
                 elif language == "eql": fields = extract_eql(query)[0]
-                
+
                 for idx in clean_indices: index_request_map[idx].update(fields)
             else:
                 if check_mappings:

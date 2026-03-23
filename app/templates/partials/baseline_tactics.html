@@ -35,7 +35,7 @@
 
 {% for tactic in ns_sorted.phases %}
 {% set tactic_slug = tactic | lower | replace(' ', '-') %}
-<div class="card" style="padding:1.25rem;margin-bottom:1rem;">
+<div class="card card-padded card-mb-sm">
     <!-- Kill chain phase header (collapsible) -->
     <div style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
          onclick="var b=document.getElementById('bl-phase-{{ loop.index }}');var c=document.getElementById('bl-phase-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
@@ -145,7 +145,7 @@
 {% endfor %}
 
 {% else %}
-<div class="card" style="padding:2.5rem;text-align:center;">
+<div class="card card-padded-lg card-center">
     <p style="color:var(--color-muted);margin:0;">No techniques yet. Add a technique to define the kill-chain.</p>
 </div>
 {% endif %}

@@ -5,7 +5,7 @@
 {% from "macros/icons.html" import icon %}
 
 {% if baselines %}
-<div class="card" style="padding:0;overflow:hidden;">
+<div class="card card-flush">
     <div class="cve-list" style="padding:0.75rem 1rem;">
     {% for bl in baselines %}
     <div class="cve-card-item {% if bl.worst_status == 'red' %}cve-card-item--nocover{% elif bl.worst_status == 'amber' %}cve-card-item--detected{% else %}cve-card-item--unaffected{% endif %}"
@@ -70,7 +70,7 @@
     </div>
 </div>
 {% else %}
-<div class="card" style="padding:2.5rem;text-align:center;">
+<div class="card card-padded-lg card-center">
     <p style="color:var(--color-muted);margin:0;">No baselines yet. Create one to start validating detection coverage.</p>
 </div>
 {% endif %}

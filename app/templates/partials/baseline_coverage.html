@@ -2,7 +2,7 @@
 
 {% if baselines %}
 {% for bl in baselines %}
-<div class="card" style="padding:1rem;margin-bottom:0.75rem;">
+<div class="card card-padded-sm" style="margin-bottom:0.75rem;">
     <div style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;"
          onclick="var b=document.getElementById('bl-body-{{ bl.playbook_id }}');var c=document.getElementById('bl-chev-{{ bl.playbook_id }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">

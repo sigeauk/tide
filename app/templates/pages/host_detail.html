@@ -34,7 +34,7 @@
                    oninput="filterPackages()"
                    style="width:100%;font-size:0.85rem;margin-bottom:0.5rem;">
             <input type="hidden" id="pkg-cve-link" value="on">
-            <div class="card" style="padding:1rem;" id="software-section">
+            <div class="card card-padded-sm" id="software-section">
                 {% include "partials/host_software.html" %}
             </div>
         </div>
@@ -52,7 +52,7 @@
                 {% endif %}
             </div>
             <div id="cve-filter-status" style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:0.4rem;display:none;"></div>
-            <div class="card" style="padding:1rem;max-height:72vh;overflow-y:auto;" id="cve-matches-card">
+            <div class="card card-padded-sm" style="max-height:72vh;overflow-y:auto;" id="cve-matches-card">
                 {% include "partials/host_cve_matches.html" %}
             </div>
         </div>
