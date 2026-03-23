@@ -482,7 +482,14 @@ def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=templates_path)
     # Disable Jinja2 template cache to work around Python 3.14 incompatibility
     # (tuple cache keys containing dicts are no longer hashable)
-    templates.env.cache = {}
+    class _NoCache:
+        """No-op cache that avoids hashing keys entirely."""
+        def get(self, key, default=None): return default
+        def __setitem__(self, key, value): pass
+        def __delitem__(self, key): pass
+        def __contains__(self, key): return False
+        def clear(self): pass
+    templates.env.cache = _NoCache()
     app.state.templates = templates
     
     # --- Custom Jinja2 filter for query syntax highlighting ---
