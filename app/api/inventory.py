@@ -1404,13 +1404,13 @@ def api_system_report(
     report_data["include_devices"] = include_devices_flag
     report_data["include_baselines"] = include_baselines_flag
 
-    safe_name = report_data["system"]["name"].replace(" ", "-").replace("/", "-")[:30]
-    level_tag = "Technical" if mode == "technical" else "Executive"
+    safe_name = report_data["system"]["name"].replace(" ", "_").replace("/", "_")[:30]
+    level_tag = "ciso" if mode == "executive" else "technical"
     date_str = datetime.utcnow().strftime("%Y%m%d")
 
     if format == "markdown":
         md = _generate_system_markdown(report_data, classification)
-        filename = f"TIDE_SystemReport_{level_tag}_{safe_name}_{date_str}.md"
+        filename = f"{date_str}-{safe_name}-{level_tag}.md"
         content = md.encode("utf-8")
         return Response(
             content=content,
@@ -1437,7 +1437,7 @@ def api_system_report(
         logger.exception(f"PDF generation failed: {exc}")
         raise HTTPException(status_code=500, detail="PDF generation failed. Check server logs.")
 
-    filename = f"TIDE_SystemReport_{level_tag}_{safe_name}_{date_str}.pdf"
+    filename = f"{date_str}-{safe_name}-{level_tag}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1469,12 +1469,12 @@ def api_cve_report(
 
     report_data["classification"] = classification
 
-    safe_cve = cve_id.replace("/", "-")
+    safe_cve = cve_id.replace("/", "_")
     date_str = datetime.utcnow().strftime("%Y%m%d")
 
     if format == "markdown":
         md = _generate_cve_markdown(report_data, classification)
-        filename = f"TIDE_CVE_Audit_{safe_cve}_{date_str}.md"
+        filename = f"{date_str}-{safe_cve}-audit.md"
         content = md.encode("utf-8")
         return Response(
             content=content,
@@ -1501,7 +1501,7 @@ def api_cve_report(
         logger.exception(f"PDF generation failed: {exc}")
         raise HTTPException(status_code=500, detail="PDF generation failed. Check server logs.")
 
-    filename = f"TIDE_CVE_Audit_{safe_cve}_{date_str}.pdf"
+    filename = f"{date_str}-{safe_cve}-audit.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
@@ -1534,13 +1534,13 @@ def api_baseline_report(
     report_data["classification"] = classification
     report_data["audience_level"] = "CISO" if mode == "executive" else "Technical"
 
-    safe_name = report_data["baseline_name"].replace(" ", "-").replace("/", "-")[:30]
-    level_tag = "Technical" if mode == "technical" else "Executive"
+    safe_name = report_data["baseline_name"].replace(" ", "_").replace("/", "_")[:30]
+    level_tag = "ciso" if mode == "executive" else "technical"
     date_str = datetime.utcnow().strftime("%Y%m%d")
 
     if format == "markdown":
         md = _generate_baseline_markdown(report_data, classification)
-        filename = f"TIDE_BaselineReport_{level_tag}_{safe_name}_{date_str}.md"
+        filename = f"{date_str}-{safe_name}-{level_tag}.md"
         content = md.encode("utf-8")
         return Response(
             content=content,
@@ -1567,7 +1567,7 @@ def api_baseline_report(
         logger.exception(f"PDF generation failed: {exc}")
         raise HTTPException(status_code=500, detail="PDF generation failed. Check server logs.")
 
-    filename = f"TIDE_BaselineReport_{level_tag}_{safe_name}_{date_str}.pdf"
+    filename = f"{date_str}-{safe_name}-{level_tag}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

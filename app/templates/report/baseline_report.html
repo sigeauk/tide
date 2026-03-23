@@ -191,6 +191,24 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
     </div>
 </div>
 
+<div style="background:#f6f8fa;border:1px solid var(--border);border-left:3px solid var(--primary);border-radius:2mm;padding:4mm 5mm;margin-bottom:6mm;font-size:8.5pt;line-height:1.6;color:var(--text);" class="avoid-break">
+    The <strong>{{ report.baseline_name }}</strong> baseline defines {{ report.total_steps }} tactic step{{ 's' if report.total_steps != 1 else '' }}
+    covering {{ report.total_techniques }} MITRE ATT&amp;CK technique{{ 's' if report.total_techniques != 1 else '' }}
+    and is applied to {{ report.total_systems }} system{{ 's' if report.total_systems != 1 else '' }}.
+    {% if report.total_systems == 0 %}
+    No systems currently have this baseline applied. Coverage cannot be assessed until systems are enrolled.
+    {% elif report.avg_coverage >= 75 %}
+    Average coverage across applied systems is <strong style="color:var(--success)">{{ report.avg_coverage }}%</strong>, indicating strong alignment with the baseline.
+    {% if report.avg_coverage < 100 %}Remaining gaps should be reviewed to determine whether additional detections are feasible or whether exceptions are warranted.{% endif %}
+    {% elif report.avg_coverage >= 50 %}
+    Average coverage is <strong style="color:var(--warning)">{{ report.avg_coverage }}%</strong>. Several systems have notable gaps in detection coverage against the defined tactic steps.
+    Prioritising the red-status steps on the lowest-scoring systems would yield the greatest improvement.
+    {% else %}
+    Average coverage is <strong style="color:var(--danger)">{{ report.avg_coverage }}%</strong>, indicating significant shortfalls.
+    Most systems lack active detection rules for the baseline's tactic steps. A targeted remediation plan is recommended.
+    {% endif %}
+</div>
+
 <!-- ══════════════════════════════════════════════════════
      SECTION 2 — BASELINE DEFINITION (TACTIC STEPS)
      ══════════════════════════════════════════════════════ -->

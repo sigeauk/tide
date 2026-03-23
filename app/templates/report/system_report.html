@@ -356,11 +356,6 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
         </div>
         <br/>
         <div class="cover-clf-badge">{{ report.classification or 'Official' }}</div>
-        {% if report.system.classification %}
-        <div style="margin-top:4mm;">
-            <span class="cover-system-pill">{{ report.system.classification }}</span>
-        </div>
-        {% endif %}
         <div class="cover-meta">
             Generated: {{ report.generated_at }}
         </div>
@@ -438,6 +433,26 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
         <span class="stat-value {% if report.coverage_ratio >= 80 %}success{% elif report.coverage_ratio >= 40 %}warning{% else %}danger{% endif %}">{{ report.coverage_ratio }}%</span>
         <span class="stat-label">Coverage Ratio</span>
     </div>
+</div>
+
+<div class="exec-narrative avoid-break">
+    <strong>{{ report.system.name }}</strong> comprises {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }}
+    with {{ report.total_cves }} unique CVE{{ 's' if report.total_cves != 1 else '' }} identified across the estate.
+    {% if report.total_cves == 0 %}
+    No known exploited vulnerabilities were matched against the installed software inventory. The system is currently in a clean state.
+    {% elif report.coverage_ratio >= 80 %}
+    Detection coverage is <strong style="color:var(--success)">strong at {{ report.coverage_ratio }}%</strong> — the majority of vulnerability-device pairings have active detection rules in place.
+    {% if report.red_hosts > 0 %}{{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} remain{{ '' if report.red_hosts != 1 else 's' }} at risk and should be prioritised for remediation.{% endif %}
+    {% elif report.coverage_ratio >= 40 %}
+    Detection coverage is <strong style="color:var(--warning)">moderate at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk with matched CVEs but no active detection.
+    Increasing rule coverage for the top CVEs listed below would materially reduce exposure.
+    {% else %}
+    Detection coverage is <strong style="color:var(--danger)">low at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} of {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk.
+    Immediate action is recommended to deploy detection rules against the highest-impact CVEs.
+    {% endif %}
+    {% if report.total_grey_pairs > 0 %}
+    {{ report.total_grey_pairs }} vulnerability-device pairing{{ 's' if report.total_grey_pairs != 1 else '' }} {{ 'have' if report.total_grey_pairs != 1 else 'has' }} been marked as blind spots and excluded from scoring.
+    {% endif %}
 </div>
 {% endif %}
 

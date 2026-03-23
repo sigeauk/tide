@@ -932,8 +932,23 @@ class DatabaseService:
         
         return None
     
+    @staticmethod
+    def _safe_int(val, default=0):
+        """Safely convert a value to int, handling NaN/None from DuckDB NULL columns."""
+        if val is None:
+            return default
+        try:
+            import math
+            if isinstance(val, float) and math.isnan(val):
+                return default
+            return int(val)
+        except (TypeError, ValueError):
+            return default
+
     def _row_to_rule(self, row: Dict[str, Any], validation_data: Dict) -> DetectionRule:
         """Convert database row to DetectionRule model."""
+        _si = self._safe_int
+
         # Parse raw_data
         raw_data = row.get('raw_data')
         if isinstance(raw_data, str):
@@ -941,22 +956,27 @@ class DatabaseService:
                 raw_data = json.loads(raw_data)
             except:
                 raw_data = {}
-        
+
         # Parse mitre_ids
         mitre_ids = row.get('mitre_ids', [])
         if hasattr(mitre_ids, 'tolist'):
             mitre_ids = mitre_ids.tolist()
         elif not isinstance(mitre_ids, list):
             mitre_ids = []
-        
+
+        # Parse severity — NULL / unexpected values fall back to 'low'
+        sev_raw = row.get('severity')
+        valid_sevs = {'low', 'medium', 'high', 'critical'}
+        severity = str(sev_raw).lower() if sev_raw and str(sev_raw).lower() in valid_sevs else 'low'
+
         # Get validation info
-        rule_name = row.get('name', '')
+        rule_name = row.get('name', '') or ''
         val_info = validation_data.get(str(rule_name), {})
-        
+
         validation_date = None
         validated_by = None
         validation_status = "never"
-        
+
         if val_info:
             val_str = val_info.get('last_checked_on', '')
             validated_by = val_info.get('checked_by')
@@ -967,27 +987,27 @@ class DatabaseService:
                     validation_status = "expired" if weeks > 12 else "valid"
                 except:
                     pass
-        
+
         return DetectionRule(
-            rule_id=row.get('rule_id', ''),
+            rule_id=row.get('rule_id', '') or '',
             name=rule_name,
-            severity=row.get('severity', 'low'),
-            author=row.get('author', 'Unknown'),
-            enabled=bool(row.get('enabled', 0)),
-            space=row.get('space', 'default'),
-            score=row.get('score', 0),
-            quality_score=row.get('quality_score', 0),
-            meta_score=row.get('meta_score', 0),
-            score_mapping=row.get('score_mapping', 0),
-            score_field_type=row.get('score_field_type', 0),
-            score_search_time=row.get('score_search_time', 0),
-            score_language=row.get('score_language', 0),
-            score_note=row.get('score_note', 0),
-            score_override=row.get('score_override', 0),
-            score_tactics=row.get('score_tactics', 0),
-            score_techniques=row.get('score_techniques', 0),
-            score_author=row.get('score_author', 0),
-            score_highlights=row.get('score_highlights', 0),
+            severity=severity,
+            author=row.get('author') or 'Unknown',
+            enabled=bool(_si(row.get('enabled'), 0)),
+            space=row.get('space') or 'default',
+            score=_si(row.get('score')),
+            quality_score=_si(row.get('quality_score')),
+            meta_score=_si(row.get('meta_score')),
+            score_mapping=_si(row.get('score_mapping')),
+            score_field_type=_si(row.get('score_field_type')),
+            score_search_time=_si(row.get('score_search_time')),
+            score_language=_si(row.get('score_language')),
+            score_note=_si(row.get('score_note')),
+            score_override=_si(row.get('score_override')),
+            score_tactics=_si(row.get('score_tactics')),
+            score_techniques=_si(row.get('score_techniques')),
+            score_author=_si(row.get('score_author')),
+            score_highlights=_si(row.get('score_highlights')),
             mitre_ids=mitre_ids,
             last_updated=row.get('last_updated'),
             raw_data=raw_data,

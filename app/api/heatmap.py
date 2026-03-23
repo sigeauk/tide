@@ -354,7 +354,7 @@ def export_threat_report(
 
     # ── Sanitise actor names for filename ────────────────────────────────
     safe_actors = "_".join(
-        a.replace(" ", "-").replace("/", "-")[:20]
+        a.replace(" ", "_").replace("/", "_")[:20]
         for a in actors[:3]
     )
     if len(actors) > 3:
@@ -362,11 +362,11 @@ def export_threat_report(
 
     from datetime import datetime
     date_str    = datetime.utcnow().strftime("%Y%m%d")
-    level_tag   = "Technical" if audience_level == "technical" else "Executive"
+    level_tag   = "ciso" if audience_level == "executive" else "technical"
 
     if format == "markdown":
         md_text = generate_markdown(report_data)
-        filename = f"TIDE_ThreatReport_{level_tag}_{safe_actors}_{date_str}.md"
+        filename = f"{date_str}-{safe_actors}-{level_tag}.md"
         return Response(
             content=md_text.encode("utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -392,7 +392,7 @@ def export_threat_report(
             detail="PDF generation failed. Check server logs for details.",
         )
 
-    filename = f"TIDE_ThreatReport_{level_tag}_{safe_actors}_{date_str}.pdf"
+    filename = f"{date_str}-{safe_actors}-{level_tag}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",

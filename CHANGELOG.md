@@ -4,12 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.3.16] - 2026-03-23
+## [3.4.0] - 2026-03-23
 
 ### Fixed
 - **Starlette 1.0 compatibility:** Updated all `TemplateResponse` calls across `main.py`, `heatmap.py`, `rules.py`, `promotion.py`, `sigma.py`, `threats.py`, and `inventory.py` to use the new `TemplateResponse(request, name, context)` signature — the old positional API was removed in Starlette 1.0.
 - **Jinja2 template caching:** Added `_NoCache` shim to prevent `TypeError: unhashable type: 'dict'` when Jinja2 tries to hash template globals as cache keys.
 - **Dockerfile:** Downgraded Python base image from 3.14 to 3.13 for broader package compatibility.
+- **System Report cover:** Removed duplicate classification badge (was showing both report classification and system classification separately).
+- **System Report export modal:** Classification dropdown now pre-populates from the system's own classification level.
+
+### Enhanced
+- **System Report executive summary:** Added narrative paragraph that interprets the scores — describes coverage ratio as strong/moderate/low with contextual recommendations, device counts, and blind spot notes.
+- **Baseline Report executive summary:** Added narrative paragraph summarising baseline scope, system count, and coverage assessment with actionable guidance based on the average coverage score.
 
 ## [3.3.14] - 2026-03-23
 
