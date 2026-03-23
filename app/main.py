@@ -480,6 +480,9 @@ def create_app() -> FastAPI:
     # Setup templates
     templates_path = os.path.join(os.path.dirname(__file__), "templates")
     templates = Jinja2Templates(directory=templates_path)
+    # Disable Jinja2 template cache to work around Python 3.14 incompatibility
+    # (tuple cache keys containing dicts are no longer hashable)
+    templates.env.cache = {}
     app.state.templates = templates
     
     # --- Custom Jinja2 filter for query syntax highlighting ---
