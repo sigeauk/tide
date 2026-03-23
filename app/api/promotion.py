@@ -44,7 +44,6 @@ def list_staging_rules(
     
     templates = request.app.state.templates
     context = {
-        "request": request,
         "rules": rules,
         "total": total,
         "page": page,
@@ -54,7 +53,7 @@ def list_staging_rules(
         "enabled": enabled or "",
         "sort_by": sort_by,
     }
-    return templates.TemplateResponse("partials/promotion_grid.html", context)
+    return templates.TemplateResponse(request, "partials/promotion_grid.html", context)
 
 
 @router.get("/metrics", response_class=HTMLResponse)
@@ -68,8 +67,9 @@ def get_promotion_metrics(
     metrics = db.get_promotion_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/promotion_metrics.html",
-        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
+        {"metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 
@@ -96,8 +96,9 @@ def get_promotion_rule_detail(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "components/rule_detail_modal.html",
-        {"request": request, "rule": rule, "env": settings}
+        {"rule": rule, "env": settings}
     )
 
 

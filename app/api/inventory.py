@@ -80,13 +80,12 @@ def _render(name: str, request: Request, ctx: dict):
     from app.config import get_settings
     settings = get_settings()
     base = {
-        "request": request,
         "brand_hue": settings.brand_hue,
         "cache_bust": settings.tide_version,
         "settings": settings,
     }
     base.update(ctx)
-    return _templates(request).TemplateResponse(name, base)
+    return _templates(request).TemplateResponse(request, name, base)
 
 
 def _get_conn_inline():

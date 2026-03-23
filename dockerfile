@@ -1,5 +1,5 @@
 # Stage 1: Base
-FROM python:3.14.3-slim-bookworm AS base
+FROM python:3.13-slim-bookworm AS base
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

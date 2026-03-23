@@ -4,10 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.3.15] - 2026-03-23
+## [3.3.16] - 2026-03-23
 
 ### Fixed
--  Replaced the cache with a _NoCache class whose .get() always returns None (cache miss) without ever hashing the key. Templates are never cached, but they're fast enough that this won't matter.   
+- **Starlette 1.0 compatibility:** Updated all `TemplateResponse` calls across `main.py`, `heatmap.py`, `rules.py`, `promotion.py`, `sigma.py`, `threats.py`, and `inventory.py` to use the new `TemplateResponse(request, name, context)` signature — the old positional API was removed in Starlette 1.0.
+- **Jinja2 template caching:** Added `_NoCache` shim to prevent `TypeError: unhashable type: 'dict'` when Jinja2 tries to hash template globals as cache keys.
+- **Dockerfile:** Downgraded Python base image from 3.14 to 3.13 for broader package compatibility.
 
 ## [3.3.14] - 2026-03-23
 

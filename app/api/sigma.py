@@ -45,9 +45,9 @@ def search_rules(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/sigma_rules_list.html",
         {
-            "request": request,
             "rules": results,
             "total_count": len(sigma.load_all_rules()),
             "filtered_count": len(results),
@@ -130,9 +130,9 @@ def convert_rule(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/sigma_convert_result.html",
         {
-            "request": request,
             "success": success,
             "result": result,
             "raw_query": raw_query,

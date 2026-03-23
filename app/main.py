@@ -480,10 +480,8 @@ def create_app() -> FastAPI:
     # Setup templates
     templates_path = os.path.join(os.path.dirname(__file__), "templates")
     templates = Jinja2Templates(directory=templates_path)
-    # Disable Jinja2 template cache to work around Python 3.14 incompatibility
-    # (tuple cache keys containing dicts are no longer hashable)
+    # Disable Jinja2 LRUCache — template globals contain dicts which are unhashable
     class _NoCache:
-        """No-op cache that avoids hashing keys entirely."""
         def get(self, key, default=None): return default
         def __setitem__(self, key, value): pass
         def __delitem__(self, key): pass
@@ -528,22 +526,14 @@ def create_app() -> FastAPI:
     templates.env.filters["highlight_query"] = highlight_query
 
     # --- Markdown filter for description fields ---
-    try:
-        import markdown as _md_lib
+    import markdown as _md_lib
 
-        def md_filter(text: str) -> Markup:
-            """Convert Markdown text to safe HTML."""
-            if not text:
-                return Markup("")
-            html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
-            return Markup(html)
-    except ImportError:
-        logger.warning("markdown package not installed — |md filter will pass text through unchanged")
-
-        def md_filter(text: str) -> Markup:
-            if not text:
-                return Markup("")
-            return Markup(str(text).replace("\n", "<br>"))
+    def md_filter(text: str) -> Markup:
+        """Convert Markdown text to safe HTML."""
+        if not text:
+            return Markup("")
+        html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
+        return Markup(html)
 
     templates.env.filters["md"] = md_filter
 
@@ -554,14 +544,13 @@ def create_app() -> FastAPI:
     def render_template(name: str, request: Request, context: dict = None):
         """Render template with global context variables (brand_hue, cache_bust)."""
         ctx = {
-            "request": request,
             "brand_hue": settings.brand_hue,
             "cache_bust": settings.tide_version,
             "settings": settings,
         }
         if context:
             ctx.update(context)
-        return templates.TemplateResponse(name, ctx)
+        return templates.TemplateResponse(request, name, ctx)
     
     # Include API routers
     app.include_router(auth.router)

@@ -45,7 +45,6 @@ def list_rules(
     
     templates = request.app.state.templates
     context = {
-        "request": request,
         "rules": rules,
         "total": total,
         "page": page,
@@ -56,7 +55,7 @@ def list_rules(
         "enabled": enabled or "",
         "sort_by": sort_by,
     }
-    return templates.TemplateResponse("partials/rules_grid.html", context)
+    return templates.TemplateResponse(request, "partials/rules_grid.html", context)
 
 
 @router.get("/metrics", response_class=HTMLResponse)
@@ -70,8 +69,8 @@ def get_metrics(
     metrics = db.get_rule_health_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        "partials/metrics_row.html",
-        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
+        request, "partials/metrics_row.html",
+        {"metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 
@@ -99,8 +98,8 @@ def get_rule_detail(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        "components/rule_detail_modal.html",
-        {"request": request, "rule": rule, "env": settings}
+        request, "components/rule_detail_modal.html",
+        {"rule": rule, "env": settings}
     )
 
 
@@ -128,13 +127,13 @@ def validate_rule(
     # If called from the modal, re-render the modal instead of the card
     if request.headers.get("X-Return-Modal") == "true":
         return templates.TemplateResponse(
-            "components/rule_detail_modal.html",
-            {"request": request, "rule": rule, "env": settings}
+            request, "components/rule_detail_modal.html",
+            {"rule": rule, "env": settings}
         )
 
     return templates.TemplateResponse(
-        "components/rule_card.html",
-        {"request": request, "rule": rule}
+        request, "components/rule_card.html",
+        {"rule": rule}
     )
 
 
@@ -180,9 +179,8 @@ async def test_rule(
         
         templates = request.app.state.templates
         return templates.TemplateResponse(
-            "components/test_result_popup.html",
+            request, "components/test_result_popup.html",
             {
-                "request": request,
                 "rule": rule,
                 "hit_count": hit_count,
                 "samples": samples,

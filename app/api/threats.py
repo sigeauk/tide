@@ -201,7 +201,6 @@ def list_threats(
     
     templates = request.app.state.templates
     context = {
-        "request": request,
         "actors": paginated_actors,
         "total": total,
         "page": page,
@@ -212,7 +211,7 @@ def list_threats(
         "source": source or "",
         "sort_by": sort_by,
     }
-    return templates.TemplateResponse("partials/threats_grid.html", context)
+    return templates.TemplateResponse(request, "partials/threats_grid.html", context)
 
 
 @router.get("/metrics", response_class=HTMLResponse)
@@ -226,8 +225,8 @@ def get_threat_metrics(
     metrics = db.get_threat_landscape_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
-        "partials/threat_metrics.html",
-        {"request": request, "metrics": metrics, "last_sync_time": get_last_sync_time()}
+        request, "partials/threat_metrics.html",
+        {"metrics": metrics, "last_sync_time": get_last_sync_time()}
     )
 
 

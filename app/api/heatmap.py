@@ -170,9 +170,9 @@ def get_heatmap_matrix(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/heatmap_matrix.html",
         {
-            "request": request,
             "data": heatmap_data,
         }
     )
@@ -248,9 +248,9 @@ def get_technique_detail(
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/technique_detail.html",
         {
-            "request": request,
             "technique": technique,
             "tactic": tactic,
             "is_covered": is_covered,
@@ -283,9 +283,9 @@ def get_technique_rules(
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/technique_rules.html",
         {
-            "request": request,
             "rules": rules,
         }
     )
@@ -476,9 +476,9 @@ def get_system_heatmap_matrix(
     if not baselines:
         templates = request.app.state.templates
         return templates.TemplateResponse(
+            request,
             "partials/heatmap_matrix.html",
             {
-                "request": request,
                 "data": HeatmapData(
                     tactics=[], matrix={},
                     selected_actors=[], total_ttps=0,
@@ -601,6 +601,7 @@ def get_system_heatmap_matrix(
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
+        request,
         "partials/heatmap_matrix.html",
-        {"request": request, "data": data},
+        {"data": data},
     )
