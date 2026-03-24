@@ -822,10 +822,10 @@ class DatabaseService:
             # Apply sorting (DB-side for DB columns)
             if not is_validation_sort:
                 sort_map = {
-                    "score_asc": "score ASC",
-                    "score_desc": "score DESC",
-                    "name_asc": "name ASC",
-                    "name_desc": "name DESC",
+                    "score_asc": "score ASC NULLS LAST",
+                    "score_desc": "score DESC NULLS LAST",
+                    "name_asc": "name ASC NULLS LAST",
+                    "name_desc": "name DESC NULLS LAST",
                 }
                 order_by = sort_map.get(filters.sort_by, "score ASC")
                 query += f" ORDER BY {order_by}"
@@ -848,10 +848,15 @@ class DatabaseService:
         # Convert to models (search already applied in SQL)
         validation_data = self._load_validation_data()
         rules = []
-        
+
         for _, row in df.iterrows():
-            rule = self._row_to_rule(row.to_dict(), validation_data)
-            rules.append(rule)
+            try:
+                rule = self._row_to_rule(row.to_dict(), validation_data)
+                rules.append(rule)
+            except Exception as e:
+                rule_id = row.get('rule_id', '?')
+                space = row.get('space', '?')
+                logger.warning(f"Skipping rule {rule_id} (space={space}): {e}")
         
         # Python-side sort for validation date
         if is_validation_sort:
@@ -945,6 +950,20 @@ class DatabaseService:
         except (TypeError, ValueError):
             return default
 
+    @staticmethod
+    def _safe_dt(val):
+        """Return a datetime or None, converting pandas NaT to None."""
+        if val is None:
+            return None
+        try:
+            if pd.isna(val):
+                return None
+        except (TypeError, ValueError):
+            pass
+        if isinstance(val, datetime):
+            return val
+        return None
+
     def _row_to_rule(self, row: Dict[str, Any], validation_data: Dict) -> DetectionRule:
         """Convert database row to DetectionRule model."""
         _si = self._safe_int
@@ -963,6 +982,8 @@ class DatabaseService:
             mitre_ids = mitre_ids.tolist()
         elif not isinstance(mitre_ids, list):
             mitre_ids = []
+        # Filter out None/empty entries that can appear from DuckDB NULL array elements
+        mitre_ids = [m for m in mitre_ids if m]
 
         # Parse severity — NULL / unexpected values fall back to 'low'
         sev_raw = row.get('severity')
@@ -1009,7 +1030,7 @@ class DatabaseService:
             score_author=_si(row.get('score_author')),
             score_highlights=_si(row.get('score_highlights')),
             mitre_ids=mitre_ids,
-            last_updated=row.get('last_updated'),
+            last_updated=self._safe_dt(row.get('last_updated')),
             raw_data=raw_data,
             validation_date=validation_date,
             validated_by=validated_by,

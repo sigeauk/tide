@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.1]- 2026-03-24
+
+### Fixed
+- **Rule Health — "All Spaces" empty grid:** Rules failed to display when viewing all spaces with the default sort (Score Low → High). Root cause: DuckDB NULL columns become `NaN` in pandas, but `dict.get('score', 0)` returns `NaN` (not `0`) because the key exists — Pydantic then rejects `NaN` as an `int`, crashing the entire response silently. Fixed with null-safe `_safe_int()` and `_safe_dt()` helpers across all numeric and timestamp fields in `_row_to_rule`.
+- **Rule Health — NULL score sorting:** Added `NULLS LAST` to all `ORDER BY` clauses so rules with NULL scores no longer land on page 1 of the default "Score Low → High" sort.
+- **Rule Health — single bad rule crashes grid:** Wrapped the `_row_to_rule` conversion loop in per-rule `try/except` with logging. One corrupt row no longer kills the entire `/api/rules` response — it is skipped and logged as a warning with the rule ID and space.
+- **Rule Health — NaT timestamp crash:** `last_updated` NULL values from DuckDB arrive as `pd.NaT` (not `None`), which Pydantic rejects for `Optional[datetime]`. Added `_safe_dt()` to convert `NaT` → `None`.
+- **Rule Health — mitre_ids NULL elements:** Filtered out `None`/empty entries from `mitre_ids` arrays that can appear from DuckDB NULL array elements.
+- **Test Rule — always 0 results:** The Kibana Preview API (8.7+) returns a `previewId` immediately but writes alerts to the `.preview.alerts-*` index asynchronously. The follow-up search was racing against Kibana and finding 0 docs. Added a retry loop (up to 3 attempts with 1s delay) and 404 handling for when the preview index hasn't been created yet.
+- **Test Rule — empty index for data view rules:** Rules using Kibana data views instead of explicit index patterns sent an empty `index: []` to the Preview API, producing no results. Now resolves data view indices before calling the Preview API.
+
 ## [3.4.0] - 2026-03-23
 
 ### Fixed

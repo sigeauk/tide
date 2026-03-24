@@ -601,7 +601,10 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
     """
     Fetch alerts from the temporary preview index after Kibana's Preview API (8.7+).
     Returns (hit_count, alerts_list).
+    Retries briefly because Kibana writes alerts asynchronously after returning the previewId.
     """
+    import time as _time
+
     es_direct_url = os.getenv("ELASTICSEARCH_URL")
     index = f".preview.alerts-security.alerts-{space}"
     search_body = {
@@ -609,30 +612,41 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
         "size": 3,
         "sort": [{"@timestamp": {"order": "desc"}}],
     }
-    # Also request total count
     search_params = {"track_total_hits": "true"}
 
-    try:
-        if es_direct_url:
-            url = f"{es_direct_url}/{index}/_search"
-            resp = session.post(url, json=search_body, params=search_params, verify=False, timeout=15)
-        else:
-            path = f"/{index}/_search?track_total_hits=true"
-            proxy_url = f"{base_url}/api/console/proxy"
-            resp = session.post(proxy_url, json=search_body, params={"path": path, "method": "POST"}, verify=False, timeout=15)
+    # Retry up to 3 times with a short delay — Kibana writes alerts asynchronously
+    for attempt in range(3):
+        try:
+            if es_direct_url:
+                url = f"{es_direct_url}/{index}/_search"
+                resp = session.post(url, json=search_body, params=search_params, verify=False, timeout=15)
+            else:
+                path = f"/{index}/_search?track_total_hits=true"
+                proxy_url = f"{base_url}/api/console/proxy"
+                resp = session.post(proxy_url, json=search_body, params={"path": path, "method": "POST"}, verify=False, timeout=15)
 
-        if resp.status_code == 200:
-            result = resp.json()
-            total = result.get("hits", {}).get("total", {})
-            hit_count = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
-            hits = result.get("hits", {}).get("hits", [])
-            return hit_count, hits
-        else:
-            log_error(f"Preview alerts search failed ({resp.status_code}): {resp.text[:300]}")
+            if resp.status_code == 200:
+                result = resp.json()
+                total = result.get("hits", {}).get("total", {})
+                hit_count = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
+                hits = result.get("hits", {}).get("hits", [])
+                if hit_count > 0 or attempt == 2:
+                    return hit_count, hits
+                # No hits yet — wait briefly for Kibana to finish writing
+                _time.sleep(1)
+            elif resp.status_code == 404:
+                # Index doesn't exist yet — Kibana hasn't created it; wait and retry
+                if attempt < 2:
+                    _time.sleep(1)
+                    continue
+                return 0, []
+            else:
+                log_error(f"Preview alerts search failed ({resp.status_code}): {resp.text[:300]}")
+                return 0, []
+        except Exception as e:
+            log_error(f"Failed to fetch preview alerts: {e}")
             return 0, []
-    except Exception as e:
-        log_error(f"Failed to fetch preview alerts: {e}")
-        return 0, []
+    return 0, []
 
 
 def preview_detection_rule(rule_data, space="default", lookback="24h"):
@@ -661,12 +675,17 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
     }
     preview_type = type_map.get(language, rule_type)
     
+    # Resolve index patterns — rules using data views may have an empty index list
+    indices = rule_data.get("index") or []
+    if not indices and (rule_data.get("data_view_id") or rule_data.get("dataViewId")):
+        indices = get_data_view_indices(session, base_url, space, rule_data)
+
     # Build the payload the Preview API requires (name, description, risk_score are mandatory)
     payload = {
         "type": preview_type,
         "query": query,
         "language": language,
-        "index": rule_data.get("index", []),
+        "index": indices,
         "name": rule_data.get("name", "TIDE Preview"),
         "description": rule_data.get("description", "Preview test from TIDE"),
         "risk_score": rule_data.get("risk_score", 21),
