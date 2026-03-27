@@ -33,9 +33,11 @@ MOVING_TAGS = {"test", "staging", "production"}
 
 def extract_kuery_lucene(query):
     if not query: return set()
-    fields = re.findall(r'\b([\w.\-]+)\s*:', query)
+    fields_colon = re.findall(r'\b([\w.\-]+)\s*:', query)
+    fields_compare = re.findall(r'\b([a-zA-Z_][\w.\-]*)\s*(?:==|!=|<=|>=|<|>)\s*', query)
     keywords = {"and", "or", "not", "true", "false", "in", "by", "from", "where"}
-    return {f for f in fields if f.lower() not in keywords}
+    fields = set(fields_colon + fields_compare)
+    return {f for f in fields if f.lower() not in keywords and not f[0].isdigit()}
 
 def extract_esql(query):
     if not query: return set()
@@ -608,7 +610,15 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
     es_direct_url = os.getenv("ELASTICSEARCH_URL")
     index = f".preview.alerts-security.alerts-{space}"
     search_body = {
-        "query": {"term": {"kibana.alert.rule.preview_id": preview_id}},
+        "query": {
+            "bool": {
+                "should": [
+                    {"term": {"kibana.alert.rule.preview_id": preview_id}},
+                    {"term": {"kibana.alert.rule.uuid": preview_id}},
+                ],
+                "minimum_should_match": 1,
+            }
+        },
         "size": 3,
         "sort": [{"@timestamp": {"order": "desc"}}],
     }

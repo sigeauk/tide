@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.3] - 2026-03-27
+
+### Fixed
+- **Rule Health - KQL mapping extraction for comparison operators:** Updated KQL/Lucene field extraction to detect comparison expressions (`==`, `!=`, `<=`, `>=`, `<`, `>`) in addition to `field:value` syntax. This fixes false 0/20 mapping scores for rules such as `score <= 25` where the field was previously not detected.
+- **Test Rule - Preview result correlation for Kibana 8.19:** Updated preview alert lookup to support both `kibana.alert.rule.preview_id` and `kibana.alert.rule.uuid` so preview hits are correctly returned instead of false 0-hit results.
+
 ## [3.4.2] - 2026-03-26
 
 ### Added
