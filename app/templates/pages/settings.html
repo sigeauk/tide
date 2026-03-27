@@ -46,6 +46,12 @@
         </svg>
         Classifications
     </button>
+    <button class="settings-tab" data-tab="apikeys" onclick="switchTab('apikeys')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+        </svg>
+        API Keys
+    </button>
 </div>
 
 <div class="settings-panel active" id="tab-logging">
@@ -295,6 +301,86 @@
                  hx-trigger="load"
                  hx-swap="innerHTML">
                 {% include "partials/classification_list.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- API Keys tab panel -->
+<div class="settings-panel" id="tab-apikeys">
+    <div class="preferences-grid" style="grid-template-columns: 1fr;">
+        <div class="preference-card">
+            <div class="preference-header">
+                <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+                </svg>
+                <h3>External API Keys</h3>
+            </div>
+            <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
+
+            <div class="alert" style="margin: 0.75rem 0 1rem 0; font-size: 0.84rem;">
+                <p><strong>External Query API (HTTPS)</strong></p>
+                <p style="margin-top:0.35rem;">Endpoint: <code>POST /api/external/query</code></p>
+                <p style="margin-top:0.2rem;">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
+                <p style="margin-top:0.2rem;">Request body: <code>{"sql": "SELECT ..."}</code></p>
+            </div>
+
+            <details style="margin: 0 0 1rem 0;">
+                <summary style="cursor:pointer; font-weight:600;">Security constraints</summary>
+                <ul style="margin:0.6rem 0 0 1rem; font-size:0.84rem; color:var(--color-text-muted);">
+                    <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
+                    <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
+                    <li>Maximum SQL length: <code>4000</code> characters</li>
+                    <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
+                </ul>
+            </details>
+
+            <details style="margin: 0 0 1rem 0;">
+                <summary style="cursor:pointer; font-weight:600;">Common query tables</summary>
+                <div style="margin-top:0.6rem; font-size:0.84rem; color:var(--color-text-muted); line-height:1.5;">
+                    <p><code>detection_rules</code>, <code>threat_actors</code>, <code>mitre_techniques</code>, <code>systems</code>, <code>hosts</code>, <code>software_inventory</code>, <code>vuln_detections</code>, <code>applied_detections</code>, <code>blind_spots</code>, <code>playbooks</code>, <code>playbook_steps</code>, <code>step_techniques</code>, <code>step_detections</code>, <code>system_baselines</code>, <code>system_baseline_snapshots</code>, <code>classifications</code>, <code>app_settings</code></p>
+                </div>
+            </details>
+
+            <details style="margin: 0 0 1rem 0;">
+                <summary style="cursor:pointer; font-weight:600;">cURL examples and responses</summary>
+                <div style="margin-top:0.6rem;">
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin-bottom:0.4rem;"><strong>Count all rules</strong></p>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql":"SELECT COUNT(*) AS total_rules FROM detection_rules"}'</pre>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem; margin-top:0.5rem;">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
+
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>List production rules by score</strong></p>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules WHERE space = '\''production'\'' ORDER BY score DESC LIMIT 5"}'</pre>
+
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Error examples</strong></p>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">401: {"detail":"Invalid or missing API key."}
+400: {"detail":"Only SELECT statements are allowed."}
+400: {"detail":"Forbidden SQL keyword: DROP"}</pre>
+                </div>
+            </details>
+
+            <!-- Create key form -->
+            <form hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
+                  hx-on::after-request="if(event.detail.successful){this.reset();}"
+                  style="display:flex;gap:0.5rem;align-items:center;margin:1rem 0;flex-wrap:wrap;">
+                <input type="text" name="api_key_label" class="form-input" placeholder="Key label (e.g. SIEM integration)" required
+                       style="min-width:220px;max-width:320px;font-size:0.85rem;">
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
+            </form>
+
+            <!-- Key list (HTMX loaded) -->
+            <div id="api-key-section">
+                <div id="api-key-list"
+                     hx-get="/api/settings/api-keys"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                </div>
             </div>
         </div>
     </div>

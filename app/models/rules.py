@@ -46,22 +46,22 @@ class DetectionRule(BaseModel):
     enabled: bool = True
     space: str = "default"
     
-    # Quality scores
-    score: int = Field(default=0, ge=0, le=100)
+    # Quality scores (no ge/le — bounds enforced at scoring time, not read time)
+    score: int = 0
     quality_score: int = 0
     meta_score: int = 0
     
     # Component scores
-    score_mapping: int = Field(default=0, ge=0, le=20)
-    score_field_type: int = Field(default=0, ge=0, le=11)
-    score_search_time: int = Field(default=0, ge=0, le=10)
-    score_language: int = Field(default=0, ge=0, le=9)
-    score_note: int = Field(default=0, ge=0, le=20)
-    score_override: int = Field(default=0, ge=0, le=5)
-    score_tactics: int = Field(default=0, ge=0, le=3)
-    score_techniques: int = Field(default=0, ge=0, le=7)
-    score_author: int = Field(default=0, ge=0, le=5)
-    score_highlights: int = Field(default=0, ge=0, le=10)
+    score_mapping: int = 0
+    score_field_type: int = 0
+    score_search_time: int = 0
+    score_language: int = 0
+    score_note: int = 0
+    score_override: int = 0
+    score_tactics: int = 0
+    score_techniques: int = 0
+    score_author: int = 0
+    score_highlights: int = 0
     
     # Metadata
     mitre_ids: List[str] = Field(default_factory=list)

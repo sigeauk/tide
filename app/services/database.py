@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 class DatabaseService:
@@ -594,6 +594,19 @@ class DatabaseService:
             self._set_schema_version(conn, 19)
             logger.info("Migration 19: Created system_baseline_snapshots table")
 
+        # Migration 20: External API keys for sidecar query service
+        if current_version < 20:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS api_keys (
+                    key_hash VARCHAR PRIMARY KEY,
+                    label VARCHAR NOT NULL,
+                    created_at TIMESTAMP DEFAULT now(),
+                    last_used_at TIMESTAMP
+                )
+            """)
+            self._set_schema_version(conn, 20)
+            logger.info("Migration 20: Created api_keys table")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -820,14 +833,15 @@ class DatabaseService:
             is_validation_sort = filters.sort_by in ("validated_asc", "validated_desc")
             
             # Apply sorting (DB-side for DB columns)
+            # Use COALESCE to eliminate NULL-handling edge cases across DuckDB versions
             if not is_validation_sort:
                 sort_map = {
-                    "score_asc": "score ASC NULLS LAST",
-                    "score_desc": "score DESC NULLS LAST",
-                    "name_asc": "name ASC NULLS LAST",
-                    "name_desc": "name DESC NULLS LAST",
+                    "score_asc": "COALESCE(score, 0) ASC, name ASC",
+                    "score_desc": "COALESCE(score, 0) DESC, name ASC",
+                    "name_asc": "COALESCE(name, '') ASC",
+                    "name_desc": "COALESCE(name, '') DESC",
                 }
-                order_by = sort_map.get(filters.sort_by, "score ASC")
+                order_by = sort_map.get(filters.sort_by, "COALESCE(score, 0) ASC, name ASC")
                 query += f" ORDER BY {order_by}"
             
             if is_validation_sort:
@@ -939,20 +953,35 @@ class DatabaseService:
     
     @staticmethod
     def _safe_int(val, default=0):
-        """Safely convert a value to int, handling NaN/None from DuckDB NULL columns."""
+        """Safely convert a value to int, handling NaN/None/pd.NA from DuckDB NULL columns."""
         if val is None:
             return default
         try:
-            import math
-            if isinstance(val, float) and math.isnan(val):
+            if pd.isna(val):
                 return default
-            return int(val)
         except (TypeError, ValueError):
+            pass
+        try:
+            return int(val)
+        except (TypeError, ValueError, OverflowError):
             return default
 
     @staticmethod
+    def _safe_str(val, default=''):
+        """Safely convert a value to str, handling None/NaN/pd.NA from DuckDB NULL columns."""
+        if val is None:
+            return default
+        try:
+            if pd.isna(val):
+                return default
+        except (TypeError, ValueError):
+            pass
+        s = str(val)
+        return s if s and s.lower() != 'nan' else default
+
+    @staticmethod
     def _safe_dt(val):
-        """Return a datetime or None, converting pandas NaT to None."""
+        """Return a datetime or None, converting pandas NaT/NA to None."""
         if val is None:
             return None
         try:
@@ -967,6 +996,7 @@ class DatabaseService:
     def _row_to_rule(self, row: Dict[str, Any], validation_data: Dict) -> DetectionRule:
         """Convert database row to DetectionRule model."""
         _si = self._safe_int
+        _ss = self._safe_str
 
         # Parse raw_data
         raw_data = row.get('raw_data')
@@ -975,6 +1005,14 @@ class DatabaseService:
                 raw_data = json.loads(raw_data)
             except:
                 raw_data = {}
+        elif raw_data is None or (not isinstance(raw_data, dict)):
+            # Handle pd.NA, NaN, or unexpected types
+            try:
+                if pd.isna(raw_data):
+                    raw_data = {}
+            except (TypeError, ValueError):
+                if not isinstance(raw_data, dict):
+                    raw_data = {}
 
         # Parse mitre_ids
         mitre_ids = row.get('mitre_ids', [])
@@ -986,12 +1024,11 @@ class DatabaseService:
         mitre_ids = [m for m in mitre_ids if m]
 
         # Parse severity — NULL / unexpected values fall back to 'low'
-        sev_raw = row.get('severity')
-        valid_sevs = {'low', 'medium', 'high', 'critical'}
-        severity = str(sev_raw).lower() if sev_raw and str(sev_raw).lower() in valid_sevs else 'low'
+        sev_str = _ss(row.get('severity'), 'low').lower()
+        severity = sev_str if sev_str in {'low', 'medium', 'high', 'critical'} else 'low'
 
         # Get validation info
-        rule_name = row.get('name', '') or ''
+        rule_name = _ss(row.get('name'))
         val_info = validation_data.get(str(rule_name), {})
 
         validation_date = None
@@ -1010,12 +1047,12 @@ class DatabaseService:
                     pass
 
         return DetectionRule(
-            rule_id=row.get('rule_id', '') or '',
+            rule_id=_ss(row.get('rule_id')),
             name=rule_name,
             severity=severity,
-            author=row.get('author') or 'Unknown',
+            author=_ss(row.get('author'), 'Unknown'),
             enabled=bool(_si(row.get('enabled'), 0)),
-            space=row.get('space') or 'default',
+            space=_ss(row.get('space'), 'default'),
             score=_si(row.get('score')),
             quality_score=_si(row.get('quality_score')),
             meta_score=_si(row.get('meta_score')),
@@ -2000,6 +2037,59 @@ class DatabaseService:
                 logger.error(f"Failed to delete ghost rules: {e}")
         
         return total_deleted
+
+
+    # ── External API Key management ──────────────────────────────────────
+
+    def create_api_key(self, label: str) -> str:
+        """Generate a new API key, store its SHA-256 hash, return the raw key."""
+        import secrets, hashlib
+        raw_key = secrets.token_urlsafe(32)
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        with self.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO api_keys (key_hash, label) VALUES (?, ?)",
+                [key_hash, label],
+            )
+        logger.info(f"API key created: {label}")
+        return raw_key
+
+    def list_api_keys(self) -> List[Dict[str, Any]]:
+        """Return all API key metadata (never the hash)."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT key_hash, label, created_at, last_used_at "
+                "FROM api_keys ORDER BY created_at DESC"
+            ).fetchall()
+        return [
+            {"key_hash": r[0], "label": r[1], "created_at": r[2], "last_used_at": r[3]}
+            for r in rows
+        ]
+
+    def validate_api_key(self, raw_key: str) -> bool:
+        """Return True if the key is valid; also touch last_used_at."""
+        import hashlib
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT key_hash FROM api_keys WHERE key_hash = ?", [key_hash]
+            ).fetchone()
+            if row:
+                conn.execute(
+                    "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
+                    [key_hash],
+                )
+                return True
+        return False
+
+    def delete_api_key(self, key_hash: str) -> bool:
+        """Revoke an API key by its hash prefix or full hash."""
+        with self.get_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM api_keys WHERE key_hash = ? RETURNING key_hash",
+                [key_hash],
+            ).fetchone()
+        return deleted is not None
 
 
 # Singleton accessor

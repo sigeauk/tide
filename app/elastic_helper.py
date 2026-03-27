@@ -7,7 +7,7 @@ import json
 import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from log import log_debug, log_error, log_info
 
@@ -600,7 +600,7 @@ def get_promotion_session():
 def _fetch_preview_alerts(session, base_url, space, preview_id):
     """
     Fetch alerts from the temporary preview index after Kibana's Preview API (8.7+).
-    Returns (hit_count, alerts_list).
+    Returns (hit_count, alerts_list, error_or_None).
     Retries briefly because Kibana writes alerts asynchronously after returning the previewId.
     """
     import time as _time
@@ -608,7 +608,7 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
     es_direct_url = os.getenv("ELASTICSEARCH_URL")
     index = f".preview.alerts-security.alerts-{space}"
     search_body = {
-        "query": {"match": {"kibana.alert.rule.preview_id": preview_id}},
+        "query": {"term": {"kibana.alert.rule.preview_id": preview_id}},
         "size": 3,
         "sort": [{"@timestamp": {"order": "desc"}}],
     }
@@ -631,7 +631,7 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
                 hit_count = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
                 hits = result.get("hits", {}).get("hits", [])
                 if hit_count > 0 or attempt == 2:
-                    return hit_count, hits
+                    return hit_count, hits, None
                 # No hits yet — wait briefly for Kibana to finish writing
                 _time.sleep(1)
             elif resp.status_code == 404:
@@ -639,14 +639,15 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
                 if attempt < 2:
                     _time.sleep(1)
                     continue
-                return 0, []
+                return 0, [], None
             else:
+                msg = f"Alert search failed ({resp.status_code}): {resp.text[:300]}"
                 log_error(f"Preview alerts search failed ({resp.status_code}): {resp.text[:300]}")
-                return 0, []
+                return 0, [], msg
         except Exception as e:
             log_error(f"Failed to fetch preview alerts: {e}")
-            return 0, []
-    return 0, []
+            return 0, [], f"Failed to fetch preview alerts: {e}"
+    return 0, [], None
 
 
 def preview_detection_rule(rule_data, space="default", lookback="24h"):
@@ -693,8 +694,13 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
         "interval": "5m",
         "from": f"now-{lookback}",
         "invocationCount": 1,
-        "timeframeEnd": datetime.now().strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "timeframeEnd": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
     }
+
+    # Include filters if present (many rules depend on these for matching)
+    filters = rule_data.get("filters")
+    if filters:
+        payload["filters"] = filters
     
     # For EQL, include event_category_override if present
     if language == "eql":
@@ -705,6 +711,21 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
     if rule_data.get("threshold"):
         payload["threshold"] = rule_data["threshold"]
         payload["type"] = "threshold"
+
+    # For threat_match (indicator) rules
+    if rule_type == "threat_match":
+        payload["type"] = "threat_match"
+        for field in ("threat_query", "threat_mapping", "threat_index", "threat_language"):
+            if rule_data.get(field):
+                payload[field] = rule_data[field]
+
+    # For new_terms rules
+    if rule_type == "new_terms":
+        payload["type"] = "new_terms"
+        if rule_data.get("new_terms_fields"):
+            payload["new_terms_fields"] = rule_data["new_terms_fields"]
+        if rule_data.get("history_window_start"):
+            payload["history_window_start"] = rule_data["history_window_start"]
     
     try:
         response = session.post(endpoint, json=payload, timeout=30)
@@ -720,17 +741,27 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
         logs = data.get("logs", [])
         alerts = []
 
-        # Check preview execution logs for errors
+        # Collect preview execution warnings and errors to surface to the user
+        preview_warnings = []
         for entry in logs:
             for err in entry.get("errors", []):
                 log_error(f"Preview execution error: {err}")
+                preview_warnings.append(f"Error: {str(err)[:200]}")
+            for warn in entry.get("warnings", []):
+                preview_warnings.append(str(warn)[:200])
+
+        # Check if the preview was aborted
+        if data.get("isAborted"):
+            return 0, [], "Preview was aborted by Kibana (query may be too expensive or timed out)."
         
         # Extract alerts from the preview response
         if "previewId" in data:
             # Newer API (8.7+): alerts stored in a temporary index, not in the response body.
             # We must query .preview.alerts-security.alerts-<space> to get the actual results.
             preview_id = data["previewId"]
-            hit_count, alerts = _fetch_preview_alerts(session, base_url, space, preview_id)
+            hit_count, alerts, fetch_error = _fetch_preview_alerts(session, base_url, space, preview_id)
+            if fetch_error:
+                return 0, [], fetch_error
         else:
             # Direct response format (older Kibana versions)
             hit_count = len(data.get("alerts", []))
@@ -746,7 +777,12 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
                 "message": (source.get("message", source.get("rule", {}).get("description", "-")) or "-")[:200],
             })
         
-        return hit_count, sample_results, None
+        # Surface warnings when there are 0 hits (explains WHY there are no results)
+        warning_msg = None
+        if hit_count == 0 and preview_warnings:
+            warning_msg = " | ".join(preview_warnings[:3])
+        
+        return hit_count, sample_results, warning_msg
         
     except requests.exceptions.Timeout:
         return 0, [], "Preview API request timed out"

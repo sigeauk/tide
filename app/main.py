@@ -17,7 +17,7 @@ import time
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing
 
 # Configure logging
 logging.basicConfig(
@@ -231,6 +231,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/docs",
         "/api/redoc",
         "/openapi.json",
+        "/api/external",
     }
     
     async def dispatch(self, request: Request, call_next):
@@ -459,6 +460,14 @@ def create_app() -> FastAPI:
     
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        # JSON API endpoints should return JSON errors, not HTML redirects
+        if request.url.path.startswith("/api/external"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+            )
+
         if exc.status_code == 401:
             login_url = f"/login?next={request.url.path}"
             if request.headers.get("HX-Request"):
@@ -561,6 +570,7 @@ def create_app() -> FastAPI:
     app.include_router(sigma.router)
     app.include_router(settings_api.router)
     app.include_router(inventory.router)
+    app.include_router(external_sharing.router)
     
     # --- HEALTH CHECK ---
     

@@ -29,33 +29,42 @@ def list_rules(
     page_size: int = Query(24, ge=1, le=100),
 ):
     """List detection rules with filtering and pagination."""
-    filters = RuleFilters(
-        search=search if search else None,
-        space=space if space else None,
-        enabled=None if not enabled else (enabled.lower() == 'true'),
-        sort_by=sort_by,
-        page=page,
-        page_size=page_size,
-    )
-    
-    rules, total, last_sync = db.get_rules(filters=filters)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    
-    logger.info(f"Fetched {len(rules)} rules (total: {total}, page: {page}/{total_pages})")
-    
-    templates = request.app.state.templates
-    context = {
-        "rules": rules,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-        "search": search or "",
-        "space": space or "",
-        "enabled": enabled or "",
-        "sort_by": sort_by,
-    }
-    return templates.TemplateResponse(request, "partials/rules_grid.html", context)
+    try:
+        filters = RuleFilters(
+            search=search if search else None,
+            space=space if space else None,
+            enabled=None if not enabled else (enabled.lower() == 'true'),
+            sort_by=sort_by,
+            page=page,
+            page_size=page_size,
+        )
+        
+        rules, total, last_sync = db.get_rules(filters=filters)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        
+        logger.info(f"Fetched {len(rules)} rules (total: {total}, page: {page}/{total_pages})")
+        
+        templates = request.app.state.templates
+        context = {
+            "rules": rules,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "search": search or "",
+            "space": space or "",
+            "enabled": enabled or "",
+            "sort_by": sort_by,
+        }
+        return templates.TemplateResponse(request, "partials/rules_grid.html", context)
+    except Exception as e:
+        logger.exception(f"Failed to list rules (sort={sort_by}, space={space}): {e}")
+        return HTMLResponse(
+            '<div class="empty-state">'
+            '<div class="empty-state-title">Error loading rules</div>'
+            f'<p class="empty-state-text">An error occurred while loading rules. Check server logs for details.</p>'
+            '</div>'
+        )
 
 
 @router.get("/metrics", response_class=HTMLResponse)

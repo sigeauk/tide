@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.2] - 2026-03-26
+
+### Added
+- **External Query API (Sidecar):** New `POST /api/external/query` endpoint enables external applications to run read-only SQL against TIDE's DuckDB. Authenticated via `X-TIDE-API-KEY` header with SHA-256 hashed keys stored in the database. SQL validation rejects all non-SELECT statements (DROP, DELETE, INSERT, UPDATE, INSTALL, etc.). Returns clean JSON with `columns`, `rows`, and `row_count`.
+- **API Key Management (Settings):** New "API Keys" tab on the Settings page. Create labelled API keys (raw key shown once, only the SHA-256 hash is stored), view key metadata (label, created date, last used), and revoke keys. Each key's `last_used_at` is updated on every successful query.
+- **DB Migration 20:** Created `api_keys` table for external API key storage.
+- **External API In-App Docs (Settings):** Added External Query API guidance directly inside the API Keys tab, including endpoint/header contract, SQL security constraints, commonly queried table names, cURL examples, and sample success/error responses for quick handoff to external teams.
+
+### Fixed
+- **Rule Health — Pydantic score constraints silently drop rules:** Removed `ge`/`le` Field constraints from all 11 score fields in `DetectionRule`. Sub-scores that exceed the expected range (e.g. `score_field_type=12` when `le=11`) caused Pydantic to reject the entire rule silently — the model never constructed, and the rule vanished from the grid. Bounds are now enforced at scoring time only, not at read time.
+- **Rule Health — COALESCE-based sort for NULL scores:** Replaced `ORDER BY score ASC NULLS LAST` with `ORDER BY COALESCE(score, 0) ASC, name ASC` across all sort modes. The previous fallback `sort_map.get(sort_by, "score ASC")` used bare `score ASC` without any NULL handling, causing NULL-scored rules to cluster on page 1 and trigger downstream conversion failures.
+- **Rule Health — pd.NA handling in `_safe_int` and new `_safe_str`:** Enhanced `_safe_int` to detect `pd.NA` (newer DuckDB/pandas versions) via `pd.isna()` instead of `isinstance(float) and math.isnan()`. Added `_safe_str` helper for string fields where `pd.NA` raises `TypeError` on the `or` operator.
+- **Rule Health — API error resilience:** Wrapped the `list_rules` endpoint in `try/except` to return an HTML error div instead of a silent HTTP 500. Previously, one conversion failure caused HTMX to leave the page in a permanent "Loading…" state with no feedback.
+- **Test Rule — silent 0 results when preview has warnings:** Preview API warnings (e.g. "no matching index found") and execution errors were only logged server-side — the user saw "0 Documents Matched" with no explanation. Warnings and errors from the Kibana preview logs are now surfaced to the UI when hit count is 0.
+- **Test Rule — `_fetch_preview_alerts` errors hidden:** Auth failures, HTTP errors, and exceptions in the alert-fetch step returned `(0, [])` silently. Now returns the actual error message so the UI can display it.
+- **Test Rule — `isAborted` not checked:** Preview API responses with `isAborted: true` (query too expensive / timed out) were treated as 0 results. Now returns an explicit error message.
+- **Test Rule — `datetime.now()` used instead of UTC:** The `timeframeEnd` timestamp used local time with a hardcoded "Z" (UTC) suffix. On containers with a non-UTC timezone this shifts the preview window. Now uses `datetime.now(timezone.utc)`.
+- **Test Rule — `match` query for preview_id:** Changed to `term` query for exact keyword matching on `kibana.alert.rule.preview_id`.
+- **Test Rule — missing `filters` in preview payload:** Rules with Kibana filters (4 of 239 rules locally) had those filters silently dropped from the preview, potentially altering match behaviour.
+- **Test Rule — missing fields for special rule types:** `threat_match` rules now include `threat_query`, `threat_mapping`, `threat_index`, and `threat_language`. `new_terms` rules now include `new_terms_fields` and `history_window_start`.
+
 ## [3.4.1]- 2026-03-24
 
 ### Fixed
