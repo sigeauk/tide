@@ -241,6 +241,141 @@ Located in `/app/data/` (volume mounted):
 
 ---
 
+## External Query API (Sidecar)
+
+TIDE exposes a read-only SQL query endpoint that lets external applications (SOAR, dashboards, custom scripts) pull data directly from the TIDE database over HTTPS.
+
+### Endpoint
+
+```
+POST /api/external/query
+```
+
+### Authentication
+
+Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are created in the TIDE UI under **Settings → API Keys**. Only the SHA-256 hash of the key is stored — the raw key is shown once at creation time.
+
+### Security Constraints
+
+| Rule | Detail |
+|------|--------|
+| **SELECT only** | The SQL must start with `SELECT` or `WITH` (CTEs are allowed) |
+| **Keyword blocklist** | `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `CREATE`, `REPLACE`, `TRUNCATE`, `ATTACH`, `DETACH`, `COPY`, `EXPORT`, `IMPORT`, `INSTALL`, `LOAD`, `CALL`, `PRAGMA`, `GRANT`, `REVOKE`, `SET` are all rejected |
+| **Max length** | 4 000 characters |
+
+### Available Tables
+
+| Table | Description |
+|-------|-------------|
+| `detection_rules` | Synced detection rules (rule_id, name, severity, space, score, quality_score, etc.) |
+| `threat_actors` | Threat actors with TTPs, aliases, and origin |
+| `mitre_techniques` | Full MITRE ATT&CK technique library |
+| `systems` | Top-level environments / systems |
+| `hosts` | Devices within a system |
+| `software_inventory` | Installed packages with CPE 2.3 strings |
+| `vuln_detections` | CVE-to-rule mappings |
+| `applied_detections` | Active detections per system/host |
+| `blind_spots` | Accepted risk / known gaps |
+| `playbooks` | Baseline definitions |
+| `playbook_steps` | Tactics within a baseline |
+| `step_techniques` | Techniques per tactic |
+| `step_detections` | Detection rules per tactic |
+| `system_baselines` | Baselines applied to systems |
+| `system_baseline_snapshots` | Point-in-time audit captures |
+| `classifications` | Classification labels |
+| `app_settings` | Application settings (key/value) |
+
+### Request Format
+
+```json
+{
+  "sql": "SELECT rule_id, name, severity, space, score FROM detection_rules WHERE space = 'production' ORDER BY score DESC LIMIT 10"
+}
+```
+
+### Response Format
+
+```json
+{
+  "columns": ["rule_id", "name", "severity", "space", "score"],
+  "rows": [
+    {
+      "rule_id": "abc-123-def",
+      "name": "Webshell Tool Reconnaissance Activity",
+      "severity": "high",
+      "space": "production",
+      "score": 95
+    }
+  ],
+  "row_count": 1
+}
+```
+
+### curl Examples
+
+**Count all detection rules:**
+
+```bash
+curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql": "SELECT COUNT(*) AS total_rules FROM detection_rules"}'
+```
+
+```json
+{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}
+```
+
+**List rules by space with scores:**
+
+```bash
+curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE space = '\''production'\'' AND score IS NOT NULL ORDER BY score DESC LIMIT 5"}'
+```
+
+```json
+{
+  "columns": ["rule_id", "name", "severity", "score"],
+  "rows": [
+    {"rule_id": "a1b2c3", "name": "Credential Dumping via LSASS", "severity": "critical", "score": 98},
+    {"rule_id": "d4e5f6", "name": "Suspicious PowerShell Execution", "severity": "high", "score": 92}
+  ],
+  "row_count": 2
+}
+```
+
+**Get threat actors with their TTP count:**
+
+```bash
+curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql": "SELECT name, origin, ttp_count FROM threat_actors ORDER BY ttp_count DESC LIMIT 5"}'
+```
+
+**Coverage summary using a CTE:**
+
+```bash
+curl -s -X POST https://your-tide-host/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
+  -d '{"sql": "WITH summary AS (SELECT space, COUNT(*) AS rules, AVG(score) AS avg_score FROM detection_rules GROUP BY space) SELECT * FROM summary ORDER BY avg_score DESC"}'
+```
+
+```json
+{
+  "columns": ["space", "rules", "avg_score"],
+  "rows": [
+    {"space": "production", "rules": 180, "avg_score": 72.4},
+    {"space": "staging", "rules": 59, "avg_score": 65.1}
+  ],
+  "row_count": 2
+}
+```
+---
+
 ## Project Structure
 
 ```
