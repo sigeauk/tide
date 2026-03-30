@@ -44,6 +44,12 @@ PIPELINE_DIR: str = os.path.join(
     "sigma_pipelines",
 )
 
+# Template storage for query post-processing pipelines (pySigma template type).
+TEMPLATE_DIR: str = os.path.join(
+    os.path.dirname(os.getenv("DB_PATH", "/app/data/tide.duckdb")),
+    "sigma_templates",
+)
+
 # Cache for loaded rules
 _rules_cache: Optional[List[Dict]] = None
 
@@ -357,15 +363,19 @@ def convert_sigma_rule(
     index_pattern: str = '',
     custom_pipeline_yaml: str = '',
     pipeline_file: str = '',
+    template_file: str = '',
 ) -> Tuple[bool, str]:
     """
-    Convert a Sigma rule to a target query language.
+        Convert a Sigma rule using pySigma-compatible processing only.
 
-    When a user-provided pipeline (pipeline_file or custom_pipeline_yaml) is
-    present, conversion is delegated to the installed sigma-cli binary so the
-    field-mapping is handled exactly as documented by the pySigma project.
-    Built-in pipeline selection (sysmon, windows, …) without a user pipeline
-    falls back to the pySigma Python API.
+        Strategy:
+            1) Prefer sigma-cli (which wraps pySigma and supports file pipelines,
+                 template postprocessing and backend options).
+            2) Fall back to direct pySigma API when sigma-cli is unavailable.
+
+        Note: For Elasticsearch detection-rule output, UI format
+        ``kibana_ndjson`` is mapped to native pySigma backend format
+        ``siem_rule_ndjson``.
 
     Returns:
         (True, result_string)  on success
@@ -375,30 +385,63 @@ def convert_sigma_rule(
     import shutil
     import tempfile
 
-    # ── Resolve user pipelines ─────────────────────────────────────────────
-    # pipeline_file may be a comma-separated list of filenames (e.g.
-    # "system1-ecs-template.yml,index-template.yml") so users can layer a
-    # field-mapping pipeline with a separate index pipeline.
-    # custom_pipeline_yaml is used as a single fallback when no files given.
-    pipeline_yamls: List[str] = []       # YAML content, one entry per file
-    pipeline_disk_paths: List[str] = []  # abs paths of on-disk files
-
+    # Resolve saved processing pipelines.
+    pipeline_disk_paths: List[str] = []
     if pipeline_file and pipeline_file.strip():
         for fname in [f.strip() for f in pipeline_file.split(',') if f.strip()]:
-            content = read_pipeline_file(fname)
-            if not content:
+            safe = os.path.basename(fname)
+            full = os.path.join(PIPELINE_DIR, safe)
+            if not os.path.isfile(full):
                 return False, f"Pipeline file not found: {fname}"
-            pipeline_yamls.append(content)
-            pipeline_disk_paths.append(
-                os.path.join(PIPELINE_DIR, os.path.basename(fname))
-            )
-    elif custom_pipeline_yaml and custom_pipeline_yaml.strip():
-        pipeline_yamls.append(custom_pipeline_yaml)
+            pipeline_disk_paths.append(full)
 
-    use_cli = bool(pipeline_yamls) and bool(shutil.which('sigma'))
+    # Parse explicit index pattern into backend-option list.
+    explicit_indices = _dedupe_keep_order(
+        [p.strip() for p in str(index_pattern or '').split(',') if p.strip()]
+    )
+
+    # Resolve saved template pipelines (postprocessing template type).
+    template_disk_paths: List[str] = []
+    if template_file and template_file.strip():
+        for fname in [f.strip() for f in template_file.split(',') if f.strip()]:
+            safe = os.path.basename(fname)
+            full = os.path.join(TEMPLATE_DIR, safe)
+            if not os.path.isfile(full):
+                return False, f"Template file not found: {fname}"
+            template_disk_paths.append(full)
+
+    # Apply explicit index overrides to template vars.index_names when templates
+    # are selected. This keeps index control inside the pySigma template path.
+    resolved_template_paths: List[str] = list(template_disk_paths)
+    if template_disk_paths and explicit_indices:
+        resolved_template_paths = []
+        for disk_path in template_disk_paths:
+            try:
+                with open(disk_path, 'r', encoding='utf-8') as f:
+                    tpl_data = yaml.safe_load(f.read()) or {}
+                vars_obj = tpl_data.get('vars') if isinstance(tpl_data.get('vars'), dict) else {}
+                vars_obj['index_names'] = explicit_indices
+                tpl_data['vars'] = vars_obj
+                with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.yml', delete=False, dir='/tmp'
+                ) as tf:
+                    yaml.dump(tpl_data, tf, default_flow_style=False, sort_keys=False)
+                    resolved_template_paths.append(tf.name)
+            except Exception as _e:
+                return False, f"Failed to apply index override to template {os.path.basename(disk_path)}: {_e}"
+
+    # Optional ad-hoc pipeline YAML from upload endpoint.
+    adhoc_pipeline_tmp: Optional[str] = None
+
+    # Alias UI format to native backend format.
+    selected_output_format = output_format
+    if backend == 'elasticsearch' and output_format == 'kibana_ndjson':
+        selected_output_format = 'default' if template_disk_paths else 'siem_rule_ndjson'
+
+    use_cli = bool(shutil.which('sigma'))
 
     # ══════════════════════════════════════════════════════════════════════
-    # PATH A — sigma-cli (user pipeline(s) present)
+    # PATH A — sigma-cli (preferred)
     # ══════════════════════════════════════════════════════════════════════
     if use_cli:
         target_map = {
@@ -420,60 +463,46 @@ def convert_sigma_rule(
                 f.write(yaml_content)
                 tmp_rule = f.name
 
-            # ── kibana_ndjson ──────────────────────────────────────────────
-            # Need a clean Lucene query (no _index) + the index list separately.
-            # Strip add_condition from every pipeline so sigma-cli never
-            # injects _index into the query.  Indices come from the pipeline
-            # YAMLs (structured read) and are merged across all files.
-            if output_format == 'kibana_ndjson':
-                all_indices: List[str] = []
-                cmd = ['sigma', 'convert', '-t', target]
-
-                for pl_yaml in pipeline_yamls:
-                    pl_indices, stripped = _extract_and_strip_index_from_pipeline(pl_yaml)
-                    all_indices.extend(pl_indices)
-                    if stripped.strip():
-                        with tempfile.NamedTemporaryFile(
-                            mode='w', suffix='.yml', delete=False, dir='/tmp'
-                        ) as f:
-                            f.write(stripped)
-                            tmp_files.append(f.name)
-                        cmd.extend(['-p', tmp_files[-1]])
-
-                # Index priority: explicit param > pipeline YAMLs > default
-                if index_pattern and index_pattern.strip():
-                    rule_indices = [p.strip() for p in index_pattern.split(',') if p.strip()]
-                elif all_indices:
-                    rule_indices = all_indices
-                else:
-                    rule_indices = ['logs-*']
-
-                cmd.append(tmp_rule)
-                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                raw_query = proc.stdout.strip()
-                if proc.returncode != 0 and not raw_query:
-                    return False, f"sigma-cli: {proc.stderr.strip()}"
-
-                rule_obj = yaml.safe_load(yaml_content) or {}
-                log_info(f'[SIGMA] CLI kibana_ndjson: query="{raw_query}", indices={rule_indices}')
-                # Compact JSON — the template's JS parses and re-formats it
-                return True, json.dumps(
-                    build_detection_rule_dict(rule_obj, raw_query, rule_indices)
-                )
-
-            # ── All other formats ──────────────────────────────────────────
             cmd = ['sigma', 'convert', '-t', target]
-            for idx, pl_yaml in enumerate(pipeline_yamls):
-                disk_path = pipeline_disk_paths[idx] if idx < len(pipeline_disk_paths) else ''
-                if disk_path and os.path.isfile(disk_path):
-                    cmd.extend(['-p', disk_path])
-                else:
-                    with tempfile.NamedTemporaryFile(
-                        mode='w', suffix='.yml', delete=False, dir='/tmp'
-                    ) as f:
-                        f.write(pl_yaml)
-                        tmp_files.append(f.name)
-                    cmd.extend(['-p', tmp_files[-1]])
+
+            if pipeline and pipeline != 'none':
+                cmd.extend(['-p', pipeline])
+
+            for disk_path in pipeline_disk_paths:
+                cmd.extend(['-p', disk_path])
+
+            for disk_path in resolved_template_paths:
+                if disk_path.startswith('/tmp/'):
+                    tmp_files.append(disk_path)
+                cmd.extend(['-p', disk_path])
+
+            if custom_pipeline_yaml and custom_pipeline_yaml.strip():
+                with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.yml', delete=False, dir='/tmp'
+                ) as f:
+                    f.write(custom_pipeline_yaml)
+                    adhoc_pipeline_tmp = f.name
+                    tmp_files.append(adhoc_pipeline_tmp)
+                cmd.extend(['-p', adhoc_pipeline_tmp])
+
+            if selected_output_format and selected_output_format != 'default':
+                cmd.extend(['-f', selected_output_format])
+
+            has_processing_pipeline = bool(
+                (pipeline and pipeline != 'none')
+                or pipeline_disk_paths
+                or resolved_template_paths
+                or (custom_pipeline_yaml and custom_pipeline_yaml.strip())
+            )
+            if not has_processing_pipeline:
+                cmd.append('--without-pipeline')
+
+            # Elastic SIEM rule formats can take index_names backend option.
+            if backend == 'elasticsearch' and selected_output_format in ('siem_rule', 'siem_rule_ndjson'):
+                effective_indices = explicit_indices or _dedupe_keep_order(get_elastic_indices())
+                for idx_name in effective_indices:
+                    cmd.extend(['-O', f'index_names={idx_name}'])
+
             cmd.append(tmp_rule)
 
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -495,8 +524,11 @@ def convert_sigma_rule(
                     pass
 
     # ══════════════════════════════════════════════════════════════════════
-    # PATH B — pure pySigma (no user pipeline; built-in pipelines only)
+    # PATH B — pure pySigma fallback
     # ══════════════════════════════════════════════════════════════════════
+    if not use_cli:
+        log_info('[SIGMA] sigma-cli not available; falling back to pySigma API.')
+
     try:
         from sigma.rule import SigmaRule
         from sigma.collection import SigmaCollection
@@ -504,7 +536,11 @@ def convert_sigma_rule(
         rule = SigmaRule.from_yaml(yaml_content)
         collection = SigmaCollection([rule])
 
-        # Build the processing pipeline from built-in selection
+        # Build the processing pipeline from built-in selection only.
+        # File-based pipelines/templates require sigma-cli path.
+        if pipeline_disk_paths or template_disk_paths or (custom_pipeline_yaml and custom_pipeline_yaml.strip()):
+            return False, "Custom pipeline/template files require sigma-cli in this build"
+
         processing_pipeline = None
         if pipeline and pipeline != 'none':
             if pipeline == 'sysmon':
@@ -532,6 +568,9 @@ def convert_sigma_rule(
         if processing_pipeline:
             bk_kwargs['processing_pipeline'] = processing_pipeline
 
+        if backend == 'elasticsearch' and selected_output_format in ('siem_rule', 'siem_rule_ndjson'):
+            bk_kwargs['index_names'] = explicit_indices or _dedupe_keep_order(get_elastic_indices())
+
         if backend == 'elasticsearch':
             from sigma.backends.elasticsearch import LuceneBackend
             sigma_backend = LuceneBackend(**bk_kwargs)
@@ -554,24 +593,9 @@ def convert_sigma_rule(
         else:
             return False, f"Unknown backend: {backend}"
 
-        # kibana_ndjson → Elastic Detection Rule JSON
-        if output_format == 'kibana_ndjson':
-            qs = sigma_backend.convert(collection)
-            raw_q = qs[0] if isinstance(qs, list) and qs else str(qs)
-            rule_indices = (
-                [p.strip() for p in index_pattern.split(',') if p.strip()]
-                if index_pattern and index_pattern.strip()
-                else ['logs-*']
-            )
-            rule_obj = yaml.safe_load(yaml_content) or {}
-            log_info(f'[SIGMA] pySigma kibana_ndjson: query="{raw_q}", indices={rule_indices}')
-            # Compact JSON — template JS formats it
-            return True, json.dumps(build_detection_rule_dict(rule_obj, raw_q, rule_indices))
-
-        # All other formats
-        if output_format and output_format != 'default':
+        if selected_output_format and selected_output_format != 'default':
             try:
-                result = sigma_backend.convert(collection, output_format)
+                result = sigma_backend.convert(collection, selected_output_format)
             except TypeError:
                 result = sigma_backend.convert(collection)
         else:
@@ -610,6 +634,60 @@ def get_elastic_indices() -> List[str]:
     return [s.strip() for s in indices_str.split(',') if s.strip()]
 
 
+def _dedupe_keep_order(values: List[str]) -> List[str]:
+    """Return a de-duplicated list while preserving first-seen order."""
+    out: List[str] = []
+    seen = set()
+    for v in values:
+        sv = str(v).strip()
+        if not sv or sv in seen:
+            continue
+        seen.add(sv)
+        out.append(sv)
+    return out
+
+
+def _get_pipeline_index_mode(data: Dict, transformations: Optional[List[Dict]] = None) -> str:
+    """
+    Resolve pipeline index merge mode.
+
+    Supported values: append (default), overwrite.
+    Accepted keys for compatibility:
+      - index_mode
+      - x_tide_index_mode
+      - x-tide-index-mode
+    """
+    raw_mode = (
+        data.get('index_mode')
+        or data.get('x_tide_index_mode')
+        or data.get('x-tide-index-mode')
+        or ''
+    )
+    mode = str(raw_mode).strip().lower()
+    if mode in ('append', 'overwrite'):
+        return mode
+
+    # Parser-safe fallback: infer from add_condition transformation metadata
+    # using either explicit custom keys or id naming conventions.
+    for t in transformations or []:
+        if t.get('type') != 'add_condition':
+            continue
+        t_mode = str(
+            t.get('tide_index_mode')
+            or t.get('x_tide_index_mode')
+            or t.get('x-tide-index-mode')
+            or ''
+        ).strip().lower()
+        if t_mode in ('append', 'overwrite'):
+            return t_mode
+
+        t_id = str(t.get('id') or '').strip().lower()
+        if 'overwrite' in t_id:
+            return 'overwrite'
+
+    return 'append'
+
+
 
 
 def _extract_indices_from_pipeline_yaml(yaml_content: str) -> List[str]:
@@ -632,7 +710,7 @@ def _extract_indices_from_pipeline_yaml(yaml_content: str) -> List[str]:
         return []
 
 
-def _extract_and_strip_index_from_pipeline(pipeline_yaml: str) -> Tuple[List[str], str]:
+def _extract_and_strip_index_from_pipeline(pipeline_yaml: str) -> Tuple[List[str], str, str]:
     """
     Structured (no-regex) extraction of _index values from a pipeline YAML.
 
@@ -642,14 +720,20 @@ def _extract_and_strip_index_from_pipeline(pipeline_yaml: str) -> Tuple[List[str
     Rule conversion — the ``_index`` will NOT appear in the query string, so
     no regex post-processing is required.
 
+    Also resolves the pipeline merge mode for index handling:
+      - append: add discovered indices to the running list (default)
+      - overwrite: replace the running list with discovered indices
+
     Returns:
-        (index_list, cleaned_pipeline_yaml)
+        (index_list, cleaned_pipeline_yaml, index_mode)
     """
     try:
         data = yaml.safe_load(pipeline_yaml) or {}
+        transformations = data.get('transformations', [])
+        mode = _get_pipeline_index_mode(data, transformations)
         indices: List[str] = []
         kept = []
-        for t in data.get('transformations', []):
+        for t in transformations:
             if t.get('type') == 'add_condition':
                 idx = (t.get('conditions') or {}).get('_index')
                 if idx is not None:
@@ -660,9 +744,35 @@ def _extract_and_strip_index_from_pipeline(pipeline_yaml: str) -> Tuple[List[str
                     continue  # drop this transformation from the clean pipeline
             kept.append(t)
         clean_data = {**data, 'transformations': kept}
-        return indices, yaml.dump(clean_data, default_flow_style=False)
+        return _dedupe_keep_order(indices), yaml.dump(clean_data, default_flow_style=False), mode
     except Exception:
-        return [], pipeline_yaml
+        return [], pipeline_yaml, 'append'
+
+
+def _merge_pipeline_indices(pipeline_yamls: List[str]) -> Tuple[List[str], List[str]]:
+    """
+    Merge index filters from multiple pipeline YAMLs in user-selected order.
+
+    Merge rules:
+      - append: extend current list
+      - overwrite: replace current list
+
+    Returns:
+        (merged_indices, cleaned_pipeline_yamls)
+    """
+    merged: List[str] = []
+    stripped_list: List[str] = []
+
+    for pl_yaml in pipeline_yamls:
+        pl_indices, stripped, mode = _extract_and_strip_index_from_pipeline(pl_yaml)
+        stripped_list.append(stripped)
+
+        if mode == 'overwrite':
+            merged = _dedupe_keep_order(pl_indices)
+        else:
+            merged = _dedupe_keep_order(merged + pl_indices)
+
+    return merged, stripped_list
 
 
 # ─── Saved Pipeline File Management ───────────────────────────────────────────
@@ -671,6 +781,12 @@ def ensure_pipeline_dir() -> str:
     """Create the pipeline storage directory if it does not exist."""
     os.makedirs(PIPELINE_DIR, exist_ok=True)
     return PIPELINE_DIR
+
+
+def ensure_template_dir() -> str:
+    """Create the template storage directory if it does not exist."""
+    os.makedirs(TEMPLATE_DIR, exist_ok=True)
+    return TEMPLATE_DIR
 
 
 def list_saved_pipelines() -> List[Dict]:
@@ -694,6 +810,27 @@ def list_saved_pipelines() -> List[Dict]:
     return results
 
 
+def list_saved_templates() -> List[Dict]:
+    """
+    Return metadata for all .yml/.yaml files in TEMPLATE_DIR.
+    Each entry: {filename, name (stem), display (title-cased stem)}.
+    """
+    ensure_template_dir()
+    results: List[Dict] = []
+    try:
+        for fname in sorted(os.listdir(TEMPLATE_DIR)):
+            if fname.endswith(('.yml', '.yaml')):
+                stem = os.path.splitext(fname)[0]
+                results.append({
+                    "filename": fname,
+                    "name": stem,
+                    "display": stem.replace('-', ' ').replace('_', ' ').title(),
+                })
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to list saved templates: {_e}")
+    return results
+
+
 def read_pipeline_file(filename: str) -> Optional[str]:
     """Read a saved pipeline YAML by filename. Returns None if not found."""
     ensure_pipeline_dir()
@@ -707,6 +844,22 @@ def read_pipeline_file(filename: str) -> Optional[str]:
             return f.read()
     except Exception as _e:
         log_error(f"[SIGMA] Failed to read pipeline file {safe}: {_e}")
+        return None
+
+
+def read_template_file(filename: str) -> Optional[str]:
+    """Read a saved template YAML by filename. Returns None if not found."""
+    ensure_template_dir()
+    safe = os.path.basename(filename)
+    path = os.path.join(TEMPLATE_DIR, safe)
+    if not os.path.isfile(path):
+        log_error(f"[SIGMA] Template file not found: {safe}")
+        return None
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return f.read()
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to read template file {safe}: {_e}")
         return None
 
 
@@ -749,6 +902,40 @@ def write_pipeline_file(filename: str, content: str) -> Tuple[bool, str]:
         return False, str(_e)
 
 
+def write_template_file(filename: str, content: str) -> Tuple[bool, str]:
+    """
+    Validate then save a template pipeline YAML to TEMPLATE_DIR.
+    Template pipelines are standard ProcessingPipeline YAML files and should
+    include a postprocessing section with one or more template items.
+    """
+    ok, msg = validate_pipeline_yaml(content)
+    if not ok:
+        return False, msg
+
+    try:
+        data = yaml.safe_load(content) or {}
+    except Exception as _e:
+        return False, f"Invalid template YAML: {_e}"
+
+    post = data.get('postprocessing')
+    if not isinstance(post, list) or not post:
+        return False, "Template YAML must include a non-empty postprocessing list"
+
+    ensure_template_dir()
+    safe = os.path.basename(filename)
+    if not safe.endswith(('.yml', '.yaml')):
+        safe += '.yml'
+    path = os.path.join(TEMPLATE_DIR, safe)
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        log_info(f"[SIGMA] Saved template file: {safe}")
+        return True, safe
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to save template file {safe}: {_e}")
+        return False, str(_e)
+
+
 def delete_pipeline_file(filename: str) -> Tuple[bool, str]:
     """
     Delete a saved pipeline YAML by filename.
@@ -765,6 +952,25 @@ def delete_pipeline_file(filename: str) -> Tuple[bool, str]:
         return True, safe
     except Exception as _e:
         log_error(f"[SIGMA] Failed to delete pipeline file {safe}: {_e}")
+        return False, str(_e)
+
+
+def delete_template_file(filename: str) -> Tuple[bool, str]:
+    """
+    Delete a saved template YAML by filename.
+    Returns (True, filename) or (False, error_message).
+    """
+    ensure_template_dir()
+    safe = os.path.basename(filename)
+    path = os.path.join(TEMPLATE_DIR, safe)
+    if not os.path.isfile(path):
+        return False, f"Template not found: {safe}"
+    try:
+        os.remove(path)
+        log_info(f"[SIGMA] Deleted template file: {safe}")
+        return True, safe
+    except Exception as _e:
+        log_error(f"[SIGMA] Failed to delete template file {safe}: {_e}")
         return False, str(_e)
 
 
@@ -920,6 +1126,7 @@ def send_rule_to_siem(
     enabled: bool = False,
     index_pattern: Optional[str] = None,
     pipeline_file: str = '',
+    template_file: str = '',
     username: str = '',
 ) -> Tuple[bool, str]:
     """
@@ -950,14 +1157,27 @@ def send_rule_to_siem(
         output_format='kibana_ndjson',
         index_pattern=index_pattern or '',
         pipeline_file=pipeline_file,
+        template_file=template_file,
     )
     if not ok:
         return False, f"Conversion failed before deploy: {json_str}"
 
     try:
         payload = json.loads(json_str)
-    except json.JSONDecodeError as exc:
-        return False, f"Failed to parse conversion result: {exc}"
+    except json.JSONDecodeError:
+        # siem_rule_ndjson can be returned as newline-delimited JSON.
+        parsed = None
+        for line in [ln.strip() for ln in str(json_str).splitlines() if ln.strip()]:
+            try:
+                candidate = json.loads(line)
+                if isinstance(candidate, dict):
+                    parsed = candidate
+                    break
+            except json.JSONDecodeError:
+                continue
+        if parsed is None:
+            return False, "Failed to parse conversion result as JSON/NDJSON"
+        payload = parsed
 
     # Apply deploy-time overrides
     payload['enabled'] = enabled

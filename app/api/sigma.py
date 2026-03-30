@@ -84,6 +84,7 @@ def convert_rule(
     index_pattern: str = Form(""),
     custom_pipeline_yaml: str = Form(""),
     pipeline_file: str = Form(""),
+    template_file: str = Form(""),
 ):
     """
     Convert a Sigma rule to target query language.
@@ -102,6 +103,7 @@ def convert_rule(
         index_pattern=index_pattern,
         custom_pipeline_yaml=custom_pipeline_yaml,
         pipeline_file=pipeline_file,
+        template_file=template_file,
     )
     
     # Also get raw query for SIEM deployment
@@ -115,6 +117,7 @@ def convert_rule(
             index_pattern=index_pattern,
             custom_pipeline_yaml=custom_pipeline_yaml,
             pipeline_file=pipeline_file,
+            template_file=template_file,
         )
         raw_query = raw_result if raw_success else ""
     
@@ -174,6 +177,7 @@ def deploy_to_siem(
     enabled: bool = Form(False),
     index_pattern: str = Form(""),
     pipeline_file: str = Form(""),
+    template_file: str = Form(""),
 ):
     """
     Deploy a converted Sigma rule to Elastic SIEM.
@@ -189,6 +193,7 @@ def deploy_to_siem(
         enabled=enabled,
         index_pattern=index_pattern or None,
         pipeline_file=pipeline_file,
+        template_file=template_file,
         username=user.username,
     )
 
@@ -347,6 +352,64 @@ def delete_saved_pipeline(
 ) -> JSONResponse:
     """Delete a saved pipeline YAML by filename."""
     ok, msg = sigma.delete_pipeline_file(filename)
+    if not ok:
+        raise HTTPException(status_code=404, detail=msg)
+    return JSONResponse({"status": "ok", "deleted": msg})
+
+
+# ─── Saved Template CRUD ────────────────────────────────────────────────────
+
+@router.get("/saved-templates")
+def list_saved_templates(request: Request, user: CurrentUser) -> JSONResponse:
+    """Return list of saved template file metadata."""
+    return JSONResponse(
+        sigma.list_saved_templates(),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@router.get("/saved-templates/{filename}")
+def get_saved_template(
+    request: Request,
+    user: CurrentUser,
+    filename: str,
+) -> JSONResponse:
+    """Return the YAML content of a saved template by filename."""
+    content = sigma.read_template_file(filename)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"Template not found: {filename}")
+    return JSONResponse(
+        {"filename": filename, "content": content},
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
+
+@router.post("/saved-templates")
+async def save_template(
+    request: Request,
+    user: CurrentUser,
+    name: str = Form(...),
+    content: str = Form(...),
+) -> JSONResponse:
+    """Validate and save a template YAML to disk."""
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="Template name is required")
+    import re as _re
+    safe_name = _re.sub(r'[^\w\-]', '_', name.strip().lower()) + '.yml'
+    ok, msg = sigma.write_template_file(safe_name, content)
+    if not ok:
+        raise HTTPException(status_code=422, detail=msg)
+    return JSONResponse({"status": "ok", "filename": msg})
+
+
+@router.delete("/saved-templates/{filename}")
+def delete_saved_template(
+    request: Request,
+    user: CurrentUser,
+    filename: str,
+) -> JSONResponse:
+    """Delete a saved template YAML by filename."""
+    ok, msg = sigma.delete_template_file(filename)
     if not ok:
         raise HTTPException(status_code=404, detail=msg)
     return JSONResponse({"status": "ok", "deleted": msg})

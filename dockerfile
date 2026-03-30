@@ -48,7 +48,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir -p /app/data /app/logs /opt/repos/mitre /opt/repos/sigma /opt/repos/cisa /opt/repos/mappings /opt/repos/nvd
+RUN mkdir -p /app/data /app/data/sigma_pipelines /app/data/sigma_templates /app/logs /opt/repos/mitre /opt/repos/sigma /opt/repos/cisa /opt/repos/mappings /opt/repos/nvd
+
+# Ensure sigma-cli backend plugins are resolved at build time for standalone use.
+# Backend Python packages are pinned in requirements.txt; this step validates
+# plugin discovery metadata inside the image.
+RUN sigma plugin list >/dev/null && \
+    sigma plugin install elasticsearch || true && \
+    sigma plugin install splunk || true && \
+    sigma plugin install microsoft365defender || true
 
 # ─── DATA REPOS ───────────────────
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma

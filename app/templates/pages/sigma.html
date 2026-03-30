@@ -58,13 +58,30 @@
             <span id="pipeline-dropdown-label">None selected</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
-        <div id="pipeline-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:50;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+        <div id="pipeline-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:2000;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
             {% for pl in pipeline_files %}
-            <div class="pipeline-option" data-value="{{ pl.filename }}" onclick="window._togglePipelineOption(this)">
+            <button type="button" class="pipeline-option" data-value="{{ pl.filename }}">
                 <span class="pipeline-option-check">&#10003;</span>
                 <span class="pipeline-option-name">{{ pl.display }}</span>
                 <span class="pipeline-option-badge"></span>
-            </div>
+            </button>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="sigma-select-group" style="position:relative;">
+        <label title="Template postprocessing pipelines — click to toggle">Templates</label>
+        <button type="button" id="template-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._toggleTemplateDropdown()">
+            <span id="template-dropdown-label">None selected</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+        </button>
+        <div id="template-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:2000;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+            {% for tpl in template_files %}
+            <button type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
+                <span class="pipeline-option-check">&#10003;</span>
+                <span class="pipeline-option-name">{{ tpl.display }}</span>
+                <span class="pipeline-option-badge"></span>
+            </button>
             {% endfor %}
         </div>
     </div>
@@ -176,6 +193,7 @@ level: medium"></textarea>
                 <input type="hidden" id="form-index-pattern" name="index_pattern" value="">
                 <input type="hidden" id="form-custom-pipeline" name="custom_pipeline_yaml" value="">
                 <input type="hidden" id="form-pipeline-file" name="pipeline_file" value="">
+                <input type="hidden" id="form-template-file" name="template_file" value="">
             </form>
             <div id="validation-result"></div>
         </div>
@@ -240,6 +258,7 @@ level: medium"></textarea>
 
                 <input type="hidden" name="index_pattern" id="deploy-index-pattern">
                 <input type="hidden" name="pipeline_file" id="deploy-pipeline-file">
+                <input type="hidden" name="template_file" id="deploy-template-file">
                 
                 <label class="checkbox-group">
                     <input type="checkbox" name="enabled" value="true">
@@ -378,7 +397,9 @@ window.initSigmaPage = function(retryCount = 0) {
     
     console.log('[Sigma] CodeMirror initialized successfully');
 
-    // Load saved index patterns + default space from Settings page
+    // Load saved index patterns + default space from Settings page.
+    // Saved index defaults should only apply when no template is selected,
+    // because template vars.index_names must remain the source of truth.
     try {
         var _savedIdxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
         var _idxField = document.getElementById('form-index-pattern');
@@ -403,6 +424,7 @@ window.initSigmaPage = function(retryCount = 0) {
     // Refresh the Custom Pipeline dropdown from the API so edits on the
     // Settings page are visible without a hard browser refresh.
     refreshPipelineFileSelect();
+    refreshTemplateFileSelect();
 
     // Sync select values to hidden form fields
     const backendSelect = document.getElementById('backend-select');
@@ -415,7 +437,14 @@ window.initSigmaPage = function(retryCount = 0) {
             document.getElementById('form-backend').value = backend;
             
             // Fetch new format options for this backend
-            fetch(`/api/sigma/formats/${backend}`)
+            fetch(`/api/sigma/formats/${backend}`, { credentials: 'same-origin' })
+                .then(response => {
+                    if (response.status === 401) {
+                        window.location.href = '/login?next=/sigma';
+                        throw new Error('Authentication required');
+                    }
+                    return response;
+                })
                 .then(response => response.text())
                 .then(html => {
                     const formatSelect = document.getElementById('format-select');
@@ -443,6 +472,7 @@ window.initSigmaPage = function(retryCount = 0) {
 
     // Pipeline multi-select: ordered selection array
     window._pipelineSelection = [];  // ordered list of selected values
+    window._templateSelection = [];  // ordered list of selected template files
 
     window._togglePipelineOption = function(el) {
         var val = el.getAttribute('data-value');
@@ -483,10 +513,85 @@ window.initSigmaPage = function(retryCount = 0) {
         return combined;
     };
 
+    window._toggleTemplateOption = function(el) {
+        var val = el.getAttribute('data-value');
+        var idx = window._templateSelection.indexOf(val);
+        if (idx === -1) {
+            window._templateSelection.push(val);
+            el.classList.add('selected');
+        } else {
+            window._templateSelection.splice(idx, 1);
+            el.classList.remove('selected');
+        }
+        window._templateSelection.forEach(function(v, i) {
+            var opt = document.querySelector('#template-multiselect .pipeline-option[data-value="' + v + '"]');
+            if (opt) {
+                var badge = opt.querySelector('.pipeline-option-badge');
+                if (badge) badge.textContent = i + 1;
+            }
+        });
+        document.querySelectorAll('#template-multiselect .pipeline-option:not(.selected) .pipeline-option-badge').forEach(function(b) {
+            b.textContent = '';
+        });
+        window._syncTemplateFiles();
+    };
+
+    window._syncTemplateFiles = function() {
+        var combined = window._templateSelection.join(',');
+        var hidden = document.getElementById('form-template-file');
+        if (hidden) hidden.value = combined;
+        var indexField = document.getElementById('form-index-pattern');
+        if (indexField) {
+            if (window._templateSelection.length > 0) {
+                indexField.value = '';
+            } else {
+                try {
+                    var savedIdxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
+                    indexField.value = savedIdxs.length ? savedIdxs.join(', ') : '';
+                } catch (_e) {
+                    indexField.value = '';
+                }
+            }
+        }
+        var label = document.getElementById('template-dropdown-label');
+        if (label) {
+            var count = window._templateSelection.length;
+            label.textContent = count === 0 ? 'None selected' : count + ' template' + (count !== 1 ? 's' : '') + ' selected';
+        }
+        return combined;
+    };
+
     window._togglePipelineDropdown = function() {
         var dd = document.getElementById('pipeline-multiselect');
         if (dd) dd.style.display = dd.style.display === 'none' ? '' : 'none';
     };
+
+    window._toggleTemplateDropdown = function() {
+        var dd = document.getElementById('template-multiselect');
+        if (dd) dd.style.display = dd.style.display === 'none' ? '' : 'none';
+    };
+
+    var pipelineMenu = document.getElementById('pipeline-multiselect');
+    if (pipelineMenu && !pipelineMenu._bound) {
+        pipelineMenu._bound = true;
+        pipelineMenu.addEventListener('click', function(e) {
+            var opt = e.target.closest('.pipeline-option');
+            if (!opt) return;
+            e.preventDefault();
+            window._togglePipelineOption(opt);
+        });
+    }
+
+    var templateMenu = document.getElementById('template-multiselect');
+    if (templateMenu && !templateMenu._bound) {
+        templateMenu._bound = true;
+        templateMenu.addEventListener('click', function(e) {
+            var opt = e.target.closest('.pipeline-option');
+            if (!opt) return;
+            e.preventDefault();
+            window._toggleTemplateOption(opt);
+        });
+    }
 
     // Close dropdown when clicking outside
     document.addEventListener('click', function(e) {
@@ -495,9 +600,15 @@ window.initSigmaPage = function(retryCount = 0) {
         if (dd && dd.style.display !== 'none' && !dd.contains(e.target) && btn !== e.target && !btn.contains(e.target)) {
             dd.style.display = 'none';
         }
+        var td = document.getElementById('template-multiselect');
+        var tb = document.getElementById('template-dropdown-btn');
+        if (td && td.style.display !== 'none' && !td.contains(e.target) && tb !== e.target && !tb.contains(e.target)) {
+            td.style.display = 'none';
+        }
     });
 
     window._syncPipelineFiles();
+    window._syncTemplateFiles();
 
     // Re-sync all hidden fields just before every HTMX form submit
     // so navigating away and back doesn't leave stale empty values
@@ -509,18 +620,13 @@ window.initSigmaPage = function(retryCount = 0) {
             var ta = document.getElementById('yaml-editor');
             if (cm && ta) ta.value = cm.getValue();
             if (window._syncPipelineFiles) window._syncPipelineFiles();
+            if (window._syncTemplateFiles) window._syncTemplateFiles();
             const ps = document.getElementById('pipeline-select');
             if (ps) document.getElementById('form-pipeline').value = ps.value;
             const bs = document.getElementById('backend-select');
             if (bs) document.getElementById('form-backend').value = bs.value;
             const fs = document.getElementById('format-select');
             if (fs) document.getElementById('form-format').value = fs.value;
-            // When custom pipeline files are selected, they control the index.
-            // Clear the saved index_pattern so pipeline-derived indices are used.
-            if (window._pipelineSelection && window._pipelineSelection.length > 0) {
-                var iField = document.getElementById('form-index-pattern');
-                if (iField) iField.value = '';
-            }
         });
     }
 
@@ -531,6 +637,22 @@ window.initSigmaPage = function(retryCount = 0) {
             var combined = window._syncPipelineFiles ? window._syncPipelineFiles() : '';
             var dpf = document.getElementById('deploy-pipeline-file');
             if (dpf) dpf.value = combined;
+            var tcombined = window._syncTemplateFiles ? window._syncTemplateFiles() : '';
+            var dtf = document.getElementById('deploy-template-file');
+            if (dtf) dtf.value = tcombined;
+            var deployIdx = document.getElementById('deploy-index-pattern');
+            if (deployIdx) {
+                if (window._templateSelection && window._templateSelection.length > 0) {
+                    deployIdx.value = '';
+                } else {
+                    try {
+                        var savedIdxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
+                        deployIdx.value = savedIdxs.length ? savedIdxs.join(', ') : '';
+                    } catch (_e) {
+                        deployIdx.value = '';
+                    }
+                }
+            }
             const rqs = document.getElementById('raw-query-store');
             const dq = document.getElementById('deploy-query');
             if (rqs && dq) dq.value = rqs.value;
@@ -546,15 +668,25 @@ window.refreshPipelineFileSelect = function() {
     if (!widget) return;
     var prevSelected = (window._pipelineSelection || []).slice();
     var bust = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now();
-    fetch('/api/sigma/saved-pipelines?_v=' + bust)
-        .then(function(r) { return r.json(); })
+    fetch('/api/sigma/saved-pipelines?_v=' + bust, { credentials: 'same-origin' })
+        .then(function(r) {
+            var ct = (r.headers.get('content-type') || '').toLowerCase();
+            if (r.status === 401 || r.redirected || ct.includes('text/html')) {
+                window.location.href = '/login?next=/sigma';
+                throw new Error('Authentication required');
+            }
+            if (!ct.includes('application/json')) {
+                throw new Error('Unexpected response type from /api/sigma/saved-pipelines');
+            }
+            return r.json();
+        })
         .then(function(pipelines) {
             widget.innerHTML = '';
             pipelines.forEach(function(pl) {
-                var row = document.createElement('div');
+                var row = document.createElement('button');
                 row.className = 'pipeline-option';
+                row.setAttribute('type', 'button');
                 row.setAttribute('data-value', pl.filename);
-                row.setAttribute('onclick', 'window._togglePipelineOption(this)');
                 var ord = prevSelected.indexOf(pl.filename);
                 if (ord !== -1) row.classList.add('selected');
                 row.innerHTML =
@@ -570,6 +702,46 @@ window.refreshPipelineFileSelect = function() {
             if (window._syncPipelineFiles) window._syncPipelineFiles();
         })
         .catch(function(e) { console.error('[Sigma] Failed to refresh pipeline list:', e); });
+};
+
+window.refreshTemplateFileSelect = function() {
+    var widget = document.getElementById('template-multiselect');
+    if (!widget) return;
+    var prevSelected = (window._templateSelection || []).slice();
+    var bust = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Date.now();
+    fetch('/api/sigma/saved-templates?_v=' + bust, { credentials: 'same-origin' })
+        .then(function(r) {
+            var ct = (r.headers.get('content-type') || '').toLowerCase();
+            if (r.status === 401 || r.redirected || ct.includes('text/html')) {
+                window.location.href = '/login?next=/sigma';
+                throw new Error('Authentication required');
+            }
+            if (!ct.includes('application/json')) {
+                throw new Error('Unexpected response type from /api/sigma/saved-templates');
+            }
+            return r.json();
+        })
+        .then(function(templates) {
+            widget.innerHTML = '';
+            templates.forEach(function(tpl) {
+                var row = document.createElement('button');
+                row.className = 'pipeline-option';
+                row.setAttribute('type', 'button');
+                row.setAttribute('data-value', tpl.filename);
+                var ord = prevSelected.indexOf(tpl.filename);
+                if (ord !== -1) row.classList.add('selected');
+                row.innerHTML =
+                    '<span class="pipeline-option-check">&#10003;</span>' +
+                    '<span class="pipeline-option-name">' + tpl.display + '</span>' +
+                    '<span class="pipeline-option-badge">' + (ord !== -1 ? (ord + 1) : '') + '</span>';
+                widget.appendChild(row);
+            });
+            window._templateSelection = prevSelected.filter(function(v) {
+                return templates.some(function(p) { return p.filename === v; });
+            });
+            if (window._syncTemplateFiles) window._syncTemplateFiles();
+        })
+        .catch(function(e) { console.error('[Sigma] Failed to refresh template list:', e); });
 };
 
 // Initialize immediately on page load
@@ -643,24 +815,25 @@ window.prepareDeployForm = function() {
     var _combined = window._syncPipelineFiles ? window._syncPipelineFiles() : '';
     var dpf = document.getElementById('deploy-pipeline-file');
     if (dpf) dpf.value = _combined;
-    // 4. Index pattern from localStorage (only when no pipeline files selected —
-    //    pipeline files control their own indices via add_condition.)
-    if (!window._pipelineSelection || window._pipelineSelection.length === 0) {
-        try {
+    var _tcombined = window._syncTemplateFiles ? window._syncTemplateFiles() : '';
+    var dtf = document.getElementById('deploy-template-file');
+    if (dtf) dtf.value = _tcombined;
+    // 4. Index pattern from localStorage (maps to backend index_names option)
+    // only when no template is selected. Template vars.index_names must win.
+    try {
+        var hasTemplateSelection = window._templateSelection && window._templateSelection.length > 0;
+        var deployIdx = document.getElementById('deploy-index-pattern');
+        var formIdx = document.getElementById('form-index-pattern');
+        if (hasTemplateSelection) {
+            if (deployIdx) deployIdx.value = '';
+            if (formIdx) formIdx.value = '';
+        } else {
             var idxs = JSON.parse(localStorage.getItem('sigma-indices') || '[]');
             var idxStr = idxs.join(', ');
-            var deployIdx = document.getElementById('deploy-index-pattern');
             if (deployIdx) deployIdx.value = idxStr;
-            var formIdx = document.getElementById('form-index-pattern');
             if (formIdx) formIdx.value = idxStr;
-        } catch (_e) {}
-    } else {
-        // Pipeline files are active — clear index so backend uses pipeline-derived indices
-        var deployIdx2 = document.getElementById('deploy-index-pattern');
-        if (deployIdx2) deployIdx2.value = '';
-        var formIdx2 = document.getElementById('form-index-pattern');
-        if (formIdx2) formIdx2.value = '';
-    }
+        }
+    } catch (_e) {}
 };
 
 // Upload custom Sigma pipeline YAML to backend for validation, store in hidden field

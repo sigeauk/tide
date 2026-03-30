@@ -3689,6 +3689,10 @@ body.light {
   cursor: pointer;
   user-select: none;
   color: var(--color-text);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  text-align: left;
 }
 .pipeline-option:hover { background: var(--color-bg-hover, rgba(255,255,255,0.06)); }
 .pipeline-option.selected { background: var(--color-primary, #4a90d9); color: #fff; }

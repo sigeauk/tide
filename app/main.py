@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
@@ -238,6 +238,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         settings = get_settings()
         path = request.url.path
         is_htmx = request.headers.get("HX-Request") == "true"
+        is_api = path.startswith("/api/")
         
         # Helper to add cache headers for HTML responses
         async def add_cache_headers(response):
@@ -267,6 +268,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if request.url.query:
             return_url += f"?{request.url.query}"
         login_url = f"/login?next={return_url}"
+
+        def _unauthorized_response(reason: str):
+            if is_api:
+                return JSONResponse(
+                    {"detail": "Authentication required", "reason": reason, "login": login_url},
+                    status_code=401,
+                )
+            if is_htmx:
+                from fastapi.responses import Response
+                response = Response(content="", status_code=200)
+                response.headers["HX-Redirect"] = login_url
+                return response
+            return RedirectResponse(url=login_url, status_code=302)
         
         if not access_token:
             # No access_token cookie — try refresh before redirecting to login
@@ -308,13 +322,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             
             # No token and no valid refresh - redirect to login
             logger.info(f"No valid tokens for path: {path}, redirecting to login (is_htmx={is_htmx})")
-            if is_htmx:
-                from fastapi.responses import Response
-                response = Response(content="", status_code=200)
-                response.headers["HX-Redirect"] = login_url
-                return response
-            
-            return RedirectResponse(url=login_url, status_code=302)
+            return _unauthorized_response("missing_or_invalid_tokens")
         
         # Token exists - validate it
         from app.services.auth import get_auth_service
@@ -355,6 +363,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 # Use HX-Redirect for clean navigation
                 response.headers["HX-Redirect"] = login_url
                 # Clear invalid cookies with proper attributes
+                response.delete_cookie(
+                    key="access_token",
+                    path="/",
+                    httponly=True,
+                    secure=use_secure,
+                    samesite="lax",
+                )
+                response.delete_cookie(
+                    key="refresh_token",
+                    path="/",
+                    httponly=True,
+                    secure=use_secure,
+                    samesite="lax",
+                )
+                return response
+
+            if is_api:
+                response = JSONResponse(
+                    {
+                        "detail": "Authentication required",
+                        "reason": "token_validation_failed",
+                        "login": login_url,
+                    },
+                    status_code=401,
+                )
                 response.delete_cookie(
                     key="access_token",
                     path="/",
@@ -868,6 +901,7 @@ def create_app() -> FastAPI:
         spaces = sigma_mod.get_kibana_spaces()
         indices = sigma_mod.get_elastic_indices()
         pipeline_files = sigma_mod.list_saved_pipelines()
+        template_files = sigma_mod.list_saved_templates()
         
         return render_template(
             "pages/sigma.html",
@@ -888,6 +922,7 @@ def create_app() -> FastAPI:
                 "spaces": spaces,
                 "indices": indices,
                 "pipeline_files": pipeline_files,
+                "template_files": template_files,
             }
         )
     
