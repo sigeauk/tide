@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.4] - 2026-03-30
+
+### Changed
+- **Baselines - Technique tag normalization:** Baseline import and tactic technique CRUD now normalize MITRE technique IDs from free-form values (including legacy-labeled input), so instruction-set content is stored as standard tagged techniques.
+- **Baselines - Legacy technique label removed:** Removed the "Legacy technique" display block from tactic MITRE mapping UI so only standard technique tags are shown.
+- **System Heatmap - step-level baseline rendering:** System baseline heatmap now renders one card per baseline step, using the step's displayed technique label and the step's own tactic bucket so matrix totals match the baseline breakdown.
+- **System Baseline cards - technique label source:** Expanded baseline rows now display technique labels from normalized tagged techniques (`step_techniques`) instead of legacy single-field values.
+
+### Fixed
+- **System Heatmap - Tagged technique synchronization:** System baseline heatmap now builds from both primary step technique and multi-technique tags, ensuring baseline techniques are reflected correctly when filtering by baseline.
+- **System Baselines UI - Bulk expand/collapse controls:** Added separate Expand All and Collapse All controls for top-level baselines and tactic groups in the System Baseline coverage panel.
+- **System Heatmap - baseline filter undercount:** Filtering to a baseline such as `secret system cyab` now preserves the full set of baseline steps instead of collapsing or overcounting cards through technique remapping.
+- **System Heatmap - filter responsiveness:** Added short TTL cache for system heatmap baseline source data and a lighter baseline load path for heatmap calls, improving repeated filter-toggle latency.
+- **System Heatmap - traceability for duplicate technique tags:** Aggregation now preserves contributing step titles per technique in tooltip metadata so entries like `Title 14` tagged with `T1200` remain discoverable in the matrix tooltip metadata.
+- **System Heatmap - custom tactic buckets route to Other:** System baseline heatmap now keeps steps tagged under non-canonical tactic labels such as `Other`, `priv esc`, and `prililege escalation` in the `Other` column instead of remapping their MITRE techniques back into canonical ATT&CK tactic columns.
+- **System Baselines - preserve raw tactic breakdowns:** System baseline coverage data now keeps the original step tactic labels for the top-level breakdown instead of normalizing typo or alias variants into canonical tactic names.
+
 ## [3.4.3] - 2026-03-27
 
 ### Fixed

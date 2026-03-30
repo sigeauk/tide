@@ -32,6 +32,24 @@ def _row_to_software(r):
     return SoftwareInventory(id=r[0], host_id=r[1], system_id=r[2], name=r[3],
                              version=r[4], vendor=r[5], cpe=r[6], source=r[7], created_at=r[8])
 
+
+def normalize_technique_id(value: str) -> str:
+    """Normalize free-form technique input into a MITRE technique ID when possible."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+
+    # Accept legacy UI labels but persist only clean technique IDs.
+    raw = re.sub(r"^legacy\s+technique\s*:\s*", "", raw, flags=re.IGNORECASE)
+    raw = raw.replace("`", "").strip()
+
+    match = re.search(r"\b(T\d{4}(?:\.\d{3})?)\b", raw, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    return ""
+
+
 _cisa_kev_cache: Optional[list] = None
 _cisa_kev_mtime: Optional[float] = None
 _cisa_kev_path_used: Optional[str] = None
@@ -2380,18 +2398,19 @@ def delete_playbook(playbook_id: str) -> bool:
 def add_playbook_step(playbook_id: str, step_number: int, title: str,
                       technique_id: str = "", required_rule: str = "",
                       description: str = "", tactic: str = "") -> PlaybookStep:
+    normalized_technique_id = normalize_technique_id(technique_id)
     with _get_conn() as conn:
         r = conn.execute(
             "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
             "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, playbook_id, step_number, title, technique_id, required_rule, description, tactic",
-            [playbook_id, step_number, title, technique_id, required_rule, description, tactic],
+            [playbook_id, step_number, title, normalized_technique_id, required_rule, description, tactic],
         ).fetchone()
     step = PlaybookStep(id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
                         technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
                         tactic=r[7] or "")
     # Auto-populate junction tables from legacy single fields
-    if technique_id.strip():
-        add_step_technique(step.id, technique_id.strip())
+    if normalized_technique_id:
+        add_step_technique(step.id, normalized_technique_id)
         step.techniques = _get_step_techniques(step.id)
     return step
 
@@ -2429,15 +2448,26 @@ def remove_baseline(system_id: str, playbook_id: str) -> bool:
     return cnt > 0
 
 
-def get_system_baselines(system_id: str) -> List[Dict]:
+def get_system_baselines(
+    system_id: str,
+    playbook_ids: Optional[List[str]] = None,
+    include_detection_details: bool = True,
+) -> List[Dict]:
     """Return playbooks applied to a system with step-level RAG coverage."""
+    query = (
+        "SELECT sb.id, sb.playbook_id, sb.applied_at, p.name, p.description "
+        "FROM system_baselines sb JOIN playbooks p ON p.id = sb.playbook_id "
+        "WHERE sb.system_id = ?"
+    )
+    params: List[str] = [system_id]
+    if playbook_ids:
+        placeholders = ",".join("?" for _ in playbook_ids)
+        query += f" AND sb.playbook_id IN ({placeholders})"
+        params.extend(playbook_ids)
+    query += " ORDER BY p.name"
+
     with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT sb.id, sb.playbook_id, sb.applied_at, p.name, p.description "
-            "FROM system_baselines sb JOIN playbooks p ON p.id = sb.playbook_id "
-            "WHERE sb.system_id = ? ORDER BY p.name",
-            [system_id],
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
 
     # Get applied detections for this system's hosts (by step_detection ID)
     hosts = list_hosts(system_id)
@@ -2465,27 +2495,32 @@ def get_system_baselines(system_id: str) -> List[Dict]:
     # Load blind spots for all tactics in one pass
     all_step_blind_spots = _load_all_blind_spots("tactic")
 
-    # Load per-technique coverage data (from Sigma/SIEM rules) once
-    try:
-        from app.services.database import get_database_service
-        _db = get_database_service()
-        covered_ttps = _db.get_all_covered_ttps()
-        ttp_rule_counts = _db.get_ttp_rule_counts()
-    except Exception:
+    # Load per-technique coverage data only when rich detection details are requested.
+    if include_detection_details:
+        try:
+            from app.services.database import get_database_service
+            _db = get_database_service()
+            covered_ttps = _db.get_all_covered_ttps()
+            ttp_rule_counts = _db.get_ttp_rule_counts()
+        except Exception:
+            covered_ttps = set()
+            ttp_rule_counts = {}
+    else:
         covered_ttps = set()
         ttp_rule_counts = {}
 
     # Batch lookup: rule name -> (rule_id, space) for clickable rule badges
     rule_name_lookup: Dict[str, Dict] = {}
-    try:
-        with _get_conn() as conn:
-            rrows = conn.execute(
-                "SELECT rule_id, name, space FROM detection_rules ORDER BY name"
-            ).fetchall()
-        for rid, rname, rspace in rrows:
-            rule_name_lookup[rname] = {"rule_id": rid, "space": rspace or "default"}
-    except Exception:
-        pass
+    if include_detection_details:
+        try:
+            with _get_conn() as conn:
+                rrows = conn.execute(
+                    "SELECT rule_id, name, space FROM detection_rules ORDER BY name"
+                ).fetchall()
+            for rid, rname, rspace in rrows:
+                rule_name_lookup[rname] = {"rule_id": rid, "space": rspace or "default"}
+        except Exception:
+            pass
 
     result = []
     for sb_id, pb_id, applied_at, pb_name, pb_desc in rows:
@@ -2519,37 +2554,51 @@ def get_system_baselines(system_id: str) -> List[Dict]:
             else:
                 status = "red"
 
+            # Build normalized tagged techniques for display/heatmap consumers.
+            normalized_tagged = []
+            for t in step.techniques:
+                tid = normalize_technique_id(t.technique_id)
+                if tid and tid not in normalized_tagged:
+                    normalized_tagged.append(tid)
+            primary_tid = normalize_technique_id(step.technique_id)
+            if primary_tid and primary_tid not in normalized_tagged:
+                normalized_tagged.append(primary_tid)
+
             # Split detections into applied/unapplied for this system
             step_applied = []
             step_unapplied = []
-            for d in step.detections:
-                label = d.rule_ref or d.note or "Rule"
-                rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
-                entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
-                         "rule_id": rule_info["rule_id"] if rule_info else None,
-                         "space": rule_info["space"] if rule_info else None}
-                if d.id in applied_step_det_ids:
-                    step_applied.append(entry)
-                else:
-                    step_unapplied.append(entry)
+            if include_detection_details:
+                for d in step.detections:
+                    label = d.rule_ref or d.note or "Rule"
+                    rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
+                    entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
+                             "rule_id": rule_info["rule_id"] if rule_info else None,
+                             "space": rule_info["space"] if rule_info else None}
+                    if d.id in applied_step_det_ids:
+                        step_applied.append(entry)
+                    else:
+                        step_unapplied.append(entry)
 
             step_results.append({
                 "step_id": step.id,
                 "step_number": step.step_number,
                 "title": step.title,
-                "tactic": step.tactic,
-                "technique_id": step.technique_id,
+                "tactic": (step.tactic or "Other"),
+                "technique_id": normalize_technique_id(step.technique_id),
+                "display_technique_ids": normalized_tagged,
+                "display_technique": normalized_tagged[0] if normalized_tagged else "",
                 "description": step.description,
                 "status": status,
                 "blind_spot_reason": bs_reason,
                 "override_type": "na" if has_na else ("gap" if has_gap else ""),
                 "techniques": [
                     {
-                        "technique_id": t.technique_id,
-                        "has_detection": t.technique_id.upper() in covered_ttps,
-                        "rule_count": ttp_rule_counts.get(t.technique_id.upper(), 0),
+                        "technique_id": normalize_technique_id(t.technique_id),
+                        "has_detection": normalize_technique_id(t.technique_id).upper() in covered_ttps,
+                        "rule_count": ttp_rule_counts.get(normalize_technique_id(t.technique_id).upper(), 0),
                     }
                     for t in step.techniques
+                    if normalize_technique_id(t.technique_id)
                 ],
                 "detections": [{"id": d.id, "rule_ref": d.rule_ref, "note": d.note} for d in step.detections],
                 "applied_dets": step_applied,
@@ -2714,18 +2763,22 @@ def _backfill_step_tactics():
 # ---------------------------------------------------------------------------
 
 def add_step_technique(step_id: str, technique_id: str) -> StepTechnique:
+    normalized_technique_id = normalize_technique_id(technique_id)
+    if not normalized_technique_id:
+        raise ValueError("technique_id is required")
+
     with _get_conn() as conn:
         dup = conn.execute(
             "SELECT id FROM step_techniques WHERE step_id = ? AND technique_id = ?",
-            [step_id, technique_id],
+            [step_id, normalized_technique_id],
         ).fetchone()
         if dup:
-            return StepTechnique(id=dup[0], step_id=step_id, technique_id=technique_id)
+            return StepTechnique(id=dup[0], step_id=step_id, technique_id=normalized_technique_id)
         r = conn.execute(
             "INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?) RETURNING id",
-            [step_id, technique_id],
+            [step_id, normalized_technique_id],
         ).fetchone()
-    return StepTechnique(id=r[0], step_id=step_id, technique_id=technique_id)
+    return StepTechnique(id=r[0], step_id=step_id, technique_id=normalized_technique_id)
 
 
 def remove_step_technique(technique_row_id: str) -> bool:
@@ -2735,10 +2788,14 @@ def remove_step_technique(technique_row_id: str) -> bool:
 
 
 def update_step_technique(technique_row_id: str, technique_id: str) -> Optional[StepTechnique]:
+    normalized_technique_id = normalize_technique_id(technique_id)
+    if not normalized_technique_id:
+        raise ValueError("technique_id is required")
+
     with _get_conn() as conn:
         r = conn.execute(
             "UPDATE step_techniques SET technique_id = ? WHERE id = ? RETURNING id, step_id, technique_id",
-            [technique_id, technique_row_id],
+            [normalized_technique_id, technique_row_id],
         ).fetchone()
     if not r:
         return None

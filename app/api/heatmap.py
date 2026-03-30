@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, Response, RedirectResponse
 from typing import List, Optional, Set, Dict
 import io
 import os
+import time
 
 from app.api.deps import DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
@@ -18,6 +19,10 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/heatmap", tags=["heatmap"])
+
+# Cache system baseline heatmap source data briefly to speed up rapid filter toggles.
+_SYSTEM_HEATMAP_CACHE: Dict[str, tuple[float, List[Dict]]] = {}
+_SYSTEM_HEATMAP_CACHE_TTL = 20.0
 
 # Tactic order for consistent display — single source of truth
 from app.services.report_generator import TACTIC_ORDER
@@ -465,14 +470,24 @@ def get_system_heatmap_matrix(
     Colours reflect per-system coverage status (green/amber/red/grey).
     Optionally filter by specific baseline_ids.
     """
-    from app.inventory_engine import get_system_baselines
+    from app.inventory_engine import get_system_baselines, normalize_technique_id
 
-    baselines = get_system_baselines(system_id)
+    cache_key = str(system_id)
+    now = time.time()
+    cached = _SYSTEM_HEATMAP_CACHE.get(cache_key)
+    if cached and (now - cached[0]) < _SYSTEM_HEATMAP_CACHE_TTL:
+        all_baselines = cached[1]
+    else:
+        all_baselines = get_system_baselines(
+            system_id,
+            include_detection_details=False,
+        )
+        _SYSTEM_HEATMAP_CACHE[cache_key] = (now, all_baselines)
 
-    # Filter to selected baselines if specified
+    baselines = all_baselines
     if baseline_ids:
-        baselines = [bl for bl in baselines if bl["playbook_id"] in baseline_ids]
-
+        selected = set(baseline_ids)
+        baselines = [bl for bl in all_baselines if bl.get("playbook_id") in selected]
     if not baselines:
         templates = request.app.state.templates
         return templates.TemplateResponse(
@@ -505,39 +520,52 @@ def get_system_heatmap_matrix(
 
     # Build matrix from baseline steps
     matrix_data: Dict[str, List] = {t: [] for t in TACTIC_ORDER}
-    seen_techniques: Dict[str, dict] = {}  # technique_id -> best entry (dedup across baselines)
+    matrix_entries: List[dict] = []
+
+    canonical_tactics = {t.lower(): t for t in TACTIC_ORDER}
+
+    def _fallback_other_label(raw_tactic: str) -> str:
+        label = (raw_tactic or "").strip()
+        if not label:
+            return "OTHER"
+        if label.lower() in canonical_tactics:
+            return "OTHER"
+        return label.upper()
 
     for bl in baselines:
         for step in bl.get("tactics", []):
-            tech_id = (step.get("technique_id") or "").upper()
-            if not tech_id:
-                continue
-
             status = step.get("status", "red")
             title = step.get("title", "")
-            raw_tactic = step.get("tactic", "Other")
+            raw_step_tactic = (step.get("tactic") or "").strip()
+            step_uses_other_bucket = (
+                not raw_step_tactic
+                or raw_step_tactic == "Other"
+                or raw_step_tactic not in matrix_data
+            )
 
-            # Map tactic name to TACTIC_ORDER key
-            tactic = raw_tactic if raw_tactic in matrix_data else "Other"
+            tagged_ids = []
+            for tagged in step.get("techniques", []):
+                tid = normalize_technique_id(str(tagged.get("technique_id") or ""))
+                if tid:
+                    tagged_ids.append(tid)
 
-            # Dedup: keep best status (green > amber > grey > red)
-            STATUS_RANK = {"green": 3, "amber": 2, "grey": 1, "red": 0}
-            if tech_id in seen_techniques:
-                existing = seen_techniques[tech_id]
-                if STATUS_RANK.get(status, 0) > STATUS_RANK.get(existing["status"], 0):
-                    existing["status"] = status
-                # Accumulate baseline names
-                if bl["playbook_name"] not in existing["baselines"]:
-                    existing["baselines"].append(bl["playbook_name"])
-                continue
+            primary_tid = normalize_technique_id(step.get("technique_id") or "")
+            if primary_tid:
+                tagged_ids.append(primary_tid)
 
-            seen_techniques[tech_id] = {
-                "tech_id": tech_id,
+            # System heatmap mirrors the baseline breakdown: one card per step.
+            tech_ids = list(dict.fromkeys(tagged_ids))
+            display_technique = tech_ids[0] if tech_ids else _fallback_other_label(raw_step_tactic)
+            display_tactic = "Other" if step_uses_other_bucket else raw_step_tactic
+            matrix_entries.append({
+                "tech_id": display_technique,
                 "title": title,
-                "tactic": tactic,
+                "tactic": display_tactic,
                 "status": status,
-                "baselines": [bl["playbook_name"]],
-            }
+                "baseline": bl["playbook_name"],
+                "step_id": step.get("step_id", ""),
+                "all_techniques": tech_ids,
+            })
 
     # Build HeatmapCell-like dicts for the template
     # We use a simple namespace object so the template can access .css_class and .tooltip
@@ -552,29 +580,38 @@ def get_system_heatmap_matrix(
             self.tooltip = tooltip
             self.rule_count = rule_count
 
-    for entry in seen_techniques.values():
+    for entry in matrix_entries:
         tactic = entry["tactic"]
         cell = _Cell(
             tech_id=entry["tech_id"],
             name=entry["title"],
             tactic=tactic,
             css_class=STATUS_CSS.get(entry["status"], "status-gap"),
-            tooltip=f'{entry["title"]} | {STATUS_TOOLTIP.get(entry["status"], "MISSING")} | Baselines: {", ".join(entry["baselines"])}',
+            tooltip=(
+                f'{entry["tech_id"]}: {entry["title"] or "Untitled"} | '
+                f'{STATUS_TOOLTIP.get(entry["status"], "MISSING")} | '
+                f'Baseline: {entry["baseline"]}'
+                + (
+                    f' | Tagged: {", ".join(entry["all_techniques"])}'
+                    if entry.get("all_techniques")
+                    else ""
+                )
+            ),
         )
         matrix_data[tactic].append(cell)
 
     # Sort cells within each tactic by technique ID
     for tactic in matrix_data:
-        matrix_data[tactic].sort(key=lambda c: c.id)
+        matrix_data[tactic].sort(key=lambda c: (c.id, c.name))
 
     active_tactics = [t for t in TACTIC_ORDER if matrix_data[t]]
 
     # Compute metrics
-    total = len(seen_techniques)
-    green_count = sum(1 for e in seen_techniques.values() if e["status"] == "green")
-    amber_count = sum(1 for e in seen_techniques.values() if e["status"] == "amber")
-    red_count = sum(1 for e in seen_techniques.values() if e["status"] == "red")
-    grey_count = sum(1 for e in seen_techniques.values() if e["status"] == "grey")
+    total = len(matrix_entries)
+    green_count = sum(1 for e in matrix_entries if e["status"] == "green")
+    amber_count = sum(1 for e in matrix_entries if e["status"] == "amber")
+    red_count = sum(1 for e in matrix_entries if e["status"] == "red")
+    grey_count = sum(1 for e in matrix_entries if e["status"] == "grey")
     effective = total - grey_count
     pct = int(green_count / effective * 100) if effective else 0
 

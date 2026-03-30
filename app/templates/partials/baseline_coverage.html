@@ -1,5 +1,18 @@
 {% from "macros/icons.html" import icon %}
 
+<div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem;">
+    <div style="display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.45rem;border:1px solid var(--color-border-muted);border-radius:0.45rem;background:var(--bg-level-2);">
+        <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:600;">Baselines</span>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:0.2rem 0.45rem;" onclick="setAllBaselineCardsExpanded(true)">Expand All</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:0.2rem 0.45rem;" onclick="setAllBaselineCardsExpanded(false)">Collapse All</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.45rem;border:1px solid var(--color-border-muted);border-radius:0.45rem;background:var(--bg-level-2);">
+        <span style="font-size:0.72rem;color:var(--color-text-muted);font-weight:600;">Tactics</span>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:0.2rem 0.45rem;" onclick="setAllTacticGroupsExpanded(true)">Expand All</button>
+        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.72rem;padding:0.2rem 0.45rem;" onclick="setAllTacticGroupsExpanded(false)">Collapse All</button>
+    </div>
+</div>
+
 {% if baselines %}
 {% for bl in baselines %}
 <div class="card card-padded-sm" style="margin-bottom:0.75rem;">
@@ -101,8 +114,8 @@
                      style="cursor:pointer;"
                      {% if step.step_id is defined and step.step_id %}onclick="window.location='/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}'"{% endif %}>
                     <div style="display:flex;align-items:center;gap:0.5rem;">
-                        {% if step.technique_id %}
-                        <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">{{ step.technique_id }}</span>
+                        {% if step.display_technique_ids %}
+                        <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">{{ step.display_technique_ids | join(', ') }}</span>
                         <span style="color:var(--color-text-muted);font-size:0.65rem;">&mdash;</span>
                         {% endif %}
                         {% if step.step_id is defined and step.step_id %}
@@ -356,6 +369,24 @@ function handleBlCoverageAction(sel) {
         htmx.ajax('POST', '/api/baselines/tactics/' + stepId + '/detections/' + detId + '/apply',
                    {target: '#baseline-coverage', swap: 'innerHTML', values: {system_id: sysId}});
     }
+}
+
+function setAllBaselineCardsExpanded(expanded) {
+    document.querySelectorAll('[id^="bl-body-"]').forEach(function(el) {
+        el.style.display = expanded ? '' : 'none';
+    });
+    document.querySelectorAll('[id^="bl-chev-"]').forEach(function(el) {
+        el.style.transform = expanded ? 'rotate(90deg)' : 'rotate(0deg)';
+    });
+}
+
+function setAllTacticGroupsExpanded(expanded) {
+    document.querySelectorAll('[id^="blcov-phase-"]').forEach(function(el) {
+        el.style.display = expanded ? 'flex' : 'none';
+    });
+    document.querySelectorAll('[id^="blcov-chev-"]').forEach(function(el) {
+        el.style.transform = expanded ? 'rotate(90deg)' : 'rotate(0deg)';
+    });
 }
 </script>
 

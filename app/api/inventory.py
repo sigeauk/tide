@@ -60,6 +60,7 @@ from app.inventory_engine import (
     add_step_detection, remove_step_detection,
     update_playbook_step, get_playbook_step, get_step_affected_systems,
     get_baseline_step_coverage,
+    normalize_technique_id,
     # Blind Spots
     add_blind_spot, remove_blind_spot, get_blind_spots,
     # Baseline Snapshots
@@ -914,6 +915,11 @@ async def api_import_baseline(
         if not title:
             title = technique_id
 
+        # Infer and normalize MITRE technique tags from either Technique column or title text.
+        if not technique_id and title:
+            technique_id = title
+        technique_id = normalize_technique_id(technique_id)
+
         # Normalise tactic name to canonical casing
         tactic_val = tactic_lookup.get(raw_tactic.lower(), raw_tactic) if raw_tactic else ""
 
@@ -1166,7 +1172,10 @@ def api_add_tactic_technique(
     request: Request, tactic_id: str, user: RequireUser,
     technique_id: str = Form(...),
 ):
-    add_step_technique(tactic_id, technique_id)
+    try:
+        add_step_technique(tactic_id, technique_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     step = get_playbook_step(tactic_id)
     resp = _render("partials/tactic_mitre_section.html", request, {
         "step": step, "technique_rules": _build_technique_rules(step),
@@ -1193,7 +1202,10 @@ def api_update_tactic_technique(
     request: Request, tactic_id: str, technique_row_id: str, user: RequireUser,
     technique_id: str = Form(...),
 ):
-    update_step_technique(technique_row_id, technique_id)
+    try:
+        update_step_technique(technique_row_id, technique_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     step = get_playbook_step(tactic_id)
     resp = _render("partials/tactic_mitre_section.html", request, {
         "step": step, "technique_rules": _build_technique_rules(step),
