@@ -9,7 +9,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Changed
 - **Sigma Converter - deterministic multi-pipeline index merge:** Added ordered index merge semantics for custom pipeline chains. Pipelines now merge index targets in selection order with support for append behavior and explicit overwrite markers.
 - **Sigma Converter - fallback behavior without sigma-cli:** When sigma-cli is unavailable, kibana_ndjson conversion still applies merged pipeline index scopes so selected pipeline order remains effective for rule index output.
-- **Agent Instructions / Testing Skills:** Consolidated overlapping testing guidance so `.github/skills/testing.md` is now the single source of truth for Playwright, API, DB, and UI-proof rules. Added explicit “do not restart `tide-app` for normal code edits” guidance and a hard requirement to disclose validation path and use visible TIDE UI proof for UI bugs.
 
 ### Fixed
 - **Sigma Pipeline Manager - auth/session save failure path:** Hardened custom pipeline fetch/save/load/delete flows to handle auth-expiry responses cleanly instead of silently failing on non-JSON login payloads.
@@ -18,7 +17,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 - **Sigma Validation Tests:** Added container-run validation scripts for saved-pipeline API CRUD and ordered append/overwrite index logic verification.
-- **Playwright Testing Standards:** Added canonical container-only Playwright guidance and a dedicated skill file (`.github/skills/playwright.md`) covering auth toggle discipline, required runtime flags (`--init`, `--ipc=host`), web-first assertion policy, timeout standards, and artifact storage under repo-mounted paths.
 
 ## [3.4.4] - 2026-03-30
 
