@@ -1,8 +1,8 @@
 """
-API routes for Authentication (Keycloak OIDC).
+API routes for Authentication (Keycloak OIDC + Local DB).
 """
 
-from fastapi import APIRouter, Request, Response, Query
+from fastapi import APIRouter, Request, Response, Query, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Optional
 
@@ -38,6 +38,51 @@ async def login(
     
     logger.info(f"Redirecting to Keycloak: {login_url}")
     return RedirectResponse(url=login_url, status_code=302)
+
+
+@router.post("/local-login", name="auth_local_login")
+async def local_login(
+    request: Request,
+    auth: AuthDep,
+    settings: SettingsDep,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form("/"),
+):
+    """
+    Authenticate with local username/password against the DB.
+    Sets a signed session cookie on success.
+    """
+    result = auth.authenticate_local(username, password)
+    if not result:
+        # Return login page with error
+        return HTMLResponse(
+            content='<div class="login-error" id="login-error">'
+                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+                    '<circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/>'
+                    '<line x1="9" x2="15" y1="9" y2="15"/></svg>'
+                    ' Invalid username or password</div>',
+            status_code=200,
+        )
+    
+    user = result
+    # Create session token and set cookie
+    session_token = auth.create_session_token(user.id)
+    
+    response = HTMLResponse(content="", status_code=200)
+    response.headers["HX-Redirect"] = next
+    
+    use_secure = settings.app_url.startswith("https://")
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+        max_age=86400,  # 24 hours
+    )
+    
+    return response
 
 
 @router.get("/callback", name="auth_callback")
@@ -109,35 +154,28 @@ async def logout(
     settings: SettingsDep,
 ):
     """
-    Logout - clear cookies and redirect to Keycloak for SSO logout.
-    This ensures the user is logged out of both TIDE and Keycloak.
+    Logout - clear all auth cookies.
+    If user had a Keycloak session, redirect through Keycloak logout.
+    If local-only, redirect straight to login page.
     """
-    # Build the post-logout redirect URI (where Keycloak will redirect after logout)
-    post_logout_uri = f"{settings.app_url}/login?logout=1"
-    
-    # Get Keycloak logout URL
-    keycloak_logout_url = auth.get_logout_url(post_logout_uri)
-    
-    # Redirect to Keycloak logout
-    response = RedirectResponse(url=keycloak_logout_url, status_code=302)
-    
-    # Also clear our cookies (belt and suspenders)
     use_secure = settings.app_url.startswith("https://")
+    had_keycloak = request.cookies.get("access_token") is not None
     
-    response.delete_cookie(
-        key="access_token",
-        path="/",
-        httponly=True,
-        secure=use_secure,
-        samesite="lax",
-    )
-    response.delete_cookie(
-        key="refresh_token",
-        path="/",
-        httponly=True,
-        secure=use_secure,
-        samesite="lax",
-    )
+    if had_keycloak:
+        post_logout_uri = f"{settings.app_url}/login?logout=1"
+        keycloak_logout_url = auth.get_logout_url(post_logout_uri)
+        response = RedirectResponse(url=keycloak_logout_url, status_code=302)
+    else:
+        response = RedirectResponse(url="/login?logout=1", status_code=302)
+    
+    for cookie_name in ("access_token", "refresh_token", "session_token"):
+        response.delete_cookie(
+            key=cookie_name,
+            path="/",
+            httponly=True,
+            secure=use_secure,
+            samesite="lax",
+        )
     
     return response
 

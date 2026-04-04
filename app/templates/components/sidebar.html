@@ -11,20 +11,25 @@ Children are indented, slightly muted, icon-free.
     
     <nav class="sidebar-nav">
         <!-- ── Standalone ── -->
+        {% if not user or user.can_read('page:home') %}
         <a href="/" class="nav-item {% if active_page == 'home' %}active{% endif %}" data-tooltip="Home">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>
             </svg>
             <span class="nav-label">Home</span>
         </a>
+        {% endif %}
         
+        {% if not user or user.can_read('page:dashboard') %}
         <a href="/dashboard" class="nav-item {% if active_page == 'dashboard' %}active{% endif %}" data-tooltip="Dashboard">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>
             </svg>
             <span class="nav-label">Dashboard</span>
         </a>
+        {% endif %}
         
+        {% if not user or user.can_read('page:systems') %}
         <a href="/systems" class="nav-item {% if active_page == 'systems' %}active{% endif %}" data-tooltip="Systems">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
@@ -32,8 +37,10 @@ Children are indented, slightly muted, icon-free.
             </svg>
             <span class="nav-label">Systems</span>
         </a>
+        {% endif %}
 
         <!-- ── Risk & Baselines ── -->
+        {% if not user or user.can_read('page:cve_overview') or user.can_read('page:baselines') %}
         <div class="nav-group" id="nav-group-risk">
             <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-risk')" data-tooltip="Risk &amp; Baselines">
                 <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -43,16 +50,22 @@ Children are indented, slightly muted, icon-free.
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
+                {% if not user or user.can_read('page:cve_overview') %}
                 <a href="/cve-overview" class="nav-child {% if active_page == 'cve_overview' %}active{% endif %}">
                     <span class="nav-label">CVE Overview</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:baselines') %}
                 <a href="/baselines" class="nav-child {% if active_page == 'baselines' %}active{% endif %}">
                     <span class="nav-label">Baselines</span>
                 </a>
+                {% endif %}
             </div>
         </div>
+        {% endif %}
 
         <!-- ── Rules ── -->
+        {% if not user or user.can_read('page:rules') or user.can_read('page:promotion') or user.can_read('page:sigma') %}
         <div class="nav-group" id="nav-group-rules">
             <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-rules')" data-tooltip="Rules">
                 <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -62,19 +75,27 @@ Children are indented, slightly muted, icon-free.
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
+                {% if not user or user.can_read('page:rules') %}
                 <a href="/rules" class="nav-child {% if active_page == 'rules' %}active{% endif %}">
                     <span class="nav-label">Rule Health</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:promotion') %}
                 <a href="/promotion" class="nav-child {% if active_page == 'promotion' %}active{% endif %}">
                     <span class="nav-label">Promotion</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:sigma') %}
                 <a href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">
                     <span class="nav-label">Sigma</span>
                 </a>
+                {% endif %}
             </div>
         </div>
+        {% endif %}
 
         <!-- ── Threats ── -->
+        {% if not user or user.can_read('page:threats') or user.can_read('page:heatmap') %}
         <div class="nav-group" id="nav-group-threats">
             <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-threats')" data-tooltip="Threats">
                 <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -84,23 +105,30 @@ Children are indented, slightly muted, icon-free.
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
+                {% if not user or user.can_read('page:threats') %}
                 <a href="/threats" class="nav-child {% if active_page == 'threats' %}active{% endif %}">
                     <span class="nav-label">Threat Landscape</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:heatmap') %}
                 <a href="/heatmap" class="nav-child {% if active_page == 'heatmap' %}active{% endif %}">
                     <span class="nav-label">Heatmap</span>
                 </a>
+                {% endif %}
             </div>
         </div>
+        {% endif %}
     </nav>
     
     <div class="sidebar-footer">
+        {% if not user or user.can_read('page:settings') %}
         <a href="/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}" data-tooltip="Settings">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
             </svg>
             <span class="nav-label">Settings</span>
         </a>
+        {% endif %}
         
         {% if user %}
         <div class="user-menu-container">

@@ -1,16 +1,20 @@
 """
-Authentication service for TIDE - Keycloak OIDC integration.
-Supports stateless JWT validation with optional dev mode bypass.
+Authentication service for TIDE - Hybrid Keycloak OIDC + Local DB auth.
+Supports stateless JWT validation with optional dev mode bypass,
+plus local username/password authentication with signed session tokens.
 """
 
+import bcrypt
 import httpx
 import jwt
 import ssl as _ssl
+import time
 from jwt import PyJWKClient
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Union
 from urllib.parse import urlencode
 from functools import lru_cache
+from itsdangerous import URLSafeTimedSerializer
 
 from app.config import get_settings
 from app.models.auth import User, TokenData
@@ -199,18 +203,37 @@ class AuthService:
             return None
     
     def get_user_from_token(self, token: str) -> Optional[User]:
-        """Validate token and return User model."""
+        """Validate Keycloak JWT and return User model with JIT provisioning."""
         token_data = self.validate_token(token)
-        if token_data:
+        if not token_data:
+            return None
+        # JIT provision: sync the Keycloak user into the local DB
+        try:
+            from app.services.database import get_database_service
+            db = get_database_service()
+            db_user = db.jit_provision_keycloak_user(
+                keycloak_id=token_data.sub,
+                username=token_data.preferred_username or token_data.sub,
+                email=token_data.email,
+                full_name=token_data.name,
+            )
+            if db_user and not db_user.get("is_active", True):
+                logger.warning(f"Keycloak user {token_data.preferred_username} is deactivated in TIDE")
+                return None
+            db_roles = db.get_user_roles(db_user["id"]) if db_user else []
+            user = User.from_token(token_data, db_user=db_user, db_roles=db_roles)
+            if db_user:
+                user.permissions = db.get_user_permissions(db_user["id"])
+            return user
+        except Exception as e:
+            logger.warning(f"JIT provisioning failed, falling back to token-only user: {e}")
             return User.from_token(token_data)
-        return None
     
     def token_expires_soon(self, token: str, threshold_seconds: int = 60) -> bool:
         """
         Check if token expires within threshold_seconds.
         Returns True if token will expire soon (should proactively refresh).
         """
-        import time
         try:
             unverified = jwt.decode(token, options={"verify_signature": False})
             exp_time = unverified.get("exp", 0)
@@ -219,6 +242,95 @@ class AuthService:
             return time_left > 0 and time_left < threshold_seconds
         except Exception:
             return False
+    
+    # --- Local (DB) Authentication ---
+
+    def _get_signer(self) -> URLSafeTimedSerializer:
+        return URLSafeTimedSerializer(self.settings.session_secret)
+
+    def _authenticate_via_keycloak(self, username: str, password: str) -> bool:
+        """Authenticate credentials against Keycloak using Resource Owner Password Credentials grant.
+        Returns True if Keycloak accepts the username/password."""
+        try:
+            with httpx.Client(verify=self.settings.ssl_context, timeout=10.0) as client:
+                response = client.post(
+                    self.settings.oidc_token_url,
+                    data={
+                        "grant_type": "password",
+                        "client_id": self.settings.keycloak_client_id,
+                        "client_secret": self.settings.keycloak_client_secret,
+                        "username": username,
+                        "password": password,
+                        "scope": "openid",
+                    },
+                )
+                if response.status_code == 200:
+                    logger.info(f"Keycloak ROPC auth succeeded for '{username}'")
+                    return True
+                logger.warning(f"Keycloak ROPC auth failed for '{username}': {response.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"Keycloak ROPC auth error for '{username}': {e}")
+            return False
+
+    def authenticate_local(self, username: str, password: str) -> Union[User, str, None]:
+        """Authenticate a local user against bcrypt password hash in DB.
+        Falls back to Keycloak ROPC for SSO-provisioned users.
+        Returns User on success, None on failure."""
+        from app.services.database import get_database_service
+        db = get_database_service()
+        db_user = db.get_user_by_username(username)
+        if not db_user:
+            logger.warning(f"Local login failed: unknown user '{username}'")
+            return None
+        if not db_user.get("is_active", True):
+            logger.warning(f"Local login failed: user '{username}' is deactivated")
+            return None
+        stored_hash = db_user.get("password_hash")
+        if not stored_hash:
+            # SSO-only user: try authenticating via Keycloak ROPC
+            if db_user.get("keycloak_id") and self._authenticate_via_keycloak(username, password):
+                db.update_user(db_user["id"], last_login=datetime.now())
+                db_roles = db.get_user_roles(db_user["id"])
+                logger.info(f"SSO user '{username}' authenticated via Keycloak ROPC")
+                user = User.from_db(db_user, db_roles)
+                user.permissions = db.get_user_permissions(db_user["id"])
+                return user
+            logger.warning(f"Local login failed: user '{username}' has no password and Keycloak auth failed")
+            return None
+        if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
+            logger.warning(f"Local login failed: bad password for '{username}'")
+            return None
+        # Update last_login
+        db.update_user(db_user["id"], last_login=datetime.now())
+        db_roles = db.get_user_roles(db_user["id"])
+        logger.info(f"Local login successful for '{username}' with roles {db_roles}")
+        user = User.from_db(db_user, db_roles)
+        user.permissions = db.get_user_permissions(db_user["id"])
+        return user
+
+    def create_session_token(self, user_id: str) -> str:
+        """Create a signed session token for local auth."""
+        return self._get_signer().dumps({"uid": user_id})
+
+    def get_user_from_session(self, token: str, max_age: int = 86400) -> Optional[User]:
+        """Validate a local session token and return User."""
+        try:
+            data = self._get_signer().loads(token, max_age=max_age)
+            user_id = data.get("uid")
+            if not user_id:
+                return None
+            from app.services.database import get_database_service
+            db = get_database_service()
+            db_user = db.get_user_by_id(user_id)
+            if not db_user or not db_user.get("is_active", True):
+                return None
+            db_roles = db.get_user_roles(db_user["id"])
+            user = User.from_db(db_user, db_roles)
+            user.permissions = db.get_user_permissions(db_user["id"])
+            return user
+        except Exception:
+            return None
     
     def get_dev_user(self) -> User:
         """Get mock user for development mode."""

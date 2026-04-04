@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 
 class DatabaseService:
@@ -607,6 +607,133 @@ class DatabaseService:
             self._set_schema_version(conn, 20)
             logger.info("Migration 20: Created api_keys table")
 
+        # Migration 21: Hybrid Auth & RBAC
+        if current_version < 21:
+            # Drop legacy users table (from _ensure_users_table) and rebuild
+            conn.execute("DROP TABLE IF EXISTS users")
+            conn.execute("""
+                CREATE TABLE users (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    username VARCHAR UNIQUE NOT NULL,
+                    email VARCHAR,
+                    full_name VARCHAR,
+                    password_hash VARCHAR,
+                    keycloak_id VARCHAR,
+                    auth_provider VARCHAR DEFAULT 'local',
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now(),
+                    last_login TIMESTAMP
+                )
+            """)
+            # Roles table with seeded roles
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS roles (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name VARCHAR UNIQUE NOT NULL,
+                    description VARCHAR
+                )
+            """)
+            for role_name, role_desc in [
+                ('ADMIN', 'Full platform administration'),
+                ('ANALYST', 'View and edit detection rules, baselines, and threats'),
+                ('ENGINEER', 'Read-only access to dashboards and reports'),
+            ]:
+                conn.execute(
+                    "INSERT INTO roles (name, description) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [role_name, role_desc],
+                )
+            # User-to-Role join table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_roles (
+                    user_id VARCHAR NOT NULL,
+                    role_id VARCHAR NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (user_id, role_id)
+                )
+            """)
+            self._set_schema_version(conn, 21)
+            logger.info("Migration 21: Created RBAC tables (users, roles, user_roles)")
+
+        # Migration 22: Page / tab permissions per role
+        if current_version < 22:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS role_permissions (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    role_id VARCHAR NOT NULL,
+                    resource VARCHAR NOT NULL,
+                    can_read BOOLEAN DEFAULT false,
+                    can_write BOOLEAN DEFAULT false,
+                    UNIQUE(role_id, resource)
+                )
+            """)
+            # Seed default permissions for the three built-in roles
+            role_rows = conn.execute("SELECT id, name FROM roles").fetchall()
+            role_map = {name: rid for rid, name in role_rows}
+            # Resource definitions: pages and settings tabs
+            page_resources = [
+                'page:home', 'page:dashboard', 'page:systems',
+                'page:cve_overview', 'page:baselines',
+                'page:rules', 'page:promotion', 'page:sigma',
+                'page:threats', 'page:heatmap', 'page:settings',
+            ]
+            tab_resources = [
+                'tab:logging', 'tab:integrations', 'tab:sigma',
+                'tab:classifications', 'tab:apikeys', 'tab:users',
+            ]
+            all_resources = page_resources + tab_resources
+            # ADMIN: full read+write on everything
+            if 'ADMIN' in role_map:
+                for res in all_resources:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, true, true) ON CONFLICT DO NOTHING",
+                        [role_map['ADMIN'], res],
+                    )
+            # ANALYST: read+write on most pages, read on settings (except users)
+            if 'ANALYST' in role_map:
+                analyst_rw = {
+                    'page:home', 'page:dashboard', 'page:systems',
+                    'page:cve_overview', 'page:baselines',
+                    'page:rules', 'page:promotion', 'page:sigma',
+                    'page:threats', 'page:heatmap',
+                }
+                analyst_read = {
+                    'page:settings',
+                    'tab:logging', 'tab:integrations', 'tab:sigma',
+                    'tab:classifications', 'tab:apikeys',
+                }
+                for res in analyst_rw:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, true, true) ON CONFLICT DO NOTHING",
+                        [role_map['ANALYST'], res],
+                    )
+                for res in analyst_read:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, true, false) ON CONFLICT DO NOTHING",
+                        [role_map['ANALYST'], res],
+                    )
+            # ENGINEER: read-only on dashboards and reports
+            if 'ENGINEER' in role_map:
+                engineer_read = {
+                    'page:home', 'page:dashboard', 'page:systems',
+                    'page:cve_overview', 'page:baselines',
+                    'page:rules', 'page:threats', 'page:heatmap',
+                    'page:settings',
+                    'tab:logging', 'tab:integrations', 'tab:sigma',
+                    'tab:classifications', 'tab:apikeys',
+                }
+                for res in engineer_read:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, true, false) ON CONFLICT DO NOTHING",
+                        [role_map['ENGINEER'], res],
+                    )
+            self._set_schema_version(conn, 22)
+            logger.info("Migration 22: Created role_permissions table with defaults")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -655,22 +782,259 @@ class DatabaseService:
             self._ensure_users_table(conn)
     
     def _ensure_users_table(self, conn):
-        """Create users table if it doesn't exist (for standalone auth)."""
+        """Bootstrap default admin user if no users exist."""
         try:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
-                    username VARCHAR UNIQUE NOT NULL,
-                    password_hash VARCHAR NOT NULL,
-                    role VARCHAR DEFAULT 'analyst',
-                    created_at TIMESTAMP DEFAULT now(),
-                    last_login TIMESTAMP
+            row = conn.execute("SELECT count(*) FROM users").fetchone()
+            if row and row[0] == 0:
+                import bcrypt
+                default_pw = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode()
+                conn.execute(
+                    "INSERT INTO users (username, email, full_name, password_hash, auth_provider, is_active) "
+                    "VALUES ('admin', 'admin@localhost', 'Default Admin', ?, 'local', true)",
+                    [default_pw],
                 )
-            """)
-            logger.info("Users table ready")
+                # Assign ADMIN role to the bootstrap user
+                admin_user_id = conn.execute(
+                    "SELECT id FROM users WHERE username = 'admin'"
+                ).fetchone()[0]
+                admin_role_id = conn.execute(
+                    "SELECT id FROM roles WHERE name = 'ADMIN'"
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [admin_user_id, admin_role_id],
+                )
+                logger.info("Bootstrap admin user created (username: admin, password: admin)")
+            else:
+                logger.info(f"Users table has {row[0]} user(s), skipping bootstrap")
         except Exception as e:
-            logger.warning(f"Could not create users table: {e}")
+            logger.warning(f"Could not bootstrap admin user: {e}")
     
+    # --- USER / RBAC DATA ---
+
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
+                "auth_provider, is_active, created_at, updated_at, last_login "
+                "FROM users WHERE username = ?", [username]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
+                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+            ))
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
+                "auth_provider, is_active, created_at, updated_at, last_login "
+                "FROM users WHERE id = ?", [user_id]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
+                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+            ))
+
+    def get_user_by_keycloak_id(self, keycloak_id: str) -> Optional[Dict]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
+                "auth_provider, is_active, created_at, updated_at, last_login "
+                "FROM users WHERE keycloak_id = ?", [keycloak_id]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
+                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+            ))
+
+    def get_all_users(self) -> List[Dict]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, username, email, full_name, keycloak_id, "
+                "auth_provider, is_active, created_at, last_login FROM users ORDER BY username"
+            ).fetchall()
+            cols = ["id", "username", "email", "full_name", "keycloak_id",
+                    "auth_provider", "is_active", "created_at", "last_login"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def create_user(self, username: str, email: str = None, full_name: str = None,
+                    password_hash: str = None, keycloak_id: str = None,
+                    auth_provider: str = "local") -> str:
+        with self.get_connection() as conn:
+            conn.execute(
+                "INSERT INTO users (username, email, full_name, password_hash, keycloak_id, auth_provider) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [username, email, full_name, password_hash, keycloak_id, auth_provider],
+            )
+            row = conn.execute("SELECT id FROM users WHERE username = ?", [username]).fetchone()
+            return row[0]
+
+    def update_user(self, user_id: str, **fields) -> bool:
+        allowed = {"username", "email", "full_name", "password_hash", "is_active", "keycloak_id", "last_login"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [user_id]
+        with self.get_connection() as conn:
+            conn.execute(
+                f"UPDATE users SET {set_clause}, updated_at = now() WHERE id = ?", values
+            )
+        return True
+
+    def delete_user(self, user_id: str):
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
+            conn.execute("DELETE FROM users WHERE id = ?", [user_id])
+
+    def get_user_roles(self, user_id: str) -> List[str]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
+                "WHERE ur.user_id = ?", [user_id]
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def get_all_roles(self) -> List[Dict]:
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT id, name, description FROM roles ORDER BY name").fetchall()
+            return [dict(zip(["id", "name", "description"], r)) for r in rows]
+
+    def set_user_roles(self, user_id: str, role_names: List[str]):
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
+            for rn in role_names:
+                role_row = conn.execute("SELECT id FROM roles WHERE name = ?", [rn]).fetchone()
+                if role_row:
+                    conn.execute(
+                        "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                        [user_id, role_row[0]],
+                    )
+
+    def jit_provision_keycloak_user(self, keycloak_id: str, username: str,
+                                     email: str = None, full_name: str = None) -> Dict:
+        existing = self.get_user_by_keycloak_id(keycloak_id)
+        if existing:
+            self.update_user(existing["id"], email=email, full_name=full_name, last_login=datetime.now())
+            return self.get_user_by_keycloak_id(keycloak_id)
+        # Link existing local account by username (e.g. admin created locally, then logs in via SSO)
+        by_name = self.get_user_by_username(username)
+        if by_name:
+            self.update_user(by_name["id"], keycloak_id=keycloak_id, email=email,
+                            full_name=full_name, last_login=datetime.now())
+            # Upgrade auth_provider to hybrid so the user can use both methods
+            with self.get_connection() as conn:
+                conn.execute("UPDATE users SET auth_provider = 'hybrid' WHERE id = ?", [by_name["id"]])
+            return self.get_user_by_id(by_name["id"])
+        uid = self.create_user(
+            username=username, email=email, full_name=full_name,
+            keycloak_id=keycloak_id, auth_provider="keycloak",
+        )
+        # Default new Keycloak users to ANALYST role
+        role_row = None
+        with self.get_connection() as conn:
+            role_row = conn.execute("SELECT id FROM roles WHERE name = 'ANALYST'").fetchone()
+        if role_row:
+            self.set_user_roles(uid, ["ANALYST"])
+        return self.get_user_by_id(uid)
+
+    # --- ROLE PERMISSIONS ---
+
+    def get_permissions_for_role(self, role_id: str) -> List[Dict]:
+        """Get all permissions for a role."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, resource, can_read, can_write FROM role_permissions "
+                "WHERE role_id = ? ORDER BY resource", [role_id]
+            ).fetchall()
+            return [dict(zip(["id", "resource", "can_read", "can_write"], r)) for r in rows]
+
+    def get_permissions_matrix(self) -> List[Dict]:
+        """Get full permissions matrix: all roles × resources."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT rp.id, r.name AS role_name, r.id AS role_id, "
+                "rp.resource, rp.can_read, rp.can_write "
+                "FROM role_permissions rp "
+                "JOIN roles r ON r.id = rp.role_id "
+                "ORDER BY r.name, rp.resource"
+            ).fetchall()
+            cols = ["id", "role_name", "role_id", "resource", "can_read", "can_write"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_all_resources(self) -> List[str]:
+        """Get all distinct resource names from role_permissions."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT resource FROM role_permissions ORDER BY resource"
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def set_permission(self, role_id: str, resource: str, can_read: bool, can_write: bool):
+        """Set a single role×resource permission (upsert)."""
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM role_permissions WHERE role_id = ? AND resource = ?",
+                [role_id, resource],
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE role_permissions SET can_read = ?, can_write = ? WHERE id = ?",
+                    [can_read, can_write, existing[0]],
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                    "VALUES (?, ?, ?, ?)",
+                    [role_id, resource, can_read, can_write],
+                )
+
+    def check_permission(self, role_names: List[str], resource: str) -> Dict[str, bool]:
+        """Check permission for a set of roles on a resource.
+        Returns {'can_read': bool, 'can_write': bool} where True if ANY role grants it."""
+        if not role_names:
+            return {"can_read": False, "can_write": False}
+        with self.get_connection() as conn:
+            placeholders = ", ".join("?" for _ in role_names)
+            rows = conn.execute(
+                f"SELECT rp.can_read, rp.can_write FROM role_permissions rp "
+                f"JOIN roles r ON r.id = rp.role_id "
+                f"WHERE r.name IN ({placeholders}) AND rp.resource = ?",
+                role_names + [resource],
+            ).fetchall()
+            can_read = any(r[0] for r in rows)
+            can_write = any(r[1] for r in rows)
+            return {"can_read": can_read, "can_write": can_write}
+
+    def get_user_permissions(self, user_id: str) -> Dict[str, Dict[str, bool]]:
+        """Get all permissions for a user based on their roles.
+        Returns {resource: {can_read, can_write}}."""
+        roles = self.get_user_roles(user_id)
+        if not roles:
+            return {}
+        with self.get_connection() as conn:
+            placeholders = ", ".join("?" for _ in roles)
+            rows = conn.execute(
+                f"SELECT rp.resource, rp.can_read, rp.can_write FROM role_permissions rp "
+                f"JOIN roles r ON r.id = rp.role_id "
+                f"WHERE r.name IN ({placeholders})",
+                roles,
+            ).fetchall()
+            perms = {}
+            for resource, can_read, can_write in rows:
+                if resource not in perms:
+                    perms[resource] = {"can_read": False, "can_write": False}
+                perms[resource]["can_read"] = perms[resource]["can_read"] or can_read
+                perms[resource]["can_write"] = perms[resource]["can_write"] or can_write
+            return perms
+
     # --- VALIDATION DATA ---
 
     def _read_validation_file(self) -> Dict[str, Any]:

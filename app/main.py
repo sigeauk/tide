@@ -212,6 +212,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
     Middleware to enforce authentication on protected routes.
     Redirects to /login if not authenticated.
     Also adds cache-control headers for HTML pages.
+    Enforces page-level RBAC permissions.
     
     For HTMX requests:
     - Uses HX-Trigger to signal auth state changes
@@ -227,11 +228,38 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/auth/callback",
         "/auth/logout",
         "/auth/refresh",
+        "/auth/local-login",
         "/static",
         "/api/docs",
         "/api/redoc",
         "/openapi.json",
         "/api/external",
+    }
+    
+    # URL path → resource name mapping for permission checks
+    PATH_RESOURCE_MAP = {
+        "/": "page:home",
+        "/dashboard": "page:dashboard",
+        "/systems": "page:systems",
+        "/cve-overview": "page:cve_overview",
+        "/baselines": "page:baselines",
+        "/rules": "page:rules",
+        "/promotion": "page:promotion",
+        "/sigma": "page:sigma",
+        "/threats": "page:threats",
+        "/heatmap": "page:heatmap",
+        "/settings": "page:settings",
+    }
+    
+    # API prefix → resource mapping for write checks
+    API_WRITE_RESOURCE_MAP = {
+        "/api/rules": "page:rules",
+        "/api/heatmap": "page:heatmap",
+        "/api/threats": "page:threats",
+        "/api/promotion": "page:promotion",
+        "/api/sigma": "page:sigma",
+        "/api/inventory": "page:systems",
+        "/api/settings": "page:settings",
     }
     
     async def dispatch(self, request: Request, call_next):
@@ -249,6 +277,40 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 response.headers["Expires"] = "0"
             return response
         
+        def _check_page_permission(user):
+            """Check if user has permission to access this path. Returns 403 response or None."""
+            if not user or user.is_admin():
+                return None
+            # Page-level read check
+            resource = self.PATH_RESOURCE_MAP.get(path)
+            if not resource:
+                # Check for sub-paths (e.g. /systems/123 → page:systems)
+                for prefix, res in self.PATH_RESOURCE_MAP.items():
+                    if prefix != "/" and path.startswith(prefix):
+                        resource = res
+                        break
+            if resource and not user.can_read(resource):
+                if is_htmx:
+                    from fastapi.responses import Response
+                    resp = Response(content="", status_code=200)
+                    resp.headers["HX-Redirect"] = "/"
+                    return resp
+                if is_api:
+                    return JSONResponse({"detail": "Insufficient permissions"}, status_code=403)
+                return JSONResponse(
+                    content="<h1>403 Forbidden</h1><p>You don't have access to this page.</p>",
+                    status_code=403,
+                    media_type="text/html",
+                )
+            # API write check (POST/PUT/DELETE)
+            if is_api and request.method in ("POST", "PUT", "DELETE", "PATCH"):
+                for prefix, res in self.API_WRITE_RESOURCE_MAP.items():
+                    if path.startswith(prefix):
+                        if not user.can_write(res):
+                            return JSONResponse({"detail": "Write access denied"}, status_code=403)
+                        break
+            return None
+        
         # Skip auth check if disabled (but still add cache headers)
         if settings.auth_disabled:
             response = await call_next(request)
@@ -262,6 +324,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Check for access token in cookie
         access_token = request.cookies.get("access_token")
         refresh_token = request.cookies.get("refresh_token")
+        session_token = request.cookies.get("session_token")
         
         # Build login URL for redirects
         return_url = str(request.url.path)
@@ -294,6 +357,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     user = auth_service.get_user_from_token(new_access_token)
                     if user:
                         logger.info(f"Silent refresh successful for {user.username}, continuing to {path}")
+                        perm_resp = _check_page_permission(user)
+                        if perm_resp:
+                            return perm_resp
                         response = await call_next(request)
                         response = await add_cache_headers(response)
                         use_secure = settings.app_url.startswith("https://")
@@ -319,6 +385,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         logger.warning("Refresh succeeded but new token failed validation")
                 else:
                     logger.warning(f"Refresh token also failed for path: {path}")
+            
+            # Try local session token before giving up
+            if session_token:
+                from app.services.auth import get_auth_service
+                auth_service = get_auth_service()
+                user = auth_service.get_user_from_session(session_token)
+                if user:
+                    logger.debug(f"Local session valid for user: {user.username}, path: {path}")
+                    perm_resp = _check_page_permission(user)
+                    if perm_resp:
+                        return perm_resp
+                    response = await call_next(request)
+                    return await add_cache_headers(response)
             
             # No token and no valid refresh - redirect to login
             logger.info(f"No valid tokens for path: {path}, redirecting to login (is_htmx={is_htmx})")
@@ -422,6 +501,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return response
         
         logger.debug(f"Token valid for user: {user.username}, path: {path}")
+        
+        # Check page-level permissions
+        perm_resp = _check_page_permission(user)
+        if perm_resp:
+            return perm_resp
         
         # Token is valid, proceed
         response = await call_next(request)
@@ -651,18 +735,30 @@ def create_app() -> FastAPI:
                 secure=use_secure,
                 samesite="lax",
             )
+            response.delete_cookie(
+                key="session_token",
+                path="/",
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+            )
             return response
         
         # Check if user is already logged in with a valid token
         access_token = request.cookies.get("access_token")
+        session_token = request.cookies.get("session_token")
+        from app.services.auth import get_auth_service
+        auth_service = get_auth_service()
+        
         if access_token:
-            from app.services.auth import get_auth_service
-            auth_service = get_auth_service()
             user = auth_service.get_user_from_token(access_token)
             if user is not None:
-                # Valid token, redirect to destination
                 return RedirectResponse(url=next, status_code=302)
-            # else: token exists but invalid/expired - show login page
+        
+        if session_token:
+            user = auth_service.get_user_from_session(session_token)
+            if user is not None:
+                return RedirectResponse(url=next, status_code=302)
         
         return render_template(
             "pages/login.html",

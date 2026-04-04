@@ -3256,6 +3256,103 @@ body.light {
 .login-page .sidebar { display: none !important; }
 .login-page .main-content { margin-left: 0 !important; }
 
+/* Local login form */
+.local-login-form {
+  text-align: left;
+  margin-bottom: 1rem;
+}
+.local-login-form .form-group {
+  margin-bottom: 1rem;
+}
+.local-login-form .form-label {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 0.35rem;
+}
+.local-login-form .form-input {
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-base);
+  color: var(--color-text);
+  transition: border-color 0.15s;
+}
+.local-login-form .form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px hsla(var(--brand-hue), 70%, 55%, 0.15);
+}
+.login-error {
+  background: var(--color-danger-bg, hsl(0 70% 95%));
+  color: var(--color-danger-text, hsl(0 70% 40%));
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.25rem 0;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-muted);
+}
+
+/* User Management (Settings) */
+.role-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.82rem;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.role-checkbox input[type="checkbox"] {
+  accent-color: var(--color-primary);
+}
+.inline-role-form {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.add-user-details summary {
+  list-style: none;
+}
+.add-user-details summary::-webkit-details-marker { display: none; }
+.add-user-form .form-input {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.85rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-surface);
+  color: var(--color-text);
+}
+.add-user-form .form-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+.toggle-sm {
+  transform: scale(0.8);
+  transform-origin: left center;
+}
+
 
 /* ================================================================
  * PREFERENCES PAGE

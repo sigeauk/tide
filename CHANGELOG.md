@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.6] - 2026-04-04
+
+### Added
+- **Hybrid Authentication:** TIDE now supports both Keycloak OIDC (SSO) and local username/password login. Users can sign in with either method from the same login page.
+- **Local Auth with bcrypt:** Secure password-based login using bcrypt hashing and signed session cookies (`itsdangerous`). Passwords require a minimum of 8 characters.
+- **Just-In-Time (JIT) Provisioning:** Keycloak SSO users are automatically synced to the local `users` table on first login, with email, name, and `keycloak_id` claims persisted.
+- **Role-Based Access Control (RBAC):** New `roles` and `user_roles` tables with three seeded roles: ADMIN, ANALYST, ENGINEER. Role checks available via `require_role()` dependency and `user.has_role()` / `user.is_admin()` helpers.
+- **User Management UI (Settings → Users):** Admin-only tab on the Settings page to list all users, view auth source (Local/SSO), assign/revoke roles, toggle active status, create local users, and delete accounts.
+- **Bootstrap Admin:** On first startup with an empty database, a default `admin` user (password: `admin`) with ADMIN role is created automatically.
+- **DB Migrations 21–22:** Created `users`, `roles`, `user_roles`, and `role_permissions` tables with proper schema for hybrid auth and RBAC.
+- **SESSION_SECRET config:** New `SESSION_SECRET` environment variable for signing local session tokens.
+- **Page & Tab RBAC Permissions:** New `role_permissions` table (DB migration 22) with per-role read/write controls for every page and settings tab. Default permissions seeded for ADMIN (full access), ANALYST (pages R+W, settings read-only), and ENGINEER (read-only).
+- **Permissions Admin UI:** New "Permissions" tab on the Settings page (admin-only) with a matrix of checkboxes to toggle read/write access per role and resource, powered by HTMX.
+- **Permissions API:** `GET /api/settings/permissions` returns the permissions matrix HTML; `POST /api/settings/permissions` toggles individual permission flags.
+- **Middleware Permission Enforcement:** `AuthMiddleware` now checks page-level read permissions and API write permissions against the user's role-based access before allowing requests through.
+- **Sidebar Permission Guards:** Navigation items are hidden when the user lacks read access to the corresponding page resource.
+- **Permission Helpers:** `require_read()` and `require_write()` dependency factories in `deps.py`; `can_read()` and `can_write()` methods on the `User` model.
+
+### Changed
+- **Login Page:** Redesigned to show both local login form and SSO button with a divider.
+- **Auth Middleware:** Now checks `session_token` cookie (local auth) in addition to `access_token` (Keycloak JWT), enabling seamless hybrid auth.
+- **Logout:** Intelligently routes through Keycloak logout only if user had an SSO session; local-only users redirect straight to the login page. All auth cookies (`access_token`, `refresh_token`, `session_token`) are cleared.
+- **User Model:** Extended with `auth_provider`, `is_active`, `has_role()`, and `from_db()` class method. Dev user now uses uppercase role names (ADMIN, ANALYST, ENGINEER).
+- **ADMIN excluded from Permissions matrix:** The ADMIN role always has full access and is no longer shown in the Permissions UI, preventing accidental lockouts.
+
+### Fixed
+- **SSO last_login tracking:** `jit_provision_keycloak_user()` now updates `last_login` on every SSO sign-in, so the Users table no longer shows "Never" for SSO accounts.
+- **SSO local login via Keycloak ROPC:** SSO-provisioned users can now sign in through the local login form using their Keycloak password. The auth service falls back to Keycloak's Resource Owner Password Credentials grant when the user has no local password hash.
+- **JIT account linking:** When an SSO user signs in and a matching local username already exists, the accounts are linked (keycloak_id set, auth_provider upgraded to hybrid) instead of creating a duplicate.
+- **Settings tab fallback:** `switchTab` JS now falls back to the first visible tab when the saved tab is hidden by permissions.
+
 ## [3.4.5] - 2026-03-30
 
 ### Changed

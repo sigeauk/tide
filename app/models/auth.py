@@ -3,7 +3,7 @@ Pydantic models for Authentication and User data.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 from datetime import datetime
 
 
@@ -42,19 +42,34 @@ class TokenData(BaseModel):
 
 class User(BaseModel):
     """Application user model."""
-    id: str  # Keycloak subject ID
+    id: str  # Internal DB user ID
     username: str
     email: Optional[str] = None
     name: Optional[str] = None
     roles: List[str] = Field(default_factory=list)
     groups: List[str] = Field(default_factory=list)
+    auth_provider: str = "keycloak"  # 'keycloak' or 'local'
+    is_active: bool = True
+    permissions: Dict[str, Dict[str, bool]] = Field(default_factory=dict)
     
     # Session info
     authenticated_at: Optional[datetime] = None
     
     @classmethod
-    def from_token(cls, token: TokenData) -> "User":
-        """Create User from decoded JWT token."""
+    def from_token(cls, token: TokenData, db_user: dict = None, db_roles: List[str] = None) -> "User":
+        """Create User from decoded JWT token, enriched with DB data."""
+        if db_user:
+            return cls(
+                id=db_user["id"],
+                username=db_user.get("username") or token.preferred_username or token.sub,
+                email=db_user.get("email") or token.email,
+                name=db_user.get("full_name") or token.name,
+                roles=db_roles or [],
+                groups=token.groups,
+                auth_provider="keycloak",
+                is_active=db_user.get("is_active", True),
+                authenticated_at=datetime.now(),
+            )
         return cls(
             id=token.sub,
             username=token.preferred_username or token.sub,
@@ -62,7 +77,22 @@ class User(BaseModel):
             name=token.name,
             roles=token.roles,
             groups=token.groups,
-            authenticated_at=datetime.now()
+            auth_provider="keycloak",
+            authenticated_at=datetime.now(),
+        )
+    
+    @classmethod
+    def from_db(cls, db_user: dict, db_roles: List[str] = None) -> "User":
+        """Create User from database row."""
+        return cls(
+            id=db_user["id"],
+            username=db_user["username"],
+            email=db_user.get("email"),
+            name=db_user.get("full_name"),
+            roles=db_roles or [],
+            auth_provider=db_user.get("auth_provider", "local"),
+            is_active=db_user.get("is_active", True),
+            authenticated_at=datetime.now(),
         )
     
     @classmethod
@@ -73,14 +103,33 @@ class User(BaseModel):
             username="developer",
             email="dev@localhost",
             name="Local Developer",
-            roles=["admin", "user"],
+            roles=["ADMIN", "ANALYST", "ENGINEER"],
             groups=["/admins", "/developers"],
+            auth_provider="local",
             authenticated_at=datetime.now()
         )
     
     def is_admin(self) -> bool:
         """Check if user has admin role."""
-        return "admin" in self.roles
+        return "ADMIN" in self.roles or "admin" in self.roles
+    
+    def has_role(self, role: str) -> bool:
+        """Check if user has a specific role (case-insensitive)."""
+        return role.upper() in [r.upper() for r in self.roles]
+
+    def can_read(self, resource: str) -> bool:
+        """Check if user can read a resource based on permissions."""
+        if self.is_admin():
+            return True
+        perm = self.permissions.get(resource)
+        return perm.get("can_read", False) if perm else False
+
+    def can_write(self, resource: str) -> bool:
+        """Check if user can write a resource based on permissions."""
+        if self.is_admin():
+            return True
+        perm = self.permissions.get(resource)
+        return perm.get("can_write", False) if perm else False
 
 
 class AuthState(BaseModel):
