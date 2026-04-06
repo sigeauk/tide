@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
+def _is_local_only_account(db_user: dict) -> bool:
+    return (db_user.get("auth_provider") or "").lower() == "local"
+
+
 @router.get("", response_class=HTMLResponse)
 def get_settings_data(request: Request, db: DbDep, user: CurrentUser):
     """Get current app settings as JSON."""
@@ -103,7 +107,8 @@ def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
 @router.get("/api-keys", response_class=HTMLResponse)
 def list_api_keys(request: Request, db: DbDep, user: RequireUser):
     """Return the API key list as an HTML partial."""
-    keys = db.list_api_keys()
+    is_admin = user.is_admin()
+    keys = db.list_api_keys() if is_admin else db.list_api_keys(created_by_user_id=user.id)
     if not keys:
         return HTMLResponse('<p class="text-muted" style="font-size:0.85rem;">No API keys created yet.</p>')
     rows = ""
@@ -111,11 +116,14 @@ def list_api_keys(request: Request, db: DbDep, user: RequireUser):
         created = str(k["created_at"])[:19] if k["created_at"] else "-"
         used = str(k["last_used_at"])[:19] if k["last_used_at"] else "Never"
         short_hash = k["key_hash"][:12] + "…"
+        owner = k.get("created_by_user_id") or "legacy"
+        owner_col = f"<td style=\"font-family:monospace;font-size:0.75rem;\">{owner}</td>" if is_admin else ""
         rows += f"""<tr>
             <td>{k["label"]}</td>
             <td style="font-family:monospace;font-size:0.8rem;">{short_hash}</td>
             <td>{created}</td>
             <td>{used}</td>
+            {owner_col}
             <td>
                 <button class="btn btn-danger btn-sm"
                         hx-delete="/api/settings/api-keys/{k["key_hash"]}"
@@ -123,9 +131,10 @@ def list_api_keys(request: Request, db: DbDep, user: RequireUser):
                         hx-confirm="Revoke this API key?">Revoke</button>
             </td>
         </tr>"""
+    owner_head = "<th>Owner</th>" if is_admin else ""
     return HTMLResponse(f"""
     <table class="mapping-table">
-        <thead><tr><th>Label</th><th>Key ID</th><th>Created</th><th>Last Used</th><th></th></tr></thead>
+        <thead><tr><th>Label</th><th>Key ID</th><th>Created</th><th>Last Used</th>{owner_head}<th></th></tr></thead>
         <tbody>{rows}</tbody>
     </table>
     """)
@@ -138,7 +147,7 @@ async def create_api_key(request: Request, db: DbDep, user: RequireUser):
     label = str(form.get("api_key_label", "")).strip()
     if not label:
         label = "Untitled key"
-    raw_key = db.create_api_key(label)
+    raw_key = db.create_api_key(label, created_by_user_id=user.id)
     return HTMLResponse(f"""
     <div id="api-key-created-toast" hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">API key created — copy it now, it won't be shown again.</div>
@@ -154,23 +163,130 @@ async def create_api_key(request: Request, db: DbDep, user: RequireUser):
 @router.delete("/api-keys/{key_hash}", response_class=HTMLResponse)
 def revoke_api_key(request: Request, key_hash: str, db: DbDep, user: RequireUser):
     """Revoke (delete) an API key."""
+    key = db.get_api_key(key_hash)
+    if not key:
+        return list_api_keys(request, db, user)
+
+    owner_id = key.get("created_by_user_id")
+    can_revoke = user.is_admin() or (owner_id is not None and owner_id == user.id)
+    if not can_revoke:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">You can only revoke your own API keys unless you are an admin.</div>
+        </div>
+        """ + list_api_keys(request, db, user).body.decode())
+
     db.delete_api_key(key_hash)
-    keys = db.list_api_keys()
-    if not keys:
-        return HTMLResponse('<p class="text-muted" style="font-size:0.85rem;">No API keys created yet.</p>')
-    # Return updated list
     return list_api_keys(request, db, user)
+
+
+# ── Profile Management (self-service; local-only accounts) ───────────────────
+
+@router.post("/profile/email", response_class=HTMLResponse)
+async def update_profile_email(request: Request, db: DbDep, user: RequireUser):
+    """Update the authenticated user's email (local-only accounts)."""
+    form = await request.form()
+    new_email = str(form.get("email", "")).strip().lower()
+
+    if not new_email or "@" not in new_email:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">Enter a valid email address.</div>
+        </div>""")
+
+    db_user = db.get_user_by_id(user.id)
+    if not db_user:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">User account not found.</div>
+        </div>""")
+
+    if not _is_local_only_account(db_user):
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">This account is managed by SSO.</div>
+        </div>""")
+
+    existing = db.get_user_by_email(new_email)
+    if existing and existing.get("id") != user.id:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">Email address is already in use.</div>
+        </div>""")
+
+    db.update_user(user.id, email=new_email)
+    return HTMLResponse(f"""
+    <div hx-swap-oob="afterbegin:#toast-container">
+        <div class="toast toast-success">Email updated to {new_email}.</div>
+    </div>""")
+
+
+@router.post("/profile/password", response_class=HTMLResponse)
+async def update_profile_password(request: Request, db: DbDep, user: RequireUser):
+    """Update the authenticated user's password (local-only accounts)."""
+    form = await request.form()
+    current_password = str(form.get("current_password", ""))
+    new_password = str(form.get("new_password", ""))
+    confirm_password = str(form.get("confirm_password", ""))
+
+    if len(new_password) < 8:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">New password must be at least 8 characters.</div>
+        </div>""")
+
+    if new_password != confirm_password:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">New password and confirmation do not match.</div>
+        </div>""")
+
+    db_user = db.get_user_by_id(user.id)
+    if not db_user:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">User account not found.</div>
+        </div>""")
+
+    if not _is_local_only_account(db_user):
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">This account is managed by SSO.</div>
+        </div>""")
+
+    stored_hash = db_user.get("password_hash")
+    if not stored_hash:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">No local password is set for this account.</div>
+        </div>""")
+
+    import bcrypt
+    if not bcrypt.checkpw(current_password.encode(), stored_hash.encode()):
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">Current password is incorrect.</div>
+        </div>""")
+
+    pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
+    db.update_user(user.id, password_hash=pw_hash, change_on_next_login=False)
+    return HTMLResponse("""
+    <div hx-swap-oob="afterbegin:#toast-container">
+        <div class="toast toast-success">Password updated successfully.</div>
+    </div>""")
 
 
 # ── User Management (ADMIN only) ────────────────────────────────────────────
 
 def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
     """Render a single user table row HTML."""
-    source_badge = (
-        '<span class="badge badge-info">SSO</span>'
-        if u.get("auth_provider") == "keycloak"
-        else '<span class="badge badge-secondary">Local</span>'
-    )
+    provider = (u.get("auth_provider") or "local").lower()
+    if provider == "keycloak":
+        source_badge = '<span class="badge badge-info">SSO</span>'
+    elif provider == "hybrid":
+        source_badge = '<span class="badge badge-primary">Hybrid</span>'
+    else:
+        source_badge = '<span class="badge badge-secondary">Local</span>'
     active_checked = "checked" if u.get("is_active") else ""
     role_checkboxes = ""
     for r in all_roles:
@@ -180,6 +296,20 @@ def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
             f'value="{r["name"]}" {checked}> {r["name"]}</label> '
         )
     last_login = str(u["last_login"])[:19] if u.get("last_login") else "Never"
+    reset_controls = ""
+    reset_controls = f'''
+        <form class="inline-role-form"
+              hx-post="/api/settings/users/{u['id']}/reset-password"
+              hx-swap="none"
+              style="margin-top:0.45rem; display:flex; flex-wrap:wrap; gap:0.35rem; align-items:center;">
+            <input type="password" name="new_password" class="form-input" minlength="8" required
+                   placeholder="New password" style="max-width:180px; font-size:0.75rem;">
+            <label class="role-checkbox" style="font-size:0.72rem;">
+                <input type="checkbox" name="change_on_next_login" checked> Require change next login
+            </label>
+            <button type="submit" class="btn btn-sm btn-secondary">Reset</button>
+        </form>
+    '''
     return f"""<tr id="user-row-{u['id']}">
         <td>{u['username']}</td>
         <td>{u.get('email') or '-'}</td>
@@ -209,6 +339,7 @@ def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
                     hx-target="#user-list"
                     hx-swap="innerHTML"
                     hx-confirm="Delete user {u['username']}?">Delete</button>
+            {reset_controls}
         </td>
     </tr>"""
 
@@ -306,20 +437,38 @@ def toggle_user_active(request: Request, user_id: str, db: DbDep, user: RequireA
 
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse)
 async def reset_user_password(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Reset a local user's password (ADMIN only)."""
+    """Reset any user's local password (ADMIN only)."""
     form = await request.form()
     new_password = str(form.get("new_password", ""))
+    change_on_next_login = str(form.get("change_on_next_login", "on")).lower() in {"on", "true", "1"}
     if len(new_password) < 8:
         return HTMLResponse("""
         <div hx-swap-oob="afterbegin:#toast-container">
             <div class="toast toast-warning">Password must be at least 8 characters.</div>
         </div>""")
+
+    target_user = db.get_user_by_id(user_id)
+    if not target_user:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">User not found.</div>
+        </div>""")
+
     import bcrypt
     pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
-    db.update_user(user_id, password_hash=pw_hash)
-    return HTMLResponse("""
+    provider = (target_user.get("auth_provider") or "local").lower()
+    update_fields = {
+        "password_hash": pw_hash,
+        "change_on_next_login": change_on_next_login,
+    }
+    # Preserve SSO while enabling local login when admin sets a local hash.
+    if provider == "keycloak":
+        update_fields["auth_provider"] = "hybrid"
+    db.update_user(user_id, **update_fields)
+    status_text = "Password reset. User must change it at next login." if change_on_next_login else "Password reset successfully."
+    return HTMLResponse(f"""
     <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">Password reset successfully.</div>
+        <div class="toast toast-success">{status_text}</div>
     </div>""")
 
 
@@ -358,7 +507,18 @@ def _render_permissions_table(db) -> str:
 
     # Separate page and tab resources
     page_resources = sorted([r for r in resources if r.startswith("page:")])
-    tab_resources = sorted([r for r in resources if r.startswith("tab:")])
+    tab_resources = [r for r in resources if r.startswith("tab:")]
+
+    # Keep settings-tab order predictable with Profile first.
+    tab_order = [
+        "tab:profile",
+        "tab:classifications",
+        "tab:integrations",
+        "tab:logging",
+        "tab:sigma",
+        "tab:users",
+    ]
+    tab_resources = [res for res in tab_order if res in tab_resources] + [res for res in tab_resources if res not in tab_order]
 
     def _resource_label(res: str) -> str:
         """Human-readable label for a resource."""

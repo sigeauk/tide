@@ -17,8 +17,17 @@
 </div>
 
 <div class="settings-tabs">
+    {% if not user or user.can_read('tab:profile') %}
+    <button class="settings-tab active" data-tab="profile" onclick="switchTab('profile')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+        </svg>
+        Profile
+    </button>
+    {% endif %}
     {% if not user or user.can_read('tab:logging') %}
-    <button class="settings-tab active" data-tab="logging" onclick="switchTab('logging')">
+    <button class="settings-tab" data-tab="logging" onclick="switchTab('logging')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/>
             <polyline points="14 2 14 8 20 8"/>
@@ -54,14 +63,6 @@
         Classifications
     </button>
     {% endif %}
-    {% if not user or user.can_read('tab:apikeys') %}
-    <button class="settings-tab" data-tab="apikeys" onclick="switchTab('apikeys')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
-        </svg>
-        API Keys
-    </button>
-    {% endif %}
     {% if user and user.is_admin() %}
     <button class="settings-tab" data-tab="users" onclick="switchTab('users')">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -82,7 +83,7 @@
     {% endif %}
 </div>
 
-<div class="settings-panel active" id="tab-logging">
+<div class="settings-panel" id="tab-logging">
     <form id="settings-form" hx-post="/api/settings/save" hx-swap="none">
         <div class="preferences-grid" style="grid-template-columns: 1fr 1fr;">
             <div class="preference-card">
@@ -380,15 +381,61 @@
     </div>
 </div>
 
-<!-- API Keys tab panel -->
-<div class="settings-panel" id="tab-apikeys">
+<!-- Profile tab panel (API keys + local account controls) -->
+<div class="settings-panel active" id="tab-profile">
     <div class="preferences-grid" style="grid-template-columns: 1fr;">
+        <div class="preference-card">
+            <div class="preference-header">
+                <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                    <circle cx="12" cy="7" r="4"/>
+                </svg>
+                <h3>Profile</h3>
+            </div>
+
+            {% if user and user.auth_provider == 'local' %}
+            <div class="preferences-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <div class="overview-section" style="margin: 0;">
+                    <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Update Email</h4>
+                    <form hx-post="/api/settings/profile/email" hx-swap="none"
+                          style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
+                        <input type="email" name="email" class="form-input" required
+                               value="{{ user.email or '' }}" placeholder="name@example.com">
+                        <div>
+                            <button type="submit" class="btn btn-primary btn-sm">Save Email</button>
+                        </div>
+                    </form>
+                </div>
+
+                <div class="overview-section" style="margin: 0;">
+                    <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Change Password</h4>
+                    <form hx-post="/api/settings/profile/password" hx-swap="none"
+                          style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
+                        <input type="password" name="current_password" class="form-input" required minlength="8"
+                               placeholder="Current password" autocomplete="current-password">
+                        <input type="password" name="new_password" class="form-input" required minlength="8"
+                               placeholder="New password" autocomplete="new-password">
+                        <input type="password" name="confirm_password" class="form-input" required minlength="8"
+                               placeholder="Confirm new password" autocomplete="new-password">
+                        <div>
+                            <button type="submit" class="btn btn-primary btn-sm">Update Password</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            {% else %}
+            <div class="alert" style="margin-top:0.5rem; font-size:0.85rem;">
+                Managed by SSO. Profile credentials are controlled by your identity provider.
+            </div>
+            {% endif %}
+        </div>
+
         <div class="preference-card">
             <div class="preference-header">
                 <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
                 </svg>
-                <h3>External API Keys</h3>
+                <h3>API Key Management</h3>
             </div>
             <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
 
@@ -821,12 +868,12 @@ function initPipelineTemplateListHandlers() {
 
 // Global Init
 (function init() {
-    var savedTab = localStorage.getItem('settings-active-tab') || 'logging';
+    var savedTab = localStorage.getItem('settings-active-tab') || 'profile';
     // If the saved tab button is hidden/missing, fall back to first visible tab
     var savedBtn = document.querySelector('.settings-tab[data-tab="' + savedTab + '"]');
     if (!savedBtn || savedBtn.offsetParent === null) {
         var firstVisible = document.querySelector('.settings-tab');
-        savedTab = firstVisible ? firstVisible.getAttribute('data-tab') : 'logging';
+        savedTab = firstVisible ? firstVisible.getAttribute('data-tab') : 'profile';
     }
     initPipelineTemplateListHandlers();
     switchTab(savedTab);

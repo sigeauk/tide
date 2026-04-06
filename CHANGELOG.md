@@ -4,7 +4,29 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.4.6] - 2026-04-04
+## [3.4.8] - 2026-04-06
+
+### Added
+- **Profile self-service endpoints (local-only):** Added `POST /api/settings/profile/email` and `POST /api/settings/profile/password` so local accounts can update their own email and password with server-side validation.
+- **Admin reset flow flag:** Added `change_on_next_login` support on users (DB migration 23) and wired Admin reset to set this flag (default `true`) for local accounts.
+- **API key ownership metadata:** Added `api_keys.created_by_user_id` (DB migration 24) so API key lifecycle actions can enforce owner/admin authorization.
+
+### Changed
+- **Settings tab refactor:** Renamed the `API Keys` settings tab to `Profile`, moved it to first position, and consolidated profile content to include both API key management and local account email/password controls.
+- **Permissions resource rename:** Renamed settings permission resource `tab:apikeys` to `tab:profile` (DB migration 23), and updated permissions matrix ordering to display `Profile` first under Settings Tabs.
+- **Profile permission defaults:** Ensured ANALYST and ENGINEER have read/write permissions for `tab:profile` by default.
+- **API write authorization granularity:** Updated middleware write checks so `/api/settings/profile*` and `/api/settings/api-keys*` authorize against `tab:profile` permissions rather than only `page:settings` write.
+- **API key list scoping:** Non-admin users now see only their own API keys in Profile; admins continue to see all keys.
+- **Auth local fallback clarity:** Local credential validation is now explicitly applied to any account with a local password hash, including SSO-origin users.
+
+### Fixed
+- **Local login after SSO activity:** Fixed auth fallback so stale/invalid Keycloak token state no longer blocks valid local-session access.
+- **SSO/local account collision:** Hardened JIT Keycloak provisioning to avoid auto-upgrading/linking local-only users by username/email, preventing local account provider corruption after SSO sign-in.
+- **Local login cookie state:** Local sign-in now clears Keycloak auth cookies on success to reduce stale SSO cookie interference with local sessions.
+- **API key revocation security:** Revocation now enforces `owner OR ADMIN` authorization; ANALYST/ENGINEER users cannot revoke keys owned by other users.
+- **SSO credentials in local form:** Fixed SSO-to-local credential fallback to use a password-grant capable Keycloak client instead of the browser OIDC client, allowing SSO-origin users without a TIDE `password_hash` to authenticate via the local login form.
+
+## [3.4.7] - 2026-04-04
 
 ### Added
 - **Hybrid Authentication:** TIDE now supports both Keycloak OIDC (SSO) and local username/password login. Users can sign in with either method from the same login page.
@@ -35,6 +57,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **JIT account linking:** When an SSO user signs in and a matching local username already exists, the accounts are linked (keycloak_id set, auth_provider upgraded to hybrid) instead of creating a duplicate.
 - **Settings tab fallback:** `switchTab` JS now falls back to the first visible tab when the saved tab is hidden by permissions.
 
+## [3.4.6] - 2026-04-04
+
+### Update
+- **Internal Changes:** Changes not released. 
+
 ## [3.4.5] - 2026-03-30
 
 ### Changed
@@ -60,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 - **System Heatmap - Tagged technique synchronization:** System baseline heatmap now builds from both primary step technique and multi-technique tags, ensuring baseline techniques are reflected correctly when filtering by baseline.
 - **System Baselines UI - Bulk expand/collapse controls:** Added separate Expand All and Collapse All controls for top-level baselines and tactic groups in the System Baseline coverage panel.
-- **System Heatmap - baseline filter undercount:** Filtering to a baseline such as `secret system cyab` now preserves the full set of baseline steps instead of collapsing or overcounting cards through technique remapping.
+- **ystem Heatmap - baseline filter undercount:** Filtering to a baseline such as `secret system cyab` now preserves the full set of baseline steps instead of collapsing or overcounting cards through technique remapping.
 - **System Heatmap - filter responsiveness:** Added short TTL cache for system heatmap baseline source data and a lighter baseline load path for heatmap calls, improving repeated filter-toggle latency.
 - **System Heatmap - traceability for duplicate technique tags:** Aggregation now preserves contributing step titles per technique in tooltip metadata so entries like `Title 14` tagged with `T1200` remain discoverable in the matrix tooltip metadata.
 - **System Heatmap - custom tactic buckets route to Other:** System baseline heatmap now keeps steps tagged under non-canonical tactic labels such as `Other`, `priv esc`, and `prililege escalation` in the `Other` column instead of remapping their MITRE techniques back into canonical ATT&CK tactic columns.

@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 24
 
 
 class DatabaseService:
@@ -734,6 +734,56 @@ class DatabaseService:
             self._set_schema_version(conn, 22)
             logger.info("Migration 22: Created role_permissions table with defaults")
 
+        # Migration 23: Profile tab rename + local auth password reset flow support
+        if current_version < 23:
+            # Rename settings permission resource from legacy tab:apikeys to tab:profile
+            try:
+                conn.execute(
+                    "UPDATE role_permissions SET resource = 'tab:profile' WHERE resource = 'tab:apikeys'"
+                )
+            except Exception:
+                pass
+
+            # Ensure default Profile tab access matches expected role defaults.
+            for role_name in ("ANALYST", "ENGINEER"):
+                role_row = conn.execute("SELECT id FROM roles WHERE name = ?", [role_name]).fetchone()
+                if not role_row:
+                    continue
+                role_id = role_row[0]
+                exists = conn.execute(
+                    "SELECT 1 FROM role_permissions WHERE role_id = ? AND resource = 'tab:profile'",
+                    [role_id],
+                ).fetchone()
+                if exists:
+                    conn.execute(
+                        "UPDATE role_permissions SET can_read = true, can_write = true WHERE role_id = ? AND resource = 'tab:profile'",
+                        [role_id],
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) VALUES (?, 'tab:profile', true, true)",
+                        [role_id],
+                    )
+
+            # Ensure users table supports forced password change flow
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN change_on_next_login BOOLEAN DEFAULT false")
+            except Exception:
+                pass
+
+            self._set_schema_version(conn, 23)
+            logger.info("Migration 23: Renamed tab:apikeys to tab:profile and added users.change_on_next_login")
+
+        # Migration 24: API key ownership metadata for role-based revocation
+        if current_version < 24:
+            try:
+                conn.execute("ALTER TABLE api_keys ADD COLUMN created_by_user_id VARCHAR")
+            except Exception:
+                pass
+
+            self._set_schema_version(conn, 24)
+            logger.info("Migration 24: Added api_keys.created_by_user_id for ownership-aware revocation")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -816,42 +866,56 @@ class DatabaseService:
         with self.get_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, created_at, updated_at, last_login "
-                "FROM users WHERE username = ?", [username]
+                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
+                "FROM users WHERE LOWER(username) = LOWER(?)", [username]
             ).fetchone()
             if not row:
                 return None
             return dict(zip(
                 ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
+            ))
+
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
+                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
+                "FROM users WHERE LOWER(email) = LOWER(?)", [email]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
+                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
             ))
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         with self.get_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, created_at, updated_at, last_login "
+                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
                 "FROM users WHERE id = ?", [user_id]
             ).fetchone()
             if not row:
                 return None
             return dict(zip(
                 ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
             ))
 
     def get_user_by_keycloak_id(self, keycloak_id: str) -> Optional[Dict]:
         with self.get_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, created_at, updated_at, last_login "
+                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
                 "FROM users WHERE keycloak_id = ?", [keycloak_id]
             ).fetchone()
             if not row:
                 return None
             return dict(zip(
                 ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "created_at", "updated_at", "last_login"], row
+                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
             ))
 
     def get_all_users(self) -> List[Dict]:
@@ -877,7 +941,10 @@ class DatabaseService:
             return row[0]
 
     def update_user(self, user_id: str, **fields) -> bool:
-        allowed = {"username", "email", "full_name", "password_hash", "is_active", "keycloak_id", "last_login"}
+        allowed = {
+            "username", "email", "full_name", "password_hash", "is_active",
+            "keycloak_id", "auth_provider", "change_on_next_login", "last_login"
+        }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return False
@@ -924,17 +991,49 @@ class DatabaseService:
         if existing:
             self.update_user(existing["id"], email=email, full_name=full_name, last_login=datetime.now())
             return self.get_user_by_keycloak_id(keycloak_id)
-        # Link existing local account by username (e.g. admin created locally, then logs in via SSO)
+        # Link existing account by username only if it is already SSO-capable.
+        # Local-only accounts must never be auto-upgraded by SSO login.
         by_name = self.get_user_by_username(username)
         if by_name:
-            self.update_user(by_name["id"], keycloak_id=keycloak_id, email=email,
-                            full_name=full_name, last_login=datetime.now())
-            # Upgrade auth_provider to hybrid so the user can use both methods
-            with self.get_connection() as conn:
-                conn.execute("UPDATE users SET auth_provider = 'hybrid' WHERE id = ?", [by_name["id"]])
-            return self.get_user_by_id(by_name["id"])
+            provider = (by_name.get("auth_provider") or "local").lower()
+            if provider in {"keycloak", "hybrid"}:
+                self.update_user(
+                    by_name["id"],
+                    keycloak_id=keycloak_id,
+                    email=email,
+                    full_name=full_name,
+                    last_login=datetime.now(),
+                )
+                return self.get_user_by_id(by_name["id"])
+
+        # Avoid attaching SSO identities to local-only users by email match.
+        by_email = self.get_user_by_email(email) if email else None
+        if by_email:
+            provider = (by_email.get("auth_provider") or "local").lower()
+            if provider in {"keycloak", "hybrid"}:
+                self.update_user(
+                    by_email["id"],
+                    keycloak_id=keycloak_id,
+                    email=email,
+                    full_name=full_name,
+                    last_login=datetime.now(),
+                )
+                return self.get_user_by_id(by_email["id"])
+
+        # Build a unique username for new SSO identities when conflicts exist.
+        final_username = username
+        if by_name and (by_name.get("auth_provider") or "local").lower() == "local":
+            suffix = 1
+            while self.get_user_by_username(f"{username}__sso{suffix}"):
+                suffix += 1
+            final_username = f"{username}__sso{suffix}"
+
+        email_for_new = email
+        if by_email and (by_email.get("auth_provider") or "local").lower() == "local":
+            email_for_new = None
+
         uid = self.create_user(
-            username=username, email=email, full_name=full_name,
+            username=final_username, email=email_for_new, full_name=full_name,
             keycloak_id=keycloak_id, auth_provider="keycloak",
         )
         # Default new Keycloak users to ANALYST role
@@ -2405,30 +2504,61 @@ class DatabaseService:
 
     # ── External API Key management ──────────────────────────────────────
 
-    def create_api_key(self, label: str) -> str:
+    def create_api_key(self, label: str, created_by_user_id: Optional[str] = None) -> str:
         """Generate a new API key, store its SHA-256 hash, return the raw key."""
         import secrets, hashlib
         raw_key = secrets.token_urlsafe(32)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with self.get_connection() as conn:
             conn.execute(
-                "INSERT INTO api_keys (key_hash, label) VALUES (?, ?)",
-                [key_hash, label],
+                "INSERT INTO api_keys (key_hash, label, created_by_user_id) VALUES (?, ?, ?)",
+                [key_hash, label, created_by_user_id],
             )
         logger.info(f"API key created: {label}")
         return raw_key
 
-    def list_api_keys(self) -> List[Dict[str, Any]]:
-        """Return all API key metadata (never the hash)."""
+    def list_api_keys(self, created_by_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return API key metadata. Non-admin views should pass created_by_user_id."""
         with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT key_hash, label, created_at, last_used_at "
-                "FROM api_keys ORDER BY created_at DESC"
-            ).fetchall()
+            if created_by_user_id:
+                rows = conn.execute(
+                    "SELECT key_hash, label, created_at, last_used_at, created_by_user_id "
+                    "FROM api_keys WHERE created_by_user_id = ? ORDER BY created_at DESC",
+                    [created_by_user_id],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT key_hash, label, created_at, last_used_at, created_by_user_id "
+                    "FROM api_keys ORDER BY created_at DESC"
+                ).fetchall()
         return [
-            {"key_hash": r[0], "label": r[1], "created_at": r[2], "last_used_at": r[3]}
+            {
+                "key_hash": r[0],
+                "label": r[1],
+                "created_at": r[2],
+                "last_used_at": r[3],
+                "created_by_user_id": r[4],
+            }
             for r in rows
         ]
+
+    def get_api_key(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        """Return API key metadata by hash."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT key_hash, label, created_at, last_used_at, created_by_user_id "
+                "FROM api_keys WHERE key_hash = ?",
+                [key_hash],
+            ).fetchone()
+        if not row:
+            return None
+        return {
+            "key_hash": row[0],
+            "label": row[1],
+            "created_at": row[2],
+            "last_used_at": row[3],
+            "created_by_user_id": row[4],
+        }
 
     def validate_api_key(self, raw_key: str) -> bool:
         """Return True if the key is valid; also touch last_used_at."""
@@ -2447,7 +2577,7 @@ class DatabaseService:
         return False
 
     def delete_api_key(self, key_hash: str) -> bool:
-        """Revoke an API key by its hash prefix or full hash."""
+        """Revoke an API key by full hash."""
         with self.get_connection() as conn:
             deleted = conn.execute(
                 "DELETE FROM api_keys WHERE key_hash = ? RETURNING key_hash",

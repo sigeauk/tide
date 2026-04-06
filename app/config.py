@@ -53,6 +53,14 @@ class Settings(BaseSettings):
     keycloak_realm: str = Field(default="tide", alias="KEYCLOAK_REALM")
     keycloak_client_id: str = Field(default="tide-app", alias="KEYCLOAK_CLIENT_ID")
     keycloak_client_secret: str = Field(default="", alias="KEYCLOAK_CLIENT_SECRET")
+    keycloak_password_grant_client_id: str = Field(
+        default="admin-cli",
+        alias="KEYCLOAK_PASSWORD_GRANT_CLIENT_ID",
+    )
+    keycloak_password_grant_client_secret: str = Field(
+        default="",
+        alias="KEYCLOAK_PASSWORD_GRANT_CLIENT_SECRET",
+    )
     jwt_algorithm: str = Field(default="RS256", alias="JWT_ALGORITHM")
     session_secret: str = Field(
         default="change-me-in-production-use-a-random-key",

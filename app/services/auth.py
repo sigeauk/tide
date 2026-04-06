@@ -11,7 +11,7 @@ import ssl as _ssl
 import time
 from jwt import PyJWKClient
 from datetime import datetime
-from typing import Optional, Union
+from typing import Optional, Union, Dict, List
 from urllib.parse import urlencode
 from functools import lru_cache
 from itsdangerous import URLSafeTimedSerializer
@@ -248,30 +248,103 @@ class AuthService:
     def _get_signer(self) -> URLSafeTimedSerializer:
         return URLSafeTimedSerializer(self.settings.session_secret)
 
-    def _authenticate_via_keycloak(self, username: str, password: str) -> bool:
-        """Authenticate credentials against Keycloak using Resource Owner Password Credentials grant.
-        Returns True if Keycloak accepts the username/password."""
+    def _password_grant_clients(self) -> List[Dict[str, str]]:
+        clients: List[Dict[str, str]] = []
+
+        preferred_client_id = self.settings.keycloak_password_grant_client_id.strip()
+        preferred_client_secret = self.settings.keycloak_password_grant_client_secret.strip()
+        if preferred_client_id:
+            clients.append(
+                {
+                    "client_id": preferred_client_id,
+                    "client_secret": preferred_client_secret,
+                }
+            )
+
+        browser_client_id = self.settings.keycloak_client_id.strip()
+        browser_client_secret = self.settings.keycloak_client_secret.strip()
+        if browser_client_id and all(c["client_id"] != browser_client_id for c in clients):
+            clients.append(
+                {
+                    "client_id": browser_client_id,
+                    "client_secret": browser_client_secret,
+                }
+            )
+
+        return clients
+
+    def _authenticate_via_keycloak(self, username: str, password: str) -> Optional[dict]:
+        """Authenticate credentials against Keycloak using a password-grant capable client.
+        Returns the token payload on success, None on failure."""
         try:
             with httpx.Client(verify=self.settings.ssl_context, timeout=10.0) as client:
-                response = client.post(
-                    self.settings.oidc_token_url,
-                    data={
+                for client_cfg in self._password_grant_clients():
+                    data = {
                         "grant_type": "password",
-                        "client_id": self.settings.keycloak_client_id,
-                        "client_secret": self.settings.keycloak_client_secret,
+                        "client_id": client_cfg["client_id"],
                         "username": username,
                         "password": password,
-                        "scope": "openid",
-                    },
-                )
-                if response.status_code == 200:
-                    logger.info(f"Keycloak ROPC auth succeeded for '{username}'")
-                    return True
-                logger.warning(f"Keycloak ROPC auth failed for '{username}': {response.status_code}")
-                return False
+                        "scope": "openid email profile",
+                    }
+                    if client_cfg.get("client_secret"):
+                        data["client_secret"] = client_cfg["client_secret"]
+
+                    response = client.post(self.settings.oidc_token_url, data=data)
+                    if response.status_code == 200:
+                        logger.info(
+                            "Keycloak password grant auth succeeded for '%s' via client '%s'",
+                            username,
+                            client_cfg["client_id"],
+                        )
+                        return response.json()
+
+                    error = ""
+                    error_description = response.text
+                    try:
+                        body = response.json()
+                        error = body.get("error", "")
+                        error_description = body.get("error_description", error_description)
+                    except ValueError:
+                        body = {}
+
+                    logger.warning(
+                        "Keycloak password grant auth failed for '%s' via client '%s': %s %s",
+                        username,
+                        client_cfg["client_id"],
+                        response.status_code,
+                        error_description,
+                    )
+
+                    if response.status_code == 400 and error == "unauthorized_client":
+                        continue
+
+                    break
         except Exception as e:
-            logger.error(f"Keycloak ROPC auth error for '{username}': {e}")
-            return False
+            logger.error(f"Keycloak password grant auth error for '{username}': {e}")
+
+        return None
+
+    def _token_data_from_password_grant(self, tokens: dict) -> Optional[TokenData]:
+        """Extract user claims from a successful password grant response."""
+        raw_token = tokens.get("id_token") or tokens.get("access_token")
+        if not raw_token:
+            logger.warning("Password grant response did not include an ID or access token")
+            return None
+
+        try:
+            payload = jwt.decode(
+                raw_token,
+                options={
+                    "verify_signature": False,
+                    "verify_aud": False,
+                    "verify_exp": False,
+                    "verify_iss": False,
+                },
+            )
+            return TokenData(**payload)
+        except Exception as e:
+            logger.error(f"Failed to decode password grant token claims: {e}")
+            return None
 
     def authenticate_local(self, username: str, password: str) -> Union[User, str, None]:
         """Authenticate a local user against bcrypt password hash in DB.
@@ -280,34 +353,60 @@ class AuthService:
         from app.services.database import get_database_service
         db = get_database_service()
         db_user = db.get_user_by_username(username)
-        if not db_user:
-            logger.warning(f"Local login failed: unknown user '{username}'")
-            return None
-        if not db_user.get("is_active", True):
+        if db_user and not db_user.get("is_active", True):
             logger.warning(f"Local login failed: user '{username}' is deactivated")
             return None
-        stored_hash = db_user.get("password_hash")
-        if not stored_hash:
-            # SSO-only user: try authenticating via Keycloak ROPC
-            if db_user.get("keycloak_id") and self._authenticate_via_keycloak(username, password):
+
+        provider = (db_user.get("auth_provider") or "local").lower() if db_user else ""
+        stored_hash = db_user.get("password_hash") if db_user else None
+        # Any account with a local hash can always use local credential validation,
+        # regardless of whether it was originally provisioned by SSO.
+        if stored_hash:
+            if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
+                logger.warning(f"Local login failed: bad password for '{username}'")
+                return None
+            db.update_user(db_user["id"], last_login=datetime.now())
+            db_roles = db.get_user_roles(db_user["id"])
+            logger.info(f"Local login successful for '{username}' (provider={provider}) with roles {db_roles}")
+            user = User.from_db(db_user, db_roles)
+            user.permissions = db.get_user_permissions(db_user["id"])
+            return user
+
+        # No local hash available: SSO-capable accounts can try Keycloak password grant fallback.
+        can_try_sso = False
+        if db_user:
+            can_try_sso = provider in {"keycloak", "hybrid"} and bool(db_user.get("keycloak_id"))
+        else:
+            # Allow local-form login for SSO users that only exist in Keycloak; the DB row will be JIT-created.
+            can_try_sso = True
+
+        if can_try_sso:
+            tokens = self._authenticate_via_keycloak(username, password)
+            if tokens:
+                if not db_user:
+                    token_data = self._token_data_from_password_grant(tokens)
+                    if not token_data:
+                        return None
+                    db_user = db.jit_provision_keycloak_user(
+                        keycloak_id=token_data.sub,
+                        username=token_data.preferred_username or username,
+                        email=token_data.email,
+                        full_name=token_data.name,
+                    )
+
                 db.update_user(db_user["id"], last_login=datetime.now())
                 db_roles = db.get_user_roles(db_user["id"])
-                logger.info(f"SSO user '{username}' authenticated via Keycloak ROPC")
+                logger.info(f"SSO user '{username}' authenticated via Keycloak password grant")
                 user = User.from_db(db_user, db_roles)
                 user.permissions = db.get_user_permissions(db_user["id"])
                 return user
-            logger.warning(f"Local login failed: user '{username}' has no password and Keycloak auth failed")
+
+        if not db_user:
+            logger.warning(f"Local login failed: unknown user '{username}'")
             return None
-        if not bcrypt.checkpw(password.encode(), stored_hash.encode()):
-            logger.warning(f"Local login failed: bad password for '{username}'")
-            return None
-        # Update last_login
-        db.update_user(db_user["id"], last_login=datetime.now())
-        db_roles = db.get_user_roles(db_user["id"])
-        logger.info(f"Local login successful for '{username}' with roles {db_roles}")
-        user = User.from_db(db_user, db_roles)
-        user.permissions = db.get_user_permissions(db_user["id"])
-        return user
+
+        logger.warning(f"Local login failed: user '{username}' has no local password hash")
+        return None
 
     def create_session_token(self, user_id: str) -> str:
         """Create a signed session token for local auth."""

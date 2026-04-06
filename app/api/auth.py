@@ -81,6 +81,22 @@ async def local_login(
         samesite="lax",
         max_age=86400,  # 24 hours
     )
+
+    # Clear Keycloak cookies to prevent stale SSO tokens from shadowing local sessions.
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        httponly=True,
+        secure=use_secure,
+        samesite="lax",
+    )
     
     return response
 

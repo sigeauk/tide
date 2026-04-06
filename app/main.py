@@ -253,6 +253,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
     
     # API prefix → resource mapping for write checks
     API_WRITE_RESOURCE_MAP = {
+        "/api/settings/profile": "tab:profile",
+        "/api/settings/api-keys": "tab:profile",
         "/api/rules": "page:rules",
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
@@ -304,7 +306,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
             # API write check (POST/PUT/DELETE)
             if is_api and request.method in ("POST", "PUT", "DELETE", "PATCH"):
-                for prefix, res in self.API_WRITE_RESOURCE_MAP.items():
+                for prefix, res in sorted(self.API_WRITE_RESOURCE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
                     if path.startswith(prefix):
                         if not user.can_write(res):
                             return JSONResponse({"detail": "Write access denied"}, status_code=403)
@@ -346,6 +348,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return RedirectResponse(url=login_url, status_code=302)
         
         if not access_token:
+            # Prefer a valid local session before attempting any SSO token refresh.
+            if session_token:
+                from app.services.auth import get_auth_service
+                auth_service = get_auth_service()
+                user = auth_service.get_user_from_session(session_token)
+                if user:
+                    logger.debug(f"Local session valid for user: {user.username}, path: {path}")
+                    perm_resp = _check_page_permission(user)
+                    if perm_resp:
+                        return perm_resp
+                    response = await call_next(request)
+                    return await add_cache_headers(response)
+
             # No access_token cookie — try refresh before redirecting to login
             if refresh_token:
                 logger.info(f"No access token but refresh token exists for path: {path}, attempting refresh...")
@@ -386,19 +401,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 else:
                     logger.warning(f"Refresh token also failed for path: {path}")
             
-            # Try local session token before giving up
-            if session_token:
-                from app.services.auth import get_auth_service
-                auth_service = get_auth_service()
-                user = auth_service.get_user_from_session(session_token)
-                if user:
-                    logger.debug(f"Local session valid for user: {user.username}, path: {path}")
-                    perm_resp = _check_page_permission(user)
-                    if perm_resp:
-                        return perm_resp
-                    response = await call_next(request)
-                    return await add_cache_headers(response)
-            
             # No token and no valid refresh - redirect to login
             logger.info(f"No valid tokens for path: {path}, redirecting to login (is_htmx={is_htmx})")
             return _unauthorized_response("missing_or_invalid_tokens")
@@ -409,6 +411,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         logger.debug(f"Validating token for path: {path}, is_htmx: {is_htmx}")
         user = auth_service.get_user_from_token(access_token)
+
+        local_session_user = None
+        if session_token:
+            local_session_user = auth_service.get_user_from_session(session_token)
+
+        if user is None and local_session_user:
+            logger.info(
+                f"Access token invalid for path: {path}; preferring local session for user: {local_session_user.username}"
+            )
+            perm_resp = _check_page_permission(local_session_user)
+            if perm_resp:
+                return perm_resp
+            response = await call_next(request)
+            return await add_cache_headers(response)
         
         # If token is invalid/expired, or about to expire soon, try to refresh
         new_tokens = None
@@ -430,6 +446,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     new_tokens = None
         
         if user is None:
+            # If Keycloak token is stale but a local session is valid, allow local auth to continue.
+            if local_session_user:
+                logger.info(f"Falling back to local session for user: {local_session_user.username}, path: {path}")
+                perm_resp = _check_page_permission(local_session_user)
+                if perm_resp:
+                    return perm_resp
+                response = await call_next(request)
+                return await add_cache_headers(response)
+
             logger.warning(f"Token validation FAILED for path: {path}, is_htmx: {is_htmx}, redirecting to login")
             
             # Token invalid - redirect to login
