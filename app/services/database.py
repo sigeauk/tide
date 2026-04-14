@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 29
 
 
 class DatabaseService:
@@ -71,15 +71,18 @@ class DatabaseService:
     def get_connection(self, read_only: bool = False, retries: int = 5, delay: float = 0.5):
         """
         Context manager for database connections with retry logic.
-        Always use read_only=False for consistent reads in WAL mode.
+        Routes to the tenant DB when a tenant context is active,
+        otherwise connects to the shared DB.
         """
+        from app.services.tenant_manager import get_tenant_db_path
+        db_path = get_tenant_db_path() or self.db_path
         conn = None
         attempt = 0
         
         while attempt < retries:
             try:
                 with self._conn_lock:
-                    conn = duckdb.connect(self.db_path, read_only=False)
+                    conn = duckdb.connect(db_path, read_only=False)
                 yield conn
                 return
             except duckdb.IOException as e:
@@ -97,6 +100,38 @@ class DatabaseService:
                     conn.close()
         
         raise duckdb.IOException("Database locked by another process.")
+
+    @contextmanager
+    def get_shared_connection(self, read_only: bool = False, retries: int = 5, delay: float = 0.5):
+        """
+        Context manager that always connects to the shared database,
+        ignoring any active tenant context.  Used for auth, RBAC,
+        client management, and SIEM inventory operations.
+        """
+        conn = None
+        attempt = 0
+        
+        while attempt < retries:
+            try:
+                with self._conn_lock:
+                    conn = duckdb.connect(self.db_path, read_only=False)
+                yield conn
+                return
+            except duckdb.IOException as e:
+                if "lock" in str(e).lower():
+                    attempt += 1
+                    logger.warning(f"Shared DB Locked. Retrying ({attempt}/{retries})...")
+                    time.sleep(delay)
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"Shared DB Connection failed: {e}")
+                raise
+            finally:
+                if conn:
+                    conn.close()
+        
+        raise duckdb.IOException("Shared database locked by another process.")
     
     def _get_schema_version(self, conn) -> int:
         """Get current schema version from database."""
@@ -784,6 +819,297 @@ class DatabaseService:
             self._set_schema_version(conn, 24)
             logger.info("Migration 24: Added api_keys.created_by_user_id for ownership-aware revocation")
 
+        # ── Migration 25: Multi-Tenant MSSP Architecture ──────────────
+        if current_version < 25:
+            # Step 1.2 — clients table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS clients (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name VARCHAR UNIQUE NOT NULL,
+                    slug VARCHAR UNIQUE NOT NULL,
+                    description VARCHAR,
+                    is_default BOOLEAN DEFAULT false,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            # Seed default client and capture its id
+            conn.execute("""
+                INSERT INTO clients (id, name, slug, description, is_default)
+                VALUES (uuid(), 'Primary Client', 'primary', 'Default tenant — migrated from standalone deployment', true)
+                ON CONFLICT (slug) DO NOTHING
+            """)
+            default_client_id = conn.execute(
+                "SELECT id FROM clients WHERE slug = 'primary'"
+            ).fetchone()[0]
+
+            # Step 1.3 — user-to-client mapping table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_clients (
+                    user_id VARCHAR NOT NULL,
+                    client_id VARCHAR NOT NULL,
+                    is_default BOOLEAN DEFAULT false,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (user_id, client_id)
+                )
+            """)
+            # Backfill: assign every existing user to Primary Client
+            existing_users = conn.execute("SELECT id FROM users").fetchall()
+            for (uid,) in existing_users:
+                conn.execute(
+                    "INSERT INTO user_clients (user_id, client_id, is_default) "
+                    "VALUES (?, ?, true) ON CONFLICT DO NOTHING",
+                    [uid, default_client_id],
+                )
+
+            # Step 1.4 — per-client SIEM connection configs
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_siem_configs (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    client_id VARCHAR NOT NULL,
+                    siem_type VARCHAR NOT NULL,
+                    label VARCHAR NOT NULL,
+                    base_url VARCHAR,
+                    api_token_enc VARCHAR,
+                    space_list VARCHAR,
+                    extra_config JSON,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            # Backfill: migrate current env-var Elastic config into a row
+            _kibana_url = os.environ.get("KIBANA_URL", "")
+            _kibana_spaces = os.environ.get("KIBANA_SPACE_LIST", "default")
+            if _kibana_url:
+                conn.execute(
+                    "INSERT INTO client_siem_configs "
+                    "(client_id, siem_type, label, base_url, space_list) "
+                    "VALUES (?, 'elastic', 'Primary Elastic', ?, ?)",
+                    [default_client_id, _kibana_url, _kibana_spaces],
+                )
+
+            # Step 1.5 — add client_id to tenant-scoped tables
+            _tenant_tables = [
+                "systems", "hosts", "software_inventory",
+                "detection_rules", "playbooks", "system_baselines",
+                "system_baseline_snapshots", "vuln_detections",
+                "applied_detections", "cve_technique_overrides",
+                "classifications", "blind_spots", "api_keys",
+            ]
+            for tbl in _tenant_tables:
+                try:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN client_id VARCHAR")
+                except Exception:
+                    pass  # Column may already exist
+                conn.execute(f"UPDATE {tbl} SET client_id = ? WHERE client_id IS NULL", [default_client_id])
+
+            # Step 1.5b — app_settings: composite key (key, client_id)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings_new (
+                    key VARCHAR NOT NULL,
+                    value VARCHAR,
+                    client_id VARCHAR NOT NULL,
+                    updated_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (key, client_id)
+                )
+            """)
+            conn.execute(f"""
+                INSERT INTO app_settings_new (key, value, client_id, updated_at)
+                SELECT key, value, '{default_client_id}', updated_at
+                FROM app_settings
+            """)
+            conn.execute("DROP TABLE IF EXISTS app_settings")
+            conn.execute("ALTER TABLE app_settings_new RENAME TO app_settings")
+
+            # Step 1.6 — threat_actors hybrid scoping (nullable client_id)
+            try:
+                conn.execute("ALTER TABLE threat_actors ADD COLUMN client_id VARCHAR")
+            except Exception:
+                pass  # Column may already exist
+            # Leave existing threat actors as NULL (shared/global MITRE data)
+
+            # Step 1.7 — add page:clients permission resource for built-in roles
+            role_rows = conn.execute("SELECT id, name FROM roles").fetchall()
+            role_map = {name: rid for rid, name in role_rows}
+            if 'ADMIN' in role_map:
+                conn.execute(
+                    "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                    "VALUES (?, 'page:clients', true, true) ON CONFLICT DO NOTHING",
+                    [role_map['ADMIN']],
+                )
+            for rname in ('ANALYST', 'ENGINEER'):
+                if rname in role_map:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                        "VALUES (?, 'page:clients', true, false) ON CONFLICT DO NOTHING",
+                        [role_map[rname]],
+                    )
+
+            self._set_schema_version(conn, 25)
+            logger.info(
+                f"Migration 25: Multi-tenant schema — clients table, user_clients, "
+                f"client_siem_configs, client_id on {len(_tenant_tables)} tables, "
+                f"app_settings composite key. Default client: {default_client_id}"
+            )
+
+        # ── Migration 26: SIEM Inventory & Management Hub ─────────────
+        if current_version < 26:
+            # Centralized SIEM inventory — shared SIEM objects linkable to clients
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_inventory (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    label VARCHAR NOT NULL,
+                    siem_type VARCHAR NOT NULL,
+                    base_url VARCHAR,
+                    api_token_enc VARCHAR,
+                    space_list VARCHAR,
+                    extra_config JSON,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+
+            # Join table: many-to-many between clients and SIEM inventory
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_siem_map (
+                    client_id VARCHAR NOT NULL,
+                    siem_id VARCHAR NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (client_id, siem_id)
+                )
+            """)
+
+            # Migrate existing client_siem_configs into siem_inventory
+            existing_configs = conn.execute(
+                "SELECT id, label, siem_type, base_url, api_token_enc, "
+                "space_list, extra_config, is_active, client_id "
+                "FROM client_siem_configs"
+            ).fetchall()
+            for cfg in existing_configs:
+                cfg_id, label, siem_type, base_url, api_token_enc, \
+                    space_list, extra_config, is_active, client_id = cfg
+                # Insert into inventory (reuse original id)
+                conn.execute(
+                    "INSERT INTO siem_inventory "
+                    "(id, label, siem_type, base_url, api_token_enc, "
+                    "space_list, extra_config, is_active) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                    [cfg_id, label, siem_type, base_url, api_token_enc,
+                     space_list, extra_config, is_active],
+                )
+                # Link to the original client
+                conn.execute(
+                    "INSERT INTO client_siem_map (client_id, siem_id) "
+                    "VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [client_id, cfg_id],
+                )
+
+            # Add page:management permission for ADMIN role
+            role_rows = conn.execute("SELECT id, name FROM roles").fetchall()
+            role_map = {name: rid for rid, name in role_rows}
+            if 'ADMIN' in role_map:
+                conn.execute(
+                    "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
+                    "VALUES (?, 'page:management', true, true) ON CONFLICT DO NOTHING",
+                    [role_map['ADMIN']],
+                )
+
+            self._set_schema_version(conn, 26)
+            logger.info(
+                f"Migration 26: SIEM Inventory — siem_inventory table, "
+                f"client_siem_map join table, migrated {len(existing_configs)} configs"
+            )
+
+        # ── Migration 27: Advanced SIEM fields ───────────────────────
+        if current_version < 27:
+            # Add separate URL fields and space fields
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS elasticsearch_url VARCHAR")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS kibana_url VARCHAR")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS production_space VARCHAR")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS staging_space VARCHAR")
+
+            # Migrate: base_url → kibana_url, space_list first entry → production_space
+            conn.execute("UPDATE siem_inventory SET kibana_url = base_url WHERE kibana_url IS NULL AND base_url IS NOT NULL")
+            # space_list was comma-separated; split into production/staging
+            rows = conn.execute("SELECT id, space_list FROM siem_inventory WHERE space_list IS NOT NULL").fetchall()
+            for row_id, space_list in rows:
+                parts = [s.strip() for s in space_list.split(",") if s.strip()]
+                prod = parts[0] if parts else None
+                stag = parts[1] if len(parts) > 1 else None
+                conn.execute(
+                    "UPDATE siem_inventory SET production_space = ?, staging_space = ? WHERE id = ?",
+                    [prod, stag, row_id],
+                )
+
+            self._set_schema_version(conn, 27)
+            logger.info("Migration 27: Advanced SIEM fields — elasticsearch_url, kibana_url, production_space, staging_space")
+
+        # ── Migration 28: Environment-Aware SIEM Roles ───────────────
+        if current_version < 28:
+            # Rebuild client_siem_map with new composite PK
+            # (client_id, siem_id, environment_role) and split dual-space
+            # configs into separate production/staging rows.
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_siem_map_new (
+                    client_id VARCHAR NOT NULL,
+                    siem_id VARCHAR NOT NULL,
+                    environment_role VARCHAR NOT NULL DEFAULT 'production',
+                    space VARCHAR,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (client_id, siem_id, environment_role)
+                )
+            """)
+
+            # Copy existing mappings as 'production' rows, pulling
+            # production_space from siem_inventory where available.
+            conn.execute("""
+                INSERT INTO client_siem_map_new
+                    (client_id, siem_id, environment_role, space, assigned_at)
+                SELECT m.client_id, m.siem_id, 'production',
+                       s.production_space, m.assigned_at
+                FROM client_siem_map m
+                JOIN siem_inventory s ON s.id = m.siem_id
+            """)
+
+            # For SIEMs that also had a staging_space, create a second
+            # 'staging' row so each space gets its own environment role.
+            conn.execute("""
+                INSERT INTO client_siem_map_new
+                    (client_id, siem_id, environment_role, space, assigned_at)
+                SELECT m.client_id, m.siem_id, 'staging',
+                       s.staging_space, m.assigned_at
+                FROM client_siem_map m
+                JOIN siem_inventory s ON s.id = m.siem_id
+                WHERE s.staging_space IS NOT NULL
+                  AND s.staging_space != ''
+            """)
+
+            conn.execute("DROP TABLE client_siem_map")
+            conn.execute("ALTER TABLE client_siem_map_new RENAME TO client_siem_map")
+
+            self._set_schema_version(conn, 28)
+            logger.info(
+                "Migration 28: Environment-aware SIEM roles — "
+                "environment_role + space on client_siem_map, "
+                "split dual-space configs into separate rows"
+            )
+
+        # ── Migration 29: Database-Per-Tenant — db_filename on clients ──
+        if current_version < 29:
+            try:
+                conn.execute(
+                    "ALTER TABLE clients ADD COLUMN db_filename VARCHAR"
+                )
+            except Exception:
+                pass  # Column may already exist
+            self._set_schema_version(conn, 29)
+            logger.info(
+                "Migration 29: Added clients.db_filename for "
+                "database-per-tenant physical isolation"
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -825,8 +1151,9 @@ class DatabaseService:
             logger.warning(f"Legacy table validation skipped: {e}")
     
     def _init_db(self):
-        """Initialize database and run migrations."""
-        with self.get_connection() as conn:
+        """Initialize database and run migrations.  Always uses the shared DB
+        regardless of any active tenant context."""
+        with self.get_shared_connection() as conn:
             self._run_migrations(conn)
             self._validate_legacy_tables(conn)
             self._ensure_users_table(conn)
@@ -854,6 +1181,16 @@ class DatabaseService:
                     "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
                     [admin_user_id, admin_role_id],
                 )
+                # Assign bootstrap admin to default client
+                default_client = conn.execute(
+                    "SELECT id FROM clients WHERE is_default = true LIMIT 1"
+                ).fetchone()
+                if default_client:
+                    conn.execute(
+                        "INSERT INTO user_clients (user_id, client_id, is_default) "
+                        "VALUES (?, ?, true) ON CONFLICT DO NOTHING",
+                        [admin_user_id, default_client[0]],
+                    )
                 logger.info("Bootstrap admin user created (username: admin, password: admin)")
             else:
                 logger.info(f"Users table has {row[0]} user(s), skipping bootstrap")
@@ -863,7 +1200,7 @@ class DatabaseService:
     # --- USER / RBAC DATA ---
 
     def get_user_by_username(self, username: str) -> Optional[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
                 "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
@@ -877,7 +1214,7 @@ class DatabaseService:
             ))
 
     def get_user_by_email(self, email: str) -> Optional[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
                 "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
@@ -891,7 +1228,7 @@ class DatabaseService:
             ))
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
                 "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
@@ -905,7 +1242,7 @@ class DatabaseService:
             ))
 
     def get_user_by_keycloak_id(self, keycloak_id: str) -> Optional[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT id, username, email, full_name, password_hash, keycloak_id, "
                 "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
@@ -919,7 +1256,7 @@ class DatabaseService:
             ))
 
     def get_all_users(self) -> List[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT id, username, email, full_name, keycloak_id, "
                 "auth_provider, is_active, created_at, last_login FROM users ORDER BY username"
@@ -931,7 +1268,7 @@ class DatabaseService:
     def create_user(self, username: str, email: str = None, full_name: str = None,
                     password_hash: str = None, keycloak_id: str = None,
                     auth_provider: str = "local") -> str:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             conn.execute(
                 "INSERT INTO users (username, email, full_name, password_hash, keycloak_id, auth_provider) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
@@ -950,19 +1287,21 @@ class DatabaseService:
             return False
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [user_id]
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             conn.execute(
                 f"UPDATE users SET {set_clause}, updated_at = now() WHERE id = ?", values
             )
         return True
 
     def delete_user(self, user_id: str):
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
+            conn.execute("UPDATE api_keys SET created_by_user_id = NULL WHERE created_by_user_id = ?", [user_id])
+            conn.execute("DELETE FROM user_clients WHERE user_id = ?", [user_id])
             conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
             conn.execute("DELETE FROM users WHERE id = ?", [user_id])
 
     def get_user_roles(self, user_id: str) -> List[str]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
                 "WHERE ur.user_id = ?", [user_id]
@@ -970,12 +1309,12 @@ class DatabaseService:
             return [r[0] for r in rows]
 
     def get_all_roles(self) -> List[Dict]:
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute("SELECT id, name, description FROM roles ORDER BY name").fetchall()
             return [dict(zip(["id", "name", "description"], r)) for r in rows]
 
     def set_user_roles(self, user_id: str, role_names: List[str]):
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
             for rn in role_names:
                 role_row = conn.execute("SELECT id FROM roles WHERE name = ?", [rn]).fetchone()
@@ -1038,17 +1377,21 @@ class DatabaseService:
         )
         # Default new Keycloak users to ANALYST role
         role_row = None
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             role_row = conn.execute("SELECT id FROM roles WHERE name = 'ANALYST'").fetchone()
         if role_row:
             self.set_user_roles(uid, ["ANALYST"])
+        # Assign new user to default client
+        default_cid = self.get_default_client_id()
+        if default_cid:
+            self.assign_user_to_client(uid, default_cid, is_default=True)
         return self.get_user_by_id(uid)
 
     # --- ROLE PERMISSIONS ---
 
     def get_permissions_for_role(self, role_id: str) -> List[Dict]:
         """Get all permissions for a role."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT id, resource, can_read, can_write FROM role_permissions "
                 "WHERE role_id = ? ORDER BY resource", [role_id]
@@ -1057,7 +1400,7 @@ class DatabaseService:
 
     def get_permissions_matrix(self) -> List[Dict]:
         """Get full permissions matrix: all roles × resources."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT rp.id, r.name AS role_name, r.id AS role_id, "
                 "rp.resource, rp.can_read, rp.can_write "
@@ -1070,7 +1413,7 @@ class DatabaseService:
 
     def get_all_resources(self) -> List[str]:
         """Get all distinct resource names from role_permissions."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT DISTINCT resource FROM role_permissions ORDER BY resource"
             ).fetchall()
@@ -1078,7 +1421,7 @@ class DatabaseService:
 
     def set_permission(self, role_id: str, resource: str, can_read: bool, can_write: bool):
         """Set a single role×resource permission (upsert)."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             existing = conn.execute(
                 "SELECT id FROM role_permissions WHERE role_id = ? AND resource = ?",
                 [role_id, resource],
@@ -1100,7 +1443,7 @@ class DatabaseService:
         Returns {'can_read': bool, 'can_write': bool} where True if ANY role grants it."""
         if not role_names:
             return {"can_read": False, "can_write": False}
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             placeholders = ", ".join("?" for _ in role_names)
             rows = conn.execute(
                 f"SELECT rp.can_read, rp.can_write FROM role_permissions rp "
@@ -1118,7 +1461,7 @@ class DatabaseService:
         roles = self.get_user_roles(user_id)
         if not roles:
             return {}
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             placeholders = ", ".join("?" for _ in roles)
             rows = conn.execute(
                 f"SELECT rp.resource, rp.can_read, rp.can_write FROM role_permissions rp "
@@ -1255,6 +1598,15 @@ class DatabaseService:
             # Base query
             query = "SELECT * FROM detection_rules WHERE 1=1"
             params = []
+            
+            # Tenant isolation: restrict to spaces linked to the active client
+            if filters.allowed_spaces is not None:
+                if not filters.allowed_spaces:
+                    # Client has no SIEMs → zero rules visible
+                    return [], 0, "Never"
+                placeholders = ", ".join("?" for _ in filters.allowed_spaces)
+                query += f" AND LOWER(space) IN ({placeholders})"
+                params.extend([s.lower() for s in filters.allowed_spaces])
             
             # Apply filters
             if filters.space:
@@ -1537,12 +1889,23 @@ class DatabaseService:
             validation_status=validation_status,
         )
     
-    def get_rule_health_metrics(self) -> RuleHealthMetrics:
-        """Calculate comprehensive rule health metrics."""
+    def get_rule_health_metrics(self, allowed_spaces: List[str] = None) -> RuleHealthMetrics:
+        """Calculate comprehensive rule health metrics.
+        If allowed_spaces is provided, only include rules in those spaces (tenant isolation)."""
         with self.get_connection() as conn:
-            df = conn.execute(
-                "SELECT enabled, score, space, severity, name, raw_data FROM detection_rules"
-            ).df()
+            if allowed_spaces is not None:
+                if not allowed_spaces:
+                    return RuleHealthMetrics()
+                placeholders = ", ".join("?" for _ in allowed_spaces)
+                df = conn.execute(
+                    f"SELECT enabled, score, space, severity, name, raw_data FROM detection_rules "
+                    f"WHERE LOWER(space) IN ({placeholders})",
+                    [s.lower() for s in allowed_spaces],
+                ).df()
+            else:
+                df = conn.execute(
+                    "SELECT enabled, score, space, severity, name, raw_data FROM detection_rules"
+                ).df()
             
             if df.empty:
                 return RuleHealthMetrics()
@@ -1632,12 +1995,22 @@ class DatabaseService:
             language_breakdown=language_breakdown,
         )
     
-    def get_unique_spaces(self) -> List[str]:
-        """Get list of unique Kibana spaces."""
+    def get_unique_spaces(self, allowed_spaces: List[str] = None) -> List[str]:
+        """Get list of unique Kibana spaces.
+        If allowed_spaces is provided, only return spaces in that allow-list (tenant isolation)."""
         with self.get_connection() as conn:
-            result = conn.execute(
-                "SELECT DISTINCT space FROM detection_rules ORDER BY space"
-            ).fetchall()
+            if allowed_spaces is not None:
+                if not allowed_spaces:
+                    return []
+                placeholders = ", ".join("?" for _ in allowed_spaces)
+                result = conn.execute(
+                    f"SELECT DISTINCT space FROM detection_rules WHERE LOWER(space) IN ({placeholders}) ORDER BY space",
+                    [s.lower() for s in allowed_spaces],
+                ).fetchall()
+            else:
+                result = conn.execute(
+                    "SELECT DISTINCT space FROM detection_rules ORDER BY space"
+                ).fetchall()
             return [row[0] for row in result if row[0]]
     
     def get_threat_actor_filter_options(self) -> Tuple[List[str], List[str]]:
@@ -1830,11 +2203,20 @@ class DatabaseService:
                 logger.warning(f"Failed to get technique rule counts: {e}")
                 return {}
     
-    def get_threat_landscape_metrics(self) -> "ThreatLandscapeMetrics":
-        """Calculate comprehensive threat landscape metrics."""
+    def get_threat_landscape_metrics(self, client_id: str = None) -> "ThreatLandscapeMetrics":
+        """Calculate comprehensive threat landscape metrics.
+        If client_id provided, coverage is scoped to that client's production SIEM spaces."""
         from app.models.threats import ThreatLandscapeMetrics
         
+        # Pre-fetch client production spaces outside the main connection
+        prod_spaces = None
+        if client_id:
+            prod_spaces = self.get_client_siem_spaces(client_id, "production")
+        
         with self.get_connection() as conn:
+            # Threat actors are intentionally global (MITRE ATT&CK / OpenCTI
+            # reference data shared across all clients).  Only rule *coverage*
+            # is scoped to the active client's production SIEM spaces below.
             df = conn.execute(
                 "SELECT ttp_count, ttps, origin, source FROM threat_actors"
             ).df()
@@ -1843,11 +2225,23 @@ class DatabaseService:
                 return ThreatLandscapeMetrics()
             
             # Get covered TTPs inline (avoid nested connection)
-            covered_result = conn.execute("""
-                SELECT DISTINCT unnest(mitre_ids) 
-                FROM detection_rules 
-                WHERE enabled = 1 AND LOWER(space) = LOWER('production')
-            """).fetchall()
+            if prod_spaces is not None:
+                if prod_spaces:
+                    placeholders = ", ".join("?" for _ in prod_spaces)
+                    covered_result = conn.execute(f"""
+                        SELECT DISTINCT unnest(mitre_ids) 
+                        FROM detection_rules 
+                        WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
+                    """, [s.lower() for s in prod_spaces]).fetchall()
+                else:
+                    # Client has 0 SIEMs — no covered TTPs
+                    covered_result = []
+            else:
+                covered_result = conn.execute("""
+                    SELECT DISTINCT unnest(mitre_ids) 
+                    FROM detection_rules 
+                    WHERE enabled = 1
+                """).fetchall()
             covered_ttps = {row[0].upper() for row in covered_result if row[0]}
             
             # Basic counts
@@ -1925,11 +2319,11 @@ class DatabaseService:
                 uncovered_actors=uncovered_actors,
             )
     
-    def get_dashboard_metrics(self) -> Tuple[RuleHealthMetrics, Dict[str, Any], "ThreatLandscapeMetrics"]:
+    def get_dashboard_metrics(self, client_id: str = None) -> Tuple[RuleHealthMetrics, Dict[str, Any], "ThreatLandscapeMetrics"]:
         """
         Get all three metric sets for the dashboard in a single DB connection.
         Loads validation data once and reuses it across rule health + promotion.
-        Much faster than calling the three methods individually.
+        When client_id is provided, scopes rules to that client's production SIEM spaces.
         """
         from app.models.threats import ThreatLandscapeMetrics
         
@@ -1937,11 +2331,28 @@ class DatabaseService:
         validation_data = self._load_validation_data()
         now = datetime.now()
         
+        # Resolve allowed spaces for tenant scoping
+        allowed_spaces = None
+        if client_id:
+            allowed_spaces = self.get_client_siem_spaces(client_id)
+        
         with self.get_connection() as conn:
             # ── Rule Health Metrics ──
-            rules_df = conn.execute(
-                "SELECT enabled, score, space, severity, name FROM detection_rules"
-            ).df()
+            if allowed_spaces is not None:
+                if allowed_spaces:
+                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+                    rules_df = conn.execute(
+                        f"SELECT enabled, score, space, severity, name FROM detection_rules WHERE space IN ({placeholders})",
+                        list(allowed_spaces),
+                    ).df()
+                else:
+                    # Client has 0 SIEMs — empty result
+                    import pandas as pd
+                    rules_df = pd.DataFrame(columns=['enabled', 'score', 'space', 'severity', 'name'])
+            else:
+                rules_df = conn.execute(
+                    "SELECT enabled, score, space, severity, name FROM detection_rules"
+                ).df()
             
             if rules_df.empty:
                 rule_metrics = RuleHealthMetrics()
@@ -2007,12 +2418,29 @@ class DatabaseService:
                 )
             
             # ── Promotion Metrics ──
-            staging_df = conn.execute(
-                "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
-            ).df()
-            prod_result = conn.execute(
-                "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
-            ).fetchone()
+            if allowed_spaces is not None:
+                if allowed_spaces:
+                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+                    staging_df = conn.execute(
+                        f"SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging' AND space IN ({placeholders})",
+                        list(allowed_spaces),
+                    ).df()
+                    prod_result = conn.execute(
+                        f"SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production' AND space IN ({placeholders})",
+                        list(allowed_spaces),
+                    ).fetchone()
+                else:
+                    # Client has 0 SIEMs — empty staging/production
+                    import pandas as pd
+                    staging_df = pd.DataFrame(columns=['enabled', 'score', 'severity', 'name'])
+                    prod_result = (0,)
+            else:
+                staging_df = conn.execute(
+                    "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
+                ).df()
+                prod_result = conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
+                ).fetchone()
             production_total = prod_result[0] if prod_result else 0
             
             if staging_df.empty:
@@ -2083,12 +2511,24 @@ class DatabaseService:
                 "SELECT ttp_count, ttps, origin, source FROM threat_actors"
             ).df()
             
-            # Covered TTPs (reuse same connection)
-            covered_result = conn.execute("""
-                SELECT DISTINCT unnest(mitre_ids) 
-                FROM detection_rules 
-                WHERE enabled = 1 AND LOWER(space) = LOWER('production')
-            """).fetchall()
+            # Covered TTPs (reuse same connection, scoped to client's spaces)
+            if allowed_spaces is not None:
+                if allowed_spaces:
+                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+                    covered_result = conn.execute(f"""
+                        SELECT DISTINCT unnest(mitre_ids) 
+                        FROM detection_rules 
+                        WHERE enabled = 1 AND space IN ({placeholders})
+                    """, list(allowed_spaces)).fetchall()
+                else:
+                    # Client has 0 SIEMs — no covered TTPs
+                    covered_result = []
+            else:
+                covered_result = conn.execute("""
+                    SELECT DISTINCT unnest(mitre_ids) 
+                    FROM detection_rules 
+                    WHERE enabled = 1 AND LOWER(space) = LOWER('production')
+                """).fetchall()
             covered_ttps = {row[0].upper() for row in covered_result if row[0]}
             
             if threat_df.empty:
@@ -2159,16 +2599,22 @@ class DatabaseService:
         
         return rule_metrics, promo_metrics, threat_metrics
     
-    def get_all_covered_ttps(self) -> Set[str]:
-        """Get all TTPs covered by enabled detection rules."""
+    def get_all_covered_ttps(self, client_id: str = None) -> Set[str]:
+        """Get all TTPs covered by enabled detection rules.
+        If client_id provided, restrict to that client's production SIEM spaces."""
+        if client_id:
+            return self.get_covered_ttps_for_client(client_id, "production")
         with self.get_connection() as conn:
             result = conn.execute(
                 "SELECT DISTINCT unnest(mitre_ids) FROM detection_rules WHERE enabled = 1"
             ).fetchall()
             return {row[0].upper() for row in result if row[0]}
     
-    def get_ttp_rule_counts(self) -> Dict[str, int]:
-        """Get count of enabled rules per MITRE technique ID."""
+    def get_ttp_rule_counts(self, client_id: str = None) -> Dict[str, int]:
+        """Get count of enabled rules per MITRE technique ID.
+        If client_id provided, restrict to that client's production SIEM spaces."""
+        if client_id:
+            return self.get_technique_rule_counts_for_client(client_id, "production")
         with self.get_connection() as conn:
             result = conn.execute("""
                 SELECT ttp_id, COUNT(*) as rule_count
@@ -2181,8 +2627,12 @@ class DatabaseService:
             """).fetchall()
             return {row[0].upper(): row[1] for row in result if row[0]}
     
-    def get_sigma_coverage_data(self) -> Tuple[Set[str], Dict[str, int]]:
+    def get_sigma_coverage_data(self, client_id: str = None) -> Tuple[Set[str], Dict[str, int]]:
         """Get covered TTPs and rule counts in a single DB connection (for sigma page)."""
+        if client_id:
+            covered = self.get_covered_ttps_for_client(client_id, "production")
+            counts = self.get_technique_rule_counts_for_client(client_id, "production")
+            return covered, counts
         with self.get_connection() as conn:
             covered_result = conn.execute(
                 "SELECT DISTINCT unnest(mitre_ids) FROM detection_rules WHERE enabled = 1"
@@ -2218,14 +2668,25 @@ class DatabaseService:
             ).fetchall()
             return {row[0]: row[1] for row in result if row[0] and row[1]}
     
-    def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True, search: str = None) -> List[DetectionRule]:
+    def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True,
+                                search: str = None, client_id: str = None,
+                                environment_role: str = None) -> List[DetectionRule]:
         """Get all detection rules that cover a specific MITRE technique.
         
         Args:
             technique_id: MITRE technique ID (e.g., T1059)
             enabled_only: If True, only return enabled rules (default). Matches heatmap coverage logic.
             search: Optional search filter to further restrict rules (matches name, author, rule_id, mitre_ids)
+            client_id: If provided, restrict to rules in spaces linked to this client.
+            environment_role: If provided with client_id, restrict to production or staging spaces.
         """
+        # Pre-fetch client spaces for filtering
+        client_spaces = None
+        if client_id:
+            client_spaces = self.get_client_siem_spaces(client_id, environment_role)
+            if not client_spaces:
+                return []
+
         with self.get_connection() as conn:
             # Query rules where the technique ID is in the mitre_ids array
             ttp_upper = technique_id.upper()
@@ -2237,6 +2698,12 @@ class DatabaseService:
             
             if enabled_only:
                 base_conditions += " AND enabled = 1"
+            
+            # Client-SIEM space filtering
+            if client_spaces:
+                placeholders = ", ".join("?" for _ in client_spaces)
+                base_conditions += f" AND LOWER(space) IN ({placeholders})"
+                params.extend([s.lower() for s in client_spaces])
             
             if search:
                 # Apply same search logic as grid - match name, author, rule_id, OR mitre_ids
@@ -2294,42 +2761,67 @@ class DatabaseService:
     
     # --- APP SETTINGS ---
     
-    def get_setting(self, key: str, default: str = None) -> str:
-        """Get a single app setting by key."""
+    def get_setting(self, key: str, default: str = None, client_id: str = None) -> str:
+        """Get a single app setting by key, optionally scoped to a client."""
         with self.get_connection() as conn:
-            row = conn.execute(
-                "SELECT value FROM app_settings WHERE key = ?", [key]
-            ).fetchone()
+            if client_id:
+                row = conn.execute(
+                    "SELECT value FROM app_settings WHERE key = ? AND client_id = ?",
+                    [key, client_id],
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT value FROM app_settings WHERE key = ? ORDER BY updated_at DESC LIMIT 1",
+                    [key],
+                ).fetchone()
             return row[0] if row else default
     
-    def get_all_settings(self) -> Dict[str, str]:
-        """Get all app settings as a dict."""
+    def get_all_settings(self, client_id: str = None) -> Dict[str, str]:
+        """Get all app settings as a dict, optionally scoped to a client."""
         with self.get_connection() as conn:
-            rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
+            if client_id:
+                rows = conn.execute(
+                    "SELECT key, value FROM app_settings WHERE client_id = ?",
+                    [client_id],
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT key, value FROM app_settings").fetchall()
             return {r[0]: r[1] for r in rows}
     
-    def save_setting(self, key: str, value: str):
-        """Save a single app setting (upsert)."""
+    def save_setting(self, key: str, value: str, client_id: str = None):
+        """Save a single app setting (upsert), optionally scoped to a client."""
         with self.get_connection() as conn:
-            conn.execute("""
-                INSERT INTO app_settings (key, value, updated_at)
-                VALUES (?, ?, now())
-                ON CONFLICT (key) DO UPDATE SET
-                    value = EXCLUDED.value,
-                    updated_at = EXCLUDED.updated_at
-            """, [key, value])
-    
-    def save_settings(self, settings_dict: Dict[str, str]):
-        """Save multiple settings at once."""
-        with self.get_connection() as conn:
-            for key, value in settings_dict.items():
+            if client_id:
                 conn.execute("""
-                    INSERT INTO app_settings (key, value, updated_at)
-                    VALUES (?, ?, now())
-                    ON CONFLICT (key) DO UPDATE SET
+                    INSERT INTO app_settings (key, value, client_id, updated_at)
+                    VALUES (?, ?, ?, now())
+                    ON CONFLICT (key, client_id) DO UPDATE SET
                         value = EXCLUDED.value,
                         updated_at = EXCLUDED.updated_at
-                """, [key, value])
+                """, [key, value, client_id])
+            else:
+                # Fallback for global settings — use default client
+                default_cid = self._get_default_client_id(conn)
+                conn.execute("""
+                    INSERT INTO app_settings (key, value, client_id, updated_at)
+                    VALUES (?, ?, ?, now())
+                    ON CONFLICT (key, client_id) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                """, [key, value, default_cid])
+    
+    def save_settings(self, settings_dict: Dict[str, str], client_id: str = None):
+        """Save multiple settings at once, optionally scoped to a client."""
+        with self.get_connection() as conn:
+            cid = client_id or self._get_default_client_id(conn)
+            for key, value in settings_dict.items():
+                conn.execute("""
+                    INSERT INTO app_settings (key, value, client_id, updated_at)
+                    VALUES (?, ?, ?, now())
+                    ON CONFLICT (key, client_id) DO UPDATE SET
+                        value = EXCLUDED.value,
+                        updated_at = EXCLUDED.updated_at
+                """, [key, value, cid])
     
     def get_all_rules_for_export(self) -> List[Dict[str, Any]]:
         """Get all detection rules as dicts for JSON log export."""
@@ -2449,9 +2941,10 @@ class DatabaseService:
                 
                 # Insert fresh rules
                 conn.register('rules_source', df_final)
-                conn.execute("""
-                    INSERT INTO detection_rules 
-                    SELECT * FROM rules_source
+                col_list = ', '.join(target_cols)
+                conn.execute(f"""
+                    INSERT INTO detection_rules ({col_list})
+                    SELECT {col_list} FROM rules_source
                 """)
                 
                 conn.execute("COMMIT")
@@ -2560,30 +3053,479 @@ class DatabaseService:
             "created_by_user_id": row[4],
         }
 
-    def validate_api_key(self, raw_key: str) -> bool:
-        """Return True if the key is valid; also touch last_used_at."""
+    def validate_api_key(self, raw_key: str) -> Optional[str]:
+        """Validate an API key. Returns the associated client_id if valid, else None."""
         import hashlib
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT key_hash FROM api_keys WHERE key_hash = ?", [key_hash]
+                "SELECT key_hash, client_id FROM api_keys WHERE key_hash = ?", [key_hash]
             ).fetchone()
             if row:
                 conn.execute(
                     "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
                     [key_hash],
                 )
-                return True
-        return False
+                return row[1]  # client_id
+        return None
 
     def delete_api_key(self, key_hash: str) -> bool:
         """Revoke an API key by full hash."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             deleted = conn.execute(
                 "DELETE FROM api_keys WHERE key_hash = ? RETURNING key_hash",
                 [key_hash],
             ).fetchone()
         return deleted is not None
+
+    # --- CLIENT / TENANT MANAGEMENT ---
+
+    def _get_default_client_id(self, conn) -> str:
+        """Get the default client id (used internally within open connection)."""
+        row = conn.execute("SELECT id FROM clients WHERE is_default = true LIMIT 1").fetchone()
+        return row[0] if row else None
+
+    def get_default_client_id(self) -> Optional[str]:
+        """Get the default (Primary) client id."""
+        with self.get_shared_connection() as conn:
+            return self._get_default_client_id(conn)
+
+    def list_clients(self) -> List[Dict]:
+        """List all clients."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name, slug, description, is_default, db_filename, created_at, updated_at "
+                "FROM clients ORDER BY is_default DESC, name"
+            ).fetchall()
+            cols = ["id", "name", "slug", "description", "is_default", "db_filename", "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_client(self, client_id: str) -> Optional[Dict]:
+        """Get a single client by id."""
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT id, name, slug, description, is_default, db_filename, created_at, updated_at "
+                "FROM clients WHERE id = ?", [client_id]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "name", "slug", "description", "is_default", "db_filename", "created_at", "updated_at"], row
+            ))
+
+    def create_client(self, name: str, slug: str, description: str = None) -> Dict:
+        """Create a new client. Returns the full client dict."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO clients (name, slug, description) VALUES (?, ?, ?)",
+                [name, slug, description],
+            )
+            row = conn.execute(
+                "SELECT id, name, slug, description, is_default, created_at, updated_at "
+                "FROM clients WHERE slug = ?", [slug]
+            ).fetchone()
+            return dict(zip(
+                ["id", "name", "slug", "description", "is_default", "created_at", "updated_at"], row
+            ))
+
+    def update_client(self, client_id: str, **fields) -> Optional[Dict]:
+        """Update a client. Allowed fields: name, description. Returns updated client or None."""
+        allowed = {"name", "description"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return self.get_client(client_id)
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [client_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE clients SET {set_clause}, updated_at = now() WHERE id = ?", values
+            )
+        return self.get_client(client_id)
+
+    def delete_client(self, client_id: str) -> bool:
+        """Delete a client. Cannot delete the default client."""
+        with self.get_shared_connection() as conn:
+            is_default = conn.execute(
+                "SELECT is_default FROM clients WHERE id = ?", [client_id]
+            ).fetchone()
+            if not is_default:
+                return False
+            if is_default[0]:
+                raise ValueError("Cannot delete the default client")
+            conn.execute("DELETE FROM user_clients WHERE client_id = ?", [client_id])
+            conn.execute("DELETE FROM client_siem_configs WHERE client_id = ?", [client_id])
+            conn.execute("DELETE FROM clients WHERE id = ?", [client_id])
+        return True
+
+    def get_user_clients(self, user_id: str) -> List[Dict]:
+        """Get all clients assigned to a user."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.slug, c.is_default AS client_default, "
+                "uc.is_default AS user_default "
+                "FROM clients c JOIN user_clients uc ON c.id = uc.client_id "
+                "WHERE uc.user_id = ? ORDER BY uc.is_default DESC, c.name",
+                [user_id],
+            ).fetchall()
+            return [
+                {"id": r[0], "name": r[1], "slug": r[2],
+                 "client_default": r[3], "user_default": r[4]}
+                for r in rows
+            ]
+
+    def get_user_client_ids(self, user_id: str) -> List[str]:
+        """Get list of client IDs a user is assigned to."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT client_id FROM user_clients WHERE user_id = ?", [user_id]
+            ).fetchall()
+            return [r[0] for r in rows]
+
+    def assign_user_to_client(self, user_id: str, client_id: str, is_default: bool = False):
+        """Assign a user to a client."""
+        with self.get_shared_connection() as conn:
+            if is_default:
+                conn.execute(
+                    "UPDATE user_clients SET is_default = false WHERE user_id = ?",
+                    [user_id],
+                )
+            conn.execute(
+                "INSERT INTO user_clients (user_id, client_id, is_default) "
+                "VALUES (?, ?, ?) ON CONFLICT (user_id, client_id) DO UPDATE SET is_default = EXCLUDED.is_default",
+                [user_id, client_id, is_default],
+            )
+
+    def remove_user_from_client(self, user_id: str, client_id: str):
+        """Remove a user from a client."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "DELETE FROM user_clients WHERE user_id = ? AND client_id = ?",
+                [user_id, client_id],
+            )
+
+    def get_client_users(self, client_id: str) -> List[Dict]:
+        """Get all users assigned to a client."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT u.id, u.username, u.email, u.full_name, uc.is_default "
+                "FROM users u JOIN user_clients uc ON u.id = uc.user_id "
+                "WHERE uc.client_id = ? ORDER BY u.username",
+                [client_id],
+            ).fetchall()
+            return [
+                {"id": r[0], "username": r[1], "email": r[2],
+                 "full_name": r[3], "is_default": r[4]}
+                for r in rows
+            ]
+
+    # --- CLIENT SIEM CONFIGS ---
+
+    def list_siem_configs(self, client_id: str) -> List[Dict]:
+        """List SIEM configs for a client."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, client_id, siem_type, label, base_url, space_list, "
+                "extra_config, is_active, created_at, updated_at "
+                "FROM client_siem_configs WHERE client_id = ? ORDER BY label",
+                [client_id],
+            ).fetchall()
+            cols = ["id", "client_id", "siem_type", "label", "base_url",
+                    "space_list", "extra_config", "is_active", "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_siem_config(self, config_id: str) -> Optional[Dict]:
+        """Get a single SIEM config by id."""
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT id, client_id, siem_type, label, base_url, api_token_enc, "
+                "space_list, extra_config, is_active, created_at, updated_at "
+                "FROM client_siem_configs WHERE id = ?", [config_id]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "client_id", "siem_type", "label", "base_url", "api_token_enc",
+                 "space_list", "extra_config", "is_active", "created_at", "updated_at"], row
+            ))
+
+    def create_siem_config(self, client_id: str, siem_type: str, label: str,
+                           base_url: str = None, api_token_enc: str = None,
+                           space_list: str = None, extra_config: dict = None) -> str:
+        """Create a SIEM config for a client. Returns the config id."""
+        import json as _json
+        extra_json = _json.dumps(extra_config) if extra_config else None
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO client_siem_configs "
+                "(client_id, siem_type, label, base_url, api_token_enc, space_list, extra_config) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [client_id, siem_type, label, base_url, api_token_enc, space_list, extra_json],
+            )
+            row = conn.execute(
+                "SELECT id FROM client_siem_configs WHERE client_id = ? AND label = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                [client_id, label],
+            ).fetchone()
+            return row[0]
+
+    def update_siem_config(self, config_id: str, **fields) -> bool:
+        """Update a SIEM config."""
+        allowed = {"label", "base_url", "api_token_enc", "space_list", "extra_config", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        if "extra_config" in updates and isinstance(updates["extra_config"], dict):
+            import json as _json
+            updates["extra_config"] = _json.dumps(updates["extra_config"])
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [config_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE client_siem_configs SET {set_clause}, updated_at = now() WHERE id = ?",
+                values,
+            )
+        return True
+
+    def delete_siem_config(self, config_id: str) -> bool:
+        """Delete a SIEM config."""
+        with self.get_shared_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM client_siem_configs WHERE id = ? RETURNING id",
+                [config_id],
+            ).fetchone()
+        return deleted is not None
+
+    # --- SIEM INVENTORY (centralized, shared across clients) ---
+
+    def list_siem_inventory(self) -> List[Dict]:
+        """List all SIEMs in the centralized inventory."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
+                "extra_config, is_active, "
+                "created_at, updated_at "
+                "FROM siem_inventory ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
+                    "extra_config", "is_active", "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_siem_inventory_item(self, siem_id: str) -> Optional[Dict]:
+        """Get a single SIEM from the inventory."""
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
+                "api_token_enc, "
+                "extra_config, is_active, created_at, updated_at "
+                "FROM siem_inventory WHERE id = ?", [siem_id]
+            ).fetchone()
+            if not row:
+                return None
+            return dict(zip(
+                ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
+                 "api_token_enc",
+                 "extra_config", "is_active", "created_at", "updated_at"], row
+            ))
+
+    def create_siem_inventory_item(self, siem_type: str, label: str,
+                                   elasticsearch_url: str = None, kibana_url: str = None,
+                                   api_token_enc: str = None,
+                                   extra_config: dict = None) -> Dict:
+        """Create a SIEM in the centralized inventory. Returns the full dict."""
+        import json as _json
+        extra_json = _json.dumps(extra_config) if extra_config else None
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO siem_inventory "
+                "(siem_type, label, elasticsearch_url, kibana_url, api_token_enc, "
+                "extra_config) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [siem_type, label, elasticsearch_url, kibana_url, api_token_enc,
+                 extra_json],
+            )
+            row = conn.execute(
+                "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
+                "extra_config, "
+                "is_active, created_at, updated_at "
+                "FROM siem_inventory WHERE label = ? ORDER BY created_at DESC LIMIT 1",
+                [label],
+            ).fetchone()
+            cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
+                    "extra_config", "is_active", "created_at", "updated_at"]
+            return dict(zip(cols, row))
+
+    def update_siem_inventory_item(self, siem_id: str, **fields) -> bool:
+        """Update a SIEM in the inventory."""
+        allowed = {"label", "elasticsearch_url", "kibana_url", "api_token_enc",
+                   "extra_config", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        if "extra_config" in updates and isinstance(updates["extra_config"], dict):
+            import json as _json
+            updates["extra_config"] = _json.dumps(updates["extra_config"])
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [siem_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE siem_inventory SET {set_clause}, updated_at = now() WHERE id = ?",
+                values,
+            )
+        return True
+
+    def delete_siem_inventory_item(self, siem_id: str) -> bool:
+        """Delete a SIEM from the inventory and remove all client mappings."""
+        with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM client_siem_map WHERE siem_id = ?", [siem_id])
+            deleted = conn.execute(
+                "DELETE FROM siem_inventory WHERE id = ? RETURNING id",
+                [siem_id],
+            ).fetchone()
+        return deleted is not None
+
+    def get_siem_clients(self, siem_id: str) -> List[Dict]:
+        """Get all clients linked to a SIEM."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.slug "
+                "FROM clients c JOIN client_siem_map m ON c.id = m.client_id "
+                "WHERE m.siem_id = ? ORDER BY c.name",
+                [siem_id],
+            ).fetchall()
+            return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+
+    def get_client_siems(self, client_id: str, environment_role: str = None) -> List[Dict]:
+        """Get all SIEMs linked to a client via the inventory.
+        Optionally filter by environment_role ('production' or 'staging')."""
+        with self.get_shared_connection() as conn:
+            query = (
+                "SELECT s.id, s.label, s.siem_type, s.elasticsearch_url, s.kibana_url, "
+                "m.environment_role, m.space, s.is_active, s.created_at "
+                "FROM siem_inventory s JOIN client_siem_map m ON s.id = m.siem_id "
+                "WHERE m.client_id = ?"
+            )
+            params = [client_id]
+            if environment_role:
+                query += " AND m.environment_role = ?"
+                params.append(environment_role)
+            query += " ORDER BY m.environment_role, s.label"
+            rows = conn.execute(query, params).fetchall()
+            cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
+                    "environment_role", "space", "is_active", "created_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def link_client_siem(self, client_id: str, siem_id: str,
+                         environment_role: str = "production", space: str = None):
+        """Link a client to a SIEM from the inventory with an environment role."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO client_siem_map (client_id, siem_id, environment_role, space) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                [client_id, siem_id, environment_role, space],
+            )
+            # Bidirectional: also populate legacy client_siem_configs
+            siem = conn.execute(
+                "SELECT id, label, siem_type, kibana_url, api_token_enc "
+                "FROM siem_inventory WHERE id = ?", [siem_id]
+            ).fetchone()
+            if siem:
+                sid, lbl, stype, kurl, token = siem
+                conn.execute(
+                    "INSERT INTO client_siem_configs "
+                    "(id, client_id, siem_type, label, base_url, api_token_enc, space_list) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                    [sid, client_id, stype, lbl, kurl, token, space],
+                )
+
+    def unlink_client_siem(self, client_id: str, siem_id: str, environment_role: str = None):
+        """Unlink a client from a SIEM (bidirectional).
+        If environment_role is provided, only remove that specific mapping."""
+        with self.get_shared_connection() as conn:
+            if environment_role:
+                conn.execute(
+                    "DELETE FROM client_siem_map "
+                    "WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
+                    [client_id, siem_id, environment_role],
+                )
+            else:
+                conn.execute(
+                    "DELETE FROM client_siem_map WHERE client_id = ? AND siem_id = ?",
+                    [client_id, siem_id],
+                )
+            # Also remove from legacy table
+            conn.execute(
+                "DELETE FROM client_siem_configs WHERE id = ? AND client_id = ?",
+                [siem_id, client_id],
+            )
+
+    # --- Client-aware rule visibility helpers ---
+
+    def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
+        """Get the list of Kibana space names visible to a client.
+        If environment_role is specified, filter to just production or staging."""
+        with self.get_shared_connection() as conn:
+            query = (
+                "SELECT DISTINCT m.space FROM client_siem_map m "
+                "WHERE m.client_id = ? AND m.space IS NOT NULL"
+            )
+            params = [client_id]
+            if environment_role:
+                query += " AND m.environment_role = ?"
+                params.append(environment_role)
+            rows = conn.execute(query, params).fetchall()
+            return [r[0] for r in rows if r[0]]
+
+    def get_covered_ttps_for_client(self, client_id: str, environment_role: str = "production") -> Set[str]:
+        """Get TTPs covered by enabled detection rules in spaces linked to client for a given role."""
+        spaces = self.get_client_siem_spaces(client_id, environment_role)
+        if not spaces:
+            return set()
+        with self.get_connection() as conn:
+            placeholders = ", ".join("?" for _ in spaces)
+            result = conn.execute(f"""
+                SELECT DISTINCT unnest(mitre_ids)
+                FROM detection_rules
+                WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
+            """, [s.lower() for s in spaces]).fetchall()
+            return {row[0].upper() for row in result if row[0]}
+
+    def get_technique_rule_counts_for_client(self, client_id: str, environment_role: str = "production") -> Dict[str, int]:
+        """Get count of enabled rules per MITRE technique for client's spaces by role."""
+        spaces = self.get_client_siem_spaces(client_id, environment_role)
+        if not spaces:
+            return {}
+        with self.get_connection() as conn:
+            placeholders = ", ".join("?" for _ in spaces)
+            result = conn.execute(f"""
+                WITH unnested AS (
+                    SELECT UPPER(unnest(mitre_ids)) as technique
+                    FROM detection_rules
+                    WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
+                )
+                SELECT technique, COUNT(*) as rule_count
+                FROM unnested
+                WHERE technique IS NOT NULL
+                GROUP BY technique
+            """, [s.lower() for s in spaces]).fetchall()
+            return {row[0]: row[1] for row in result if row[0]}
+
+    def get_rules_for_client(self, client_id: str, environment_role: str = None) -> List[Dict]:
+        """Get all detection rules visible to a client via linked SIEMs.
+        If environment_role is specified, restrict to that role's spaces only."""
+        spaces = self.get_client_siem_spaces(client_id, environment_role)
+        if not spaces:
+            return []
+        with self.get_connection() as conn:
+            placeholders = ", ".join("?" for _ in spaces)
+            rows = conn.execute(f"""
+                SELECT * FROM detection_rules
+                WHERE LOWER(space) IN ({placeholders})
+                ORDER BY name
+            """, [s.lower() for s in spaces]).fetchall()
+            if not rows:
+                return []
+            columns = [desc[0] for desc in conn.description]
+            return [dict(zip(columns, r)) for r in rows]
 
 
 # Singleton accessor

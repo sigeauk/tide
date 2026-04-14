@@ -4,6 +4,82 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0]
+
+### Added
+- **Management Hub (`/management`):** New top-level admin-only area with a tabbed interface consolidating Clients, SIEMs, Users, and Permissions management into a single page.
+- **Move System workflow:** "Move" button on client system cards opens a modal to move a system to another client. Pre-flight dependency check (`move-check` endpoint) shows affected baselines, host/software counts, and SIEM compatibility. When the target client has different production SIEM spaces, `applied_detections` are reset to prevent stale rule coverage.
+- **Move System engine functions:** `move_system_check()` and `move_system_to_client()` in `inventory_engine.py` handle SIEM space comparison, applied detection cleanup, and optional baseline migration.
+- **Cross-DB Move System workflow:** `move_system_to_client()` detects multi-DB mode and dispatches to `_move_system_multi_db()`, which physically copies rows (systems, hosts, software_inventory, blind_spots, applied_detections, playbooks, system_baselines, system_baseline_snapshots, playbook_steps, step_techniques, step_detections) from the source tenant DB to the target tenant DB, then deletes from source. SIEM-aware: if the target has different production spaces, applied_detections are not copied and coverage is reset. Baseline migration is optional. The shared DB is updated for consistency after the cross-tenant transfer.
+- **`_cross_db_copy()` helper:** Generic row-copy function between DuckDB connections with automatic `client_id` replacement on copied rows.
+- **`tenant_context_for(client_id)` context manager:** Temporarily sets the active tenant DB path via `contextvars` and restores the previous context on exit. Used by management routes and move system pre-flight checks to query the correct tenant DB without full request-scoped dependency injection.
+- **Graceful resource-not-found redirects:** `_gone_redirect()` helper in `inventory.py` returns an `HX-Redirect` header for HTMX requests or a 302 `RedirectResponse` for full-page loads. Applied to system detail, host detail, CVE detail, baseline detail, and tactic detail pages — prevents hard 404s when a resource belongs to a different tenant.
+- **Database-per-tenant architecture:** Each client now gets a dedicated DuckDB file (`{slug}_{shortid}.duckdb`) instead of sharing a single database with row-level `client_id` filtering. Guarantees zero cross-tenant data leakage at the storage layer and eliminates DuckDB's single-writer concurrency bottleneck.
+- **Tenant connection manager (`tenant_manager.py`):** Context-aware connection routing using Python `contextvars`. `get_connection()` automatically routes to the active tenant's DB; `get_shared_connection()` always returns the shared DB for auth, RBAC, and client management.
+- **Reference data sync:** `mitre_techniques`, `threat_actors`, `siem_inventory`, and `client_siem_map` are synced as physical copies from the shared DB into each tenant DB on startup and after MITRE/SIEM changes, so tenant queries work without cross-DB ATTACH.
+- **Detection rule distribution:** After each Elastic sync, `_distribute_rules_to_tenants()` copies detection rules into each tenant DB filtered by the client's linked SIEM spaces.
+- **Migration script (`migrate_to_multi_db.py`):** One-time utility to split an existing single-DB deployment into per-tenant databases. Supports `--dry-run`. Copies all tenant-scoped tables, FK-linked tables, and reference data.
+- **External query tenant scoping:** `/api/external/query` now enforces tenant isolation via temporary DuckDB views that shadow all tenant-scoped tables, filtered by the API key's owning `client_id`. Explicit `main.*` schema references are rejected.
+- **Playwright multi-tenancy E2E suite:** Five test scripts in `test/playwright/scripts/multi_tenancy/`: cross-tenant URL guard, system card navigation, move system flow, SIEM reset on move, and API cross-tenant guard.
+- **SIEM Inventory:** Centralized SIEM management with CRUD for SIEM objects (Elastic, Splunk, Sentinel). SIEMs have label, type, separate Elasticsearch URL and Kibana URL fields, and API key. A single SIEM can be linked to multiple clients with different environment roles.
+- **Environment Role model:** Each client-SIEM link now carries an `environment_role` ('production' or 'staging') and a single `space` field. A SIEM can serve as 'production' for one client and 'staging' for another. Production SIEMs drive dashboard/heatmap coverage; staging SIEMs drive promotion workflows.
+- **Test Connection:** "Test Connection" button in the SIEM modal calls Kibana `/api/status` to verify connectivity and reports Kibana version and health.
+- **Client-SIEM linking with environment context:** Link form now includes Environment Role selector (Production/Staging) and Space input. Unlink is role-specific.
+- **Client-aware detection queries:** All coverage queries (`get_all_covered_ttps`, `get_ttp_rule_counts`, `get_rules_for_technique`, `get_sigma_coverage_data`, `get_threat_landscape_metrics`) accept optional `client_id` to scope results to rules deployed in that client's production SIEM spaces.
+- **Client-specific query methods:** New `get_client_siem_spaces()`, `get_covered_ttps_for_client()`, `get_technique_rule_counts_for_client()`, `get_rules_for_client()` methods for direct client-scoped queries.
+- **Manage Assets page:** Client detail page (`/clients/{id}`) now shows Systems, Baselines, Linked SIEMs, and Assigned Users with counts in the stats strip. "View Details" button renamed to "Manage Assets".
+- **User client assignment checklist:** "Manage Clients" action on the Users tab opens a checklist of all clients, updating the `user_clients` join table directly.
+- **DB Migration 26:** Created `siem_inventory` table and `client_siem_map` join table. Migrated existing `client_siem_configs` data into the new inventory. Added `page:management` permission resource for ADMIN role.
+- **DB Migration 27:** Added `elasticsearch_url`, `kibana_url`, `production_space`, `staging_space` columns to `siem_inventory`. Migrated `base_url` → `kibana_url` and split `space_list` into production/staging fields.
+- **DB Migration 28:** Added `environment_role` and `space` columns to `client_siem_map`. Rebuilt table with composite PK `(client_id, siem_id, environment_role)`. Split dual-space SIEM configs into separate production/staging rows. Added `client_id` column to all tenant-scoped tables (systems, hosts, playbooks, etc.).
+- **DB Migration 29:** Added `db_filename VARCHAR` column to `clients` table for tracking tenant DB filenames.
+- **Management API router (`/api/management/`):** Tab partial endpoints, SIEM CRUD, test-connection, client-SIEM linking, and user-client assignment endpoints.
+- **Playwright tenant audit:** New `test/playwright/scripts/tenant_audit.js` automates cross-tenant validation (batman/DC zero-rule check, ironman/Marvel rule visibility, privilege escalation guard, active_client_id cookie on login).
+- **Playwright refactor audit:** New `test/playwright/scripts/v4_refactor_audit.js` — 53-check comprehensive audit covering full-site page crawl, sync count leak, sigma deploy scoping, SIEM terminology, baseline isolation, systems isolation, CVE pages, management access, and cross-tenant API guards.
+
+### Changed
+- **~40 shared-only methods** in `database.py` switched from `get_connection()` to `get_shared_connection()` (user CRUD, role/permission CRUD, client CRUD, API key management, SIEM inventory/config operations).
+- **`inventory_engine._cf()`** returns no-op filter `("", [])` when a tenant context is active, since the DB is already tenant-scoped.
+- **`deps.get_active_client()`** now resolves the tenant DB path and sets the tenant context via `contextvars` for the duration of each request.
+- **App startup** now calls `refresh_tenant_cache()` and `sync_shared_data()` to initialize multi-DB routing.
+- **Tenant switcher redirect:** Client switcher component (`client_switcher.html`) now redirects to `/` (dashboard) after switching tenants instead of reloading the current page, preventing 404s on resource-detail pages that belong to the previous tenant.
+- **Management partials tenant context:** `_render_client_systems_partial()` and `_render_client_baselines_partial()` now wrap inventory queries in `tenant_context_for(client_id)` to read from the correct tenant DB in multi-DB mode.
+- **Client detail page tenant context:** `client_detail_page()` wraps system and baseline listing in `tenant_context_for(client_id)` for correct multi-DB routing.
+- **`_init_db()` uses shared connection:** `DatabaseService._init_db()` now uses `get_shared_connection()` instead of `get_connection()`, ensuring migrations always target the shared DB even when a tenant context is active.
+- **Sidebar navigation:** Replaced "Clients" link with "Management" link pointing to the new hub.
+- **Settings page:** Fully removed Users and Permissions tabs (previously showed redirect buttons). These are now exclusively in the Management Hub.
+- **HTMX navigation:** Management Hub tabs use native `hx-get` on tab buttons targeting `#management-content` — no page reloads. Tab state preserved in URL via `?tab=` query param across client switches.
+- **SIEM cards:** SIEMs render as cards (matching Systems page pattern) showing Elasticsearch URL and Kibana URL. Production/staging space display removed from SIEM inventory cards (space is now per client-SIEM link).
+- **Client SIEM partial:** Updated `client_siems.html` to display Environment Role badge (Production/Staging) and Kibana Space per linked SIEM instead of dual production_space/staging_space fields.
+- **Space → SIEM terminology:** Renamed "Space" filter labels to "SIEM" on Rule Health and Sigma pages. Default dropdown option is now "All SIEMs". SIEM card detail uses "Kibana Space" for the Elastic space field.
+- **Sigma deploy targets:** Deploy dropdown on the Sigma page now uses `deploy_targets` (client-scoped SIEM list with labelled environment role) instead of the global `spaces` variable.
+- **Heatmap client-awareness:** `get_heatmap_matrix`, `get_technique_detail`, `get_technique_rules`, and report export now pass `client_id` to all coverage queries, ensuring heatmap shows only rules visible to the active client's production SIEM spaces.
+- **Sigma search client-awareness:** Added `client_id: ActiveClient` parameter to sigma rule search endpoint for client-scoped coverage pills.
+- **Inventory engine client-awareness:** `get_system_baselines`, `build_system_report_data`, `_build_baseline_heatmap`, `get_rules_for_cve_techniques`, and `_build_technique_rules` now thread `client_id` through to all coverage queries.
+- **Report generator client-awareness:** `build_report_data` accepts optional `client_id` and scopes coverage/rule-count queries accordingly.
+- **Modal consistency:** Client and SIEM modals use `modal-overlay` → `modal-content modal-sm` → `modal-header` pattern matching the Systems page.
+- **PATH_RESOURCE_MAP & API_WRITE_RESOURCE_MAP:** Added `/management` and `/api/management` entries for permission enforcement.
+- **Pydantic models:** Removed `production_space`/`staging_space` from `SIEMInventoryItem`, `SIEMInventoryCreate`, `SIEMInventoryUpdate`. Added `ClientSIEMLink` and `ClientSIEMLinkFull` models.
+- **Architectural reset & instruction hardening:** Purged host-side `node_modules/`, `package.json`, and `package-lock.json` that were erroneously committed. Added Node/NPM artifacts to `.gitignore` and removed them from git tracking. Hardened `copilot-instructions.md` HARD STOPS with explicit `npm install`/`npx` host ban, shell discipline rule, zero-host-dependency mandate, and mandatory `--rm` flag for Playwright containers.
+- **Management card modals:** Extracted system and baseline modals from HTMX swap zones (`client_systems.html`, `client_baselines.html`) into `client_detail.html`, preventing modal destruction on every HTMX swap. Replaced fragile `setTimeout(hide, 100)` with `hx-on::before-request` for immediate modal close. Added `hx-swap-oob="true"` for server-side modal option updates.
+- **Baseline report scoping:** `build_baseline_report_data()` now passes `client_id` to `get_baseline_step_coverage()` and filters the `system_baselines` JOIN by client, preventing cross-tenant system names from appearing in reports.
+- **Rule Health isolation:** Rule Health page (`/rules`) and `/api/rules` now scope detection rules to the active client's linked SIEM spaces via `allowed_spaces` on `RuleFilters`. Clients with 0 SIEMs correctly see 0 rules, 0% coverage.
+- **Rule metrics isolation:** `get_rule_health_metrics()` now accepts optional `allowed_spaces` to restrict aggregations to tenant-visible rules only.
+- **Space filter isolation:** `get_unique_spaces()` now accepts optional `allowed_spaces` to restrict the space dropdown to tenant-visible spaces only.
+- **Login default client:** `local_login()` now sets `active_client_id` cookie to the user's default (or only assigned) client, preventing all users from landing on the system default "Primary Client."
+- **User deletion pipeline:** `delete_user()` now also deletes from `user_clients` before removing `user_roles` and the user record, preventing orphaned foreign key rows.
+- **Threat Landscape isolation:** `list_threats()` and `get_threat_metrics()` now accept `ActiveClient` and scope covered-TTP / rule-count queries to the active client's production SIEM spaces. Clients with 0 SIEMs correctly see 0% coverage across all actors.
+- **Dashboard metrics isolation:** `get_dashboard_metrics()` now accepts optional `client_id` to scope rule health, promotion, and threat landscape metrics to the active client's SIEM spaces.
+- **Baseline assignment validation:** `apply_baseline()` and `remove_baseline()` now accept `client_id` and validate same-client ownership of both system and playbook before INSERT/DELETE, preventing cross-tenant baseline manipulation.
+- **Baseline queries:** `get_system_baselines()` now filters joined playbooks by `client_id` when provided, preventing cross-client baseline visibility.
+- **Asset reassignment checks:** `assign_system_to_client()` and `assign_baseline_to_client()` now reject reassignment if the asset already belongs to a different client.
+- **API key cleanup:** `delete_user()` now nullifies `api_keys.created_by_user_id` before cascading deletes, preventing orphaned foreign key references.
+- **Sync status privacy:** Sync status banner no longer exposes the global rule count ("Synced 245 rules from Elastic"). Now shows "Sync complete" and dispatches a `refreshRules` event to reload scoped metrics.
+- **Sigma deployment scoping:** `/sigma` page deploy dropdown now shows only the active client's linked SIEMs (e.g. "DC (Production)") instead of every Kibana space from the environment variable. The deploy endpoint validates the target space belongs to the client.
+- **Sigma spaces API visibility:** `GET /api/sigma/spaces` now returns only the active client's linked SIEM spaces instead of all configured spaces.
+- **Baseline detail isolation:** Baseline detail page systems list and step-coverage RAG matrix now filter by `client_id`, preventing systems from other clients appearing in the "Apply to system" dropdown or coverage grid.
+- **Management Add System responses:** Assigning a system to a client no longer exposes UUIDs in error toasts. Returns a clear "System not found." message when the system does not exist.
+
 ## [3.4.8] - 2026-04-06
 
 ### Added

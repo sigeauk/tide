@@ -101,6 +101,7 @@ def build_report_data(
     show_defense: bool = False,
     audience_level: str = "executive",
     classification: str = "Official",
+    client_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Compile every data point needed to render a threat report.
@@ -123,8 +124,8 @@ def build_report_data(
         classification = CLASSIFICATION_OPTIONS[0]
 
     all_actors      = db.get_threat_actors()
-    covered_ttps    = db.get_all_covered_ttps()          # set of technique IDs
-    ttp_rule_counts = db.get_ttp_rule_counts()           # {id: count}
+    covered_ttps    = db.get_all_covered_ttps(client_id=client_id)  # set of technique IDs
+    ttp_rule_counts = db.get_ttp_rule_counts(client_id=client_id)   # {id: count}
     ttp_map         = db.get_technique_map()             # {id: tactic_slug}
     ttp_names       = db.get_technique_names()           # {id: name}
 

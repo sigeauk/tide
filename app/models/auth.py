@@ -52,6 +52,10 @@ class User(BaseModel):
     is_active: bool = True
     permissions: Dict[str, Dict[str, bool]] = Field(default_factory=dict)
     
+    # Multi-tenant fields
+    clients: List[str] = Field(default_factory=list)  # Assigned client IDs
+    active_client_id: Optional[str] = None  # Currently selected client
+    
     # Session info
     authenticated_at: Optional[datetime] = None
     
@@ -96,7 +100,7 @@ class User(BaseModel):
         )
     
     @classmethod
-    def dev_user(cls) -> "User":
+    def dev_user(cls, client_ids: List[str] = None) -> "User":
         """Create mock user for local development."""
         return cls(
             id="dev-user-001",
@@ -106,6 +110,8 @@ class User(BaseModel):
             roles=["ADMIN", "ANALYST", "ENGINEER"],
             groups=["/admins", "/developers"],
             auth_provider="local",
+            clients=client_ids or [],
+            active_client_id=(client_ids[0] if client_ids else None),
             authenticated_at=datetime.now()
         )
     

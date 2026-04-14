@@ -5,7 +5,8 @@ Exposes a secure POST /api/external/query endpoint that allows authenticated
 external applications to run read-only SQL against the TIDE DuckDB database.
 
 Authentication: API key via X-TIDE-API-KEY header.
-Authorisation:  Only SELECT statements are permitted.
+Authorisation:  Only SELECT statements are permitted; results are scoped to
+                the client that owns the API key via temporary filtered views.
 """
 
 import re
@@ -25,6 +26,20 @@ router = APIRouter(prefix="/api/external", tags=["external"])
 _FORBIDDEN_RE = re.compile(
     r"\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|REPLACE|TRUNCATE|ATTACH|DETACH|"
     r"COPY|EXPORT|IMPORT|INSTALL|LOAD|CALL|PRAGMA|GRANT|REVOKE|SET)\b",
+    re.IGNORECASE,
+)
+
+# Tables with a client_id column that must be tenant-scoped
+_TENANT_SCOPED_TABLES = [
+    "systems", "hosts", "software_inventory", "detection_rules",
+    "playbooks", "system_baselines", "system_baseline_snapshots",
+    "vuln_detections", "applied_detections", "cve_technique_overrides",
+    "classifications", "blind_spots", "api_keys",
+]
+
+# Reject explicit main.* references that would bypass temp-view scoping
+_SCHEMA_BYPASS_RE = re.compile(
+    r"\bmain\s*\.\s*(" + "|".join(_TENANT_SCOPED_TABLES) + r")\b",
     re.IGNORECASE,
 )
 
@@ -60,6 +75,14 @@ def _validate_sql(sql: str) -> None:
             detail=f"Forbidden SQL keyword: {match.group(0).upper()}",
         )
 
+    # Reject qualified schema references that bypass tenant-scoped views
+    bypass = _SCHEMA_BYPASS_RE.search(stripped)
+    if bypass:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Qualified schema references not allowed: main.{bypass.group(1)}",
+        )
+
 
 @router.post("/query", response_model=QueryResponse)
 def external_query(
@@ -72,9 +95,12 @@ def external_query(
 
     Requires a valid API key in the X-TIDE-API-KEY header.
     Only SELECT (and WITH/CTE) statements are permitted.
+    All tenant-scoped tables are automatically filtered to the API key's
+    owning client via temporary views — callers see only their own data.
     """
     # ── Auth ──
-    if not db.validate_api_key(x_tide_api_key):
+    client_id = db.validate_api_key(x_tide_api_key)
+    if not client_id:
         logger.warning("External query rejected — invalid API key")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -84,13 +110,25 @@ def external_query(
     # ── SQL validation ──
     _validate_sql(body.sql)
 
-    # ── Execute via the app's connection pool (handles DuckDB locking) ──
+    # ── Execute with tenant-scoped views ──
     try:
         with db.get_connection() as conn:
+            # Shadow every tenant-scoped table with a filtered temp view.
+            # DuckDB resolves temp views before main schema tables, so the
+            # caller's SQL transparently sees only their client's rows.
+            for table in _TENANT_SCOPED_TABLES:
+                conn.execute(
+                    f"CREATE OR REPLACE TEMP VIEW {table} AS "
+                    f"SELECT * FROM main.{table} WHERE client_id = ?",
+                    [client_id],
+                )
+
             result = conn.execute(body.sql)
             columns = [desc[0] for desc in result.description]
             raw_rows = result.fetchall()
             rows = [dict(zip(columns, row)) for row in raw_rows]
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"External query error: {exc}")
         raise HTTPException(
@@ -98,5 +136,5 @@ def external_query(
             detail=f"Query error: {exc}",
         )
 
-    logger.info(f"External query OK — {len(rows)} rows returned")
+    logger.info(f"External query OK — {len(rows)} rows for client {client_id[:8]}…")
     return QueryResponse(columns=columns, rows=rows, row_count=len(rows))

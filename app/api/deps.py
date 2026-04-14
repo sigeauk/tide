@@ -10,6 +10,9 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import Settings, get_settings
 from app.services.database import DatabaseService, get_database_service
 from app.services.auth import AuthService, get_auth_service
+from app.services.tenant_manager import (
+    resolve_tenant_db_path, set_tenant_context, clear_tenant_context,
+)
 from app.models.auth import User
 
 import logging
@@ -150,3 +153,95 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[Optional[User], Depends(get_current_user)]
 RequireUser = Annotated[User, Depends(require_auth)]
 RequireAdmin = Annotated[User, Depends(require_admin)]
+
+
+async def get_active_client(
+    request: Request,
+    user: CurrentUser,
+    db: Annotated[DatabaseService, Depends(get_db)],
+) -> str:
+    """
+    Dependency: Resolve the active client (tenant) for this request.
+
+    Resolution order:
+    1. X-Client-ID request header (API consumers)
+    2. active_client_id session cookie
+    3. User's default client from user_clients table
+    4. System default client (fallback for dev mode / auth-disabled)
+    5. 400 if unresolvable
+
+    Validates the user has access to the resolved client.
+    Admins may access any client.
+    """
+    client_id: Optional[str] = None
+
+    # 1. Explicit header
+    header_val = request.headers.get("X-Client-ID")
+    if header_val:
+        client_id = header_val
+
+    # 2. Cookie fallback
+    if not client_id:
+        client_id = request.cookies.get("active_client_id")
+
+    # 3. Default client for user (when authenticated)
+    if not client_id and user:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                [user.id],
+            ).fetchone()
+            if row:
+                client_id = row[0]
+
+    # 4. System default client (dev mode / auth disabled)
+    if not client_id:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM clients WHERE is_default = true LIMIT 1",
+            ).fetchone()
+            if row:
+                client_id = row[0]
+
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No active client selected. Set X-Client-ID header or switch client.",
+        )
+
+    # Validate access: admin can access any client; skip when auth disabled
+    if user and not user.is_admin():
+        with db.get_connection() as conn:
+            allowed = conn.execute(
+                "SELECT 1 FROM user_clients WHERE user_id = ? AND client_id = ?",
+                [user.id, client_id],
+            ).fetchone()
+            if not allowed:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have access to this client.",
+                )
+
+    # Verify client exists
+    with db.get_connection() as conn:
+        exists = conn.execute("SELECT 1 FROM clients WHERE id = ?", [client_id]).fetchone()
+    if not exists:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Client not found.",
+        )
+
+    # Stash on request state for downstream use
+    request.state.client_id = client_id
+
+    # Set tenant DB context if multi-DB mode is active
+    settings = get_settings()
+    tenant_path = resolve_tenant_db_path(client_id, settings.data_dir)
+    if tenant_path:
+        set_tenant_context(tenant_path)
+
+    return client_id
+
+
+# Active tenant type alias
+ActiveClient = Annotated[str, Depends(get_active_client)]

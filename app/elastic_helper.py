@@ -14,6 +14,38 @@ from log import log_debug, log_error, log_info
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
+
+# --- TEST CONNECTION ---
+
+def test_elastic_connection(kibana_url: str, api_key: str, timeout: int = 10):
+    """
+    Test connectivity to a Kibana instance.
+    Returns (ok: bool, detail: str).
+    """
+    url = kibana_url.rstrip("/") + "/api/status"
+    headers = {
+        "kbn-xsrf": "true",
+        "Authorization": f"ApiKey {api_key}",
+    }
+    try:
+        resp = requests.get(url, headers=headers, verify=False, timeout=timeout)
+        if resp.status_code == 200:
+            data = resp.json()
+            version = data.get("version", {}).get("number", "unknown")
+            status = data.get("status", {}).get("overall", {}).get("level", "unknown")
+            return True, f"Kibana {version} ({status})"
+        elif resp.status_code == 401:
+            return False, "Authentication failed (401)"
+        else:
+            return False, f"HTTP {resp.status_code}"
+    except requests.exceptions.ConnectTimeout:
+        return False, "Connection timed out"
+    except requests.exceptions.ConnectionError:
+        return False, "Connection refused"
+    except Exception as exc:
+        return False, str(exc)[:120]
+
+
 # --- CONFIG ---
 IGNORED_INDICES = {
     "_id", "_index", "_score", "_version", "_source", "alert", "event", 

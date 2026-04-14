@@ -68,6 +68,7 @@ class Settings(BaseSettings):
     )
     
     # --- DATABASE ---
+    data_dir: str = Field(default="/app/data", alias="DATA_DIR")
     db_path: str = Field(default="/app/data/tide.duckdb", alias="DB_PATH")
     trigger_dir: str = Field(default="/app/data/triggers", alias="TRIGGER_DIR")
     validation_file: str = Field(default="/app/data/checkedRule.json", alias="VALIDATION_FILE")

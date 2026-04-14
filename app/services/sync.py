@@ -2,11 +2,83 @@
 Sync service for TIDE - handles synchronization with Elastic and MITRE.
 """
 
+import duckdb
 import logging
 import os
 import sys
 
 logger = logging.getLogger(__name__)
+
+
+def _distribute_rules_to_tenants():
+    """Copy detection rules from shared DB to each tenant DB,
+    filtered by the client's SIEM space mappings.
+    Called after a global elastic sync."""
+    from app.services.tenant_manager import is_multi_db_mode
+    if not is_multi_db_mode():
+        return
+
+    from app.config import get_settings
+    settings = get_settings()
+    shared_db_path = settings.db_path
+    data_dir = settings.data_dir
+
+    try:
+        shared_conn = duckdb.connect(shared_db_path, read_only=True)
+        clients = shared_conn.execute(
+            "SELECT id, db_filename FROM clients WHERE db_filename IS NOT NULL"
+        ).fetchall()
+
+        for client_id, db_filename in clients:
+            spaces = shared_conn.execute(
+                "SELECT DISTINCT space FROM client_siem_map "
+                "WHERE client_id = ? AND space IS NOT NULL",
+                [client_id],
+            ).fetchall()
+            space_list = [s[0] for s in spaces if s[0]]
+            if not space_list:
+                continue
+
+            tenant_path = os.path.join(data_dir, db_filename)
+            if not os.path.exists(tenant_path):
+                continue
+
+            try:
+                tenant_conn = duckdb.connect(tenant_path)
+                tenant_conn.execute(
+                    f"ATTACH '{shared_db_path}' AS shared (READ_ONLY)"
+                )
+
+                placeholders = ", ".join("?" for _ in space_list)
+                tenant_conn.execute("DELETE FROM detection_rules")
+                tenant_conn.execute(f"""
+                    INSERT INTO detection_rules
+                    SELECT rule_id, name, severity, author, enabled, space,
+                           score, quality_score, meta_score,
+                           score_mapping, score_field_type, score_search_time,
+                           score_language, score_note, score_override,
+                           score_tactics, score_techniques, score_author,
+                           score_highlights, last_updated, mitre_ids, raw_data,
+                           '{client_id}' AS client_id
+                    FROM shared.detection_rules
+                    WHERE LOWER(space) IN ({placeholders})
+                """, [s.lower() for s in space_list])
+
+                tenant_conn.execute("DETACH shared")
+                count = tenant_conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules"
+                ).fetchone()[0]
+                tenant_conn.close()
+                logger.info(
+                    f"Distributed {count} rules to tenant {client_id[:8]} "
+                    f"(spaces: {space_list})"
+                )
+            except Exception as e:
+                logger.error(f"Rule distribution failed for {client_id[:8]}: {e}")
+
+        shared_conn.close()
+    except Exception as e:
+        logger.error(f"Rule distribution failed: {e}")
 
 
 def run_mitre_sync():
@@ -94,6 +166,16 @@ def run_mitre_sync():
             
             total = mitre_actors + octi_actors
             logger.info(f"Total threat sync complete. {mitre_actors} MITRE + {octi_actors} OCTI = {total} actors.")
+            
+            # Sync shared reference data (threat actors, MITRE) to tenant DBs
+            try:
+                from app.services.tenant_manager import sync_shared_data, is_multi_db_mode
+                if is_multi_db_mode():
+                    sync_shared_data(settings.data_dir if hasattr(settings, 'data_dir') else '/app/data',
+                                     settings.db_path)
+            except Exception as e:
+                logger.warning(f"Shared data sync to tenants failed: {e}")
+            
             return total
         finally:
             os.chdir(original_cwd)
@@ -193,6 +275,13 @@ def run_elastic_sync(force_mapping=False):
                     db.delete_rules_for_spaces(empty_spaces)
                 
                 logger.info(f"Synced {count} rules from Elastic")
+                
+                # Distribute rules to per-tenant databases
+                try:
+                    _distribute_rules_to_tenants()
+                except Exception as e:
+                    logger.warning(f"Rule distribution to tenants failed: {e}")
+                
                 return count
             else:
                 # No rules returned from Elastic — this is likely a connectivity or auth issue.

@@ -1,0 +1,378 @@
+{% extends "base.html" %}
+{% block title %}Management - TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
+    <div>
+        <h1 class="page-title-hero">Management</h1>
+        <p class="page-subtitle">Administer clients, SIEM connections, users, and permissions.</p>
+    </div>
+</div>
+
+<div class="settings-tabs">
+    <button class="settings-tab {% if active_tab == 'clients' %}active{% endif %}" data-tab="clients"
+            hx-get="/api/management/tab/clients" hx-target="#management-content" hx-swap="innerHTML"
+            onclick="activateMgmtTab(this,'clients')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
+        </svg>
+        Clients
+    </button>
+    <button class="settings-tab {% if active_tab == 'siems' %}active{% endif %}" data-tab="siems"
+            hx-get="/api/management/tab/siems" hx-target="#management-content" hx-swap="innerHTML"
+            onclick="activateMgmtTab(this,'siems')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
+            <line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>
+        </svg>
+        SIEMs
+    </button>
+    <button class="settings-tab {% if active_tab == 'users' %}active{% endif %}" data-tab="users"
+            hx-get="/api/management/tab/users" hx-target="#management-content" hx-swap="innerHTML"
+            onclick="activateMgmtTab(this,'users')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
+            <circle cx="9" cy="7" r="4"/>
+            <path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        Users
+    </button>
+    <button class="settings-tab {% if active_tab == 'permissions' %}active{% endif %}" data-tab="permissions"
+            hx-get="/api/management/tab/permissions" hx-target="#management-content" hx-swap="innerHTML"
+            onclick="activateMgmtTab(this,'permissions')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        </svg>
+        Permissions
+    </button>
+</div>
+
+<div class="settings-panel active" id="management-content"
+     hx-get="/api/management/tab/{{ active_tab }}"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading...</div>
+</div>
+
+<!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
+<div class="modal-overlay" id="client-modal" style="display:none;"
+     onclick="if(event.target===this) closeClientModal()">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title" id="client-modal-title">New Client</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeClientModal()">&#x2715;</button>
+        </div>
+        <form id="client-form" onsubmit="return submitClientForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="client-form-id" value="">
+            <div>
+                <label for="client-form-name" class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="client-form-name" class="form-input" required maxlength="100" placeholder="Acme Corp">
+            </div>
+            <div>
+                <label for="client-form-slug" class="form-label">Slug</label>
+                <input type="text" id="client-form-slug" class="form-input" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
+                <span class="text-secondary" style="font-size:0.75rem;">Lowercase letters, numbers, hyphens only.</span>
+            </div>
+            <div>
+                <label for="client-form-desc" class="form-label">Description</label>
+                <textarea id="client-form-desc" class="form-input" rows="3" placeholder="Optional description..."></textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Create / Edit SIEM Modal ───────────────────────────────────── -->
+<div class="modal-overlay" id="siem-modal" style="display:none;"
+     onclick="if(event.target===this) closeSiemModal()">
+    <div class="modal-content modal-sm" style="max-width:560px;">
+        <div class="modal-header">
+            <h3 class="modal-title" id="siem-modal-title">New SIEM</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeSiemModal()">&#x2715;</button>
+        </div>
+        <form id="siem-form" onsubmit="return submitSiemForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="siem-form-id" value="">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                <div>
+                    <label for="siem-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                    <input type="text" id="siem-form-label" name="label" class="form-input" required maxlength="200" placeholder="Primary Elastic">
+                </div>
+                <div>
+                    <label for="siem-form-type" class="form-label">Type</label>
+                    <select id="siem-form-type" name="siem_type" class="form-input" onchange="updateSiemFields()">
+                        <option value="elastic">Elastic</option>
+                        <option value="splunk">Splunk</option>
+                        <option value="sentinel">Sentinel</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Elastic-specific fields -->
+            <div id="siem-fields-elastic">
+                <div style="display:flex;flex-direction:column;gap:1rem;">
+                    <div>
+                        <label for="siem-form-es-url" class="form-label">Elasticsearch URL</label>
+                        <input type="text" id="siem-form-es-url" name="elasticsearch_url" class="form-input" placeholder="https://es.example.com:9200">
+                    </div>
+                    <div>
+                        <label for="siem-form-kb-url" class="form-label">Kibana URL</label>
+                        <input type="text" id="siem-form-kb-url" name="kibana_url" class="form-input" placeholder="https://kibana.example.com:5601">
+                    </div>
+                    <div>
+                        <label for="siem-form-token" class="form-label">API Key / Token</label>
+                        <input type="password" id="siem-form-token" name="api_token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Splunk-specific fields -->
+            <div id="siem-fields-splunk" style="display:none;">
+                <div style="display:flex;flex-direction:column;gap:1rem;">
+                    <div>
+                        <label class="form-label">Splunk URL</label>
+                        <input type="text" id="siem-form-splunk-url" class="form-input" placeholder="https://splunk.example.com:8089">
+                    </div>
+                    <div>
+                        <label class="form-label">API Token</label>
+                        <input type="password" id="siem-form-splunk-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sentinel-specific fields -->
+            <div id="siem-fields-sentinel" style="display:none;">
+                <div style="display:flex;flex-direction:column;gap:1rem;">
+                    <div>
+                        <label class="form-label">Sentinel URL</label>
+                        <input type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
+                    </div>
+                    <div>
+                        <label class="form-label">API Token</label>
+                        <input type="password" id="siem-form-sentinel-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                    </div>
+                </div>
+            </div>
+
+            <div id="siem-test-result" style="min-height:1.5rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testSiemConnection()"
+                        id="siem-test-btn">Test Connection</button>
+                <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeSiemModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Tab switching — pure HTMX, no page reload
+function activateMgmtTab(btn, tabName) {
+    document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('active'); });
+    btn.classList.add('active');
+    history.replaceState(null, '', '/management?tab=' + tabName);
+}
+
+// Client modal
+function showCreateClientModal() {
+    document.getElementById('client-modal-title').textContent = 'New Client';
+    document.getElementById('client-form-submit').textContent = 'Create';
+    document.getElementById('client-form-id').value = '';
+    document.getElementById('client-form-name').value = '';
+    document.getElementById('client-form-slug').value = '';
+    document.getElementById('client-form-slug').disabled = false;
+    document.getElementById('client-form-desc').value = '';
+    document.getElementById('client-modal').style.display = 'flex';
+}
+
+function editClient(id, name, desc) {
+    document.getElementById('client-modal-title').textContent = 'Edit Client';
+    document.getElementById('client-form-submit').textContent = 'Save';
+    document.getElementById('client-form-id').value = id;
+    document.getElementById('client-form-name').value = name;
+    document.getElementById('client-form-slug').value = '';
+    document.getElementById('client-form-slug').disabled = true;
+    document.getElementById('client-form-desc').value = desc;
+    document.getElementById('client-modal').style.display = 'flex';
+}
+
+function closeClientModal() {
+    document.getElementById('client-modal').style.display = 'none';
+}
+
+async function submitClientForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('client-form-id').value;
+    var payload = {
+        name: document.getElementById('client-form-name').value,
+        description: document.getElementById('client-form-desc').value || null,
+    };
+    if (!id) {
+        payload.slug = document.getElementById('client-form-slug').value || null;
+    }
+    var url = id ? '/api/clients/' + id : '/api/clients';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {
+            method: method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Request failed', 'error');
+            return false;
+        }
+        closeClientModal();
+        htmx.ajax('GET', '/api/management/tab/clients', '#management-content');
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+async function confirmDeleteClient(id, name) {
+    if (!confirm('Delete client "' + name + '"? This cannot be undone.')) return;
+    try {
+        var resp = await fetch('/api/clients/' + id, {method: 'DELETE'});
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Delete failed', 'error');
+            return;
+        }
+        htmx.ajax('GET', '/api/management/tab/clients', '#management-content');
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+}
+
+// SIEM modal — dynamic fields per type
+function updateSiemFields() {
+    var type = document.getElementById('siem-form-type').value;
+    document.getElementById('siem-fields-elastic').style.display = type === 'elastic' ? '' : 'none';
+    document.getElementById('siem-fields-splunk').style.display = type === 'splunk' ? '' : 'none';
+    document.getElementById('siem-fields-sentinel').style.display = type === 'sentinel' ? '' : 'none';
+    // Only show Test Connection for elastic
+    document.getElementById('siem-test-btn').style.display = type === 'elastic' ? '' : 'none';
+    document.getElementById('siem-test-result').innerHTML = '';
+}
+
+function _clearSiemFields() {
+    ['siem-form-es-url','siem-form-kb-url','siem-form-token',
+     'siem-form-splunk-url','siem-form-splunk-token',
+     'siem-form-sentinel-url','siem-form-sentinel-token'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.value = '';
+    });
+}
+
+function showCreateSiemModal() {
+    document.getElementById('siem-modal-title').textContent = 'New SIEM';
+    document.getElementById('siem-form-submit').textContent = 'Create';
+    document.getElementById('siem-form-id').value = '';
+    document.getElementById('siem-form-label').value = '';
+    document.getElementById('siem-form-type').value = 'elastic';
+    document.getElementById('siem-form-type').disabled = false;
+    _clearSiemFields();
+    document.getElementById('siem-test-result').innerHTML = '';
+    updateSiemFields();
+    document.getElementById('siem-modal').style.display = 'flex';
+}
+
+function editSiem(id, label, type, esUrl, kbUrl) {
+    document.getElementById('siem-modal-title').textContent = 'Edit SIEM';
+    document.getElementById('siem-form-submit').textContent = 'Save';
+    document.getElementById('siem-form-id').value = id;
+    document.getElementById('siem-form-label').value = label;
+    document.getElementById('siem-form-type').value = type;
+    document.getElementById('siem-form-type').disabled = true;
+    _clearSiemFields();
+    // Populate the right fields based on type
+    if (type === 'elastic') {
+        document.getElementById('siem-form-es-url').value = esUrl || '';
+        document.getElementById('siem-form-kb-url').value = kbUrl || '';
+    } else if (type === 'splunk') {
+        document.getElementById('siem-form-splunk-url').value = kbUrl || '';
+    } else if (type === 'sentinel') {
+        document.getElementById('siem-form-sentinel-url').value = kbUrl || '';
+    }
+    document.getElementById('siem-test-result').innerHTML = '';
+    updateSiemFields();
+    document.getElementById('siem-modal').style.display = 'flex';
+}
+
+function closeSiemModal() {
+    document.getElementById('siem-modal').style.display = 'none';
+}
+
+async function submitSiemForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('siem-form-id').value;
+    var type = document.getElementById('siem-form-type').value;
+    var formData = new FormData();
+    formData.append('label', document.getElementById('siem-form-label').value);
+    formData.append('siem_type', type);
+
+    if (type === 'elastic') {
+        formData.append('elasticsearch_url', document.getElementById('siem-form-es-url').value);
+        formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
+        formData.append('api_token', document.getElementById('siem-form-token').value);
+    } else if (type === 'splunk') {
+        formData.append('kibana_url', document.getElementById('siem-form-splunk-url').value);
+        formData.append('api_token', document.getElementById('siem-form-splunk-token').value);
+    } else if (type === 'sentinel') {
+        formData.append('kibana_url', document.getElementById('siem-form-sentinel-url').value);
+        formData.append('api_token', document.getElementById('siem-form-sentinel-token').value);
+    }
+
+    var url = id ? '/api/management/siems/' + id : '/api/management/siems';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {method: method, body: formData});
+        if (!resp.ok) {
+            showToast('Request failed', 'error');
+            return false;
+        }
+        closeSiemModal();
+        var html = await resp.text();
+        document.getElementById('management-content').innerHTML = html;
+        htmx.process(document.getElementById('management-content'));
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+async function testSiemConnection() {
+    var btn = document.getElementById('siem-test-btn');
+    var result = document.getElementById('siem-test-result');
+    btn.disabled = true;
+    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
+
+    var formData = new FormData();
+    formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
+    formData.append('api_token', document.getElementById('siem-form-token').value);
+    formData.append('siem_type', document.getElementById('siem-form-type').value);
+
+    try {
+        var resp = await fetch('/api/management/siems/test-connection', {method: 'POST', body: formData});
+        result.innerHTML = await resp.text();
+    } catch (ex) {
+        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
+    }
+    btn.disabled = false;
+}
+</script>
+{% endblock %}

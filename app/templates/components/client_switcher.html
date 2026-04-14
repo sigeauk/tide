@@ -1,0 +1,43 @@
+<!--
+Client Switcher — sidebar dropdown for multi-tenant client selection.
+Hidden when user has only one client (or none).
+Uses hx-post to switch, then full page reload to refresh all data.
+-->
+{% if user_clients and user_clients | length > 1 %}
+<div class="client-switcher" id="client-switcher">
+    <button class="client-switcher__trigger" onclick="toggleClientMenu(event)" data-tooltip="{{ active_client.name if active_client else 'Select Client' }}">
+        <span class="client-switcher__icon">
+            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
+            </svg>
+        </span>
+        <span class="nav-label client-switcher__name">{{ active_client.name if active_client else 'No Client' }}</span>
+        <svg class="nav-label client-switcher__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+
+    <div class="client-switcher__menu" id="client-menu">
+        {% for client in user_clients %}
+        <button
+            class="client-switcher__item {% if active_client and client.id == active_client.id %}active{% endif %}"
+            hx-post="/api/clients/switch"
+            hx-vals='{"client_id": "{{ client.id }}"}'
+            hx-swap="none"
+            hx-on::after-request="window.location.reload()"
+        >
+            <span class="client-switcher__dot {% if active_client and client.id == active_client.id %}active{% endif %}"></span>
+            <span>{{ client.name }}</span>
+        </button>
+        {% endfor %}
+    </div>
+</div>
+{% elif active_client %}
+{# Single-client user: show name without dropdown #}
+<div class="client-switcher client-switcher--single" data-tooltip="{{ active_client.name }}">
+    <span class="client-switcher__icon">
+        <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
+        </svg>
+    </span>
+    <span class="nav-label client-switcher__name">{{ active_client.name }}</span>
+</div>
+{% endif %}

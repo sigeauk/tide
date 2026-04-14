@@ -1,0 +1,122 @@
+{# Partial: client_siems.html
+   Context: client_siems (list of SIEM dicts), client (dict), available_siems (list), siem_rule_counts (dict space->counts)
+#}
+{% from "macros/icons.html" import icon %}
+
+<div class="client-section-toggle" onclick="var b=document.getElementById('siems-body');var c=document.getElementById('siems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+    <span class="client-list-item__icon">{{ icon('server', '14') }}</span>
+    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Linked SIEMs</h2>
+    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_siems | length }}</span>
+    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-siems-modal').style.display='flex'">
+            {{ icon('edit-2', '14') }} Edit
+        </button>
+    </div>
+    <span id="siems-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
+</div>
+
+<div id="siems-body">
+{% if client_siems %}
+<div class="client-list">
+    {% for s in client_siems %}
+    {% set rc = siem_rule_counts.get(s.space, {}) if siem_rule_counts is defined and siem_rule_counts else {} %}
+    <div class="client-list-item client-list-item--{% if s.is_active %}active{% else %}inactive{% endif %}">
+        <div class="client-list-item__body">
+            <span class="client-list-item__title" style="cursor:default;">{{ s.label }}</span>
+            <span class="badge badge-muted" style="font-size:0.72rem;">{{ s.siem_type }}</span>
+            {% if s.environment_role == 'production' %}
+            <span class="badge badge-info" style="font-size:0.68rem;">Production</span>
+            {% elif s.environment_role == 'staging' %}
+            <span class="badge badge-warning" style="font-size:0.68rem;">Staging</span>
+            {% endif %}
+            {% if s.is_active %}
+            <span class="badge badge-success" style="font-size:0.68rem;">Active</span>
+            {% else %}
+            <span class="badge badge-grey" style="font-size:0.68rem;">Inactive</span>
+            {% endif %}
+            <span class="client-list-item__meta">{{ s.space or 'No space' }}</span>
+            {% if rc %}
+            <span class="client-list-item__meta">{{ icon('file-text', '12') }} {{ rc.total }} rules ({{ rc.enabled }} enabled)</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+    {{ icon('server', '36') }}
+    <p style="margin-top:0.75rem;">No SIEMs linked to this client yet.</p>
+</div>
+{% endif %}
+</div>
+
+<!-- Edit SIEMs Modal -->
+<div id="edit-siems-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Manage SIEMs — {{ client.name }}</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-siems-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1rem;">
+            <!-- Current SIEMs with remove -->
+            {% if client_siems %}
+            <div>
+                <label class="form-label">Current SIEMs</label>
+                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                    {% for s in client_siems %}
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                        <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.environment_role }}</span></span>
+                        <button class="btn btn-ghost btn-sm text-danger"
+                                hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?environment_role={{ s.environment_role }}"
+                                hx-target="#client-siems-section" hx-swap="innerHTML"
+                                hx-confirm="Unlink '{{ s.label }}' ({{ s.environment_role }}) from this client?"
+                                style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                            {{ icon('x', '12') }} Remove
+                        </button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            <!-- Add SIEM form -->
+            {% if available_siems is defined and available_siems %}
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <form hx-post="/api/management/clients/{{ client.id }}/siems"
+                  hx-target="#client-siems-section" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-siems-modal').style.display='none'">
+                <label class="form-label">Add SIEM</label>
+                <select name="siem_id" class="form-input" required id="add-siem-select"
+                        onchange="toggleSpaceField(this)">
+                    <option value="" disabled selected>Select a SIEM&hellip;</option>
+                    {% for si in available_siems %}
+                    <option value="{{ si.id }}" data-siem-type="{{ si.siem_type }}">{{ si.label }} ({{ si.siem_type }})</option>
+                    {% endfor %}
+                </select>
+                <select name="environment_role" class="form-input" required>
+                    <option value="production">Production</option>
+                    <option value="staging">Staging</option>
+                </select>
+                <div id="siem-space-field" style="display:none;">
+                    <input type="text" name="space" class="form-input" placeholder="Kibana space (e.g. production)">
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
+            </form>
+            {% endif %}
+            <div style="display:flex;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('edit-siems-modal').style.display='none'">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleSpaceField(sel) {
+    var opt = sel.options[sel.selectedIndex];
+    var siemType = opt ? opt.getAttribute('data-siem-type') : '';
+    document.getElementById('siem-space-field').style.display = (siemType === 'elastic') ? '' : 'none';
+}
+</script>

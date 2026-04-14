@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from typing import Optional
 
-from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep
+from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.models.rules import RuleFilters
 
 import logging
@@ -21,6 +21,7 @@ def list_rules(
     request: Request,
     db: DbDep,
     user: CurrentUser,
+    client_id: ActiveClient,
     search: Optional[str] = Query(None),
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
@@ -30,6 +31,9 @@ def list_rules(
 ):
     """List detection rules with filtering and pagination."""
     try:
+        # Tenant isolation: restrict to spaces linked to the active client
+        allowed_spaces = db.get_client_siem_spaces(client_id)
+        
         filters = RuleFilters(
             search=search if search else None,
             space=space if space else None,
@@ -37,6 +41,7 @@ def list_rules(
             sort_by=sort_by,
             page=page,
             page_size=page_size,
+            allowed_spaces=allowed_spaces,
         )
         
         rules, total, last_sync = db.get_rules(filters=filters)
@@ -72,10 +77,12 @@ def get_metrics(
     request: Request,
     db: DbDep,
     user: CurrentUser,
+    client_id: ActiveClient,
 ):
     """Get rule health metrics."""
     from app.main import get_last_sync_time
-    metrics = db.get_rule_health_metrics()
+    allowed_spaces = db.get_client_siem_spaces(client_id)
+    metrics = db.get_rule_health_metrics(allowed_spaces=allowed_spaces)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",

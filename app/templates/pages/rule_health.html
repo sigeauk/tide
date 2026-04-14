@@ -40,7 +40,7 @@
     </div>
     
     <div class="filter-group">
-        <label class="form-label">Space</label>
+        <label class="form-label">SIEM</label>
         <select 
             name="space" 
             class="form-input form-select"
@@ -49,7 +49,7 @@
             hx-target="#rules-grid"
             hx-swap="innerHTML"
             hx-include="[name='search'], [name='enabled'], [name='sort_by']">
-            <option value="">All Spaces</option>
+            <option value="">All SIEMs</option>
             {% for space in spaces %}
             <option value="{{ space }}">{{ space | capitalize }}</option>
             {% endfor %}

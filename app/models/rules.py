@@ -167,6 +167,7 @@ class RuleFilters(BaseModel):
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc
     page: int = 1
     page_size: int = 24
+    allowed_spaces: Optional[List[str]] = None  # tenant-scoped space allow-list
 
 
 class RuleListResponse(BaseModel):

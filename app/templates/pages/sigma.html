@@ -248,11 +248,14 @@ level: medium"></textarea>
                 </button>
                 
                 <div class="filter-group">
-                    <label>Space</label>
+                    <label>SIEM</label>
                     <select id="deploy-space-select" name="space">
-                        {% for space in spaces %}
-                        <option value="{{ space }}" {% if space == 'staging' %}selected{% endif %}>{{ space | title }}</option>
+                        {% for target in deploy_targets %}
+                        <option value="{{ target.space }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
                         {% endfor %}
+                        {% if not deploy_targets %}
+                        <option value="" disabled selected>No SIEMs linked</option>
+                        {% endif %}
                     </select>
                 </div>
 

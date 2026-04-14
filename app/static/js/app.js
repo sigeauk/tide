@@ -123,6 +123,36 @@ console.debug('TIDE app.js loading...');
     };
 
     /**
+     * Toggle client switcher dropdown
+     */
+    window.toggleClientMenu = function(event) {
+        if (event) {
+            event.stopPropagation();
+            event.preventDefault();
+        }
+        var switcher = document.getElementById('client-switcher');
+        if (!switcher) return;
+        var isOpen = switcher.classList.contains('open');
+        if (isOpen) {
+            switcher.classList.remove('open');
+            document.removeEventListener('click', closeClientMenu);
+        } else {
+            switcher.classList.add('open');
+            setTimeout(function() {
+                document.addEventListener('click', closeClientMenu);
+            }, 10);
+        }
+    };
+
+    function closeClientMenu(e) {
+        var switcher = document.getElementById('client-switcher');
+        if (switcher && !switcher.contains(e.target)) {
+            switcher.classList.remove('open');
+            document.removeEventListener('click', closeClientMenu);
+        }
+    }
+
+    /**
      * Toggle theme between light and dark
      */
     window.toggleTheme = function() {

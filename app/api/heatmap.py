@@ -11,7 +11,7 @@ import io
 import os
 import time
 
-from app.api.deps import DbDep, CurrentUser
+from app.api.deps import ActiveClient, DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
 
 import logging
@@ -57,7 +57,7 @@ def get_tactic_display(raw_tactic: str) -> str:
 def get_heatmap_matrix(
     request: Request,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     actors: List[str] = Query(default=[]),
     show_defense: bool = Query(False),
     source_filter: List[str] = Query(default=[], description="Filter actors by data source(s). Empty = all sources."),
@@ -68,8 +68,8 @@ def get_heatmap_matrix(
     """
     # Get data from database
     all_actors = db.get_threat_actors()
-    covered_ttps = db.get_all_covered_ttps()
-    ttp_rule_counts = db.get_ttp_rule_counts()
+    covered_ttps = db.get_all_covered_ttps(client_id=client_id)
+    ttp_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
     ttp_map = db.get_technique_map()
     ttp_names = db.get_technique_names()
     
@@ -187,7 +187,7 @@ def get_heatmap_matrix(
 def search_actors(
     request: Request,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     actor_search: Optional[str] = Query(None),
 ):
     """
@@ -217,7 +217,7 @@ def get_technique_detail(
     request: Request,
     technique_id: str,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     search: Optional[str] = Query(None),
 ):
     """
@@ -230,7 +230,7 @@ def get_technique_detail(
     """
     ttp_names = db.get_technique_names()
     ttp_map = db.get_technique_map()
-    covered_ttps = db.get_all_covered_ttps()
+    covered_ttps = db.get_all_covered_ttps(client_id=client_id)
     
     ttp_upper = technique_id.upper()
     name = ttp_names.get(ttp_upper, "Unknown Technique")
@@ -239,7 +239,7 @@ def get_technique_detail(
     is_covered = ttp_upper in covered_ttps
     
     # Get ALL rules (including disabled) so users see coverage gaps clearly
-    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False)
+    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False, client_id=client_id)
     has_rules = len(rules) > 0
     
     # Build technique object for template
@@ -272,7 +272,7 @@ def get_technique_rules(
     request: Request,
     technique_id: str,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     search: Optional[str] = Query(None),
 ):
     """
@@ -284,7 +284,7 @@ def get_technique_rules(
         search: Optional search filter to apply to rules (matches name, author, rule_id, mitre_ids)
     """
     # Get ALL rules for this technique (including disabled)
-    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False)
+    rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False, client_id=client_id)
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -302,7 +302,7 @@ def get_technique_rules(
 def export_threat_report(
     request: Request,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     actors: List[str] = Query(default=[]),
     format: str = Query("pdf", pattern="^(pdf|markdown)$"),
     show_defense: bool = Query(False),
@@ -350,6 +350,7 @@ def export_threat_report(
         show_defense=show_defense,
         audience_level=audience_level,
         classification=classification,
+        client_id=client_id,
     )
     if report_data is None:
         raise HTTPException(
@@ -416,7 +417,7 @@ def export_threat_report(
 def generate_baseline_from_heatmap(
     request: Request,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     actor_names: str = Form(...),
     baseline_name: str = Form(""),
     description: str = Form(""),
@@ -450,6 +451,7 @@ def generate_baseline_from_heatmap(
         technique_name_map=technique_name_map,
         baseline_name=baseline_name,
         description=description,
+        client_id=client_id,
     )
 
     return RedirectResponse(url=f"/baselines/{baseline.id}", status_code=303)
@@ -462,7 +464,7 @@ def get_system_heatmap_matrix(
     request: Request,
     system_id: str,
     db: DbDep,
-    user: CurrentUser,
+    user: CurrentUser, client_id: ActiveClient,
     baseline_ids: List[str] = Query(default=[]),
 ):
     """
@@ -481,6 +483,7 @@ def get_system_heatmap_matrix(
         all_baselines = get_system_baselines(
             system_id,
             include_detection_details=False,
+            client_id=client_id,
         )
         _SYSTEM_HEATMAP_CACHE[cache_key] = (now, all_baselines)
 

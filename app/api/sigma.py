@@ -7,7 +7,7 @@ from fastapi import APIRouter, Request, Query, Form, UploadFile, File, HTTPExcep
 from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Optional
 
-from app.api.deps import CurrentUser, SettingsDep, DbDep
+from app.api.deps import CurrentUser, SettingsDep, DbDep, ActiveClient
 from app import sigma_helper as sigma
 
 import logging
@@ -22,6 +22,7 @@ def search_rules(
     request: Request,
     user: CurrentUser,
     db: DbDep,
+    client_id: ActiveClient,
     query: str = Query("", alias="q"),
     technique: str = Query(""),
     category: str = Query(""),
@@ -40,8 +41,8 @@ def search_rules(
     )
     
     # Coverage data for MITRE pills
-    covered_ttps = db.get_all_covered_ttps()
-    ttp_rule_counts = db.get_ttp_rule_counts()
+    covered_ttps = db.get_all_covered_ttps(client_id=client_id)
+    ttp_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
     
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -171,6 +172,8 @@ def validate_rule(
 def deploy_to_siem(
     request: Request,
     user: CurrentUser,
+    db: DbDep,
+    client_id: ActiveClient,
     yaml_content: str = Form(...),
     raw_query: str = Form(...),
     space: str = Form("staging"),
@@ -181,10 +184,18 @@ def deploy_to_siem(
 ):
     """
     Deploy a converted Sigma rule to Elastic SIEM.
+    Validates that the target space belongs to the active client's linked SIEMs.
     """
     if not yaml_content.strip() or not raw_query.strip():
         return HTMLResponse(
             '<div class="alert alert-warning">Convert a rule first before deploying</div>'
+        )
+
+    # Validate the target space belongs to this client
+    allowed_spaces = db.get_client_siem_spaces(client_id)
+    if space not in allowed_spaces:
+        return HTMLResponse(
+            '<div class="alert alert-danger">Deployment blocked: target SIEM is not linked to your client.</div>'
         )
 
     success, message = sigma.send_rule_to_siem(
@@ -244,12 +255,17 @@ def get_categories(request: Request, user: CurrentUser):
 
 
 @router.get("/spaces", response_class=HTMLResponse)
-def get_spaces(request: Request, user: CurrentUser):
-    """Get Kibana spaces as HTML options."""
-    spaces = sigma.get_kibana_spaces()
+def get_spaces(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+    """Get deploy target SIEMs as HTML options, scoped to active client."""
+    client_siems = db.get_client_siems(client_id)
     html = ""
-    for space in spaces:
-        html += f'<option value="{space}">{space.title()}</option>'
+    for s in client_siems:
+        if s.get("space"):
+            label = f'{s["label"]} ({s["environment_role"].title()})'
+            selected = ' selected' if s["environment_role"] == "production" else ""
+            html += f'<option value="{s["space"]}"{selected}>{label}</option>'
+    if not html:
+        html = '<option value="" disabled selected>No SIEMs linked</option>'
     return HTMLResponse(html)
 
 

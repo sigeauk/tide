@@ -1,0 +1,65 @@
+{# Partial: client_systems.html
+   Context: system_summaries (list of SystemSummary), client (dict), available_systems (list), all_clients (list)
+#}
+{% from "macros/icons.html" import icon %}
+
+<div class="client-section-toggle" onclick="var b=document.getElementById('systems-body');var c=document.getElementById('systems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+    <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
+    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Systems</h2>
+    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
+    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-systems-modal').style.display='flex'">
+            {{ icon('edit-2', '14') }} Edit
+        </button>
+    </div>
+    <span id="systems-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
+</div>
+
+<div id="systems-body">
+{% set items = system_summaries if system_summaries is defined else [] %}
+{% if items %}
+<div class="client-list">
+    {% for summary in items %}
+    {% set sys = summary.system %}
+    <div class="client-list-item client-list-item--{% if summary.worst_status == 'red' %}danger{% elif summary.worst_status == 'amber' %}warning{% else %}active{% endif %}">
+        <div class="client-list-item__body">
+            <a href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
+            {% if sys.classification %}
+            <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
+            {% endif %}
+            {% if summary.worst_status == 'red' %}
+            <span class="badge badge-danger" style="font-size:0.68rem;">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — At Risk</span>
+            {% elif summary.worst_status == 'amber' %}
+            <span class="badge badge-warning" style="font-size:0.68rem;">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — Monitored</span>
+            {% else %}
+            <span class="badge badge-success" style="font-size:0.68rem;">Clean</span>
+            {% endif %}
+            <span class="client-list-item__meta">{{ icon('server', '12') }} {{ summary.host_count }} device{{ 's' if summary.host_count != 1 }}</span>
+            <span class="client-list-item__meta">{{ icon('bug', '12') }} {{ summary.vuln_count }} vuln{{ 's' if summary.vuln_count != 1 }}</span>
+            <span class="client-list-item__meta">{{ icon('package', '12') }} {{ summary.software_count }} pkg</span>
+            <span class="client-list-item__meta">{{ icon('clipboard-list', '12') }} {{ summary.baseline_count }} baseline{{ 's' if summary.baseline_count != 1 }}{% if summary.baseline_count > 0 %} ({{ summary.baseline_coverage_pct }}%){% endif %}</span>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% elif client_systems is defined and client_systems %}
+{# Fallback for Python renderer that passes plain system objects #}
+<div class="client-list">
+    {% for sys in client_systems %}
+    <div class="client-list-item client-list-item--active">
+        <div class="client-list-item__body">
+            <a href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
+            {% if sys.classification %}
+            <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+    {{ icon('monitor', '36') }}
+    <p style="margin-top:0.75rem;">No systems assigned to this client yet.</p>
+</div>
+{% endif %}
+</div>

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request, Response, Query, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Optional
 
-from app.api.deps import AuthDep, SettingsDep, CurrentUser
+from app.api.deps import AuthDep, SettingsDep, CurrentUser, DbDep
 from app.config import get_settings
 
 import logging
@@ -45,6 +45,7 @@ async def local_login(
     request: Request,
     auth: AuthDep,
     settings: SettingsDep,
+    db: DbDep,
     username: str = Form(...),
     password: str = Form(...),
     next: str = Form("/"),
@@ -81,6 +82,36 @@ async def local_login(
         samesite="lax",
         max_age=86400,  # 24 hours
     )
+
+    # Set active_client_id cookie so the user lands on their assigned tenant.
+    # Priority: user's is_default client → first assigned client → system default.
+    _cid = None
+    try:
+        with db.get_connection() as conn:
+            row = conn.execute(
+                "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                [user.id],
+            ).fetchone()
+            if row:
+                _cid = row[0]
+            else:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if _cid:
+            response.set_cookie(
+                key="active_client_id",
+                value=_cid,
+                httponly=True,
+                secure=use_secure,
+                samesite="lax",
+                max_age=86400,
+            )
+    except Exception as e:
+        logger.warning(f"Could not resolve default client for user {user.id}: {e}")
 
     # Clear Keycloak cookies to prevent stale SSO tokens from shadowing local sessions.
     response.delete_cookie(

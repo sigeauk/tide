@@ -20,6 +20,21 @@ def _get_conn():
     from app.services.database import get_database_service
     return get_database_service().get_connection()
 
+
+def _cf(alias: str = "", client_id: str = None) -> tuple[str, list]:
+    """Build a client_id filter clause. Returns (sql_fragment, params).
+    alias: table alias prefix (e.g. 's.' or '' for no alias).
+    In multi-DB mode (tenant context active), returns empty clause
+    because the database IS the tenant scope — no filtering needed.
+    If client_id is None, returns empty clause (no filter)."""
+    from app.services.tenant_manager import get_tenant_db_path
+    if get_tenant_db_path() is not None:
+        return ("", [])
+    if client_id is None:
+        return ("", [])
+    col = f"{alias}client_id" if alias else "client_id"
+    return (f" AND {col} = ?", [client_id])
+
 def _row_to_system(r):
     return System(id=r[0], name=r[1], description=r[2], created_at=r[3], updated_at=r[4],
                   classification=r[5] if len(r) > 5 else None)
@@ -76,11 +91,13 @@ def _load_cisa_kev():
     return []
 
 
-def _list_all_hosts_by_system() -> Dict[str, List]:
+def _list_all_hosts_by_system(client_id: str = None) -> Dict[str, List]:
     """Load all hosts grouped by system_id in one query."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts ORDER BY name"
+            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts WHERE 1=1" + frag + " ORDER BY name",
+            params,
         ).fetchall()
     result: Dict[str, list] = {}
     for r in rows:
@@ -89,12 +106,14 @@ def _list_all_hosts_by_system() -> Dict[str, List]:
     return result
 
 
-def _list_all_software_by_host() -> Dict[str, List]:
+def _list_all_software_by_host(client_id: str = None) -> Dict[str, List]:
     """Load all software grouped by host_id in one query."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at "
-            "FROM software_inventory WHERE host_id IS NOT NULL ORDER BY name"
+            "FROM software_inventory WHERE host_id IS NOT NULL" + frag + " ORDER BY name",
+            params,
         ).fetchall()
     result: Dict[str, list] = {}
     for r in rows:
@@ -150,133 +169,493 @@ _TECHNIQUE_NAMES = {
     "T1505.003": "Web Shell",
 }
 
-def _get_covered_techniques(technique_ids):
+def _get_covered_techniques(technique_ids, client_id: str = None):
     coverage = {}
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             for t_id in technique_ids:
                 row = conn.execute(
-                    "SELECT COUNT(*) FROM detection_rules WHERE list_contains(mitre_ids, ?)",
-                    [t_id]).fetchone()
+                    "SELECT COUNT(*) FROM detection_rules WHERE list_contains(mitre_ids, ?)" + frag,
+                    [t_id] + params).fetchone()
                 coverage[t_id] = int(row[0]) if row else 0
     except Exception as exc:
         logger.warning(f"Failed to query MITRE coverage: {exc}")
         coverage = {t: 0 for t in technique_ids}
     return coverage
 
-def get_cve_techniques(cve_id):
+def get_cve_techniques(cve_id, client_id: str = None):
     mitre_map = _load_mitre_cve_map()
     technique_ids = list(mitre_map.get(cve_id.upper(), []))
     # Merge manual DB overrides
-    override_ids = get_cve_technique_overrides(cve_id)
+    override_ids = get_cve_technique_overrides(cve_id, client_id=client_id)
     for t in override_ids:
         if t not in technique_ids:
             technique_ids.append(t)
     if not technique_ids:
         return []
-    coverage = _get_covered_techniques(technique_ids)
+    coverage = _get_covered_techniques(technique_ids, client_id=client_id)
     return [MitreTechnique(technique_id=t_id, name=_TECHNIQUE_NAMES.get(t_id, ""),
                            has_detection=coverage.get(t_id, 0) > 0, rule_count=coverage.get(t_id, 0))
             for t_id in technique_ids]
 
 # --- MITRE Technique Overrides (manual per-CVE additions) ---
 
-def get_cve_technique_overrides(cve_id: str) -> List[str]:
+def get_cve_technique_overrides(cve_id: str, client_id: str = None) -> List[str]:
     """Return list of manually added technique IDs for a CVE."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT technique_id FROM cve_technique_overrides WHERE cve_id = ? ORDER BY technique_id",
-                [cve_id.upper()]).fetchall()
+                "SELECT technique_id FROM cve_technique_overrides WHERE cve_id = ?" + frag + " ORDER BY technique_id",
+                [cve_id.upper()] + params).fetchall()
         return [r[0] for r in rows]
     except Exception as exc:
         logger.warning(f"get_cve_technique_overrides failed: {exc}")
         return []
 
-def add_cve_technique_override(cve_id: str, technique_id: str) -> bool:
+def add_cve_technique_override(cve_id: str, technique_id: str, client_id: str = None) -> bool:
     """Add a technique ID override for a CVE. Returns True if inserted."""
     try:
         with _get_conn() as conn:
-            conn.execute(
-                "INSERT INTO cve_technique_overrides (cve_id, technique_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                [cve_id.upper(), technique_id.upper()])
+            if client_id:
+                conn.execute(
+                    "INSERT INTO cve_technique_overrides (cve_id, technique_id, client_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                    [cve_id.upper(), technique_id.upper(), client_id])
+            else:
+                conn.execute(
+                    "INSERT INTO cve_technique_overrides (cve_id, technique_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                    [cve_id.upper(), technique_id.upper()])
         return True
     except Exception as exc:
         logger.warning(f"add_cve_technique_override failed: {exc}")
         return False
 
-def remove_cve_technique_override(cve_id: str, technique_id: str) -> bool:
+def remove_cve_technique_override(cve_id: str, technique_id: str, client_id: str = None) -> bool:
     """Remove a technique ID override for a CVE. Returns True if deleted."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             before = conn.execute(
-                "SELECT COUNT(*) FROM cve_technique_overrides WHERE cve_id = ? AND technique_id = ?",
-                [cve_id.upper(), technique_id.upper()]).fetchone()[0]
+                "SELECT COUNT(*) FROM cve_technique_overrides WHERE cve_id = ? AND technique_id = ?" + frag,
+                [cve_id.upper(), technique_id.upper()] + params).fetchone()[0]
             conn.execute(
-                "DELETE FROM cve_technique_overrides WHERE cve_id = ? AND technique_id = ?",
-                [cve_id.upper(), technique_id.upper()])
+                "DELETE FROM cve_technique_overrides WHERE cve_id = ? AND technique_id = ?" + frag,
+                [cve_id.upper(), technique_id.upper()] + params)
         return bool(before)
     except Exception as exc:
         logger.warning(f"remove_cve_technique_override failed: {exc}")
         return False
 
 # --- Classification CRUD ---
-def list_classifications() -> List[Classification]:
+def list_classifications(client_id: str = None) -> List[Classification]:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        rows = conn.execute("SELECT id, name, color FROM classifications ORDER BY name").fetchall()
+        rows = conn.execute("SELECT id, name, color FROM classifications WHERE 1=1" + frag + " ORDER BY name", params).fetchall()
     return [Classification(id=r[0], name=r[1], color=r[2]) for r in rows]
 
-def get_classification_color(name: Optional[str]) -> Optional[str]:
+def get_classification_color(name: Optional[str], client_id: str = None) -> Optional[str]:
     """Return the hex colour for a classification name, or None."""
     if not name:
         return None
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        r = conn.execute("SELECT color FROM classifications WHERE name = ?", [name]).fetchone()
+        r = conn.execute("SELECT color FROM classifications WHERE name = ?" + frag, [name] + params).fetchone()
     return r[0] if r else None
 
-def add_classification(name: str, color: str = "#6b7280") -> Classification:
+def add_classification(name: str, color: str = "#6b7280", client_id: str = None) -> Classification:
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO classifications (name, color) VALUES (?, ?) RETURNING id, name, color",
-            [name.strip(), color.strip()]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO classifications (name, color, client_id) VALUES (?, ?, ?) RETURNING id, name, color",
+                [name.strip(), color.strip(), client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO classifications (name, color) VALUES (?, ?) RETURNING id, name, color",
+                [name.strip(), color.strip()]).fetchone()
     return Classification(id=row[0], name=row[1], color=row[2])
 
-def delete_classification(cls_id: str) -> bool:
+def delete_classification(cls_id: str, client_id: str = None) -> bool:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM classifications WHERE id = ?", [cls_id]).fetchone()[0]
+        before = conn.execute("SELECT COUNT(*) FROM classifications WHERE id = ?" + frag, [cls_id] + params).fetchone()[0]
         if before == 0:
             return False
         # Clear classification from any systems using it
-        row = conn.execute("SELECT name FROM classifications WHERE id = ?", [cls_id]).fetchone()
+        row = conn.execute("SELECT name FROM classifications WHERE id = ?" + frag, [cls_id] + params).fetchone()
         if row:
-            conn.execute("UPDATE systems SET classification = NULL WHERE classification = ?", [row[0]])
-        conn.execute("DELETE FROM classifications WHERE id = ?", [cls_id])
+            conn.execute("UPDATE systems SET classification = NULL WHERE classification = ?" + frag, [row[0]] + params)
+        conn.execute("DELETE FROM classifications WHERE id = ?" + frag, [cls_id] + params)
     return True
 
 # --- System CRUD ---
-def list_systems():
+def list_systems(client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, name, description, created_at, updated_at, classification FROM systems ORDER BY name"
+            "SELECT id, name, description, created_at, updated_at, classification FROM systems WHERE 1=1" + frag + " ORDER BY name",
+            params,
         ).fetchall()
     return [_row_to_system(r) for r in rows]
 
-def get_system(system_id):
+def _cascade_system_client(conn, system_id: str, new_client_id: str):
+    """Cascade client_id change to all child tables of a system."""
+    child_tables_with_system_id = [
+        "hosts", "software_inventory", "applied_detections",
+        "blind_spots", "system_baselines", "system_baseline_snapshots",
+    ]
+    for table in child_tables_with_system_id:
+        conn.execute(f"UPDATE {table} SET client_id = ? WHERE system_id = ?",
+                     [new_client_id, system_id])
+    # Also update host-linked rows in tables that use host_id instead of system_id
+    host_ids = [r[0] for r in conn.execute(
+        "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
+    if host_ids:
+        ph = ",".join("?" for _ in host_ids)
+        # software_inventory, applied_detections, blind_spots can link via host_id
+        for table in ["software_inventory", "applied_detections", "blind_spots"]:
+            conn.execute(
+                f"UPDATE {table} SET client_id = ? WHERE host_id IN ({ph})",
+                [new_client_id] + host_ids)
+
+
+def assign_system_to_client(system_id: str, client_id: str) -> bool:
+    with _get_conn() as conn:
+        r = conn.execute("SELECT id, client_id FROM systems WHERE id = ?", [system_id]).fetchone()
+        if not r:
+            return False
+        conn.execute("UPDATE systems SET client_id = ? WHERE id = ?", [client_id, system_id])
+        _cascade_system_client(conn, system_id, client_id)
+    return True
+
+def unassign_system_from_client(system_id: str, client_id: str, default_client_id: str = None) -> bool:
+    with _get_conn() as conn:
+        r = conn.execute("SELECT id FROM systems WHERE id = ? AND client_id = ?", [system_id, client_id]).fetchone()
+        if not r:
+            return False
+        target_client = default_client_id or client_id
+        conn.execute("UPDATE systems SET client_id = ? WHERE id = ?", [target_client, system_id])
+        _cascade_system_client(conn, system_id, target_client)
+    return True
+
+
+def move_system_check(system_id: str, source_client_id: str, target_client_id: str) -> Optional[Dict]:
+    """Pre-flight check for moving a system between clients.
+    Returns dependency summary dict or None if system not found."""
+    from app.services.database import get_database_service
+    from app.services.tenant_manager import tenant_context_for, is_multi_db_mode
+    db = get_database_service()
+
+    if is_multi_db_mode():
+        with tenant_context_for(source_client_id):
+            return _move_system_check_inner(system_id, source_client_id, target_client_id, db)
+    else:
+        return _move_system_check_inner(system_id, source_client_id, target_client_id, db)
+
+
+def _move_system_check_inner(system_id, source_client_id, target_client_id, db):
+    with _get_conn() as conn:
+        sys_row = conn.execute(
+            "SELECT id, name FROM systems WHERE id = ? AND client_id = ?",
+            [system_id, source_client_id]).fetchone()
+        if not sys_row:
+            return None
+
+        baselines = conn.execute(
+            "SELECT sb.playbook_id, p.name FROM system_baselines sb "
+            "JOIN playbooks p ON p.id = sb.playbook_id "
+            "WHERE sb.system_id = ?", [system_id]).fetchall()
+
+        host_count = conn.execute(
+            "SELECT COUNT(*) FROM hosts WHERE system_id = ?", [system_id]).fetchone()[0]
+        software_count = conn.execute(
+            "SELECT COUNT(*) FROM software_inventory WHERE system_id = ?", [system_id]).fetchone()[0]
+
+        applied_count = conn.execute(
+            "SELECT COUNT(*) FROM applied_detections WHERE system_id = ?", [system_id]).fetchone()[0]
+
+    # SIEM comparison via shared DB
+    source_spaces = set(db.get_client_siem_spaces(source_client_id, "production"))
+    target_spaces = set(db.get_client_siem_spaces(target_client_id, "production"))
+    siem_compatible = bool(source_spaces & target_spaces)
+
+    return {
+        "system_id": system_id,
+        "system_name": sys_row[1],
+        "baselines": [{"id": b[0], "name": b[1]} for b in baselines],
+        "host_count": host_count,
+        "software_count": software_count,
+        "applied_detections_count": applied_count,
+        "siem_compatible": siem_compatible,
+        "source_spaces": sorted(source_spaces),
+        "target_spaces": sorted(target_spaces),
+        "shared_spaces": sorted(source_spaces & target_spaces),
+    }
+
+
+def _cross_db_copy(src, tgt, table: str, where: str, params: list,
+                   new_client_id: str = None) -> int:
+    """Copy rows from *src* to *tgt* DuckDB connections.
+
+    If *new_client_id* is provided and the table has a ``client_id``
+    column, all copied rows have their ``client_id`` replaced.
+    Returns the number of rows copied.
+    """
+    cols = [c[0] for c in src.execute(f"DESCRIBE {table}").fetchall()]
+    rows = src.execute(
+        f"SELECT {', '.join(cols)} FROM {table} WHERE {where}", params
+    ).fetchall()
+    if not rows:
+        return 0
+    ci_idx = cols.index("client_id") if ("client_id" in cols and new_client_id) else None
+    placeholders = ", ".join("?" for _ in cols)
+    col_list = ", ".join(cols)
+    for row in rows:
+        values = list(row)
+        if ci_idx is not None:
+            values[ci_idx] = new_client_id
+        tgt.execute(f"INSERT INTO {table} ({col_list}) VALUES ({placeholders})", values)
+    return len(rows)
+
+
+def move_system_to_client(
+    system_id: str,
+    source_client_id: str,
+    target_client_id: str,
+    move_baselines: bool = False,
+) -> Dict:
+    """Move a system between clients with SIEM-aware rule coverage handling.
+
+    In multi-DB mode, physically copies data from the source tenant DB to
+    the target tenant DB and deletes from source.
+    Returns result dict with move status and what was affected.
+    """
+    from app.services.tenant_manager import is_multi_db_mode
+
+    check = move_system_check(system_id, source_client_id, target_client_id)
+    if check is None:
+        raise ValueError("System not found or not owned by source client.")
+
+    if is_multi_db_mode():
+        return _move_system_multi_db(
+            system_id, source_client_id, target_client_id,
+            move_baselines, check,
+        )
+    return _move_system_single_db(
+        system_id, source_client_id, target_client_id,
+        move_baselines, check,
+    )
+
+
+def _move_system_single_db(system_id, source_client_id, target_client_id,
+                           move_baselines, check):
+    """Legacy single-DB move: UPDATE client_id on all related rows."""
+    coverage_reset = False
+    reset_count = 0
+
+    with _get_conn() as conn:
+        if not check["siem_compatible"]:
+            reset_count = conn.execute(
+                "SELECT COUNT(*) FROM applied_detections WHERE system_id = ?",
+                [system_id]).fetchone()[0]
+            conn.execute(
+                "DELETE FROM applied_detections WHERE system_id = ?",
+                [system_id])
+            host_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
+            if host_ids:
+                ph = ",".join("?" for _ in host_ids)
+                reset_count += conn.execute(
+                    f"SELECT COUNT(*) FROM applied_detections WHERE host_id IN ({ph})",
+                    host_ids).fetchone()[0]
+                conn.execute(
+                    f"DELETE FROM applied_detections WHERE host_id IN ({ph})",
+                    host_ids)
+            coverage_reset = True
+
+        conn.execute("UPDATE systems SET client_id = ? WHERE id = ?",
+                     [target_client_id, system_id])
+        _cascade_system_client(conn, system_id, target_client_id)
+
+        moved_baselines = []
+        if move_baselines and check["baselines"]:
+            for bl in check["baselines"]:
+                conn.execute("UPDATE playbooks SET client_id = ? WHERE id = ?",
+                             [target_client_id, bl["id"]])
+                conn.execute("UPDATE system_baselines SET client_id = ? WHERE playbook_id = ?",
+                             [target_client_id, bl["id"]])
+                moved_baselines.append(bl)
+
+    logger.info(
+        f"System {system_id} moved from {source_client_id} to {target_client_id} "
+        f"(coverage_reset={coverage_reset}, baselines_moved={len(moved_baselines)})"
+    )
+    return {
+        "moved": True, "system_id": system_id,
+        "system_name": check["system_name"],
+        "target_client_id": target_client_id,
+        "coverage_reset": coverage_reset,
+        "applied_detections_removed": reset_count,
+        "baselines_moved": moved_baselines,
+        "host_count": check["host_count"],
+        "software_count": check["software_count"],
+    }
+
+
+def _move_system_multi_db(system_id, source_client_id, target_client_id,
+                          move_baselines, check):
+    """Multi-DB move: copy rows from source tenant DB to target, then delete."""
+    import duckdb
+    from app.services.tenant_manager import resolve_tenant_db_path
+    from app.config import get_settings
+
+    settings = get_settings()
+    src_path = resolve_tenant_db_path(source_client_id, settings.data_dir)
+    tgt_path = resolve_tenant_db_path(target_client_id, settings.data_dir)
+    if not src_path or not tgt_path:
+        raise ValueError("Both clients must have tenant databases for cross-DB move.")
+
+    siem_compatible = check["siem_compatible"]
+    reset_count = 0
+
+    src = duckdb.connect(src_path)
+    tgt = duckdb.connect(tgt_path)
+    try:
+        # Gather host IDs for this system
+        host_ids = [r[0] for r in src.execute(
+            "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
+        host_ph = ",".join("?" for _ in host_ids) if host_ids else None
+
+        # ── Helper to build combined system_id + host_id WHERE clause ──
+        def _sys_host_where():
+            w = "system_id = ?"
+            p = [system_id]
+            if host_ids:
+                w += f" OR host_id IN ({host_ph})"
+                p += host_ids
+            return w, p
+
+        # ── Copy to target ──
+        _cross_db_copy(src, tgt, "systems", "id = ?", [system_id], target_client_id)
+        _cross_db_copy(src, tgt, "hosts", "system_id = ?", [system_id], target_client_id)
+
+        sw_w, sw_p = _sys_host_where()
+        _cross_db_copy(src, tgt, "software_inventory", sw_w, sw_p, target_client_id)
+        _cross_db_copy(src, tgt, "blind_spots", sw_w, sw_p, target_client_id)
+
+        if siem_compatible:
+            _cross_db_copy(src, tgt, "applied_detections", sw_w, sw_p, target_client_id)
+        else:
+            reset_count = src.execute(
+                f"SELECT COUNT(*) FROM applied_detections WHERE {sw_w}", sw_p
+            ).fetchone()[0]
+
+        # Baselines / snapshots
+        moved_baselines = []
+        if move_baselines and check["baselines"]:
+            bl_ids = [b["id"] for b in check["baselines"]]
+            bl_ph = ",".join("?" for _ in bl_ids)
+
+            _cross_db_copy(src, tgt, "playbooks", f"id IN ({bl_ph})", bl_ids, target_client_id)
+            _cross_db_copy(src, tgt, "system_baselines", "system_id = ?", [system_id], target_client_id)
+            _cross_db_copy(src, tgt, "system_baseline_snapshots", "system_id = ?", [system_id], target_client_id)
+
+            step_ids = [r[0] for r in src.execute(
+                f"SELECT id FROM playbook_steps WHERE playbook_id IN ({bl_ph})", bl_ids
+            ).fetchall()]
+            _cross_db_copy(src, tgt, "playbook_steps", f"playbook_id IN ({bl_ph})", bl_ids)
+            if step_ids:
+                st_ph = ",".join("?" for _ in step_ids)
+                _cross_db_copy(src, tgt, "step_techniques", f"step_id IN ({st_ph})", step_ids)
+                _cross_db_copy(src, tgt, "step_detections", f"step_id IN ({st_ph})", step_ids)
+
+            moved_baselines = check["baselines"]
+
+            # Delete baselines from source (FK order)
+            if step_ids:
+                st_ph = ",".join("?" for _ in step_ids)
+                src.execute(f"DELETE FROM step_techniques WHERE step_id IN ({st_ph})", step_ids)
+                src.execute(f"DELETE FROM step_detections WHERE step_id IN ({st_ph})", step_ids)
+            src.execute(f"DELETE FROM playbook_steps WHERE playbook_id IN ({bl_ph})", bl_ids)
+            src.execute(f"DELETE FROM system_baselines WHERE playbook_id IN ({bl_ph})", bl_ids)
+            src.execute(f"DELETE FROM playbooks WHERE id IN ({bl_ph})", bl_ids)
+        else:
+            # Not moving baselines — sever the links
+            src.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
+
+        # Always delete snapshots from source (they reference the system being moved)
+        src.execute("DELETE FROM system_baseline_snapshots WHERE system_id = ?", [system_id])
+
+        # ── Delete system data from source (reverse FK order) ──
+        ad_w, ad_p = _sys_host_where()
+        src.execute(f"DELETE FROM applied_detections WHERE {ad_w}", ad_p)
+        src.execute(f"DELETE FROM blind_spots WHERE {sw_w}", sw_p)
+        src.execute(f"DELETE FROM software_inventory WHERE {sw_w}", sw_p)
+        src.execute("DELETE FROM hosts WHERE system_id = ?", [system_id])
+        src.execute("DELETE FROM systems WHERE id = ?", [system_id])
+
+    finally:
+        src.close()
+        tgt.close()
+
+    # ── Keep the shared DB consistent ──
+    from app.services.database import get_database_service
+    with get_database_service().get_shared_connection() as shared:
+        shared.execute(
+            "UPDATE systems SET client_id = ? WHERE id = ?",
+            [target_client_id, system_id])
+        shared.execute(
+            "UPDATE hosts SET client_id = ? WHERE system_id = ?",
+            [target_client_id, system_id])
+        shared.execute(
+            "UPDATE software_inventory SET client_id = ? WHERE system_id = ?",
+            [target_client_id, system_id])
+        if move_baselines and check["baselines"]:
+            bl_ids = [b["id"] for b in check["baselines"]]
+            bl_ph = ",".join("?" for _ in bl_ids)
+            shared.execute(
+                f"UPDATE playbooks SET client_id = ? WHERE id IN ({bl_ph})",
+                [target_client_id] + bl_ids)
+
+    logger.info(
+        f"System {system_id} moved cross-DB from {source_client_id} to "
+        f"{target_client_id} (siem_reset={not siem_compatible}, "
+        f"baselines_moved={len(moved_baselines)})"
+    )
+    return {
+        "moved": True, "system_id": system_id,
+        "system_name": check["system_name"],
+        "target_client_id": target_client_id,
+        "coverage_reset": not siem_compatible,
+        "applied_detections_removed": reset_count,
+        "baselines_moved": moved_baselines,
+        "host_count": check["host_count"],
+        "software_count": check["software_count"],
+    }
+
+def get_system(system_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at, classification FROM systems WHERE id = ?",
-            [system_id]).fetchone()
+            "SELECT id, name, description, created_at, updated_at, classification FROM systems WHERE id = ?" + frag,
+            [system_id] + params).fetchone()
     return _row_to_system(r) if r else None
 
-def add_system(data):
+def add_system(data, client_id: str = None):
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO systems (name, description, classification) VALUES (?, ?, ?) RETURNING id, name, description, created_at, updated_at, classification",
-            [data.name, data.description, getattr(data, 'classification', None)]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO systems (name, description, classification, client_id) VALUES (?, ?, ?, ?) "
+                "RETURNING id, name, description, created_at, updated_at, classification",
+                [data.name, data.description, getattr(data, 'classification', None), client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO systems (name, description, classification) VALUES (?, ?, ?) RETURNING id, name, description, created_at, updated_at, classification",
+                [data.name, data.description, getattr(data, 'classification', None)]).fetchone()
     return _row_to_system(row)
 
-def edit_system(system_id, data):
-    current = get_system(system_id)
+def edit_system(system_id, data, client_id: str = None):
+    current = get_system(system_id, client_id=client_id)
     if not current:
         return None
     name = data.name if data.name is not None else current.name
@@ -288,43 +667,53 @@ def edit_system(system_id, data):
             [name, desc, classification, system_id]).fetchone()
     return _row_to_system(row) if row else None
 
-def delete_system(system_id):
+def delete_system(system_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM systems WHERE id = ?", [system_id]).fetchone()[0]
+        before = conn.execute("SELECT COUNT(*) FROM systems WHERE id = ?" + frag, [system_id] + params).fetchone()[0]
         if before == 0:
             return False
-        host_ids = [r[0] for r in conn.execute("SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
+        host_ids = [r[0] for r in conn.execute("SELECT id FROM hosts WHERE system_id = ?" + frag, [system_id] + params).fetchall()]
         for h_id in host_ids:
             conn.execute("DELETE FROM software_inventory WHERE host_id = ?", [h_id])
         conn.execute("DELETE FROM software_inventory WHERE system_id = ?", [system_id])
         conn.execute("DELETE FROM hosts WHERE system_id = ?", [system_id])
+        conn.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
         conn.execute("DELETE FROM systems WHERE id = ?", [system_id])
     return True
 
 # --- Host CRUD ---
-def list_hosts(system_id):
+def list_hosts(system_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts WHERE system_id = ? ORDER BY name",
-            [system_id]).fetchall()
+            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts WHERE system_id = ?" + frag + " ORDER BY name",
+            [system_id] + params).fetchall()
     return [_row_to_host(r) for r in rows]
 
-def get_host(host_id):
+def get_host(host_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts WHERE id = ?",
-            [host_id]).fetchone()
+            "SELECT id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at FROM hosts WHERE id = ?" + frag,
+            [host_id] + params).fetchone()
     return _row_to_host(r) if r else None
 
-def add_host(system_id, data):
+def add_host(system_id, data, client_id: str = None):
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO hosts (system_id, name, ip_address, os, hardware_vendor, model, source) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at",
-            [system_id, data.name, data.ip_address, data.os, data.hardware_vendor, data.model, data.source]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO hosts (system_id, name, ip_address, os, hardware_vendor, model, source, client_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at",
+                [system_id, data.name, data.ip_address, data.os, data.hardware_vendor, data.model, data.source, client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO hosts (system_id, name, ip_address, os, hardware_vendor, model, source) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, system_id, name, ip_address, os, hardware_vendor, model, source, created_at",
+                [system_id, data.name, data.ip_address, data.os, data.hardware_vendor, data.model, data.source]).fetchone()
     return _row_to_host(row)
 
-def edit_host(host_id, data: HostUpdate):
-    current = get_host(host_id)
+def edit_host(host_id, data: HostUpdate, client_id: str = None):
+    current = get_host(host_id, client_id=client_id)
     if not current:
         return None
     name = data.name if data.name is not None else current.name
@@ -339,9 +728,10 @@ def edit_host(host_id, data: HostUpdate):
             [name, ip, os_, hv, mod, host_id]).fetchone()
     return _row_to_host(row) if row else None
 
-def delete_host(host_id):
+def delete_host(host_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM hosts WHERE id = ?", [host_id]).fetchone()[0]
+        before = conn.execute("SELECT COUNT(*) FROM hosts WHERE id = ?" + frag, [host_id] + params).fetchone()[0]
         if before == 0:
             return False
         conn.execute("DELETE FROM software_inventory WHERE host_id = ?", [host_id])
@@ -349,43 +739,58 @@ def delete_host(host_id):
     return True
 
 # --- Software CRUD ---
-def list_host_software(host_id):
+def list_host_software(host_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE host_id = ? ORDER BY name",
-            [host_id]).fetchall()
+            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE host_id = ?" + frag + " ORDER BY name",
+            [host_id] + params).fetchall()
     return [_row_to_software(r) for r in rows]
 
-def add_host_software(host_id, system_id, data):
+def add_host_software(host_id, system_id, data, client_id: str = None):
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO software_inventory (host_id, system_id, name, version, vendor, cpe, source) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
-            [host_id, system_id, data.name, data.version, data.vendor, data.cpe, data.source]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO software_inventory (host_id, system_id, name, version, vendor, cpe, source, client_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
+                [host_id, system_id, data.name, data.version, data.vendor, data.cpe, data.source, client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO software_inventory (host_id, system_id, name, version, vendor, cpe, source) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
+                [host_id, system_id, data.name, data.version, data.vendor, data.cpe, data.source]).fetchone()
     return _row_to_software(row)
 
-def list_software(system_id):
+def list_software(system_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE system_id = ? ORDER BY name",
-            [system_id]).fetchall()
+            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE system_id = ?" + frag + " ORDER BY name",
+            [system_id] + params).fetchall()
     return [_row_to_software(r) for r in rows]
 
-def add_software(system_id, data):
+def add_software(system_id, data, client_id: str = None):
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO software_inventory (system_id, name, version, vendor, cpe, source) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
-            [system_id, data.name, data.version, data.vendor, data.cpe, data.source]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO software_inventory (system_id, name, version, vendor, cpe, source, client_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
+                [system_id, data.name, data.version, data.vendor, data.cpe, data.source, client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO software_inventory (system_id, name, version, vendor, cpe, source) VALUES (?, ?, ?, ?, ?, ?) RETURNING id, host_id, system_id, name, version, vendor, cpe, source, created_at",
+                [system_id, data.name, data.version, data.vendor, data.cpe, data.source]).fetchone()
     return _row_to_software(row)
 
-def get_software(software_id):
+def get_software(software_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE id = ?",
-            [software_id]).fetchone()
+            "SELECT id, host_id, system_id, name, version, vendor, cpe, source, created_at FROM software_inventory WHERE id = ?" + frag,
+            [software_id] + params).fetchone()
     return _row_to_software(row) if row else None
 
-def edit_software(software_id, data: SoftwareUpdate):
-    current = get_software(software_id)
+def edit_software(software_id, data: SoftwareUpdate, client_id: str = None):
+    current = get_software(software_id, client_id=client_id)
     if not current:
         return None
     name    = data.name    if data.name    is not None else current.name
@@ -399,14 +804,15 @@ def edit_software(software_id, data: SoftwareUpdate):
             [name, version, vendor, cpe, software_id]).fetchone()
     return _row_to_software(row) if row else None
 
-def delete_software(software_id):
+def delete_software(software_id, client_id: str = None):
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM software_inventory WHERE id = ?", [software_id]).fetchone()[0]
+        before = conn.execute("SELECT COUNT(*) FROM software_inventory WHERE id = ?" + frag, [software_id] + params).fetchone()[0]
         conn.execute("DELETE FROM software_inventory WHERE id = ?", [software_id])
     return before > 0
 
 # --- Nessus Parser ---
-def parse_nessus_xml(xml_bytes, system_id):
+def parse_nessus_xml(xml_bytes, system_id, client_id: str = None):
     warnings = []
     hosts_created = 0
     software_inserted = 0
@@ -426,7 +832,7 @@ def parse_nessus_xml(xml_bytes, system_id):
                 elif tag_name in ("operating-system", "os"):
                     os_name = tag.text
         try:
-            host = add_host(system_id, HostCreate(name=host_name, ip_address=ip_address, os=os_name, source="nessus"))
+            host = add_host(system_id, HostCreate(name=host_name, ip_address=ip_address, os=os_name, source="nessus"), client_id=client_id)
             hosts_created += 1
         except Exception as exc:
             msg = f"Failed to create host {host_name!r}: {exc}"
@@ -463,7 +869,7 @@ def parse_nessus_xml(xml_bytes, system_id):
             try:
                 add_host_software(host.id, system_id, SoftwareCreate(
                     name=software_name, version=software_version,
-                    vendor=vendor, cpe=cpe_values[0] if cpe_values else None, source="nessus"))
+                    vendor=vendor, cpe=cpe_values[0] if cpe_values else None, source="nessus"), client_id=client_id)
                 software_inserted += 1
             except Exception as exc:
                 msg = f"Failed to insert {software_name!r} on {host_name!r}: {exc}"
@@ -639,16 +1045,16 @@ def _match_software_against_kev(
                 matches[cve_id].append(sw.name)
     return matches
 
-def get_host_vulnerabilities(host_id):
-    host = get_host(host_id)
+def get_host_vulnerabilities(host_id, client_id: str = None):
+    host = get_host(host_id, client_id=client_id)
     if not host:
         return []
-    software = list_host_software(host_id)
+    software = list_host_software(host_id, client_id=client_id)
     if not software:
         return []
 
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     # Enrich detections with applied_to so templates can check per-host coverage
     for dets in detections.values():
         _enrich_detections_with_applied(dets, applied_map)
@@ -683,7 +1089,7 @@ def get_host_vulnerabilities(host_id):
             out.append(_kev_to_cve_match(
                 kev_entry,
                 matched_software=sw_names,
-                techniques=get_cve_techniques(cve_id) if cve_id in matched_map else [],
+                techniques=get_cve_techniques(cve_id, client_id=client_id) if cve_id in matched_map else [],
                 detections=cve_dets,
                 threat_actors=actors,
             ))
@@ -706,20 +1112,20 @@ def get_host_vulnerabilities(host_id):
 
     return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
 
-def get_system_vulnerabilities(system_id):
-    system = get_system(system_id)
+def get_system_vulnerabilities(system_id, client_id: str = None):
+    system = get_system(system_id, client_id=client_id)
     if not system:
         return []
     kev = _load_cisa_kev()
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
-    detections = list_cve_detections()
+    detections = list_cve_detections(client_id=client_id)
     combined_sw: Dict[str, List[str]] = {}          # cve_id -> sw names
     combined_hosts: Dict[str, List[AffectedHost]] = {}
     combined_actors: Dict[str, List[str]] = {}      # cve_id -> actor names
-    all_software = _list_all_software_by_host()
+    all_software = _list_all_software_by_host(client_id=client_id)
 
-    for host in list_hosts(system_id):
-        software = all_software.get(host.id, list_host_software(host.id))
+    for host in list_hosts(system_id, client_id=client_id):
+        software = all_software.get(host.id, list_host_software(host.id, client_id=client_id))
         if not software:
             continue
         host_sw_cpes: List[str] = [sw.cpe for sw in software if sw.cpe]
@@ -791,16 +1197,16 @@ def get_system_vulnerabilities(system_id):
 
     return sorted(out, key=lambda m: (m.date_added or "0"), reverse=True)
 
-def get_all_cve_overview():
+def get_all_cve_overview(client_id: str = None):
     """Return all KEV entries. Matched entries (with affected hosts) come first."""
     kev_entries = _load_cisa_kev()
     if not kev_entries:
         return []
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
-    systems = list_systems()
-    all_hosts = _list_all_hosts_by_system()
-    all_software = _list_all_software_by_host()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
+    systems = list_systems(client_id=client_id)
+    all_hosts = _list_all_hosts_by_system(client_id=client_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
     # Enrich detections with applied_to
     for cve_id_key, dets in detections.items():
         _enrich_detections_with_applied(dets, applied_map)
@@ -839,21 +1245,21 @@ def get_all_cve_overview():
     unmatched_rows.sort(key=lambda m: m.date_added, reverse=True)
     return matched_rows + unmatched_rows
 
-def get_cve_detail(cve_id):
+def get_cve_detail(cve_id, client_id: str = None):
     kev_entries = _load_cisa_kev()
     kev_entry = next((k for k in kev_entries if k.get("cveID", "").upper() == cve_id.upper()), None)
     if not kev_entry:
         return None
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     cve_dets = detections.get(cve_id.upper(), [])
     _enrich_detections_with_applied(cve_dets, applied_map)
-    cve_blind_spots = get_blind_spots("cve", cve_id.upper())
+    cve_blind_spots = get_blind_spots("cve", cve_id.upper(), client_id=client_id)
     all_affected: List[AffectedHost] = []
     matched_sw: List[str] = []
-    all_hosts = _list_all_hosts_by_system()
-    all_software = _list_all_software_by_host()
-    for system in list_systems():
+    all_hosts = _list_all_hosts_by_system(client_id=client_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
+    for system in list_systems(client_id=client_id):
         for host in all_hosts.get(system.id, []):
             software = all_software.get(host.id, [])
             matches = _match_software_against_kev(software, kev_entries, host_os=host.os or "")
@@ -873,19 +1279,19 @@ def get_cve_detail(cve_id):
                         matched_sw.append(sw_name)
     return _kev_to_cve_match(kev_entry, affected_hosts=all_affected,
                              matched_software=matched_sw,
-                             techniques=get_cve_techniques(cve_id),
+                             techniques=get_cve_techniques(cve_id, client_id=client_id),
                              detections=cve_dets)
 
 # --- Summaries ---
-def get_system_summaries():
-    systems = list_systems()
+def get_system_summaries(client_id: str = None):
+    systems = list_systems(client_id=client_id)
     if not systems:
         return []
-    all_hosts = _list_all_hosts_by_system()
-    all_software = _list_all_software_by_host()
+    all_hosts = _list_all_hosts_by_system(client_id=client_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
     kev = _load_cisa_kev()
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     # Preload baseline assignment counts per system
     baseline_counts: dict[str, int] = {}
     baseline_step_totals: dict[str, int] = {}
@@ -969,14 +1375,14 @@ def get_system_summaries():
             worst_status=worst_status))
     return summaries
 
-def get_host_summaries(system_id):
-    hosts = list_hosts(system_id)
+def get_host_summaries(system_id, client_id: str = None):
+    hosts = list_hosts(system_id, client_id=client_id)
     if not hosts:
         return []
-    all_software = _list_all_software_by_host()
+    all_software = _list_all_software_by_host(client_id=client_id)
     kev = _load_cisa_kev()
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     summaries = []
     for host in hosts:
         software = all_software.get(host.id, [])
@@ -1003,17 +1409,18 @@ def get_host_summaries(system_id):
     return summaries
 
 # --- Stats for Dashboard ---
-def get_inventory_stats() -> InventoryStats:
+def get_inventory_stats(client_id: str = None) -> InventoryStats:
     """Fast aggregated stats for dashboard widget."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
-            env_count = conn.execute("SELECT COUNT(*) FROM systems").fetchone()[0]
-            host_count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
-            sw_count = conn.execute("SELECT COUNT(*) FROM software_inventory WHERE host_id IS NOT NULL").fetchone()[0]
-            baseline_count = conn.execute("SELECT COUNT(*) FROM playbooks").fetchone()[0]
-            baseline_assignment_count = conn.execute("SELECT COUNT(*) FROM system_baselines").fetchone()[0]
+            env_count = conn.execute("SELECT COUNT(*) FROM systems WHERE 1=1" + frag, params).fetchone()[0]
+            host_count = conn.execute("SELECT COUNT(*) FROM hosts WHERE 1=1" + frag, params).fetchone()[0]
+            sw_count = conn.execute("SELECT COUNT(*) FROM software_inventory WHERE host_id IS NOT NULL" + frag, params).fetchone()[0]
+            baseline_count = conn.execute("SELECT COUNT(*) FROM playbooks WHERE 1=1" + frag, params).fetchone()[0]
+            baseline_assignment_count = conn.execute("SELECT COUNT(*) FROM system_baselines WHERE 1=1" + frag, params).fetchone()[0]
             last_scan_row = conn.execute(
-                "SELECT MAX(created_at) FROM hosts").fetchone()
+                "SELECT MAX(created_at) FROM hosts WHERE 1=1" + frag, params).fetchone()
             last_scan = str(last_scan_row[0])[:10] if last_scan_row and last_scan_row[0] else None
     except Exception as exc:
         logger.warning(f"get_inventory_stats DB error: {exc}")
@@ -1028,9 +1435,9 @@ def get_inventory_stats() -> InventoryStats:
                               last_scan=last_scan)
     affected_hosts_set: set = set()
     matched_cves: set = set()
-    all_hosts = _list_all_hosts_by_system()
-    all_software = _list_all_software_by_host()
-    for system in list_systems():
+    all_hosts = _list_all_hosts_by_system(client_id=client_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
+    for system in list_systems(client_id=client_id):
         for host in all_hosts.get(system.id, []):
             sw = all_software.get(host.id, [])
             if not sw:
@@ -1046,7 +1453,7 @@ def get_inventory_stats() -> InventoryStats:
         last_scan=last_scan,
     )
 
-def get_cve_overview_stats(cves=None) -> CveOverviewStats:
+def get_cve_overview_stats(cves=None, client_id: str = None) -> CveOverviewStats:
     """Stats for the CVE Overview header cards.
     If *cves* (output of get_all_cve_overview) is passed, derive stats from it
     to avoid recomputing the expensive host/software matching.
@@ -1072,9 +1479,9 @@ def get_cve_overview_stats(cves=None) -> CveOverviewStats:
         # Fallback: compute from scratch with batch loading
         affected_cves = set()
         affected_hosts_set = set()
-        all_hosts = _list_all_hosts_by_system()
-        all_software = _list_all_software_by_host()
-        for system in list_systems():
+        all_hosts = _list_all_hosts_by_system(client_id=client_id)
+        all_software = _list_all_software_by_host(client_id=client_id)
+        for system in list_systems(client_id=client_id):
             for host in all_hosts.get(system.id, []):
                 sw = all_software.get(host.id, [])
                 if not sw:
@@ -1084,7 +1491,7 @@ def get_cve_overview_stats(cves=None) -> CveOverviewStats:
                     affected_hosts_set.add(host.id)
                     affected_cves.update(m.keys())
 
-    detections = list_cve_detections()
+    detections = list_cve_detections(client_id=client_id)
     detected_count = len(detections)
     ransomware_cves = {k.get("cveID", "") for k in kev
                       if (k.get("knownRansomwareCampaignUse") or "").lower() in _CVE_RANSOMWARE_YES}
@@ -1096,12 +1503,14 @@ def get_cve_overview_stats(cves=None) -> CveOverviewStats:
     )
 
 # --- Detection CRUD ---
-def list_cve_detections() -> Dict[str, List[VulnDetection]]:
+def list_cve_detections(client_id: str = None) -> Dict[str, List[VulnDetection]]:
     """Returns {cve_id: [VulnDetection, ...]} for all recorded detection rules."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections"
+                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections WHERE 1=1" + frag,
+                params,
             ).fetchall()
         result: Dict[str, List[VulnDetection]] = {}
         for r in rows:
@@ -1112,63 +1521,72 @@ def list_cve_detections() -> Dict[str, List[VulnDetection]]:
         logger.warning(f"list_cve_detections error: {exc}")
         return {}
 
-def get_cve_detections(cve_id: str) -> List[VulnDetection]:
+def get_cve_detections(cve_id: str, client_id: str = None) -> List[VulnDetection]:
     """Return all detection entries for a given CVE."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections WHERE cve_id = ? ORDER BY created_at",
-                [cve_id.upper()]).fetchall()
+                "SELECT id, cve_id, rule_ref, note, source, created_at FROM vuln_detections WHERE cve_id = ?" + frag + " ORDER BY created_at",
+                [cve_id.upper()] + params).fetchall()
         return [VulnDetection(id=r[0], cve_id=r[1], rule_ref=_resolve_rule_ref(r[2]), note=r[3], source=r[4], created_at=r[5]) for r in rows]
     except Exception as exc:
         logger.warning(f"get_cve_detections error: {exc}")
         return []
 
-def add_cve_detection(cve_id: str, rule_ref: Optional[str] = None, note: Optional[str] = None, source: str = "manual") -> Optional[VulnDetection]:
+def add_cve_detection(cve_id: str, rule_ref: Optional[str] = None, note: Optional[str] = None, source: str = "manual", client_id: str = None) -> Optional[VulnDetection]:
     """Add a new detection entry for a CVE. Returns the created entry."""
     cve_id = cve_id.upper()
     with _get_conn() as conn:
-        row = conn.execute(
-            "INSERT INTO vuln_detections (cve_id, rule_ref, note, source) VALUES (?, ?, ?, ?) RETURNING id, cve_id, rule_ref, note, source, created_at",
-            [cve_id, rule_ref, note, source]).fetchone()
+        if client_id:
+            row = conn.execute(
+                "INSERT INTO vuln_detections (cve_id, rule_ref, note, source, client_id) VALUES (?, ?, ?, ?, ?) RETURNING id, cve_id, rule_ref, note, source, created_at",
+                [cve_id, rule_ref, note, source, client_id]).fetchone()
+        else:
+            row = conn.execute(
+                "INSERT INTO vuln_detections (cve_id, rule_ref, note, source) VALUES (?, ?, ?, ?) RETURNING id, cve_id, rule_ref, note, source, created_at",
+                [cve_id, rule_ref, note, source]).fetchone()
     if row:
         return VulnDetection(id=row[0], cve_id=row[1], rule_ref=row[2], note=row[3], source=row[4], created_at=row[5])
     return None
 
-def remove_cve_detection(detection_id: str) -> bool:
+def remove_cve_detection(detection_id: str, client_id: str = None) -> bool:
     """Remove a single detection entry by its ID."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM vuln_detections WHERE id = ?", [detection_id]).fetchone()[0]
-        conn.execute("DELETE FROM vuln_detections WHERE id = ?", [detection_id])
+        before = conn.execute("SELECT COUNT(*) FROM vuln_detections WHERE id = ?" + frag, [detection_id] + params).fetchone()[0]
+        conn.execute("DELETE FROM vuln_detections WHERE id = ?" + frag, [detection_id] + params)
     return before > 0
 
-def get_rules_for_cve_techniques(cve_id: str) -> Dict[str, list]:
+def get_rules_for_cve_techniques(cve_id: str, client_id: str = None) -> Dict[str, list]:
     """Returns {technique_id: [DetectionRule]} for all techniques mapped to this CVE."""
     from app.services.database import get_database_service
     db = get_database_service()
-    techniques = get_cve_techniques(cve_id)
+    techniques = get_cve_techniques(cve_id, client_id=client_id)
     result: Dict[str, list] = {}
     for t in techniques:
-        rules = db.get_rules_for_technique(t.technique_id, enabled_only=False)
+        rules = db.get_rules_for_technique(t.technique_id, enabled_only=False, client_id=client_id)
         if rules:
             result[t.technique_id] = rules
     return result
 
 
-def get_all_siem_rules() -> list:
+def get_all_siem_rules(client_id: str = None) -> list:
     """Return a lightweight list of ALL SIEM rules [{rule_id, name}] for dropdowns."""
     from app.services.database import get_database_service
     db = get_database_service()
+    frag, params = _cf("", client_id)
     with db.get_connection() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name FROM detection_rules ORDER BY name"
+            "SELECT rule_id, name FROM detection_rules WHERE 1=1" + frag + " ORDER BY name",
+            params,
         ).fetchall()
     return [{"rule_id": r[0], "name": r[1]} for r in rows]
 
 
 # --- Tier 3: Applied Detection CRUD ---
 
-def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id: Optional[str] = None) -> Optional[AppliedDetection]:
+def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id: Optional[str] = None, client_id: str = None) -> Optional[AppliedDetection]:
     """Apply a detection rule to a system or individual host (Tier 3).
     When system_id is given, creates per-host rows for every host in that system
     so that coverage can be managed individually per host."""
@@ -1182,9 +1600,14 @@ def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id:
                 [detection_id, host_id]).fetchone()
             if dup:
                 return AppliedDetection(id=dup[0], detection_id=detection_id, host_id=host_id)
-            row = conn.execute(
-                "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
-                [detection_id, host_id]).fetchone()
+            if client_id:
+                row = conn.execute(
+                    "INSERT INTO applied_detections (detection_id, system_id, host_id, client_id) VALUES (?, NULL, ?, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                    [detection_id, host_id, client_id]).fetchone()
+            else:
+                row = conn.execute(
+                    "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                    [detection_id, host_id]).fetchone()
             if row:
                 return AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
         elif system_id:
@@ -1203,9 +1626,14 @@ def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id:
                     "SELECT id FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL",
                     [detection_id, system_id]).fetchone()
                 if not dup:
-                    row = conn.execute(
-                        "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, ?, NULL) RETURNING id, detection_id, system_id, host_id, applied_at",
-                        [detection_id, system_id]).fetchone()
+                    if client_id:
+                        row = conn.execute(
+                            "INSERT INTO applied_detections (detection_id, system_id, host_id, client_id) VALUES (?, ?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                            [detection_id, system_id, client_id]).fetchone()
+                    else:
+                        row = conn.execute(
+                            "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, ?, NULL) RETURNING id, detection_id, system_id, host_id, applied_at",
+                            [detection_id, system_id]).fetchone()
                     if row:
                         last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
                 else:
@@ -1218,43 +1646,56 @@ def apply_detection(detection_id: str, system_id: Optional[str] = None, host_id:
                     if dup:
                         last = AppliedDetection(id=dup[0], detection_id=detection_id, host_id=hid)
                         continue
-                    row = conn.execute(
-                        "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
-                        [detection_id, hid]).fetchone()
+                    if client_id:
+                        row = conn.execute(
+                            "INSERT INTO applied_detections (detection_id, system_id, host_id, client_id) VALUES (?, NULL, ?, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                            [detection_id, hid, client_id]).fetchone()
+                    else:
+                        row = conn.execute(
+                            "INSERT INTO applied_detections (detection_id, system_id, host_id) VALUES (?, NULL, ?) RETURNING id, detection_id, system_id, host_id, applied_at",
+                            [detection_id, hid]).fetchone()
                     if row:
                         last = AppliedDetection(id=row[0], detection_id=row[1], system_id=row[2], host_id=row[3], applied_at=row[4])
     return last
 
 
-def remove_applied_detection(applied_id: str) -> bool:
+def remove_applied_detection(applied_id: str, client_id: str = None) -> bool:
     """Remove an applied detection entry by its ID."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        before = conn.execute("SELECT COUNT(*) FROM applied_detections WHERE id = ?", [applied_id]).fetchone()[0]
-        conn.execute("DELETE FROM applied_detections WHERE id = ?", [applied_id])
+        before = conn.execute("SELECT COUNT(*) FROM applied_detections WHERE id = ?" + frag, [applied_id] + params).fetchone()[0]
+        conn.execute("DELETE FROM applied_detections WHERE id = ?" + frag, [applied_id] + params)
     return before > 0
 
 
-def remove_detection_for_system(detection_id: str, system_id: str) -> int:
+def remove_detection_for_system(detection_id: str, system_id: str, client_id: str = None) -> int:
     """Remove applied detection rows for all hosts in a system (and any system-level row). Returns count removed."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
+        # Verify system ownership when client_id is provided
+        if client_id:
+            owner = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
+            if not owner or owner[0] != client_id:
+                return 0
         count = 0
         host_ids = [r[0] for r in conn.execute(
             "SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()]
         if host_ids:
             placeholders = ",".join("?" for _ in host_ids)
             count += conn.execute(
-                f"DELETE FROM applied_detections WHERE detection_id = ? AND host_id IN ({placeholders})",
-                [detection_id] + host_ids).rowcount
+                f"DELETE FROM applied_detections WHERE detection_id = ? AND host_id IN ({placeholders})" + frag,
+                [detection_id] + host_ids + params).rowcount
         # Also remove system-level row (used when system has no hosts)
         count += conn.execute(
-            "DELETE FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL",
-            [detection_id, system_id]).rowcount
+            "DELETE FROM applied_detections WHERE detection_id = ? AND system_id = ? AND host_id IS NULL" + frag,
+            [detection_id, system_id] + params).rowcount
     return count
 
 
-def _load_applied_detections() -> Dict[str, List[AppliedDetection]]:
+def _load_applied_detections(client_id: str = None) -> Dict[str, List[AppliedDetection]]:
     """Load all applied detections keyed by detection_id for fast lookup.
     Migrates any legacy system-level rows (system_id set, host_id NULL) to per-host rows."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             # Migrate legacy system-level rows to per-host rows
@@ -1277,8 +1718,8 @@ def _load_applied_detections() -> Dict[str, List[AppliedDetection]]:
                 conn.execute("DELETE FROM applied_detections WHERE id = ?", [leg_id])
 
             rows = conn.execute(
-                "SELECT id, detection_id, system_id, host_id, applied_at FROM applied_detections"
-            ).fetchall()
+                "SELECT id, detection_id, system_id, host_id, applied_at FROM applied_detections WHERE 1=1" + frag,
+                params).fetchall()
         result: Dict[str, List[AppliedDetection]] = {}
         for r in rows:
             ad = AppliedDetection(id=r[0], detection_id=r[1], system_id=r[2], host_id=r[3], applied_at=r[4])
@@ -1342,15 +1783,16 @@ def _enrich_detections_with_applied(detections: List[VulnDetection],
     return detections
 
 
-def _load_all_blind_spots(entity_type: str) -> Dict[str, List[BlindSpot]]:
+def _load_all_blind_spots(entity_type: str, client_id: str = None) -> Dict[str, List[BlindSpot]]:
     """Load all blind spots of a given type, grouped by entity_id."""
+    frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             rows = conn.execute(
                 "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
                 "COALESCE(override_type, 'gap') "
-                "FROM blind_spots WHERE entity_type = ?",
-                [entity_type],
+                "FROM blind_spots WHERE entity_type = ?" + frag,
+                [entity_type] + params,
             ).fetchall()
         result: Dict[str, List[BlindSpot]] = {}
         for r in rows:
@@ -1420,7 +1862,7 @@ def ingest_cisa_feed(json_bytes):
 # Report Data Builders
 # ---------------------------------------------------------------------------
 
-def _build_baseline_heatmap(baselines: List[Dict]) -> Dict:
+def _build_baseline_heatmap(baselines: List[Dict], client_id: str = None) -> Dict:
     """Build MITRE ATT&CK heatmap matrix from baseline coverage data.
 
     Returns dict with: matrix, active_tactics, metrics, narrative.
@@ -1439,7 +1881,7 @@ def _build_baseline_heatmap(baselines: List[Dict]) -> Dict:
         from app.services.database import get_database_service
         _db = get_database_service()
         ttp_names = _db.get_technique_names()
-        ttp_rule_counts = _db.get_ttp_rule_counts()
+        ttp_rule_counts = _db.get_ttp_rule_counts(client_id=client_id)
     except Exception:
         ttp_names = {}
         ttp_rule_counts = {}
@@ -1529,29 +1971,29 @@ def _build_baseline_heatmap(baselines: List[Dict]) -> Dict:
     }
 
 
-def build_system_report_data(system_id: str, include_devices: bool = True) -> Optional[Dict]:
+def build_system_report_data(system_id: str, include_devices: bool = True, client_id: str = None) -> Optional[Dict]:
     """Build all data needed for System detail reports (CISO + Technical).
     
     Args:
         system_id: System ID to build report for
         include_devices: If False, excludes all device/host-specific tables and metrics
     """
-    system = get_system(system_id)
+    system = get_system(system_id, client_id=client_id)
     if not system:
         return None
 
     kev = _load_cisa_kev()
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
-    detections = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     for dets in detections.values():
         _enrich_detections_with_applied(dets, applied_map)
 
-    all_software = _list_all_software_by_host()
-    hosts = list_hosts(system_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
+    hosts = list_hosts(system_id, client_id=client_id)
 
     # Load all CVE blind spots once
-    all_blind_spots = _load_all_blind_spots("cve")
+    all_blind_spots = _load_all_blind_spots("cve", client_id=client_id)
 
     # Build per-host vulnerability data with full RAG status
     host_rows: List[Dict] = []
@@ -1644,7 +2086,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
     baselines = get_system_baselines(system_id)
     snapshots = get_baseline_snapshots(system_id)
     try:
-        heatmap = _build_baseline_heatmap(baselines)
+        heatmap = _build_baseline_heatmap(baselines, client_id=client_id)
     except Exception as _e:
         import logging as _log
         _log.getLogger(__name__).warning(f"Baseline heatmap build failed: {_e}")
@@ -1714,28 +2156,28 @@ def build_system_report_data(system_id: str, include_devices: bool = True) -> Op
     }
 
 
-def build_cve_report_data(cve_id: str, search_filter: str = "") -> Optional[Dict]:
+def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str = None) -> Optional[Dict]:
     """Build all data needed for the CVE Audit Report."""
     kev_entries = _load_cisa_kev()
     kev_entry = next((k for k in kev_entries if k.get("cveID", "").upper() == cve_id.upper()), None)
     if not kev_entry:
         return None
 
-    detections_map = list_cve_detections()
-    applied_map = _load_applied_detections()
+    detections_map = list_cve_detections(client_id=client_id)
+    applied_map = _load_applied_detections(client_id=client_id)
     cve_dets = detections_map.get(cve_id.upper(), [])
     _enrich_detections_with_applied(cve_dets, applied_map)
 
-    techniques = get_cve_techniques(cve_id)
-    technique_rules = get_rules_for_cve_techniques(cve_id)
-    cve_blind_spots = get_blind_spots("cve", cve_id.upper())
+    techniques = get_cve_techniques(cve_id, client_id=client_id)
+    technique_rules = get_rules_for_cve_techniques(cve_id, client_id=client_id)
+    cve_blind_spots = get_blind_spots("cve", cve_id.upper(), client_id=client_id)
 
     # Build affected systems/hosts matrix
-    all_hosts_by_sys = _list_all_hosts_by_system()
-    all_software = _list_all_software_by_host()
+    all_hosts_by_sys = _list_all_hosts_by_system(client_id=client_id)
+    all_software = _list_all_software_by_host(client_id=client_id)
     systems_map: Dict[str, Dict] = {}
 
-    for system in list_systems():
+    for system in list_systems(client_id=client_id):
         for host in all_hosts_by_sys.get(system.id, []):
             # Apply search filter
             if search_filter:
@@ -1798,25 +2240,26 @@ def build_cve_report_data(cve_id: str, search_filter: str = "") -> Optional[Dict
     }
 
 
-def build_baseline_report_data(baseline_id: str) -> Optional[Dict]:
+def build_baseline_report_data(baseline_id: str, client_id: str = None) -> Optional[Dict]:
     """Build all data needed for a Baseline Assurance Report.
 
     Collects the baseline definition, all applied systems, and per-system
     step-level RAG coverage.
     """
-    playbook = get_playbook(baseline_id)
+    playbook = get_playbook(baseline_id, client_id=client_id)
     if not playbook:
         return None
 
     # Per-step per-system RAG coverage
-    step_coverage = get_baseline_step_coverage(baseline_id)
+    step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
 
-    # Collect applied systems with IDs
+    # Collect applied systems with IDs (scoped to active client)
+    cf, cp = _cf("s.", client_id)
     with _get_conn() as conn:
         sys_rows = conn.execute(
             "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ? ORDER BY s.name",
-            [baseline_id],
+            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ?" + cf + " ORDER BY s.name",
+            [baseline_id] + cp,
         ).fetchall()
     system_ids = [r[0] for r in sys_rows]
     system_names = {r[0]: r[1] for r in sys_rows}
@@ -1920,10 +2363,12 @@ def build_baseline_report_data(baseline_id: str) -> Optional[Dict]:
 # Baselines — Engine
 # ---------------------------------------------------------------------------
 
-def list_playbooks() -> List[Playbook]:
+def list_playbooks(client_id: str = None) -> List[Playbook]:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks ORDER BY name"
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE 1=1" + frag + " ORDER BY name",
+            params,
         ).fetchall()
     result = []
     for r in rows:
@@ -1932,19 +2377,42 @@ def list_playbooks() -> List[Playbook]:
         result.append(pb)
     return result
 
+def assign_baseline_to_client(baseline_id: str, client_id: str) -> bool:
+    with _get_conn() as conn:
+        r = conn.execute("SELECT id, client_id FROM playbooks WHERE id = ?", [baseline_id]).fetchone()
+        if not r:
+            return False
+        conn.execute("UPDATE playbooks SET client_id = ? WHERE id = ?", [client_id, baseline_id])
+        # Cascade to system_baselines linking this playbook
+        conn.execute("UPDATE system_baselines SET client_id = ? WHERE playbook_id = ?",
+                     [client_id, baseline_id])
+    return True
 
-def get_baseline_step_coverage(baseline_id: str) -> Dict[str, List[Dict]]:
+def unassign_baseline_from_client(baseline_id: str, client_id: str, default_client_id: str = None) -> bool:
+    with _get_conn() as conn:
+        r = conn.execute("SELECT id FROM playbooks WHERE id = ? AND client_id = ?", [baseline_id, client_id]).fetchone()
+        if not r:
+            return False
+        target_client = default_client_id or client_id
+        conn.execute("UPDATE playbooks SET client_id = ? WHERE id = ?", [target_client, baseline_id])
+        conn.execute("UPDATE system_baselines SET client_id = ? WHERE playbook_id = ?",
+                     [target_client, baseline_id])
+    return True
+
+
+def get_baseline_step_coverage(baseline_id: str, client_id: str = None) -> Dict[str, List[Dict]]:
     """Compute per-step per-system RAG status for a single baseline.
 
     Returns {step_id: [{system_id, system_name, status}, ...]} where
     status is one of 'green', 'amber', 'red', 'grey'.
     """
     with _get_conn() as conn:
-        # Applied systems
+        # Applied systems (scoped to active client)
+        cf, cp = _cf("s.", client_id)
         sys_rows = conn.execute(
             "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ? ORDER BY s.name",
-            [baseline_id],
+            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ?" + cf + " ORDER BY s.name",
+            [baseline_id] + cp,
         ).fetchall()
         if not sys_rows:
             return {}
@@ -2040,7 +2508,7 @@ def get_baseline_step_coverage(baseline_id: str) -> Dict[str, List[Dict]]:
     return result
 
 
-def get_baselines_overview() -> List[Dict]:
+def get_baselines_overview(client_id: str = None) -> List[Dict]:
     """Efficient overview of all baselines for the listing page.
 
     Returns a list of dicts with:
@@ -2048,10 +2516,12 @@ def get_baselines_overview() -> List[Dict]:
       system_count, worst_status ('green'|'amber'|'red'|'grey'|None)
     Uses a single DB connection for all queries.
     """
+    frag, fparams = _cf("", client_id)
     with _get_conn() as conn:
         # All playbooks
         pbs = conn.execute(
-            "SELECT id, name, description FROM playbooks ORDER BY name"
+            "SELECT id, name, description FROM playbooks WHERE 1=1" + frag + " ORDER BY name",
+            fparams,
         ).fetchall()
         if not pbs:
             return []
@@ -2082,10 +2552,11 @@ def get_baselines_overview() -> List[Dict]:
         ).fetchall()
         det_counts = dict(det_rows)
 
-        # System counts per playbook
+        # System counts per playbook (JOIN systems to exclude orphaned rows)
         sys_rows = conn.execute(
-            f"SELECT playbook_id, COUNT(DISTINCT system_id) FROM system_baselines "
-            f"WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
+            f"SELECT sb.playbook_id, COUNT(DISTINCT sb.system_id) "
+            f"FROM system_baselines sb JOIN systems s ON s.id = sb.system_id "
+            f"WHERE sb.playbook_id IN ({placeholders}) GROUP BY sb.playbook_id",
             pb_ids,
         ).fetchall()
         sys_counts = dict(sys_rows)
@@ -2221,23 +2692,25 @@ def get_baselines_overview() -> List[Dict]:
     return results
 
 
-def get_playbook_header(playbook_id: str) -> Optional[Playbook]:
+def get_playbook_header(playbook_id: str, client_id: str = None) -> Optional[Playbook]:
     """Lightweight playbook fetch — no steps loaded. For breadcrumbs etc."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?",
-            [playbook_id],
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?" + frag,
+            [playbook_id] + params,
         ).fetchone()
     if not r:
         return None
     return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
 
 
-def get_playbook(playbook_id: str) -> Optional[Playbook]:
+def get_playbook(playbook_id: str, client_id: str = None) -> Optional[Playbook]:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?",
-            [playbook_id],
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?" + frag,
+            [playbook_id] + params,
         ).fetchone()
     if not r:
         return None
@@ -2311,17 +2784,24 @@ def _get_step_detections(step_id: str) -> List[StepDetection]:
     return [StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual") for r in rows]
 
 
-def create_playbook(name: str, description: str = "") -> Playbook:
+def create_playbook(name: str, description: str = "", client_id: str = None) -> Playbook:
     with _get_conn() as conn:
-        r = conn.execute(
-            "INSERT INTO playbooks (name, description) VALUES (?, ?) RETURNING id, name, description, created_at, updated_at",
-            [name, description],
-        ).fetchone()
+        if client_id:
+            r = conn.execute(
+                "INSERT INTO playbooks (name, description, client_id) VALUES (?, ?, ?) RETURNING id, name, description, created_at, updated_at",
+                [name, description, client_id],
+            ).fetchone()
+        else:
+            r = conn.execute(
+                "INSERT INTO playbooks (name, description) VALUES (?, ?) RETURNING id, name, description, created_at, updated_at",
+                [name, description],
+            ).fetchone()
     return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
 
 
-def update_playbook(playbook_id: str, name: str = None, description: str = None) -> Optional[Playbook]:
+def update_playbook(playbook_id: str, name: str = None, description: str = None, client_id: str = None) -> Optional[Playbook]:
     """Update editable fields on a playbook (baseline)."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         sets, vals = [], []
         if name is not None:
@@ -2330,8 +2810,8 @@ def update_playbook(playbook_id: str, name: str = None, description: str = None)
             sets.append("description = ?"); vals.append(description)
         if sets:
             vals.append(playbook_id)
-            conn.execute(f"UPDATE playbooks SET {', '.join(sets)} WHERE id = ?", vals)
-    return get_playbook(playbook_id)
+            conn.execute(f"UPDATE playbooks SET {', '.join(sets)} WHERE id = ?" + frag, vals + params)
+    return get_playbook(playbook_id, client_id=client_id)
 
 
 def generate_baseline_from_actor(
@@ -2387,17 +2867,23 @@ def generate_baseline_from_actor(
     return playbook
 
 
-def delete_playbook(playbook_id: str) -> bool:
+def delete_playbook(playbook_id: str, client_id: str = None) -> bool:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
+        # Verify ownership when client_id is provided
+        if client_id:
+            owner = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+            if not owner or owner[0] != client_id:
+                return False
         conn.execute("DELETE FROM playbook_steps WHERE playbook_id = ?", [playbook_id])
         conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
-        cnt = conn.execute("DELETE FROM playbooks WHERE id = ?", [playbook_id]).rowcount
+        cnt = conn.execute("DELETE FROM playbooks WHERE id = ?" + frag, [playbook_id] + params).rowcount
     return cnt > 0
 
 
 def add_playbook_step(playbook_id: str, step_number: int, title: str,
                       technique_id: str = "", required_rule: str = "",
-                      description: str = "", tactic: str = "") -> PlaybookStep:
+                      description: str = "", tactic: str = "", client_id: str = None) -> PlaybookStep:
     normalized_technique_id = normalize_technique_id(technique_id)
     with _get_conn() as conn:
         r = conn.execute(
@@ -2415,7 +2901,7 @@ def add_playbook_step(playbook_id: str, step_number: int, title: str,
     return step
 
 
-def delete_playbook_step(step_id: str) -> bool:
+def delete_playbook_step(step_id: str, client_id: str = None) -> bool:
     with _get_conn() as conn:
         conn.execute("DELETE FROM step_techniques WHERE step_id = ?", [step_id])
         conn.execute("DELETE FROM step_detections WHERE step_id = ?", [step_id])
@@ -2423,8 +2909,16 @@ def delete_playbook_step(step_id: str) -> bool:
     return cnt > 0
 
 
-def apply_baseline(system_id: str, playbook_id: str) -> SystemBaseline:
+def apply_baseline(system_id: str, playbook_id: str, client_id: str = None) -> SystemBaseline:
     with _get_conn() as conn:
+        # Validate same-client ownership when client_id is provided
+        if client_id:
+            sys_client = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
+            pb_client = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+            if not sys_client or sys_client[0] != client_id:
+                raise ValueError(f"System {system_id} does not belong to active client")
+            if not pb_client or pb_client[0] != client_id:
+                raise ValueError(f"Baseline {playbook_id} does not belong to active client")
         dup = conn.execute(
             "SELECT id FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
             [system_id, playbook_id],
@@ -2439,8 +2933,16 @@ def apply_baseline(system_id: str, playbook_id: str) -> SystemBaseline:
     return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
 
 
-def remove_baseline(system_id: str, playbook_id: str) -> bool:
+def remove_baseline(system_id: str, playbook_id: str, client_id: str = None) -> bool:
     with _get_conn() as conn:
+        # Validate same-client ownership when client_id is provided
+        if client_id:
+            sys_client = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
+            pb_client = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+            if not sys_client or sys_client[0] != client_id:
+                raise ValueError(f"System {system_id} does not belong to active client")
+            if not pb_client or pb_client[0] != client_id:
+                raise ValueError(f"Baseline {playbook_id} does not belong to active client")
         cnt = conn.execute(
             "DELETE FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
             [system_id, playbook_id],
@@ -2452,6 +2954,7 @@ def get_system_baselines(
     system_id: str,
     playbook_ids: Optional[List[str]] = None,
     include_detection_details: bool = True,
+    client_id: str = None,
 ) -> List[Dict]:
     """Return playbooks applied to a system with step-level RAG coverage."""
     query = (
@@ -2460,6 +2963,9 @@ def get_system_baselines(
         "WHERE sb.system_id = ?"
     )
     params: List[str] = [system_id]
+    if client_id:
+        query += " AND p.client_id = ?"
+        params.append(client_id)
     if playbook_ids:
         placeholders = ",".join("?" for _ in playbook_ids)
         query += f" AND sb.playbook_id IN ({placeholders})"
@@ -2470,7 +2976,7 @@ def get_system_baselines(
         rows = conn.execute(query, params).fetchall()
 
     # Get applied detections for this system's hosts (by step_detection ID)
-    hosts = list_hosts(system_id)
+    hosts = list_hosts(system_id, client_id=client_id)
     host_ids = {h.id for h in hosts}
 
     # Build set of step_detection IDs that have been applied to at least one host
@@ -2500,8 +3006,8 @@ def get_system_baselines(
         try:
             from app.services.database import get_database_service
             _db = get_database_service()
-            covered_ttps = _db.get_all_covered_ttps()
-            ttp_rule_counts = _db.get_ttp_rule_counts()
+            covered_ttps = _db.get_all_covered_ttps(client_id=client_id)
+            ttp_rule_counts = _db.get_ttp_rule_counts(client_id=client_id)
         except Exception:
             covered_ttps = set()
             ttp_rule_counts = {}
@@ -2762,7 +3268,7 @@ def _backfill_step_tactics():
 # Step-level CRUD (multi-technique, multi-detection)
 # ---------------------------------------------------------------------------
 
-def add_step_technique(step_id: str, technique_id: str) -> StepTechnique:
+def add_step_technique(step_id: str, technique_id: str, client_id: str = None) -> StepTechnique:
     normalized_technique_id = normalize_technique_id(technique_id)
     if not normalized_technique_id:
         raise ValueError("technique_id is required")
@@ -2781,13 +3287,13 @@ def add_step_technique(step_id: str, technique_id: str) -> StepTechnique:
     return StepTechnique(id=r[0], step_id=step_id, technique_id=normalized_technique_id)
 
 
-def remove_step_technique(technique_row_id: str) -> bool:
+def remove_step_technique(technique_row_id: str, client_id: str = None) -> bool:
     with _get_conn() as conn:
         cnt = conn.execute("DELETE FROM step_techniques WHERE id = ?", [technique_row_id]).rowcount
     return cnt > 0
 
 
-def update_step_technique(technique_row_id: str, technique_id: str) -> Optional[StepTechnique]:
+def update_step_technique(technique_row_id: str, technique_id: str, client_id: str = None) -> Optional[StepTechnique]:
     normalized_technique_id = normalize_technique_id(technique_id)
     if not normalized_technique_id:
         raise ValueError("technique_id is required")
@@ -2802,7 +3308,7 @@ def update_step_technique(technique_row_id: str, technique_id: str) -> Optional[
     return StepTechnique(id=r[0], step_id=r[1], technique_id=r[2])
 
 
-def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual") -> StepDetection:
+def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual", client_id: str = None) -> StepDetection:
     with _get_conn() as conn:
         r = conn.execute(
             "INSERT INTO step_detections (step_id, rule_ref, note, source) VALUES (?, ?, ?, ?) "
@@ -2812,7 +3318,7 @@ def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str 
     return StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual")
 
 
-def remove_step_detection(detection_row_id: str) -> bool:
+def remove_step_detection(detection_row_id: str, client_id: str = None) -> bool:
     with _get_conn() as conn:
         cnt = conn.execute("DELETE FROM step_detections WHERE id = ?", [detection_row_id]).rowcount
     return cnt > 0
@@ -2840,8 +3346,9 @@ def update_playbook_step(step_id: str, title: str = None, tactic: str = None,
     return get_playbook_step(step_id)
 
 
-def get_playbook_step(step_id: str) -> Optional[PlaybookStep]:
-    """Get a single step with its techniques and detections."""
+def get_playbook_step(step_id: str, client_id: str = None) -> Optional[PlaybookStep]:
+    """Get a single step with its techniques and detections.
+    client_id accepted for API compatibility; steps are scoped via their parent playbook."""
     with _get_conn() as conn:
         r = conn.execute(
             "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic "
@@ -2860,7 +3367,7 @@ def get_playbook_step(step_id: str) -> Optional[PlaybookStep]:
     return step
 
 
-def get_step_affected_systems(step_id: str) -> List[Dict]:
+def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]:
     """Get systems where the baseline containing this tactic is applied, with per-system RAG status.
     4-tier RAG logic:
       GREEN = detection rule applied (covered)
@@ -2903,14 +3410,14 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
                 applied_sys_map.setdefault(det_id, set()).add(sys_id)
 
     # Load blind spots for this tactic
-    blind_spots = get_blind_spots("tactic", step_id)
+    blind_spots = get_blind_spots("tactic", step_id, client_id=client_id)
 
     result = []
     for system_id, system_name in rows:
         # Fetch system description
-        sys_obj = get_system(system_id)
+        sys_obj = get_system(system_id, client_id=client_id)
         system_description = sys_obj.description if sys_obj else ""
-        hosts = list_hosts(system_id)
+        hosts = list_hosts(system_id, client_id=client_id)
         host_ids = {h.id for h in hosts}
 
         # Check direct application: detection applied to at least one host in system,
@@ -2962,36 +3469,46 @@ def get_step_affected_systems(step_id: str) -> List[Dict]:
 
 def add_blind_spot(entity_type: str, entity_id: str, reason: str,
                    system_id: str = None, host_id: str = None,
-                   created_by: str = "", override_type: str = "gap") -> BlindSpot:
+                   created_by: str = "", override_type: str = "gap",
+                   client_id: str = None) -> BlindSpot:
     """Record a known blind spot (negative coverage).
     override_type: 'gap' (amber/known gap) or 'na' (grey/not applicable)."""
     if override_type not in ("gap", "na"):
         override_type = "gap"
     with _get_conn() as conn:
-        r = conn.execute(
-            "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
-            [entity_type, entity_id, system_id, host_id, reason, created_by, override_type],
-        ).fetchone()
+        if client_id:
+            r = conn.execute(
+                "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type, client_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
+                [entity_type, entity_id, system_id, host_id, reason, created_by, override_type, client_id],
+            ).fetchone()
+        else:
+            r = conn.execute(
+                "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
+                [entity_type, entity_id, system_id, host_id, reason, created_by, override_type],
+            ).fetchone()
     return BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
                      override_type=r[8] if r[8] else "gap")
 
 
-def remove_blind_spot(blind_spot_id: str) -> bool:
+def remove_blind_spot(blind_spot_id: str, client_id: str = None) -> bool:
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
-        cnt = conn.execute("DELETE FROM blind_spots WHERE id = ?", [blind_spot_id]).rowcount
+        cnt = conn.execute("DELETE FROM blind_spots WHERE id = ?" + frag, [blind_spot_id] + params).rowcount
     return cnt > 0
 
 
-def get_blind_spots(entity_type: str, entity_id: str) -> List[BlindSpot]:
+def get_blind_spots(entity_type: str, entity_id: str, client_id: str = None) -> List[BlindSpot]:
     """Get all blind spots for a given entity (CVE or step)."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
             "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
             "COALESCE(override_type, 'gap') "
-            "FROM blind_spots WHERE entity_type = ? AND entity_id = ? ORDER BY created_at",
-            [entity_type, entity_id],
+            "FROM blind_spots WHERE entity_type = ? AND entity_id = ?" + frag + " ORDER BY created_at",
+            [entity_type, entity_id] + params,
         ).fetchall()
     return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
                       host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
@@ -3027,7 +3544,7 @@ def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
 
 def create_baseline_snapshot(
     system_id: str, baseline_id: str, label: str, captured_by: str,
-    captured_at=None,
+    captured_at=None, client_id: str = None,
 ) -> Dict:
     """Capture a point-in-time snapshot of baseline coverage for a system."""
     import uuid
@@ -3049,14 +3566,24 @@ def create_baseline_snapshot(
     score_pct = float(bl["coverage_pct"])
 
     with _get_conn() as conn:
-        conn.execute(
-            "INSERT INTO system_baseline_snapshots "
-            "(id, system_id, baseline_id, captured_at, captured_by, label, "
-            "score_percentage, count_green, count_amber, count_red, count_grey) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [snap_id, system_id, baseline_id, ts, captured_by, label,
-             score_pct, count_green, count_amber, count_red, count_grey],
-        )
+        if client_id:
+            conn.execute(
+                "INSERT INTO system_baseline_snapshots "
+                "(id, system_id, baseline_id, captured_at, captured_by, label, "
+                "score_percentage, count_green, count_amber, count_red, count_grey, client_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [snap_id, system_id, baseline_id, ts, captured_by, label,
+                 score_pct, count_green, count_amber, count_red, count_grey, client_id],
+            )
+        else:
+            conn.execute(
+                "INSERT INTO system_baseline_snapshots "
+                "(id, system_id, baseline_id, captured_at, captured_by, label, "
+                "score_percentage, count_green, count_amber, count_red, count_grey) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [snap_id, system_id, baseline_id, ts, captured_by, label,
+                 score_pct, count_green, count_amber, count_red, count_grey],
+            )
 
     return {
         "id": snap_id, "system_id": system_id, "baseline_id": baseline_id,
@@ -3085,7 +3612,7 @@ def create_all_baseline_snapshots(
     return results
 
 
-def get_baseline_snapshots(system_id: str) -> List[Dict]:
+def get_baseline_snapshots(system_id: str, client_id: str = None) -> List[Dict]:
     """Return all snapshots for a system, newest first, with baseline names."""
     with _get_conn() as conn:
         rows = conn.execute(
@@ -3109,10 +3636,138 @@ def get_baseline_snapshots(system_id: str) -> List[Dict]:
     ]
 
 
-def delete_baseline_snapshot(snapshot_id: str) -> bool:
+def delete_baseline_snapshot(snapshot_id: str, client_id: str = None) -> bool:
     """Delete a single snapshot."""
+    frag, params = _cf("", client_id)
     with _get_conn() as conn:
         cnt = conn.execute(
-            "DELETE FROM system_baseline_snapshots WHERE id = ?", [snapshot_id],
+            "DELETE FROM system_baseline_snapshots WHERE id = ?" + frag, [snapshot_id] + params,
         ).rowcount
     return cnt > 0
+
+
+# ---------------------------------------------------------------------------
+# Cross-Tenant Baseline Cloning
+# ---------------------------------------------------------------------------
+
+def clone_baseline_cross_tenant(
+    source_client_id: str,
+    target_client_id: str,
+    baseline_id: str,
+) -> Dict:
+    """Clone a baseline (playbook + steps + techniques + detections) from one
+    tenant's database into another.  All rows receive fresh UUIDs so the
+    clone is completely independent of the source.
+
+    Returns a dict with the new playbook id and name.
+    """
+    import uuid
+    import duckdb
+    from app.services.tenant_manager import resolve_tenant_db_path, is_multi_db_mode
+    from app.config import get_settings
+
+    if source_client_id == target_client_id:
+        raise ValueError("Source and target clients must be different.")
+
+    settings = get_settings()
+    multi_db = is_multi_db_mode()
+
+    if multi_db:
+        src_path = resolve_tenant_db_path(source_client_id, settings.data_dir)
+        tgt_path = resolve_tenant_db_path(target_client_id, settings.data_dir)
+        if not src_path or not tgt_path:
+            raise ValueError("Both clients must have tenant databases.")
+        src = duckdb.connect(src_path)
+        tgt = duckdb.connect(tgt_path)
+    else:
+        # Single DB — use a single shared connection
+        src = _get_conn().__enter__()
+        tgt = src
+
+    try:
+        result = _clone_baseline_inner(src, tgt, baseline_id, target_client_id)
+    finally:
+        if multi_db:
+            src.close()
+            tgt.close()
+        else:
+            src.__exit__(None, None, None)
+
+    logger.info(
+        f"Baseline cloned from client {source_client_id} to "
+        f"{target_client_id} as '{result['name']}' (new id={result['id']})"
+    )
+    return result
+
+
+def _clone_baseline_inner(src, tgt, baseline_id: str, target_client_id: str) -> Dict:
+    """Core cloning logic shared by both single-DB and multi-DB paths."""
+    import uuid
+
+    # 1. Fetch source playbook
+    pb = src.execute(
+        "SELECT id, name, description FROM playbooks WHERE id = ?",
+        [baseline_id],
+    ).fetchone()
+    if not pb:
+        raise ValueError("Baseline not found in source tenant.")
+
+    new_pb_id = str(uuid.uuid4())
+    clone_name = f"{pb[1]} (clone)"
+
+    tgt.execute(
+        "INSERT INTO playbooks (id, name, description, client_id) "
+        "VALUES (?, ?, ?, ?)",
+        [new_pb_id, clone_name, pb[2] or "", target_client_id],
+    )
+
+    # 2. Copy playbook_steps with new IDs
+    steps = src.execute(
+        "SELECT id, step_number, title, technique_id, required_rule, "
+        "description, tactic FROM playbook_steps WHERE playbook_id = ?",
+        [baseline_id],
+    ).fetchall()
+
+    step_id_map: Dict[str, str] = {}
+    for s in steps:
+        new_step_id = str(uuid.uuid4())
+        step_id_map[s[0]] = new_step_id
+        tgt.execute(
+            "INSERT INTO playbook_steps "
+            "(id, playbook_id, step_number, title, technique_id, "
+            "required_rule, description, tactic) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [new_step_id, new_pb_id, s[1], s[2], s[3], s[4], s[5], s[6]],
+        )
+
+    # 3. Copy step_techniques
+    if step_id_map:
+        old_ids = list(step_id_map.keys())
+        ph = ",".join("?" for _ in old_ids)
+        techs = src.execute(
+            f"SELECT id, step_id, technique_id FROM step_techniques "
+            f"WHERE step_id IN ({ph})",
+            old_ids,
+        ).fetchall()
+        for t in techs:
+            tgt.execute(
+                "INSERT INTO step_techniques (id, step_id, technique_id) "
+                "VALUES (?, ?, ?)",
+                [str(uuid.uuid4()), step_id_map[t[1]], t[2]],
+            )
+
+        # 4. Copy step_detections
+        dets = src.execute(
+            f"SELECT id, step_id, rule_ref, note, source "
+            f"FROM step_detections WHERE step_id IN ({ph})",
+            old_ids,
+        ).fetchall()
+        for d in dets:
+            tgt.execute(
+                "INSERT INTO step_detections "
+                "(id, step_id, rule_ref, note, source) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [str(uuid.uuid4()), step_id_map[d[1]], d[2], d[3], d[4]],
+            )
+
+    return {"id": new_pb_id, "name": clone_name, "steps": len(steps)}

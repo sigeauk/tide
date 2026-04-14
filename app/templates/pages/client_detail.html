@@ -1,0 +1,393 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}{{ client.name }} | Clients | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
+    <div>
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
+            <a href="/management?tab=clients" style="color:var(--color-muted);font-size:0.85rem;">&larr; Clients</a>
+        </div>
+        <h1 class="page-title-hero">{{ client.name }}</h1>
+        <span class="system-card__classification" style="margin-top:0.25rem;">{{ client.slug }}</span>
+        <p class="page-subtitle">
+            {% if client.description %}{{ client.description }}{% else %}No description.{% endif %}
+        </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-shrink:0;align-items:flex-start;padding-top:0.5rem;">
+        <button class="btn btn-secondary btn-sm" onclick="openEditClientModal()">
+            {{ icon('edit-2', '14') }} Edit
+        </button>
+        {% if not client.is_default %}
+        <button class="btn btn-danger btn-sm"
+                onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')">
+            {{ icon('trash-2', '14') }} Delete
+        </button>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Stats strip -->
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('server', '16') }} Linked SIEMs</div>
+        <div class="metric-value">{{ client_siems | length }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('monitor', '16') }} Systems</div>
+        <div class="metric-value">{{ client_systems | length }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('shield', '16') }} Baselines</div>
+        <div class="metric-value">{{ client_baselines | length }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('users', '16') }} Assigned Users</div>
+        <div class="metric-value">{{ client_users | length }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('clock', '16') }} Created</div>
+        <div class="metric-value" style="font-size:1rem;">{{ client.created_at.strftime('%Y-%m-%d') if client.created_at else 'N/A' }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">{{ icon('check-circle', '16') }} Status</div>
+        <div class="metric-value">{% if client.is_default %}<span class="badge badge-info">Default</span>{% else %}<span class="badge badge-success">Active</span>{% endif %}</div>
+    </div>
+</div>
+
+<!-- Linked SIEMs Section -->
+<div class="card card-padded card-mb" id="client-siems-card">
+    <div id="client-siems-section">
+        {% include "partials/client_siems.html" %}
+    </div>
+</div>
+
+<!-- Assigned Users Section -->
+<div class="card card-padded card-mb" id="client-users-card">
+    <div id="client-users-section">
+        {% include "partials/client_users.html" %}
+    </div>
+</div>
+
+<!-- Client Systems Section -->
+<div class="card card-padded card-mb" id="client-systems-card">
+    <div id="client-systems-section">
+        {% include "partials/client_systems.html" %}
+    </div>
+</div>
+
+<!-- Client Baselines Section -->
+<div class="card card-padded card-mb" id="client-baselines-card">
+    <div id="client-baselines-section">
+        {% include "partials/client_baselines.html" %}
+    </div>
+</div>
+
+<!-- Edit Systems Modal -->
+<div id="edit-systems-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Manage Systems — {{ client.name }}</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-systems-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1rem;">
+            <!-- Current systems with remove -->
+            {% if client_systems %}
+            <div>
+                <label class="form-label">Current Systems</label>
+                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                    {% for sys in client_systems %}
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                        <span>{{ sys.name }}{% if sys.classification %} <span class="badge badge-muted" style="font-size:0.6rem;">{{ sys.classification }}</span>{% endif %}</span>
+                        <div style="display:flex;gap:0.25rem;">
+                            <button class="btn btn-ghost btn-sm"
+                                    onclick="document.getElementById('edit-systems-modal').style.display='none';openMoveSystemModal('{{ sys.id }}', '{{ sys.name }}')"
+                                    style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                                {{ icon('arrow-right-left', '12') }} Move
+                            </button>
+                            <button class="btn btn-ghost btn-sm text-danger"
+                                    hx-delete="/api/management/clients/{{ client.id }}/systems/{{ sys.id }}"
+                                    hx-target="#client-systems-section" hx-swap="innerHTML"
+                                    hx-confirm="Remove '{{ sys.name }}' from this client?"
+                                    style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                                {{ icon('x', '12') }} Remove
+                            </button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            <!-- Add system -->
+            {% if available_systems %}
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <form hx-post="/api/management/clients/{{ client.id }}/systems"
+                  hx-target="#client-systems-section" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
+                <label class="form-label">Add System</label>
+                <select name="system_id" class="form-input" required>
+                    <option value="" disabled selected>Select a system&hellip;</option>
+                    {% for sys in available_systems %}
+                    <option value="{{ sys.id }}">{{ sys.name }}{% if sys.classification %} ({{ sys.classification }}){% endif %}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add System</button>
+            </form>
+            {% endif %}
+            <!-- Move from another client -->
+            {% if all_clients %}
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <form hx-post="/api/management/clients/{{ client.id }}/move-from"
+                  hx-target="#client-systems-section" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
+                <label class="form-label">Move from Another Client</label>
+                <select name="source_client_id" class="form-input" required
+                        hx-get="/api/management/clients/{{ client.id }}/move-from/systems"
+                        hx-target="#edit-move-from-system-select"
+                        hx-trigger="change" hx-include="this" hx-swap="innerHTML">
+                    <option value="" disabled selected>Select source client&hellip;</option>
+                    {% for c in all_clients %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="system_id" id="edit-move-from-system-select" class="form-input" required>
+                    <option value="" disabled selected>Select a source client first&hellip;</option>
+                </select>
+                <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
+                    <input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);">
+                    Also move associated baselines
+                </label>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
+            </form>
+            {% endif %}
+            <div style="display:flex;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('edit-systems-modal').style.display='none'">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Move System Modal (outside HTMX swap zone) -->
+<div id="move-system-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Move System to Another Client</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('move-system-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-post="/api/management/clients/{{ client.id }}/move-system"
+              hx-target="#client-systems-section" hx-swap="innerHTML"
+              style="display:flex;flex-direction:column;gap:1rem;"
+              hx-on::before-request="if(event.detail.elt===this) document.getElementById('move-system-modal').style.display='none'">
+            <input type="hidden" name="system_id" id="move-system-id">
+            <div>
+                <p style="font-size:0.875rem;margin:0 0 0.5rem;">
+                    Moving: <strong id="move-system-name"></strong>
+                </p>
+            </div>
+            <div>
+                <label class="form-label">Target Client <span style="color:var(--color-danger)">*</span></label>
+                <select name="target_client_id" id="move-target-client" class="form-input" required
+                        hx-get="/api/management/clients/{{ client.id }}/move-check"
+                        hx-target="#move-check-result" hx-swap="innerHTML"
+                        hx-trigger="change" hx-include="closest form">
+                    <option value="" disabled selected>Select target client&hellip;</option>
+                    {% for c in all_clients %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="move-check-result">
+                <p style="color:var(--color-muted);padding:0.5rem;font-size:0.85rem;">Select a target client above.</p>
+            </div>
+            <div>
+                <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;cursor:pointer;">
+                    <input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);">
+                    Also move associated baselines
+                </label>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('move-system-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move System</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Edit Baselines Modal -->
+<div id="edit-baselines-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Manage Baselines — {{ client.name }}</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-baselines-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1rem;">
+            <!-- Current baselines with remove -->
+            {% if client_baselines %}
+            <div>
+                <label class="form-label">Current Baselines</label>
+                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                    {% for bl in client_baselines %}
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                        <span>{{ bl.name }}</span>
+                        <button class="btn btn-ghost btn-sm text-danger"
+                                hx-delete="/api/management/clients/{{ client.id }}/baselines/{{ bl.id }}"
+                                hx-target="#client-baselines-section" hx-swap="innerHTML"
+                                hx-confirm="Remove '{{ bl.name }}' from this client?"
+                                style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                            {{ icon('x', '12') }} Remove
+                        </button>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            <!-- Add baseline -->
+            {% if available_baselines %}
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <form hx-post="/api/management/clients/{{ client.id }}/baselines"
+                  hx-target="#client-baselines-section" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
+                <label class="form-label">Add Baseline</label>
+                <select name="baseline_id" class="form-input" required>
+                    <option value="" disabled selected>Select a baseline&hellip;</option>
+                    {% for bl in available_baselines %}
+                    <option value="{{ bl.id }}">{{ bl.name }}</option>
+                    {% endfor %}
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add Baseline</button>
+            </form>
+            {% endif %}
+            <!-- Clone from another client -->
+            {% if all_clients %}
+            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <form hx-post="/api/management/clients/{{ client.id }}/clone-baseline"
+                  hx-target="#client-baselines-section" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
+                <label class="form-label">Clone from Another Client</label>
+                <select name="source_client_id" class="form-input" required
+                        hx-get="/api/management/clients/{{ client.id }}/clone-baseline/baselines"
+                        hx-target="#edit-clone-baseline-select"
+                        hx-trigger="change" hx-include="this" hx-swap="innerHTML">
+                    <option value="" disabled selected>Select source client&hellip;</option>
+                    {% for c in all_clients %}
+                    <option value="{{ c.id }}">{{ c.name }}</option>
+                    {% endfor %}
+                </select>
+                <select name="baseline_id" id="edit-clone-baseline-select" class="form-input" required>
+                    <option value="" disabled selected>Select a source client first&hellip;</option>
+                </select>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone Baseline</button>
+            </form>
+            {% endif %}
+            <div style="display:flex;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('edit-baselines-modal').style.display='none'">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Client Modal -->
+<div id="edit-client-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">Edit Client</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('edit-client-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form id="edit-client-form" onsubmit="return submitEditClient(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <div>
+                <label for="edit-client-name" class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="edit-client-name" class="form-input" required maxlength="100"
+                       value="{{ client.name }}">
+            </div>
+            <div>
+                <label class="form-label">Slug</label>
+                <input type="text" class="form-input" value="{{ client.slug }}" disabled
+                       style="opacity:0.6;">
+            </div>
+            <div>
+                <label for="edit-client-desc" class="form-label">Description</label>
+                <textarea id="edit-client-desc" class="form-input" rows="3">{{ client.description or '' }}</textarea>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('edit-client-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openEditClientModal() {
+    document.getElementById('edit-client-modal').style.display = 'flex';
+}
+
+async function submitEditClient(e) {
+    e.preventDefault();
+    var payload = {
+        name: document.getElementById('edit-client-name').value,
+        description: document.getElementById('edit-client-desc').value || null,
+    };
+    try {
+        var resp = await fetch('/api/clients/{{ client.id }}', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Update failed', 'error');
+            return false;
+        }
+        showToast('Client updated', 'success');
+        window.location.reload();
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+async function confirmDeleteClient(id, name) {
+    if (!confirm('Delete client "' + name + '"? This cannot be undone.')) return;
+    try {
+        var resp = await fetch('/api/clients/' + id, {method: 'DELETE'});
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Delete failed', 'error');
+            return;
+        }
+        window.location.href = '/management?tab=clients';
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+}
+
+function openMoveSystemModal(systemId, systemName) {
+    document.getElementById('move-system-id').value = systemId;
+    document.getElementById('move-system-name').textContent = systemName;
+    document.getElementById('move-target-client').value = '';
+    document.getElementById('move-check-result').innerHTML = '<p style="color:var(--color-muted);padding:0.5rem;font-size:0.85rem;">Select a target client above.</p>';
+    document.getElementById('move-system-modal').style.display = 'flex';
+}
+</script>
+{% endblock %}

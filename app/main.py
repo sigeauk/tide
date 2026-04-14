@@ -17,7 +17,7 @@ import time
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api
 
 # Configure logging
 logging.basicConfig(
@@ -106,6 +106,14 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
+
+    # Initialize multi-tenant DB routing
+    try:
+        from app.services.tenant_manager import refresh_tenant_cache, sync_shared_data
+        refresh_tenant_cache(settings.data_dir, settings.db_path)
+        sync_shared_data(settings.data_dir, settings.db_path)
+    except Exception as e:
+        logger.warning(f"Tenant cache init failed (legacy single-DB mode): {e}")
 
     # Seed default baselines if not already present
     try:
@@ -249,6 +257,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
         "/settings": "page:settings",
+        "/clients": "page:clients",
+        "/management": "page:management",
     }
     
     # API prefix → resource mapping for write checks
@@ -262,6 +272,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/sigma": "page:sigma",
         "/api/inventory": "page:systems",
         "/api/settings": "page:settings",
+        "/api/clients": "page:clients",
+        "/api/management": "page:management",
     }
     
     async def dispatch(self, request: Request, call_next):
@@ -693,7 +705,7 @@ def create_app() -> FastAPI:
     
     # --- Helper function to render templates with global context ---
     def render_template(name: str, request: Request, context: dict = None):
-        """Render template with global context variables (brand_hue, cache_bust)."""
+        """Render template with global context variables (brand_hue, cache_bust, active_client)."""
         ctx = {
             "brand_hue": settings.brand_hue,
             "cache_bust": settings.tide_version,
@@ -701,6 +713,47 @@ def create_app() -> FastAPI:
         }
         if context:
             ctx.update(context)
+
+        # Inject active client info for the client switcher component
+        if "active_client" not in ctx:
+            try:
+                from app.services.database import get_database_service
+                _db = get_database_service()
+                _user = ctx.get("user")
+
+                # Resolve active client id (cookie → user default → system default)
+                _cid = request.cookies.get("active_client_id")
+                if not _cid and _user:
+                    with _db.get_connection() as conn:
+                        row = conn.execute(
+                            "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                            [_user.id],
+                        ).fetchone()
+                        if row:
+                            _cid = row[0]
+                if not _cid:
+                    with _db.get_connection() as conn:
+                        row = conn.execute(
+                            "SELECT id FROM clients WHERE is_default = true LIMIT 1",
+                        ).fetchone()
+                        if row:
+                            _cid = row[0]
+
+                # Fetch client record
+                ctx["active_client"] = _db.get_client(_cid) if _cid else None
+
+                # Fetch user's available clients (admin sees all)
+                if _user and hasattr(_user, "is_admin") and _user.is_admin():
+                    ctx["user_clients"] = _db.list_clients()
+                elif _user:
+                    _ids = _db.get_user_client_ids(_user.id)
+                    ctx["user_clients"] = [c for c in (_db.get_client(i) for i in _ids) if c]
+                else:
+                    ctx["user_clients"] = []
+            except Exception:
+                ctx["active_client"] = None
+                ctx["user_clients"] = []
+
         return templates.TemplateResponse(request, name, ctx)
     
     # Include API routers
@@ -713,6 +766,8 @@ def create_app() -> FastAPI:
     app.include_router(settings_api.router)
     app.include_router(inventory.router)
     app.include_router(external_sharing.router)
+    app.include_router(clients_api.router)
+    app.include_router(management_api.router)
     
     # --- HEALTH CHECK ---
     
@@ -821,7 +876,23 @@ def create_app() -> FastAPI:
         from app.services.database import get_database_service
         db = get_database_service()
         
-        metrics = db.get_rule_health_metrics()
+        # Resolve active client for tenant-scoped rule visibility
+        # (mirrors the resolution chain in deps.get_active_client)
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+        
+        allowed_spaces = db.get_client_siem_spaces(_cid) if _cid else None
+        
+        metrics = db.get_rule_health_metrics(allowed_spaces=allowed_spaces)
         # Derive spaces from metrics (avoids a second DB connection)
         spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
         
@@ -907,8 +978,22 @@ def create_app() -> FastAPI:
         from app.inventory_engine import get_inventory_stats, get_cve_overview_stats, get_baselines_overview
         db = get_database_service()
         
+        # Resolve active client for tenant-scoped metrics
+        # (mirrors the resolution chain in deps.get_active_client)
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+        
         # Single combined query for all metrics (1 connection, 1 validation load)
-        rule_metrics, promotion_metrics, threat_metrics = db.get_dashboard_metrics()
+        rule_metrics, promotion_metrics, threat_metrics = db.get_dashboard_metrics(client_id=_cid)
         
         # Integration / repo status (same as settings page)
         env_settings = get_settings()
@@ -957,7 +1042,21 @@ def create_app() -> FastAPI:
         from app.services.database import get_database_service
         db = get_database_service()
         
-        metrics = db.get_threat_landscape_metrics()
+        # Resolve active client for tenant-scoped coverage
+        # (mirrors the resolution chain in deps.get_active_client)
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+        
+        metrics = db.get_threat_landscape_metrics(client_id=_cid)
         
         # Derive filter options from metrics (avoids a second DB connection)
         origins = sorted(metrics.origin_breakdown.keys()) if metrics.origin_breakdown else []
@@ -1018,8 +1117,31 @@ def create_app() -> FastAPI:
         # Coverage data for MITRE pills (single DB connection)
         covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
 
-        # Dynamic env-driven dropdowns
-        spaces = sigma_mod.get_kibana_spaces()
+        # Dynamic env-driven dropdowns — scoped to active client's SIEMs
+        # Resolve active client (mirrors deps.get_active_client)
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+
+        # Build deploy targets from client's linked SIEMs
+        client_siems = db.get_client_siems(_cid) if _cid else []
+        deploy_targets = []
+        for s in client_siems:
+            if s.get("space"):
+                deploy_targets.append({
+                    "space": s["space"],
+                    "label": f'{s["label"]} ({s["environment_role"].title()})',
+                    "environment_role": s["environment_role"],
+                })
+
         indices = sigma_mod.get_elastic_indices()
         pipeline_files = sigma_mod.list_saved_pipelines()
         template_files = sigma_mod.list_saved_templates()
@@ -1040,7 +1162,7 @@ def create_app() -> FastAPI:
                 "technique_filter": technique,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
-                "spaces": spaces,
+                "deploy_targets": deploy_targets,
                 "indices": indices,
                 "pipeline_files": pipeline_files,
                 "template_files": template_files,
@@ -1123,6 +1245,113 @@ def create_app() -> FastAPI:
             }
         )
     
+    @app.get("/clients", response_class=HTMLResponse)
+    def clients_page(request: Request, user: CurrentUser, db: DbDep):
+        """Client management page (admin only)."""
+        if user and not user.is_admin():
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/", status_code=302)
+        clients = db.list_clients()
+        # Enrich each client dict with SIEM configs and users for the template
+        for c in clients:
+            c["_siem_configs"] = db.list_siem_configs(c["id"])
+            c["_users"] = db.get_client_users(c["id"])
+        return render_template(
+            "pages/clients.html",
+            request,
+            {
+                "user": user,
+                "active_page": "clients",
+                "clients": clients,
+            }
+        )
+
+    @app.get("/clients/{client_id}", response_class=HTMLResponse)
+    def client_detail_page(request: Request, client_id: str, user: CurrentUser, db: DbDep):
+        """Client detail page with SIEM linking and user assignment."""
+        if user and not user.is_admin():
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/", status_code=302)
+        client = db.get_client(client_id)
+        if not client:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Client not found")
+        client_siems = db.get_client_siems(client_id)
+        client_users = db.get_client_users(client_id)
+        # Available SIEMs — show all so same SIEM can be linked as production + staging
+        all_siems = db.list_siem_inventory()
+        available_siems = all_siems
+        # Available users not yet assigned
+        all_users = db.get_all_users()
+        assigned_user_ids = {u["id"] for u in client_users}
+        available_users = [u for u in all_users if u["id"] not in assigned_user_ids]
+        # Systems and baselines assigned to this client
+        from app.inventory_engine import list_systems, list_playbooks, get_system_summaries
+        from app.services.tenant_manager import tenant_context_for
+        with tenant_context_for(client_id):
+            client_systems = list_systems(client_id=client_id)
+            client_baselines = list_playbooks(client_id=client_id)
+            all_systems = list_systems()
+            all_baselines = list_playbooks()
+            system_summaries = get_system_summaries(client_id=client_id)
+        # Available systems/baselines not already assigned to this client
+        assigned_sys_ids = {s.id for s in client_systems}
+        available_systems = [s for s in all_systems if s.id not in assigned_sys_ids]
+        assigned_bl_ids = {b.id for b in client_baselines}
+        available_baselines = [b for b in all_baselines if b.id not in assigned_bl_ids]
+        # SIEM rule counts by space (total + enabled)
+        siem_rule_counts = {}
+        try:
+            import duckdb
+            conn = duckdb.connect(str(db.db_path), read_only=True)
+            rows = conn.execute(
+                "SELECT space, COUNT(*) as total, SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) as enabled FROM detection_rules WHERE space IS NOT NULL GROUP BY space"
+            ).fetchall()
+            conn.close()
+            for space, total, enabled in rows:
+                siem_rule_counts[str(space)] = {"total": int(total), "enabled": int(enabled)}
+        except Exception:
+            pass
+        return render_template(
+            "pages/client_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "management",
+                "client": client,
+                "client_siems": client_siems,
+                "client_users": client_users,
+                "available_siems": available_siems,
+                "available_users": available_users,
+                "client_systems": client_systems,
+                "client_baselines": client_baselines,
+                "available_systems": available_systems,
+                "available_baselines": available_baselines,
+                "system_summaries": system_summaries,
+                "siem_rule_counts": siem_rule_counts,
+                "all_clients": [c for c in db.list_clients() if c["id"] != client_id],
+            }
+        )
+    
+    @app.get("/management", response_class=HTMLResponse)
+    def management_page(request: Request, user: CurrentUser, db: DbDep):
+        """Management hub — admin-only area for Clients, SIEMs, Users, Permissions."""
+        if user and not user.is_admin():
+            from fastapi.responses import RedirectResponse
+            return RedirectResponse(url="/", status_code=302)
+        tab = request.query_params.get("tab", "clients")
+        if tab not in ("clients", "siems", "users", "permissions"):
+            tab = "clients"
+        return render_template(
+            "pages/management.html",
+            request,
+            {
+                "user": user,
+                "active_page": "management",
+                "active_tab": tab,
+            }
+        )
+    
     # --- SYNC API ---
     
     @app.post("/api/sync/elastic", response_class=HTMLResponse)
@@ -1172,16 +1401,18 @@ def create_app() -> FastAPI:
             </div>
             """)
         elif state == "complete":
-            count = _sync_status["rule_count"]
             return HTMLResponse(f"""
             <div id="sync-status" class="sync-tracker sync-complete">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
                     <polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
-                <span>Synced {count} rules from Elastic</span>
+                <span>Sync complete</span>
             </div>
-            <script>setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 4000);</script>
+            <script>
+            document.body.dispatchEvent(new Event('refreshRules'));
+            setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 4000);
+            </script>
             """)
         elif state == "error":
             return HTMLResponse(f"""

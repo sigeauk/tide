@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import DbDep, CurrentUser, RequireUser, RequireAdmin
+from app.api.deps import ActiveClient, DbDep, CurrentUser, RequireUser, RequireAdmin
 
 logger = logging.getLogger(__name__)
 
@@ -19,15 +19,15 @@ def _is_local_only_account(db_user: dict) -> bool:
 
 
 @router.get("", response_class=HTMLResponse)
-def get_settings_data(request: Request, db: DbDep, user: CurrentUser):
+def get_settings_data(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient):
     """Get current app settings as JSON."""
-    settings = db.get_all_settings()
+    settings = db.get_all_settings(client_id=client_id)
     import json
     return HTMLResponse(json.dumps(settings), media_type="application/json")
 
 
 @router.post("/save", response_class=HTMLResponse)
-async def save_settings(request: Request, db: DbDep, user: CurrentUser):
+async def save_settings(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient):
     """
     Save app settings from form submission.
     Returns a toast notification on success.
@@ -53,7 +53,7 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser):
         except ValueError:
             pass
     
-    db.save_settings(settings_to_save)
+    db.save_settings(settings_to_save, client_id=client_id)
     
     # Reschedule rule log job if needed
     try:
@@ -72,11 +72,11 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser):
 
 
 @router.post("/rule-log/export", response_class=HTMLResponse)
-def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser):
+def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient):
     """Manually trigger a rule log export to all active paths."""
     from app.services.rule_logger import export_rule_logs, cleanup_old_logs, _get_write_paths
     
-    settings = db.get_all_settings()
+    settings = db.get_all_settings(client_id=client_id)
     retention_days = int(settings.get("rule_log_retention_days", "7"))
     write_paths = _get_write_paths()
     

@@ -1,0 +1,38 @@
+{# Partial: client_baselines.html
+   Context: client_baselines (list of baseline objects), client (dict), available_baselines (list), all_clients (list)
+#}
+{% from "macros/icons.html" import icon %}
+
+<div class="client-section-toggle" onclick="var b=document.getElementById('baselines-body');var c=document.getElementById('baselines-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+    <span class="client-list-item__icon">{{ icon('shield', '14') }}</span>
+    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Baselines</h2>
+    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_baselines | length }}</span>
+    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-baselines-modal').style.display='flex'">
+            {{ icon('edit-2', '14') }} Edit
+        </button>
+    </div>
+    <span id="baselines-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
+</div>
+
+<div id="baselines-body">
+{% if client_baselines %}
+<div class="client-list">
+    {% for bl in client_baselines %}
+    <div class="client-list-item client-list-item--info">
+        <div class="client-list-item__body">
+            <a href="/baselines/{{ bl.id }}" class="client-list-item__title">{{ bl.name }}</a>
+            {% if bl.description %}
+            <span class="client-list-item__meta">{{ bl.description[:80] }}{% if bl.description|length > 80 %}&hellip;{% endif %}</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+    {{ icon('shield', '36') }}
+    <p style="margin-top:0.75rem;">No baselines assigned to this client yet.</p>
+</div>
+{% endif %}
+</div>

@@ -8,7 +8,7 @@ from typing import Optional, List
 from dataclasses import dataclass
 import re
 
-from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep
+from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 
 import logging
 
@@ -98,6 +98,7 @@ def list_threats(
     request: Request,
     db: DbDep,
     user: CurrentUser,
+    client_id: ActiveClient,
     search: Optional[str] = Query(None),
     origin: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
@@ -110,9 +111,9 @@ def list_threats(
         # Get all actors
         actors = db.get_threat_actors()
         
-        # Get covered TTPs and rule counts in production
-        covered_ttps = db.get_covered_ttps_by_space("production")
-        technique_rule_counts = db.get_technique_rule_counts("production")
+        # Get covered TTPs and rule counts scoped to active client
+        covered_ttps = db.get_all_covered_ttps(client_id=client_id)
+        technique_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
     except Exception as e:
         # Fallback if database not ready
         actors = []
@@ -219,10 +220,11 @@ def get_threat_metrics(
     request: Request,
     db: DbDep,
     user: CurrentUser,
+    client_id: ActiveClient,
 ):
-    """Get threat landscape metrics."""
+    """Get threat landscape metrics scoped to active client."""
     from app.main import get_last_sync_time
-    metrics = db.get_threat_landscape_metrics()
+    metrics = db.get_threat_landscape_metrics(client_id=client_id)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/threat_metrics.html",

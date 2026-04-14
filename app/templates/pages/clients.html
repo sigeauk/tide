@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}Clients - TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1 class="page-title-hero">Client Management</h1>
+    <p class="page-subtitle">Manage MSSP tenants, user assignments, and SIEM configurations.</p>
+</div>
+
+<div class="clients-page">
+    <!-- Action bar -->
+    <div class="card" style="margin-bottom: 1.5rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
+            <span class="text-secondary">{{ clients | length }} client{{ 's' if clients | length != 1 else '' }} configured</span>
+            <button class="btn btn-primary" onclick="showCreateClientModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Client
+            </button>
+        </div>
+    </div>
+
+    <!-- Client cards -->
+    <div class="clients-grid">
+        {% for client in clients %}
+        <div class="card client-card" data-client-id="{{ client.id }}">
+            <div class="client-card__header">
+                <div>
+                    <h3 class="client-card__name">{{ client.name }}</h3>
+                    <span class="badge badge-muted">{{ client.slug }}</span>
+                    {% if client.is_default %}
+                    <span class="badge badge-info">Default</span>
+                    {% endif %}
+                </div>
+                <div class="client-card__actions">
+                    <button class="btn btn-ghost btn-sm" onclick="editClient('{{ client.id }}', '{{ client.name }}', '{{ client.description or '' }}')" title="Edit">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                    </button>
+                    {% if not client.is_default %}
+                    <button class="btn btn-ghost btn-sm text-danger" onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')" title="Delete">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+
+            {% if client.description %}
+            <p class="text-secondary" style="margin: 0.5rem 0 0;">{{ client.description }}</p>
+            {% endif %}
+
+            <!-- SIEM configs summary -->
+            <div class="client-card__section" style="margin-top: 1rem;">
+                <h4 class="text-secondary" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">SIEM Configurations</h4>
+                {% if client._siem_configs %}
+                {% for cfg in client._siem_configs %}
+                <div style="display:flex; align-items:center; gap:0.5rem; padding:0.25rem 0;">
+                    <span class="badge badge-muted">{{ cfg.siem_type }}</span>
+                    <span>{{ cfg.label }}</span>
+                    {% if cfg.is_active %}<span class="badge badge-success" style="font-size:0.625rem;">active</span>{% endif %}
+                </div>
+                {% endfor %}
+                {% else %}
+                <span class="text-secondary" style="font-size: 0.8125rem;">No SIEM configured</span>
+                {% endif %}
+            </div>
+
+            <!-- Users summary -->
+            <div class="client-card__section" style="margin-top: 1rem;">
+                <h4 class="text-secondary" style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">Assigned Users</h4>
+                {% if client._users %}
+                <div style="display:flex; flex-wrap:wrap; gap:0.25rem;">
+                    {% for u in client._users %}
+                    <span class="badge badge-muted" title="{{ u.email or '' }}">{{ u.username }}</span>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <span class="text-secondary" style="font-size: 0.8125rem;">No users assigned</span>
+                {% endif %}
+            </div>
+
+            <div class="client-card__footer text-secondary" style="margin-top: 1rem; font-size: 0.75rem;">
+                Created {{ client.created_at.strftime('%Y-%m-%d') if client.created_at else 'N/A' }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+<!-- Create / Edit Modal -->
+<div class="modal-overlay" id="client-modal" style="display:none;" onclick="if(event.target===this) closeClientModal()">
+    <div class="modal-content card" style="max-width: 480px; width: 100%;">
+        <h2 id="client-modal-title">New Client</h2>
+        <form id="client-form" onsubmit="return submitClientForm(event)">
+            <input type="hidden" id="client-form-id" value="">
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label for="client-form-name" class="form-label">Name</label>
+                <input type="text" id="client-form-name" class="form-control" required maxlength="100" placeholder="Acme Corp">
+            </div>
+            <div class="form-group" style="margin-bottom: 1rem;">
+                <label for="client-form-slug" class="form-label">Slug</label>
+                <input type="text" id="client-form-slug" class="form-control" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
+                <span class="text-secondary" style="font-size: 0.75rem;">Lowercase letters, numbers, hyphens only. Auto-generated if blank.</span>
+            </div>
+            <div class="form-group" style="margin-bottom: 1.5rem;">
+                <label for="client-form-desc" class="form-label">Description</label>
+                <textarea id="client-form-desc" class="form-control" rows="3" placeholder="Optional description..."></textarea>
+            </div>
+            <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
+                <button type="button" class="btn btn-ghost" onclick="closeClientModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showCreateClientModal() {
+    document.getElementById('client-modal-title').textContent = 'New Client';
+    document.getElementById('client-form-submit').textContent = 'Create';
+    document.getElementById('client-form-id').value = '';
+    document.getElementById('client-form-name').value = '';
+    document.getElementById('client-form-slug').value = '';
+    document.getElementById('client-form-slug').disabled = false;
+    document.getElementById('client-form-desc').value = '';
+    document.getElementById('client-modal').style.display = 'flex';
+}
+
+function editClient(id, name, desc) {
+    document.getElementById('client-modal-title').textContent = 'Edit Client';
+    document.getElementById('client-form-submit').textContent = 'Save';
+    document.getElementById('client-form-id').value = id;
+    document.getElementById('client-form-name').value = name;
+    document.getElementById('client-form-slug').value = '';
+    document.getElementById('client-form-slug').disabled = true;
+    document.getElementById('client-form-desc').value = desc;
+    document.getElementById('client-modal').style.display = 'flex';
+}
+
+function closeClientModal() {
+    document.getElementById('client-modal').style.display = 'none';
+}
+
+async function submitClientForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('client-form-id').value;
+    var payload = {
+        name: document.getElementById('client-form-name').value,
+        description: document.getElementById('client-form-desc').value || null,
+    };
+    if (!id) {
+        payload.slug = document.getElementById('client-form-slug').value || null;
+    }
+    var url = id ? '/api/clients/' + id : '/api/clients';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {
+            method: method,
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Request failed', 'error');
+            return false;
+        }
+        closeClientModal();
+        window.location.reload();
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+async function confirmDeleteClient(id, name) {
+    if (!confirm('Delete client "' + name + '"? This cannot be undone.')) return;
+    try {
+        var resp = await fetch('/api/clients/' + id, {method: 'DELETE'});
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Delete failed', 'error');
+            return;
+        }
+        window.location.reload();
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+}
+</script>
+{% endblock %}
