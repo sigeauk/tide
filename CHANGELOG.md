@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.1]
+
+### Fixed
+- **500 on tactic edit:** `update_playbook_step()` did not accept the `client_id` keyword argument passed by the API route, causing a `TypeError` on every PUT to `/api/baselines/tactics/{id}`.
+- **500 on CISA KEV upload:** `ingest_cisa_feed()` was called with an unsupported `client_id` kwarg (global data, not tenant-scoped).
+- **500 on MITRE CVE map upload:** `save_mitre_cve_map()` was called with an unsupported `client_id` kwarg (global data, not tenant-scoped).
+- **Blind-spot applied detections not tenant-scoped:** `_load_applied_detections()` calls in `api_add_blind_spot` and `api_remove_blind_spot` now pass `client_id` for correct multi-tenant filtering.
+
 ## [4.0.0]
 
 ### Added

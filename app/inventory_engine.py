@@ -3325,8 +3325,10 @@ def remove_step_detection(detection_row_id: str, client_id: str = None) -> bool:
 
 
 def update_playbook_step(step_id: str, title: str = None, tactic: str = None,
-                         description: str = None, step_number: int = None) -> Optional[PlaybookStep]:
-    """Update editable fields on a playbook step."""
+                         description: str = None, step_number: int = None,
+                         client_id: str = None) -> Optional[PlaybookStep]:
+    """Update editable fields on a playbook step.
+    client_id accepted for API compatibility; steps are scoped via their parent playbook."""
     with _get_conn() as conn:
         row = conn.execute("SELECT playbook_id FROM playbook_steps WHERE id = ?", [step_id]).fetchone()
         if not row:

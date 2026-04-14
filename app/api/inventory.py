@@ -757,7 +757,7 @@ async def api_ingest_cisa(
     if not raw:
         raise HTTPException(status_code=400, detail="No data received")
     try:
-        count = ingest_cisa_feed(raw, client_id=client_id)
+        count = ingest_cisa_feed(raw)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     cves = get_all_cve_overview(client_id=client_id)
@@ -790,7 +790,7 @@ async def api_upload_mitre_mapping(
     if not raw:
         raise HTTPException(status_code=400, detail="No data received")
     try:
-        count = save_mitre_cve_map(raw, client_id=client_id)
+        count = save_mitre_cve_map(raw)
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return HTMLResponse(
@@ -1381,7 +1381,7 @@ def api_add_blind_spot(
         if cve:
             grouped = _group_affected_by_system(cve)
             detections_map = list_cve_detections(client_id=client_id)
-            applied_map = _load_applied_detections()
+            applied_map = _load_applied_detections(client_id=client_id)
             cve_dets = detections_map.get(entity_id.upper(), [])
             _enrich_detections_with_applied(cve_dets, applied_map)
             cve_blind_spots = get_blind_spots("cve", entity_id, client_id=client_id)
@@ -1409,7 +1409,7 @@ def api_remove_blind_spot(
         if cve:
             grouped = _group_affected_by_system(cve)
             detections_map = list_cve_detections(client_id=client_id)
-            applied_map = _load_applied_detections()
+            applied_map = _load_applied_detections(client_id=client_id)
             cve_dets = detections_map.get(entity_id.upper(), [])
             _enrich_detections_with_applied(cve_dets, applied_map)
             cve_blind_spots = get_blind_spots("cve", entity_id, client_id=client_id)
