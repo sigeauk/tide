@@ -1,22 +1,39 @@
 {# Partial: tactic_detection_section.html
-   Context: step (BaselineTactic with detections list), all_siem_rules (list), technique_rules (dict)
+   Context: step (BaselineTactic with detections list)
+   Add-rule panels use HTMX search endpoints for SIEM & Sigma rules.
 #}
 {% from "macros/icons.html" import icon %}
 
 <h2 class="section-title">{{ icon('shield','16') }} Detection Rules</h2>
 
+{% set sigma_dets = step.detections | selectattr('source', 'equalto', 'sigma') | list %}
+{% set siem_dets  = step.detections | selectattr('source', 'equalto', 'siem') | list %}
+{% set manual_dets = step.detections | rejectattr('source', 'equalto', 'sigma') | rejectattr('source', 'equalto', 'siem') | list %}
+
 {% if step.detections %}
 <div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
-    {% for d in step.detections %}
-    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);">
+    {# ── SIEM rules (green) ────────────────────────────── #}
+    {% for d in siem_dets %}
+    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-success);">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
-            <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
-                {{ icon('file-code','13') }} {{ d.rule_ref }}
+            {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
+            <div style="font-size:0.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
+                {{ icon('file-code','13') }}
+                {% if rule_info.rule_id %}
+                <span style="cursor:pointer;color:var(--color-text);text-decoration:underline;text-decoration-style:dotted;"
+                      hx-get="/api/rules/{{ rule_info.rule_id }}/detail?space={{ rule_info.space | default('default') }}"
+                      hx-target="#modal-container"
+                      hx-swap="innerHTML"
+                      title="View rule details">{{ d.rule_ref }}</span>
+                {% else %}
+                {{ d.rule_ref }}
+                {% endif %}
             </div>
             {% endif %}
-            <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:0.2rem;">
-                {{ d.source }}{% if d.note %} · {{ d.note }}{% endif %}
+            <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
+                <span class="badge badge-success" style="font-size:0.62rem;padding:0.1rem 0.35rem;">{{ icon('shield-check','9') }} SIEM</span>
+                {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
             </div>
         </div>
         <button class="btn btn-danger btn-sm"
@@ -24,6 +41,56 @@
                 hx-target="#step-detection-section"
                 hx-swap="innerHTML"
                 hx-confirm="Remove this detection?"
+                style="padding:0.2rem 0.4rem;font-size:0.7rem;">
+            {{ icon('x','12') }}
+        </button>
+    </div>
+    {% endfor %}
+
+    {# ── Manual rules (blue / app accent) ──────────────── #}
+    {% for d in manual_dets %}
+    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-info);">
+        <div style="flex:1;min-width:0;">
+            {% if d.rule_ref %}
+            <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
+                {{ icon('file-text','13') }} {{ d.rule_ref }}
+            </div>
+            {% endif %}
+            <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
+                <span class="badge" style="font-size:0.62rem;padding:0.1rem 0.35rem;background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('edit-3','9') }} MANUAL</span>
+                {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
+            </div>
+        </div>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
+                hx-target="#step-detection-section"
+                hx-swap="innerHTML"
+                hx-confirm="Remove this detection?"
+                style="padding:0.2rem 0.4rem;font-size:0.7rem;">
+            {{ icon('x','12') }}
+        </button>
+    </div>
+    {% endfor %}
+
+    {# ── Sigma rules (potential → amber, not appliable) ────────── #}
+    {% for d in sigma_dets %}
+    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-warning);opacity:0.85;">
+        <div style="flex:1;min-width:0;">
+            {% if d.rule_ref %}
+            <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
+                {{ icon('file-text','13') }} {{ d.rule_ref }}
+            </div>
+            {% endif %}
+            <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
+                <span class="badge badge-warning" style="font-size:0.62rem;padding:0.1rem 0.35rem;">{{ icon('zap','9') }} SIGMA</span>
+                <span style="font-size:0.68rem;color:var(--color-text-muted);">Potential — convert &amp; deploy to activate</span>
+            </div>
+        </div>
+        <button class="btn btn-danger btn-sm"
+                hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
+                hx-target="#step-detection-section"
+                hx-swap="innerHTML"
+                hx-confirm="Remove this sigma rule?"
                 style="padding:0.2rem 0.4rem;font-size:0.7rem;">
             {{ icon('x','12') }}
         </button>
@@ -37,50 +104,114 @@
 </div>
 {% endif %}
 
-<!-- Add detection form -->
+<!-- Add detection buttons -->
 <div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
-    <button class="btn btn-sm btn-secondary" id="add-step-det-btn"
-            onclick="this.style.display='none';document.getElementById('add-step-det-form').style.display='flex';">
-        {{ icon('plus','14') }} Add Detection Rule
-    </button>
-    <form id="add-step-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
-          hx-post="/api/baselines/tactics/{{ step.id }}/detections"
-          hx-target="#step-detection-section"
-          hx-swap="innerHTML"
-          hx-on::after-request="this.reset();var b=document.getElementById('add-step-det-btn');if(b)b.style.display='inline-flex';">
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        {# ── + Add SIEM Rule (green) ───────────────────────────── #}
+        <button class="btn btn-sm" id="add-siem-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
+                onclick="this.style.display='none';var p=document.getElementById('add-siem-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('siem-rule-search'),'load');">
+            {{ icon('shield-check','14') }} + Add SIEM Rule
+        </button>
 
-        {# SIEM rules dropdown with MITRE-mapped group #}
-        {% if all_siem_rules is defined and all_siem_rules %}
-        <select class="form-input" style="font-size:0.82rem;"
-                onchange="var f=this.closest('form'),v=this.value;if(v){f.querySelector('[name=rule_ref]').value=v;f.querySelector('[name=source]').value='siem';}">
-            <option value="">— Select a SIEM rule —</option>
-            {% if technique_rules is defined and technique_rules %}
-            <optgroup label="Mapped to techniques on this step">
-                {% for tid, tr in technique_rules.items() %}
-                  {% for r in tr.get('rules', []) %}
-                    <option value="{{ r.name }}">{{ r.name }} ({{ tid }})</option>
-                  {% endfor %}
-                {% endfor %}
-            </optgroup>
-            {% endif %}
-            <optgroup label="All SIEM Rules">
-                {% for r in all_siem_rules %}
-                <option value="{{ r.name }}">{{ r.name }}</option>
-                {% endfor %}
-            </optgroup>
-        </select>
-        {% endif %}
+        {# ── + Add Manual Rule (blue) ──────────────────────────── #}
+        <button class="btn btn-sm" id="add-manual-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
+                onclick="this.style.display='none';document.getElementById('add-manual-det-panel').style.display='flex';">
+            {{ icon('edit-3','14') }} + Add Manual Rule
+        </button>
 
-        <input class="form-input" name="rule_ref" placeholder="Rule name / reference…" style="font-size:0.85rem;">
-        <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
-        <input type="hidden" name="source" value="manual">
+        {# ── + Add Sigma Rule (amber) ──────────────────────────── #}
+        <button class="btn btn-sm" id="add-sigma-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
+                onclick="this.style.display='none';var p=document.getElementById('add-sigma-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('sigma-rule-search'),'load');">
+            {{ icon('zap','14') }} + Add Sigma Rule
+        </button>
+    </div>
 
-        <div style="display:flex;gap:0.5rem;">
-            <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
+    {# ── SIEM Rule search panel (green) ────────────────────────── #}
+    <div id="add-siem-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(34,197,94,.04);">
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input type="text" id="siem-rule-search" class="form-input" placeholder="Search SIEM rules…"
+                   style="font-size:0.82rem;flex:1;"
+                   hx-get="/api/baselines/tactics/{{ step.id }}/siem-rules"
+                   hx-trigger="input changed delay:300ms, load"
+                   hx-target="#siem-rule-results"
+                   hx-swap="innerHTML"
+                   name="q">
             <button type="button" class="btn btn-secondary btn-sm"
-                    onclick="this.closest('form').style.display='none';document.getElementById('add-step-det-btn').style.display='inline-flex';">
+                    onclick="document.getElementById('add-siem-det-panel').style.display='none';document.getElementById('add-siem-det-btn').style.display='inline-flex';">
                 Cancel
             </button>
         </div>
-    </form>
+        <div id="siem-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+            <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
+        </div>
+        <form id="add-siem-det-form"
+              hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+              hx-target="#step-detection-section"
+              hx-swap="innerHTML">
+            <input type="hidden" name="rule_ref" id="siem-det-rule-ref" value="">
+            <input type="hidden" name="note" value="">
+            <input type="hidden" name="source" value="siem">
+        </form>
+    </div>
+
+    {# ── Manual Rule input panel (blue) ────────────────────────── #}
+    <div id="add-manual-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
+        <form hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+              hx-target="#step-detection-section"
+              hx-swap="innerHTML"
+              style="display:flex;flex-direction:column;gap:0.5rem;">
+            <input class="form-input" name="rule_ref" placeholder="Add coverage i.e. Dashboard" required style="font-size:0.85rem;">
+            <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
+            <input type="hidden" name="source" value="manual">
+            <div style="display:flex;gap:0.5rem;">
+                <button type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="this.closest('div[id]').style.display='none';document.getElementById('add-manual-det-btn').style.display='inline-flex';">
+                    Cancel
+                </button>
+            </div>
+        </form>
+    </div>
+
+    {# ── Sigma Rule search panel (amber) ───────────────────────── #}
+    <div id="add-sigma-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(234,179,8,.04);">
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+            <input type="text" id="sigma-rule-search" class="form-input" placeholder="Search sigma rules…"
+                   style="font-size:0.82rem;flex:1;"
+                   hx-get="/api/baselines/tactics/{{ step.id }}/sigma-rules"
+                   hx-trigger="input changed delay:300ms, load"
+                   hx-target="#sigma-rule-results"
+                   hx-swap="innerHTML"
+                   name="q">
+            <button type="button" class="btn btn-secondary btn-sm"
+                    onclick="document.getElementById('add-sigma-det-panel').style.display='none';document.getElementById('add-sigma-det-btn').style.display='inline-flex';">
+                Cancel
+            </button>
+        </div>
+        <div id="sigma-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+            <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
+        </div>
+        <form id="add-sigma-det-form"
+              hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+              hx-target="#step-detection-section"
+              hx-swap="innerHTML">
+            <input type="hidden" name="rule_ref" id="sigma-det-rule-ref" value="">
+            <input type="hidden" name="note" value="">
+            <input type="hidden" name="source" value="sigma">
+        </form>
+    </div>
+
+    <script>
+    function selectSiemRule(btn, title) {
+        document.getElementById('siem-det-rule-ref').value = title;
+        htmx.trigger(document.getElementById('add-siem-det-form'), 'submit');
+    }
+    function selectSigmaRule(btn, title) {
+        document.getElementById('sigma-det-rule-ref').value = title;
+        htmx.trigger(document.getElementById('add-sigma-det-form'), 'submit');
+    }
+    </script>
 </div>

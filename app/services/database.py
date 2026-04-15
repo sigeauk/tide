@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 class DatabaseService:
@@ -1108,6 +1108,35 @@ class DatabaseService:
             logger.info(
                 "Migration 29: Added clients.db_filename for "
                 "database-per-tenant physical isolation"
+            )
+
+        # ── Migration 30: Sigma Rules Index (shared DB only) ─────────
+        if current_version < 30:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sigma_rules_index (
+                    rule_id   VARCHAR PRIMARY KEY,
+                    title     VARCHAR,
+                    level     VARCHAR,
+                    status    VARCHAR,
+                    product   VARCHAR,
+                    category  VARCHAR,
+                    service   VARCHAR,
+                    techniques VARCHAR[],
+                    tactics   VARCHAR[],
+                    file_path VARCHAR,
+                    indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            try:
+                conn.execute("CREATE INDEX idx_sigma_product  ON sigma_rules_index(product)")
+                conn.execute("CREATE INDEX idx_sigma_service  ON sigma_rules_index(service)")
+                conn.execute("CREATE INDEX idx_sigma_category ON sigma_rules_index(category)")
+            except Exception:
+                pass  # Indexes may already exist
+            self._set_schema_version(conn, 30)
+            logger.info(
+                "Migration 30: Created sigma_rules_index table "
+                "for Sigma logsource metadata indexing"
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -2691,10 +2720,10 @@ class DatabaseService:
             # Query rules where the technique ID is in the mitre_ids array
             ttp_upper = technique_id.upper()
             
-            # Build query with search filter if provided
-            # Use list_contains (DuckDB's array membership function)
-            base_conditions = "(list_contains(mitre_ids, ?) OR list_contains(mitre_ids, ?))"
-            params = [ttp_upper, technique_id]
+            # Case-insensitive technique matching: unnest and upper-compare
+            # to stay consistent with the count/coverage queries that UPPER() the IDs
+            base_conditions = "EXISTS (SELECT 1 FROM (SELECT unnest(mitre_ids) AS mid) WHERE UPPER(mid) = ?)"
+            params = [ttp_upper]
             
             if enabled_only:
                 base_conditions += " AND enabled = 1"

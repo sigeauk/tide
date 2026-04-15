@@ -125,6 +125,14 @@
          onclick="var b=document.getElementById('baselines-body');var c=document.getElementById('baselines-chevron');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('check-square', '18') }} Assurance Baselines</h2>
         <div style="display:flex;align-items:center;gap:0.5rem;">
+            <button class="btn btn-secondary btn-sm"
+                    hx-get="/api/baselines/generate-form?system_id={{ system.id }}"
+                    hx-target="#generate-baselines-modal"
+                    hx-swap="innerHTML"
+                    onclick="event.stopPropagation();document.getElementById('generate-baselines-modal').style.display='flex';"
+                    style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;">
+                {{ icon('zap', '14') }} Generate Baselines
+            </button>
             <button class="btn btn-primary btn-sm"
                     onclick="event.stopPropagation();openSnapshotModal('all', '', '')"
                     style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;">
@@ -433,6 +441,10 @@ function toggleAllHeatmapBaselines(allCb) {
 
 <!-- Required for mitre_pill slide panel -->
 <div id="slide-panel-container"></div>
+
+<!-- Generate Baselines modal (loaded via HTMX) -->
+<div id="generate-baselines-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this)this.style.display='none'"></div>
 
 {% endblock %}
 

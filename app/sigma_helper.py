@@ -192,6 +192,100 @@ def extract_mitre_techniques(rule: Dict) -> List[str]:
     return list(set(techniques))
 
 
+# Canonical mapping of Sigma tag slugs → human-readable MITRE tactic names
+_TACTIC_TAG_MAP = {
+    "initial_access": "Initial Access",
+    "execution": "Execution",
+    "persistence": "Persistence",
+    "privilege_escalation": "Privilege Escalation",
+    "defense_evasion": "Defense Evasion",
+    "credential_access": "Credential Access",
+    "discovery": "Discovery",
+    "lateral_movement": "Lateral Movement",
+    "collection": "Collection",
+    "command_and_control": "Command and Control",
+    "exfiltration": "Exfiltration",
+    "impact": "Impact",
+    "resource_development": "Resource Development",
+    "reconnaissance": "Reconnaissance",
+}
+
+
+def extract_mitre_tactics(rule: Dict) -> List[str]:
+    """Extract MITRE ATT&CK tactic names from a Sigma rule's tags.
+
+    Tags like ``attack.initial_access`` are mapped via *_TACTIC_TAG_MAP*
+    to human-readable names (e.g. "Initial Access").
+    """
+    tactics: list[str] = []
+    for tag in (rule.get("tags") or []):
+        if not isinstance(tag, str) or not tag.startswith("attack."):
+            continue
+        slug = tag[len("attack."):]
+        tactic = _TACTIC_TAG_MAP.get(slug)
+        if tactic:
+            tactics.append(tactic)
+    return list(dict.fromkeys(tactics))  # dedupe, preserve order
+
+
+def index_sigma_rules() -> int:
+    """Populate the *sigma_rules_index* table in the **shared** DB.
+
+    Uses the in-memory rules cache (must be loaded first via
+    ``load_all_rules()``).  Strategy is TRUNCATE → INSERT so the index
+    always mirrors the baked-in SigmaHQ repo.
+
+    Returns the number of rows inserted.
+    """
+    from datetime import datetime as _dt
+    from app.services.database import get_database_service
+
+    rules = load_all_rules()
+    if not rules:
+        log_error("[SIGMA-INDEX] No rules in cache – skipping index")
+        return 0
+
+    db = get_database_service()
+    now = _dt.utcnow()
+    rows = []
+    for rule in rules:
+        rule_id = rule.get("id")
+        if not rule_id:
+            continue
+        ls = rule.get("logsource") or {}
+        product  = (ls.get("product") or "").strip().lower() or None
+        category = (ls.get("category") or "").strip().lower() or None
+        service  = (ls.get("service") or "").strip().lower() or None
+        techniques = extract_mitre_techniques(rule) or []
+        tactics    = extract_mitre_tactics(rule) or []
+        rows.append((
+            str(rule_id),
+            rule.get("title", ""),
+            (rule.get("level") or "").lower(),
+            (rule.get("status") or "").lower(),
+            product,
+            category,
+            service,
+            techniques,
+            tactics,
+            rule.get("_file_path", ""),
+            now,
+        ))
+
+    with db.get_shared_connection() as conn:
+        conn.execute("DELETE FROM sigma_rules_index")
+        conn.executemany(
+            """INSERT INTO sigma_rules_index
+               (rule_id, title, level, status, product, category,
+                service, techniques, tactics, file_path, indexed_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            rows,
+        )
+
+    log_info(f"[SIGMA-INDEX] Indexed {len(rows)} rules into sigma_rules_index")
+    return len(rows)
+
+
 def load_all_rules(force_reload: bool = False) -> List[Dict]:
     """Load all Sigma rules from the repository."""
     global _rules_cache

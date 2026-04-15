@@ -1,0 +1,44 @@
+{# Partial: sigma_rule_options.html — Sigma rule search results for the Add Sigma Rule dropdown
+   Context: sigma_results (list[dict]), query (str)
+#}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{% if sigma_results %}
+<div class="sigma-rule-results" style="max-height:260px;overflow-y:auto;">
+    {% for rule in sigma_results %}
+    <button type="button" class="sigma-rule-option"
+            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;background:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted);"
+            onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
+            onclick="selectSigmaRule(this, '{{ rule.title | e }}')">
+        <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.title }}">
+                {{ rule.title }}
+            </div>
+            <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+                {% if rule._techniques %}
+                    {% for tech in rule._techniques[:3] %}
+                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {% endfor %}
+                    {% if rule._techniques|length > 3 %}
+                    <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule._techniques|length - 3 }}</span>
+                    {% endif %}
+                {% endif %}
+                {% if rule.level %}
+                <span class="level-badge level-{{ rule.level | default('medium') }}" style="font-size:0.6rem;margin-left:0.25rem;">
+                    {{ rule.level | upper }}
+                </span>
+                {% endif %}
+            </div>
+        </div>
+    </button>
+    {% endfor %}
+</div>
+{% elif query %}
+<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+    No sigma rules found matching "{{ query }}"
+</div>
+{% else %}
+<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+    No sigma rules mapped to the techniques on this step.
+</div>
+{% endif %}

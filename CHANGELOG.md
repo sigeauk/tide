@@ -4,6 +4,34 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.2]
+
+### Added
+- **`sigma_rules_index` table (Migration 30):** New shared-DB table indexes every SigmaHQ rule's `logsource` metadata (`product`, `category`, `service`), severity level, status, MITRE techniques and tactics. Three covering indexes on `product`, `service`, and `category` for fast grouping queries.
+- **`index_sigma_rules()` startup sync:** On each app start, all loaded Sigma rules are bulk-indexed into `sigma_rules_index` (TRUNCATE + INSERT) so the Generate Baselines UI always reflects the current rule set.
+- **Generate Baselines button:** New "Generate Baselines" button on the system detail page (left of "Snapshot All") opens an HTMX modal for the tech-stack questionnaire workflow.
+- **Product-First Tech Stack Questionnaire:** "Primary Technology" abstraction via `COALESCE(product, category)` maps every Sigma rule to a single tech name. Curated UI buckets (Endpoints, Cloud & Identity, Network & Security, Other Applications) present one checkbox per technology with exact rule counts. Eliminates the 50+ redundant Windows category headers from the original `category → product` grouping.
+- **Generate Preview endpoint (`POST /api/baselines/generate-preview`):** Queries `sigma_rules_index` using surgical `COALESCE(product, category)` matching with sub-group fan-out via `CASE WHEN product IS NOT NULL THEN COALESCE(service, category) ELSE service END`. Selecting "Windows" correctly previews 59 modular baselines across all event types. Button shows "Generate N Baselines (X Rules)".
+- **Baseline Generation Engine (`POST /api/baselines/generate`):** For each baseline group, creates a Playbook in the tenant DB, loads full YAML from SigmaHQ files to extract `description`, `falsepositives`, techniques, and tactics. Creates one PlaybookStep per Sigma rule with populated `step_techniques` and `step_detections` (source: `sigma`). Auto-applies generated baselines to the triggering system.
+- **+ Add Sigma Rule button:** New amber-styled "+ Add Sigma Rule" button on the tactic detail page. Opens a search dropdown that filters SigmaHQ rules by the techniques mapped on the current tactic. Selecting a rule adds it as a `source=sigma` detection. Endpoint: `GET /api/baselines/tactics/{id}/sigma-rules`.
+- **Sigma rule search dropdown:** `sigma_rule_options.html` partial renders searchable sigma rule results with rule title, MITRE technique pills, and severity badge. De-duplicates results across multiple mapped techniques.
+- **Three color-coded Add Detection buttons:** Replaced the single "Add Detection Rule" form with three separate buttons — green "+ Add SIEM Rule" (searchable dropdown via HTMX), blue "+ Add Manual Rule" (text inputs), amber "+ Add Sigma Rule" (searchable dropdown). Each button opens its own color-matched panel.
+- **SIEM rule search endpoint:** `GET /api/baselines/tactics/{id}/siem-rules` returns a searchable list of SIEM rules, grouping "Mapped to techniques on this step" first. `siem_rule_options.html` partial shows MITRE pills, severity badge, and enabled status.
+- **Sigma rule selector in Convert & Deploy:** When multiple sigma detections exist on a tactic, a dropdown lets the user choose which sigma rule to load into the CodeMirror editor. Backend resolves all sigma detection rule_refs to UUIDs.
+- **Clickable SIEM rule names:** SIEM detection rule names in the tactic detection section are now clickable, opening the rule detail/logic modal. Uses `rule_name_lookup` to resolve rule names to rule IDs.
+
+### Changed
+- **Clickable MITRE technique pills:** Pills on baseline coverage and baseline tactics pages are now clickable — opening the technique detail slide panel. Added `event.stopPropagation()` to prevent click-through on parent cards.
+- **Coverage-colored MITRE pills on baselines:** Technique pills on baseline coverage (system page) and baseline tactics (baseline detail page) now reflect actual detection coverage — green with rule count when covered, red when a gap. Previously all pills were neutral blue regardless of coverage status.
+- **SIEM rule dropdown enrichment:** The "All SIEM Rules" section in the search dropdown now shows MITRE technique pills, severity badge, and enabled/disabled status (was: name only). Consistent with the sigma rule dropdown format.
+- **Slide panel on baseline detail page:** Added `#slide-panel-container` so technique pills on the baseline detail page open the technique detail modal (was: silently failing).
+- **Baseline & coverage card title order:** Technique pills now appear *after* the tactic name (was: technique ID first, then name). Uses the standard `mitre_pill` component for consistent pill formatting across baseline coverage and baseline tactics views.
+- **Detection rule color-coding by source:** Tactic detection section now renders SIEM rules with green border, Manual additions with blue (app accent) border and "MANUAL" badge, and Sigma rules with amber border. Previously SIEM and Manual rules shared the same green style.
+- **Markdown description rendering:** Tactic detail page descriptions now render Markdown (bold, italic, code, line breaks) via the `| md` Jinja filter instead of raw plain text.
+
+### Fixed
+- **Technique coverage count mismatch:** `get_rules_for_technique()` now uses case-insensitive `UPPER()` matching on `mitre_ids` (via unnest + compare), consistent with the aggregation query in `get_ttp_rule_counts()`. Previously, `list_contains()` performed case-sensitive matching, causing techniques like T1203 to show "1 rule" in the coverage count but 0 rules in the detail view.
+
 ## [4.0.1]
 
 ### Fixed

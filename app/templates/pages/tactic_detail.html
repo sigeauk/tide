@@ -1,7 +1,19 @@
 {% extends "base.html" %}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, icon_text %}
 
 {% block title %}{{ tactic.title }} — Technique Detail | TIDE{% endblock %}
+
+{% block head %}
+{% if backends is defined %}
+<link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
+<script defer src="/static/js/vendor/codemirror.min.js"></script>
+<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
+<link rel="stylesheet" href="/static/css/vendor/prism-tomorrow.min.css">
+<script defer src="/static/js/vendor/prism.min.js"></script>
+<script defer src="/static/js/vendor/prism-json.min.js"></script>
+{% endif %}
+{% endblock %}
 
 {% block content %}
 <div style="padding:1.5rem;">
@@ -49,7 +61,7 @@
             {% endif %}
         </div>
         {% if tactic.description %}
-        <p style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">{{ tactic.description }}</p>
+        <div class="md-content" style="margin:0;font-size:1.05rem;color:var(--color-text-muted);word-wrap:break-word;overflow-wrap:break-word;">{{ tactic.description | md }}</div>
         {% endif %}
     </div>
 
@@ -95,6 +107,280 @@
          hx-swap="innerHTML">
         {% include "partials/tactic_affected_systems.html" %}
     </div>
+
+    {# ── Sigma Convert Section ─────────────────────────────────── #}
+    {% set sigma_dets = step.detections | selectattr('source', 'equalto', 'sigma') | list %}
+    {% if sigma_dets and backends is defined %}
+    <div class="card card-padded" style="margin-top:1.5rem;" id="sigma-convert-section">
+        <div style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;"
+             onclick="var b=document.getElementById('tc-body'),c=document.getElementById('tc-chevron');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(0)';if(!window._tcEditorReady){window._tcInitDeferred();}}else{b.style.display='none';c.style.transform='rotate(-90deg)';}">
+            <svg id="tc-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform .2s;transform:rotate(-90deg);flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
+            <h2 class="section-title" style="color:var(--color-warning);margin:0;">{{ icon('zap','16') }} Sigma Convert & Deploy</h2>
+        </div>
+        <div id="tc-body" style="display:none;margin-top:0.75rem;">
+        <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 1rem;">
+            Convert the sigma rule linked to this technique into a SIEM query for deployment.
+        </p>
+
+        {# Sigma rule selector — shown when multiple sigma detections exist #}
+        {% if sigma_rule_ids | length > 1 %}
+        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);background:rgba(234,179,8,.06);">
+            <label style="font-size:0.75rem;font-weight:600;color:var(--color-warning);white-space:nowrap;">{{ icon('zap','13') }} Sigma Rule</label>
+            <select id="tc-sigma-rule-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;flex:1;"
+                    onchange="tcLoadSigmaRule(this.value);">
+                {% for rid in sigma_rule_ids %}
+                <option value="{{ rid }}">{{ sigma_rule_map.get(rid, rid) }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        {% endif %}
+
+        {# Compact horizontal selects #}
+        <div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem;">
+            <div style="display:flex;flex-direction:column;gap:0.2rem;">
+                <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Target</label>
+                <select id="tc-backend-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
+                    {% for key, label in backends.items() %}
+                    <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:0.2rem;">
+                <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Format</label>
+                <select id="tc-format-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
+                    {% for key, label in formats.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:0.2rem;">
+                <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Pipeline</label>
+                <select id="tc-pipeline-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                    {% for key, label in pipelines.items() %}
+                    <option value="{{ key }}">{{ label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% if pipeline_files is defined and pipeline_files %}
+            <div style="display:flex;flex-direction:column;gap:0.2rem;position:relative;">
+                <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Custom Pipeline</label>
+                <select id="tc-pipeline-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                    <option value="">None</option>
+                    {% for pl in pipeline_files %}
+                    <option value="{{ pl.filename }}">{{ pl.display }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+            {% if template_files is defined and template_files %}
+            <div style="display:flex;flex-direction:column;gap:0.2rem;position:relative;">
+                <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Template</label>
+                <select id="tc-template-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                    <option value="">None</option>
+                    {% for tpl in template_files %}
+                    <option value="{{ tpl.filename }}">{{ tpl.display }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            {% endif %}
+        </div>
+
+        {# Two-column: YAML editor + Query output #}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
+            {# Left — YAML editor #}
+            <div style="display:flex;flex-direction:column;border:1px solid var(--color-border-muted);border-radius:var(--radius);">
+                <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                    {{ icon('file-text','13') }} rule.yml
+                </div>
+                <form id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-query-output" hx-swap="innerHTML">
+                    <textarea id="tc-yaml-editor" name="yaml_content" style="width:100%;min-height:280px;font-family:monospace;font-size:0.8rem;background:var(--color-bg);color:var(--color-text);border:none;padding:0.5rem;resize:vertical;" spellcheck="false"></textarea>
+                    <input type="hidden" id="tc-form-backend" name="backend" value="elasticsearch">
+                    <input type="hidden" id="tc-form-pipeline" name="pipeline" value="none">
+                    <input type="hidden" id="tc-form-format" name="output_format" value="kibana_ndjson">
+                    <input type="hidden" id="tc-form-pipeline-file" name="pipeline_file" value="">
+                    <input type="hidden" id="tc-form-template-file" name="template_file" value="">
+                </form>
+                <div id="tc-validation-result"></div>
+                <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                    <button type="submit" form="tc-convert-form" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
+                        {{ icon_text('refresh-cw', 'Convert', '12') }}
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.75rem;"
+                            hx-post="/api/sigma/validate" hx-target="#tc-validation-result" hx-include="#tc-yaml-editor">
+                        {{ icon_text('check-circle', 'Validate', '12') }}
+                    </button>
+                </div>
+            </div>
+
+            {# Right — Query output #}
+            <div style="display:flex;flex-direction:column;border:1px solid var(--color-border-muted);border-radius:var(--radius);">
+                <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                    {{ icon('zap','13') }} Query Output
+                </div>
+                <div id="tc-query-output" style="flex:1;min-height:280px;padding:0.5rem;font-family:monospace;font-size:0.8rem;overflow:auto;background:var(--color-bg);">
+                    <div style="text-align:center;padding:2rem 1rem;color:var(--color-text-muted);">
+                        {{ icon('terminal','28') }}
+                        <p style="margin:0.5rem 0 0;font-size:0.82rem;">Click Convert to generate the query</p>
+                    </div>
+                </div>
+                <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;align-items:center;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                    <form id="tc-deploy-form" hx-post="/api/sigma/deploy" hx-target="#tc-deploy-result" hx-swap="innerHTML" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                        <input type="hidden" name="yaml_content" id="tc-deploy-yaml">
+                        <input type="hidden" name="raw_query" id="tc-deploy-query">
+                        <input type="hidden" name="pipeline_file" id="tc-deploy-pipeline-file">
+                        <input type="hidden" name="template_file" id="tc-deploy-template-file">
+                        {% if deploy_targets is defined and deploy_targets %}
+                        <select name="space" class="form-input" style="font-size:0.75rem;padding:0.2rem 0.4rem;">
+                            {% for target in deploy_targets %}
+                            <option value="{{ target.space }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
+                            {% endfor %}
+                        </select>
+                        <label style="font-size:0.72rem;display:flex;align-items:center;gap:0.25rem;">
+                            <input type="checkbox" name="enabled" value="true"> Enable
+                        </label>
+                        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;" onclick="tcPrepareDeploy()">
+                            {{ icon_text('rocket', 'Deploy', '12') }}
+                        </button>
+                        {% else %}
+                        <span style="font-size:0.75rem;color:var(--color-text-muted);">No SIEMs linked — configure in Settings</span>
+                        {% endif %}
+                    </form>
+                    <div id="tc-deploy-result" style="flex:1;"></div>
+                </div>
+            </div>
+        </div>
+        </div>{# /tc-body #}
+    </div>
+
+    <script>
+    (function() {
+        // Sigma rule IDs (all sigma detections for this step)
+        var ruleIds = {{ sigma_rule_ids | tojson }};
+        var ruleId = ruleIds.length ? ruleIds[0] : '';
+        window._tcEditorReady = false;
+
+        // Load a specific sigma rule into the editor
+        window.tcLoadSigmaRule = function(id) {
+            ruleId = id;
+            var cm = window._tcEditor;
+            if (!cm) return;
+            if (!id) { cm.setValue(''); return; }
+            fetch('/api/sigma/rule/' + id, { credentials: 'same-origin' })
+                .then(function(r) { return r.text(); })
+                .then(function(yaml) { cm.setValue(yaml); setTimeout(function(){cm.refresh();}, 50); })
+                .catch(function(e) { console.error('[TC] rule load error:', e); });
+        };
+
+        function _loadScript(src) {
+            return new Promise(function(ok, fail) {
+                if (document.querySelector('script[data-tc-loaded="' + src + '"]')) { ok(); return; }
+                var s = document.createElement('script');
+                s.src = src; s.setAttribute('data-tc-loaded', src);
+                s.onload = ok; s.onerror = function() { fail(new Error('Failed: ' + src)); };
+                document.head.appendChild(s);
+            });
+        }
+
+        function initTcEditor(retry) {
+            retry = retry || 0;
+            if (typeof CodeMirror === 'undefined' || !CodeMirror.modes || !CodeMirror.modes.yaml) {
+                if (retry === 0) {
+                    if (typeof CodeMirror === 'undefined') {
+                        _loadScript('/static/js/vendor/codemirror.min.js')
+                            .then(function() { return _loadScript('/static/js/vendor/codemirror-yaml.min.js'); })
+                            .catch(function(e) { console.error('[TC] CM load error:', e); });
+                    } else if (!CodeMirror.modes.yaml) {
+                        _loadScript('/static/js/vendor/codemirror-yaml.min.js').catch(function(){});
+                    }
+                    if (typeof Prism === 'undefined') {
+                        _loadScript('/static/js/vendor/prism.min.js')
+                            .then(function() { return _loadScript('/static/js/vendor/prism-json.min.js'); })
+                            .catch(function(){});
+                    }
+                }
+                if (retry < 50) setTimeout(function() { initTcEditor(retry + 1); }, 100);
+                return;
+            }
+
+            var ta = document.getElementById('tc-yaml-editor');
+            if (!ta) return;
+            if (ta.style.display === 'none') return; // already bound
+
+            var cm = CodeMirror.fromTextArea(ta, {
+                mode: 'yaml', theme: 'material-darker',
+                lineNumbers: true, lineWrapping: true,
+                tabSize: 2, indentWithTabs: false, autofocus: false
+            });
+            window._tcEditor = cm;
+            cm.on('change', function() { ta.value = cm.getValue(); });
+            setTimeout(function() { cm.refresh(); }, 100);
+            setTimeout(function() { cm.refresh(); }, 400);
+
+            // Auto-load sigma rule YAML if rule ID is present
+            if (ruleId) {
+                fetch('/api/sigma/rule/' + ruleId, { credentials: 'same-origin' })
+                    .then(function(r) { return r.text(); })
+                    .then(function(yaml) { cm.setValue(yaml); setTimeout(function(){cm.refresh();}, 50); })
+                    .catch(function(e) { console.error('[TC] rule load error:', e); });
+            }
+        }
+
+        // Sync select → hidden fields before HTMX submit
+        var form = document.getElementById('tc-convert-form');
+        if (form) {
+            form.addEventListener('htmx:configRequest', function() {
+                var cm = window._tcEditor;
+                var ta = document.getElementById('tc-yaml-editor');
+                if (cm && ta) ta.value = cm.getValue();
+                var bs = document.getElementById('tc-backend-select');
+                if (bs) document.getElementById('tc-form-backend').value = bs.value;
+                var ps = document.getElementById('tc-pipeline-select');
+                if (ps) document.getElementById('tc-form-pipeline').value = ps.value;
+                var fs = document.getElementById('tc-format-select');
+                if (fs) document.getElementById('tc-form-format').value = fs.value;
+                var pf = document.getElementById('tc-pipeline-file-select');
+                if (pf) document.getElementById('tc-form-pipeline-file').value = pf.value;
+                var tf = document.getElementById('tc-template-file-select');
+                if (tf) document.getElementById('tc-form-template-file').value = tf.value;
+            });
+        }
+
+        // Fetch formats when backend changes
+        var bSel = document.getElementById('tc-backend-select');
+        if (bSel) {
+            bSel.addEventListener('change', function() {
+                fetch('/api/sigma/formats/' + this.value, { credentials: 'same-origin' })
+                    .then(function(r) { return r.text(); })
+                    .then(function(html) {
+                        var fSel = document.getElementById('tc-format-select');
+                        fSel.innerHTML = html;
+                        if (fSel.options[0]) document.getElementById('tc-form-format').value = fSel.options[0].value;
+                    }).catch(function(){});
+            });
+        }
+
+        // Deploy helper
+        window.tcPrepareDeploy = function() {
+            var cm = window._tcEditor;
+            if (cm) document.getElementById('tc-deploy-yaml').value = cm.getValue();
+            var rqs = document.getElementById('raw-query-store');
+            var dq = document.getElementById('tc-deploy-query');
+            if (rqs && dq) dq.value = rqs.value;
+            var pf = document.getElementById('tc-pipeline-file-select');
+            if (pf) document.getElementById('tc-deploy-pipeline-file').value = pf.value;
+            var tf = document.getElementById('tc-template-file-select');
+            if (tf) document.getElementById('tc-deploy-template-file').value = tf.value;
+        };
+
+        // Deferred init — called when the section is first expanded
+        window._tcInitDeferred = function() {
+            if (window._tcEditorReady) return;
+            window._tcEditorReady = true;
+            initTcEditor();
+        };
+    })();
+    </script>
+    {% endif %}
 
 </div>
 

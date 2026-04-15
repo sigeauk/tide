@@ -2,6 +2,7 @@
    Context: baseline (Baseline with tactics list), step_coverage (dict step_id -> [{system_id, system_name, status}])
 #}
 {% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
 
 {% set KILL_CHAIN = ["Reconnaissance","Resource Development","Initial Access","Execution",
     "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
@@ -94,14 +95,19 @@
          data-coverage='[{{ cov_json | join(",") }}]'
          onclick="window.location='/baselines/{{ baseline.id }}/tactics/{{ step.id }}'">
         <div class="tech-card__body">
-            <div style="display:flex;align-items:center;gap:0.5rem;">
-                {% if step.technique_id %}
-                <span style="font-family:monospace;font-size:0.78rem;color:var(--color-text-muted);font-weight:600;">{{ step.technique_id }}</span>
-                <span style="color:var(--color-text-muted);font-size:0.7rem;">—</span>
-                {% endif %}
+            <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
                 <a href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
                    class="tech-card__title tech-card__title--{{ worst }}"
                    onclick="event.stopPropagation();">{{ step.title }}</a>
+                {% if step.techniques %}
+                    {% for t in step.techniques %}
+                    {% set tid_upper = t.technique_id | upper %}
+                    {{ mitre_pill(t.technique_id, covered=(tid_upper in covered_ttps if covered_ttps is defined else false), rule_count=(ttp_rule_counts.get(tid_upper, 0) if ttp_rule_counts is defined else 0), clickable=true, size='sm') }}
+                    {% endfor %}
+                {% elif step.technique_id %}
+                    {% set tid_upper = step.technique_id | upper %}
+                    {{ mitre_pill(step.technique_id, covered=(tid_upper in covered_ttps if covered_ttps is defined else false), rule_count=(ttp_rule_counts.get(tid_upper, 0) if ttp_rule_counts is defined else 0), clickable=true, size='sm') }}
+                {% endif %}
             </div>
             {% if step.description %}
             <div class="tech-card__desc">{{ step.description[:120] }}{% if step.description|length > 120 %}…{% endif %}</div>

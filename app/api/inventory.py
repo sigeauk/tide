@@ -833,6 +833,11 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, 
     applied_systems = [{"system_id": r[0], "system_name": r[1]} for r in sys_rows]
     all_systems = list_systems(client_id=client_id)
     step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
+    # Per-technique coverage for pill coloring
+    from app.services.database import get_database_service as _get_db
+    _db = _get_db()
+    covered_ttps = _db.get_all_covered_ttps(client_id=client_id)
+    ttp_rule_counts = _db.get_ttp_rule_counts(client_id=client_id)
     return _render("pages/baseline_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "user": user,
         "mitre_tactics": MITRE_TACTICS,
@@ -840,7 +845,338 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, 
         "applied_systems": applied_systems,
         "all_systems": all_systems,
         "step_coverage": step_coverage,
+        "covered_ttps": covered_ttps,
+        "ttp_rule_counts": ttp_rule_counts,
     })
+
+
+# ---------------------------------------------------------------------------
+# Dynamic Baseline Generator — Phase 3 (Questionnaire) + Phase 4 (Engine)
+# ---------------------------------------------------------------------------
+
+# Severity / status filters applied to every sigma_rules_index query.
+_SIGMA_LEVEL_FILTER = "level IN ('critical', 'high', 'medium')"
+_SIGMA_STATUS_FILTER = "(status IS NULL OR status NOT IN ('deprecated', 'unsupported'))"
+
+# SQL expressions for the "Primary Technology" abstraction.
+# tech = the top-level technology the user selects (e.g. "windows", "proxy").
+# gkey = the sub-grouping used to split one tech into modular baselines.
+_TECH_COL = "COALESCE(product, category)"
+_GROUP_COL = ("CASE WHEN product IS NOT NULL "
+              "THEN COALESCE(service, category) ELSE service END")
+
+# Curated UI bucket definitions — order is display order.
+_UI_BUCKETS: list[tuple[str, set[str]]] = [
+    ("Endpoints", {"windows", "linux", "macos"}),
+    ("Cloud & Identity", {
+        "aws", "azure", "gcp", "m365", "google_workspace",
+        "okta", "onelogin", "github", "bitbucket",
+    }),
+    ("Network & Security", {
+        "cisco", "fortigate", "paloalto", "firewall",
+        "proxy", "dns", "zeek", "antivirus",
+    }),
+]
+
+
+def _sigma_tech_catalog() -> dict[str, list[dict]]:
+    """Return a curated Service Catalog of primary technologies for the UI.
+
+    Each rule is assigned to exactly one *tech* via ``COALESCE(product,
+    category)``.  The resulting tech names are then sorted into predefined
+    UI buckets (Endpoints, Cloud & Identity, Network & Security) with
+    everything else falling into "Other Applications".
+    """
+    from app.services.database import get_database_service
+    db = get_database_service()
+    with db.get_shared_connection() as conn:
+        rows = conn.execute(f"""
+            SELECT {_TECH_COL} AS tech, COUNT(rule_id) AS cnt
+            FROM sigma_rules_index
+            WHERE {_TECH_COL} IS NOT NULL
+              AND {_SIGMA_LEVEL_FILTER}
+              AND {_SIGMA_STATUS_FILTER}
+            GROUP BY tech
+            ORDER BY tech
+        """).fetchall()
+
+    buckets: dict[str, list[dict]] = {name: [] for name, _ in _UI_BUCKETS}
+    buckets["Other Applications"] = []
+
+    for tech, cnt in rows:
+        item = {
+            "tech": tech,
+            "label": tech.replace("_", " ").title(),
+            "count": cnt,
+        }
+        placed = False
+        for bucket_name, members in _UI_BUCKETS:
+            if tech in members:
+                buckets[bucket_name].append(item)
+                placed = True
+                break
+        if not placed:
+            buckets["Other Applications"].append(item)
+
+    return {k: v for k, v in buckets.items() if v}
+
+
+@router.get("/api/baselines/generate-form", response_class=HTMLResponse)
+def api_generate_baselines_form(
+    request: Request, user: CurrentUser, client_id: ActiveClient,
+    system_id: str = Query(...),
+):
+    """Return the Generate Baselines modal HTML with dynamic tech checkboxes."""
+    system = get_system(system_id, client_id=client_id)
+    if not system:
+        return HTMLResponse("<p style='color:var(--color-danger)'>System not found.</p>")
+
+    catalog = _sigma_tech_catalog()
+    total = sum(item["count"] for items in catalog.values() for item in items)
+
+    return _render("partials/generate_baselines_modal.html", request, {
+        "system_id": system_id,
+        "system_name": system.name,
+        "catalog": catalog,
+        "rule_count": total,
+    })
+
+
+def _build_baseline_groups(
+    selections: list[str], client_id: str,
+) -> list[dict]:
+    """Query sigma_rules_index and group matching rules into baseline buckets.
+
+    *selections* contains ``COALESCE(product, category)`` tech names from
+    the form checkboxes.  The query fans each tech out into sub-groups via
+    ``CASE WHEN product IS NOT NULL THEN COALESCE(service, category)
+    ELSE service END`` so that e.g. "windows" yields ~20 modular baselines
+    (one per event type / service).
+
+    Each group dict includes an ``exists`` flag (True when a playbook with
+    that name is already present).  The UI shows existing baselines
+    unchecked by default so the user can choose to re-create them.
+
+    Returns ``groups`` — a flat list of baseline group dicts.
+    """
+    if not selections:
+        return []
+
+    from app.services.database import get_database_service
+    db = get_database_service()
+
+    placeholders = ", ".join(["?"] * len(selections))
+    with db.get_shared_connection() as conn:
+        rows = conn.execute(f"""
+            SELECT {_TECH_COL}  AS tech,
+                   {_GROUP_COL} AS gkey,
+                   COUNT(*)     AS cnt
+            FROM sigma_rules_index
+            WHERE {_TECH_COL} IN ({placeholders})
+              AND {_SIGMA_LEVEL_FILTER}
+              AND {_SIGMA_STATUS_FILTER}
+            GROUP BY tech, gkey
+            ORDER BY tech, gkey
+        """, selections).fetchall()
+
+    existing_names = {p.name for p in list_playbooks(client_id=client_id)}
+    groups: list[dict] = []
+    for tech, gkey, cnt in rows:
+        tech_label = tech.replace("_", " ").title()
+        if gkey:
+            name = f"{tech_label} {gkey.replace('_', ' ').title()} Detection Baseline"
+        else:
+            name = f"{tech_label} Detection Baseline"
+        groups.append({
+            "name": name, "count": cnt,
+            "tech": tech, "grouping_key": gkey,
+            "exists": name in existing_names,
+        })
+    return groups
+
+
+@router.post("/api/baselines/generate-preview", response_class=HTMLResponse)
+async def api_generate_baselines_preview(
+    request: Request, user: RequireUser, client_id: ActiveClient,
+):
+    """Return a preview of what baselines will be created."""
+    form = await request.form()
+    system_id = form.get("system_id", "")
+    techs = form.getlist("techs")
+    groups = _build_baseline_groups(techs, client_id)
+    new_groups = [g for g in groups if not g["exists"]]
+    existing_groups = [g for g in groups if g["exists"]]
+    total_rules = sum(g["count"] for g in new_groups)
+    return _render("partials/generate_baselines_preview.html", request, {
+        "groups": groups,
+        "new_groups": new_groups,
+        "existing_groups": existing_groups,
+        "total_rules": total_rules,
+        "system_id": system_id,
+    })
+
+
+def _generate_baselines_from_sigma(
+    system_id: str,
+    groups: list[dict],
+    client_id: str,
+) -> int:
+    """Phase 4 baseline engine — create playbooks from Sigma rule groups.
+
+    For each group (tech + sub-grouping combination):
+      1. Create a Playbook with a description summarising the scope.
+      2. Query sigma_rules_index for matching rule_ids using the same
+         ``_TECH_COL`` / ``_GROUP_COL`` expressions as the preview.
+      3. For each rule, load the YAML file via sigma_helper, extract
+         description / falsepositives / techniques / tactics.
+      4. Create a PlaybookStep per rule with step_detections and
+         step_techniques populated.
+      5. Apply the new baseline to the triggering system_id.
+
+    Returns the number of baselines created.
+    """
+    from app.sigma_helper import load_sigma_rule, extract_mitre_techniques, extract_mitre_tactics
+    from app.services.database import get_database_service
+    db = get_database_service()
+
+    created = 0
+    for group in groups:
+        tech = group["tech"]
+        gkey = group["grouping_key"]
+        baseline_name = group["name"]
+
+        # Fetch matching rule rows — identical predicates to _build_baseline_groups
+        with db.get_shared_connection() as conn:
+            if gkey is not None:
+                rule_rows = conn.execute(f"""
+                    SELECT rule_id, title, file_path, techniques, tactics
+                    FROM sigma_rules_index
+                    WHERE {_TECH_COL} = ?
+                      AND ({_GROUP_COL}) = ?
+                      AND {_SIGMA_LEVEL_FILTER}
+                      AND {_SIGMA_STATUS_FILTER}
+                    ORDER BY title
+                """, [tech, gkey]).fetchall()
+            else:
+                rule_rows = conn.execute(f"""
+                    SELECT rule_id, title, file_path, techniques, tactics
+                    FROM sigma_rules_index
+                    WHERE {_TECH_COL} = ?
+                      AND ({_GROUP_COL}) IS NULL
+                      AND {_SIGMA_LEVEL_FILTER}
+                      AND {_SIGMA_STATUS_FILTER}
+                    ORDER BY title
+                """, [tech]).fetchall()
+
+        if not rule_rows:
+            continue
+
+        # Create the playbook in the tenant DB
+        scope = gkey.replace("_", " ").title() if gkey else "General"
+        description = (
+            f"Auto-generated detection baseline for {tech.replace('_', ' ').title()} "
+            f"({scope}) — {len(rule_rows)} Sigma rules covering "
+            f"severity levels critical/high/medium."
+        )
+        pb = create_playbook(baseline_name, description, client_id=client_id)
+
+        # Create one PlaybookStep per Sigma rule
+        for step_num, (rule_id, title, file_path, idx_techniques, idx_tactics) in enumerate(rule_rows, 1):
+            rule_yaml = load_sigma_rule(file_path) if file_path else None
+
+            if rule_yaml:
+                rule_desc = rule_yaml.get("description", "") or ""
+                fps = rule_yaml.get("falsepositives") or []
+                if fps:
+                    fp_text = "; ".join(str(fp) for fp in fps)
+                    rule_desc = f"{rule_desc}\n\nFalse Positives: {fp_text}" if rule_desc else f"False Positives: {fp_text}"
+                techniques = extract_mitre_techniques(rule_yaml)
+                tactics = extract_mitre_tactics(rule_yaml)
+            else:
+                rule_desc = ""
+                techniques = list(idx_techniques) if idx_techniques else []
+                tactics = list(idx_tactics) if idx_tactics else []
+
+            primary_technique = techniques[0] if techniques else ""
+            primary_tactic = tactics[0] if tactics else ""
+
+            step = add_playbook_step(
+                pb.id,
+                step_num,
+                title or f"Rule {rule_id}",
+                technique_id=primary_technique,
+                required_rule=rule_id,
+                description=rule_desc.strip(),
+                tactic=primary_tactic,
+                client_id=client_id,
+            )
+
+            for extra_tech in techniques[1:]:
+                try:
+                    add_step_technique(step.id, extra_tech, client_id=client_id)
+                except Exception:
+                    pass
+
+            # Sigma rules are tracked as step_detections with source="sigma"
+            # so they appear in the detection list, but only SIEM/manual
+            # detections can be applied to systems for coverage (green).
+            add_step_detection(
+                step.id,
+                rule_ref=title or rule_id,
+                note=f"Sigma rule {rule_id}",
+                source="sigma",
+                client_id=client_id,
+            )
+
+        try:
+            apply_baseline(system_id, pb.id, client_id=client_id)
+        except Exception as e:
+            logger.warning(f"[GENERATE] Could not apply baseline {baseline_name}: {e}")
+
+        created += 1
+        logger.info(f"[GENERATE] Created baseline '{baseline_name}' ({len(rule_rows)} rules)")
+
+    return created
+
+
+@router.post("/api/baselines/generate", response_class=HTMLResponse)
+async def api_generate_baselines(
+    request: Request, user: RequireUser, client_id: ActiveClient,
+):
+    """Execute baseline generation from selected technologies.
+
+    Reads *techs* (primary technology names), builds baseline groups,
+    filters to only the baselines the user selected in the preview,
+    calls the engine, and returns the refreshed baseline coverage partial.
+    """
+    form = await request.form()
+    system_id = form.get("system_id", "")
+    techs = form.getlist("techs")
+    selected_indices = set(form.getlist("selected_baselines"))
+    system = get_system(system_id, client_id=client_id)
+    if not system:
+        raise HTTPException(status_code=404, detail="System not found")
+
+    groups = _build_baseline_groups(techs, client_id)
+
+    # If the user explicitly selected baselines in the preview, only
+    # generate those.  Otherwise fall back to all non-existing groups.
+    if selected_indices:
+        groups = [g for i, g in enumerate(groups) if str(i) in selected_indices]
+    else:
+        groups = [g for g in groups if not g["exists"]]
+
+    if groups:
+        created = _generate_baselines_from_sigma(system_id, groups, client_id)
+        logger.info(
+            f"[GENERATE] Created {created} baselines "
+            f"({sum(g['count'] for g in groups)} rules) for system {system_id}"
+        )
+    else:
+        logger.warning(f"[GENERATE] No new baselines to create for {techs}")
+
+    # Re-render baseline coverage
+    return _render_system_baseline_coverage(request, system_id, client_id)
 
 
 @router.post("/api/baselines", response_class=HTMLResponse)
@@ -1035,7 +1371,13 @@ def api_add_tactic(
         step_number = (len(pb.tactics) + 1) if pb else 1
     add_playbook_step(baseline_id, step_number, title, technique_id, "", description, tactic=tactic or None, client_id=client_id)
     pb = get_playbook(baseline_id, client_id=client_id)
-    return _render("partials/baseline_tactics.html", request, {"baseline": pb})
+    from app.services.database import get_database_service as _get_db
+    _db = _get_db()
+    return _render("partials/baseline_tactics.html", request, {
+        "baseline": pb,
+        "covered_ttps": _db.get_all_covered_ttps(client_id=client_id),
+        "ttp_rule_counts": _db.get_ttp_rule_counts(client_id=client_id),
+    })
 
 
 @router.delete("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
@@ -1050,7 +1392,13 @@ def api_delete_tactic(request: Request, tactic_id: str, playbook_id: str = Query
         resp.headers["HX-Redirect"] = f"/baselines/{playbook_id}"
         return resp
     pb = get_playbook(playbook_id, client_id=client_id)
-    return _render("partials/baseline_tactics.html", request, {"baseline": pb})
+    from app.services.database import get_database_service as _get_db
+    _db = _get_db()
+    return _render("partials/baseline_tactics.html", request, {
+        "baseline": pb,
+        "covered_ttps": _db.get_all_covered_ttps(client_id=client_id),
+        "ttp_rule_counts": _db.get_ttp_rule_counts(client_id=client_id),
+    })
 
 
 @router.post("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
@@ -1193,6 +1541,63 @@ def page_tactic_detail(request: Request, baseline_id: str, tactic_id: str, user:
 
     technique_rules = _build_technique_rules(step, client_id=client_id)
 
+    # Sigma convert context — only when sigma detections exist on this step
+    sigma_ctx: dict = {}
+    sigma_dets = [d for d in step.detections if (d.source or "manual") == "sigma"]
+    if sigma_dets:
+        from app import sigma_helper as sigma_mod
+        from app.services.database import get_database_service
+        _db = get_database_service()
+        sigma_ctx["backends"] = sigma_mod.get_available_backends()
+        sigma_ctx["pipelines"] = sigma_mod.get_available_pipelines()
+        sigma_ctx["formats"] = sigma_mod.get_output_formats("elasticsearch")
+        sigma_ctx["pipeline_files"] = sigma_mod.list_saved_pipelines()
+        sigma_ctx["template_files"] = sigma_mod.list_saved_templates()
+        # Build deploy targets from client's linked SIEMs
+        client_siems = _db.get_client_siems(client_id) if client_id else []
+        deploy_targets = []
+        for s in client_siems:
+            if s.get("space"):
+                deploy_targets.append({
+                    "space": s["space"],
+                    "label": f'{s["label"]} ({s["environment_role"].title()})',
+                    "environment_role": s["environment_role"],
+                })
+        sigma_ctx["deploy_targets"] = deploy_targets
+        # Resolve sigma rule UUIDs for all sigma detections
+        all_rules_cache = None  # lazy-load for legacy title lookups
+        sigma_rule_ids = []
+        sigma_rule_map = {}  # id → title for selector display
+        for det in sigma_dets:
+            ref = det.rule_ref or ""
+            if not ref:
+                continue
+            # Try as UUID first
+            rule_data = sigma_mod.get_rule_by_id(ref)
+            if rule_data:
+                sigma_rule_ids.append(ref)
+                sigma_rule_map[ref] = rule_data.get("title", ref)
+            else:
+                # Legacy: stored as title — search all rules for matching title
+                if all_rules_cache is None:
+                    all_rules_cache = sigma_mod.load_all_rules()
+                for r in all_rules_cache:
+                    if r.get("title") == ref:
+                        rid = r.get("id", "")
+                        if rid:
+                            sigma_rule_ids.append(rid)
+                            sigma_rule_map[rid] = ref
+                        break
+        # Deduplicate while preserving order
+        seen = set()
+        unique_ids = []
+        for rid in sigma_rule_ids:
+            if rid not in seen:
+                seen.add(rid)
+                unique_ids.append(rid)
+        sigma_ctx["sigma_rule_ids"] = unique_ids
+        sigma_ctx["sigma_rule_map"] = sigma_rule_map
+
     return _render("pages/tactic_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "tactic": step,
         "step": step,  # alias for partials that still reference step
@@ -1201,8 +1606,10 @@ def page_tactic_detail(request: Request, baseline_id: str, tactic_id: str, user:
         "affected_systems": affected_systems, "blind_spots": blind_spots,
         "all_siem_rules": all_siem_rules,
         "technique_rules": technique_rules,
+        "rule_name_lookup": _build_rule_name_lookup(client_id),
         "mitre_tactics": MITRE_TACTICS,
         "user": user,
+        **sigma_ctx,
     })
 
 
@@ -1268,6 +1675,26 @@ def api_update_tactic_technique(
     return resp
 
 
+def _build_rule_name_lookup(client_id: str = None) -> dict:
+    """Build rule_name -> {rule_id, space} lookup for clickable rule names."""
+    with _get_conn_inline() as conn:
+        frag = " AND client_id = ?" if client_id else ""
+        params = [client_id] if client_id else []
+        rows = conn.execute(
+            "SELECT rule_id, name, space FROM detection_rules WHERE 1=1" + frag,
+            params,
+        ).fetchall()
+    return {r[1]: {"rule_id": r[0], "space": r[2] or "default"} for r in rows}
+
+
+def _render_detection_section(request, step, client_id=None):
+    """Render tactic_detection_section.html with all required context."""
+    return _render("partials/tactic_detection_section.html", request, {
+        "step": step,
+        "rule_name_lookup": _build_rule_name_lookup(client_id),
+    })
+
+
 @router.post("/api/baselines/tactics/{tactic_id}/detections", response_class=HTMLResponse)
 def api_add_tactic_detection(
     request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
@@ -1275,11 +1702,7 @@ def api_add_tactic_detection(
 ):
     add_step_detection(tactic_id, rule_ref, note, source, client_id=client_id)
     step = get_playbook_step(tactic_id, client_id=client_id)
-    all_siem_rules = get_all_siem_rules(client_id=client_id)
-    resp = _render("partials/tactic_detection_section.html", request, {
-        "step": step, "all_siem_rules": all_siem_rules,
-        "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
+    resp = _render_detection_section(request, step, client_id=client_id)
     resp.headers["HX-Trigger"] = "stepUpdated"
     return resp
 
@@ -1290,13 +1713,84 @@ def api_remove_tactic_detection(
 ):
     remove_step_detection(detection_row_id, client_id=client_id)
     step = get_playbook_step(step_id, client_id=client_id)
-    all_siem_rules = get_all_siem_rules(client_id=client_id)
-    resp = _render("partials/tactic_detection_section.html", request, {
-        "step": step, "all_siem_rules": all_siem_rules,
-        "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
+    resp = _render_detection_section(request, step, client_id=client_id)
     resp.headers["HX-Trigger"] = "stepUpdated"
     return resp
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/sigma-rules", response_class=HTMLResponse)
+def api_search_sigma_rules_for_step(
+    request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+    q: str = Query(""),
+):
+    """Return sigma rules matching the techniques on this step, as HTML options."""
+    from app import sigma_helper as sigma_mod
+    step = get_playbook_step(tactic_id, client_id=client_id)
+    if not step:
+        return HTMLResponse("")
+    # Collect all technique IDs mapped on this step
+    technique_ids = [t.technique_id.upper() for t in step.techniques]
+    if step.technique_id and step.technique_id.upper() not in technique_ids:
+        technique_ids.append(step.technique_id.upper())
+    if not technique_ids:
+        return _render("partials/sigma_rule_options.html", request, {"sigma_results": [], "query": q})
+    # Search sigma rules for each technique and de-duplicate
+    seen = set()
+    sigma_results = []
+    for tid in technique_ids:
+        matches = sigma_mod.search_rules(query=q, technique_filter=tid, limit=50)
+        for r in matches:
+            rid = r.get("id", "")
+            if rid and rid not in seen:
+                seen.add(rid)
+                sigma_results.append(r)
+    # Sort by title
+    sigma_results.sort(key=lambda r: r.get("title", ""))
+    return _render("partials/sigma_rule_options.html", request, {
+        "sigma_results": sigma_results[:100],
+        "query": q,
+    })
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/siem-rules", response_class=HTMLResponse)
+def api_search_siem_rules_for_step(
+    request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+    q: str = Query(""),
+):
+    """Return SIEM rules as HTML options, mapped-to-technique rules first, then all."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    step = get_playbook_step(tactic_id, client_id=client_id)
+    if not step:
+        return HTMLResponse("")
+    # Collect technique IDs on this step
+    technique_ids = [t.technique_id.upper() for t in step.techniques]
+    if step.technique_id and step.technique_id.upper() not in technique_ids:
+        technique_ids.append(step.technique_id.upper())
+    # Get mapped rules (rules that cover this step's techniques)
+    mapped = []
+    mapped_ids = set()
+    for tid in technique_ids:
+        for r in db.get_rules_for_technique(tid, enabled_only=False, client_id=client_id):
+            if r.rule_id not in mapped_ids:
+                mapped_ids.add(r.rule_id)
+                mapped.append(r)
+    # Get all SIEM rules
+    all_rules = get_all_siem_rules(client_id=client_id)
+    # Apply search filter
+    q_lower = q.strip().lower()
+    if q_lower:
+        mapped = [r for r in mapped if q_lower in r.name.lower()]
+        all_rules = [r for r in all_rules if q_lower in r["name"].lower()]
+    # Sort
+    mapped.sort(key=lambda r: r.name)
+    all_rules.sort(key=lambda r: r["name"])
+    return _render("partials/siem_rule_options.html", request, {
+        "mapped_rules": mapped[:50],
+        "all_rules": all_rules[:100],
+        "query": q,
+        "mapped_ids": mapped_ids,
+    })
 
 
 @router.get("/api/baselines/tactics/{tactic_id}/affected-systems", response_class=HTMLResponse)
@@ -1307,16 +1801,18 @@ def api_tactic_affected_systems(request: Request, tactic_id: str, user: CurrentU
 @router.get("/api/baselines/tactics/{tactic_id}/detections", response_class=HTMLResponse)
 def api_tactic_detections(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
     step = get_playbook_step(tactic_id, client_id=client_id)
-    all_siem_rules = get_all_siem_rules(client_id=client_id)
-    return _render("partials/tactic_detection_section.html", request, {
-        "step": step, "all_siem_rules": all_siem_rules,
-        "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
+    return _render_detection_section(request, step, client_id=client_id)
 
 
 @router.post("/api/baselines/tactics/{tactic_id}/detections/{detection_id}/apply", response_class=HTMLResponse)
 async def api_apply_step_detection(request: Request, tactic_id: str, detection_id: str, user: RequireUser, client_id: ActiveClient):
     """Apply a tactic detection rule to all hosts in a system."""
+    # Block sigma-sourced detections — only SIEM/manual rules can be applied
+    step = get_playbook_step(tactic_id, client_id=client_id)
+    if step:
+        det = next((d for d in step.detections if d.id == detection_id), None)
+        if det and (det.source or "manual") == "sigma":
+            raise HTTPException(status_code=422, detail="Sigma rules cannot be applied directly — convert & deploy first")
     form = await request.form()
     system_id = (form.get("system_id") or "").strip()
     if not system_id:

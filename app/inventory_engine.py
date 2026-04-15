@@ -1572,16 +1572,16 @@ def get_rules_for_cve_techniques(cve_id: str, client_id: str = None) -> Dict[str
 
 
 def get_all_siem_rules(client_id: str = None) -> list:
-    """Return a lightweight list of ALL SIEM rules [{rule_id, name}] for dropdowns."""
+    """Return a list of ALL SIEM rules [{rule_id, name, mitre_ids, severity, enabled}] for dropdowns."""
     from app.services.database import get_database_service
     db = get_database_service()
     frag, params = _cf("", client_id)
     with db.get_connection() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name FROM detection_rules WHERE 1=1" + frag + " ORDER BY name",
+            "SELECT rule_id, name, mitre_ids, severity, enabled FROM detection_rules WHERE 1=1" + frag + " ORDER BY name",
             params,
         ).fetchall()
-    return [{"rule_id": r[0], "name": r[1]} for r in rows]
+    return [{"rule_id": r[0], "name": r[1], "mitre_ids": r[2] or [], "severity": r[3] or "", "enabled": bool(r[4])} for r in rows]
 
 
 # --- Tier 3: Applied Detection CRUD ---
@@ -2429,9 +2429,11 @@ def get_baseline_step_coverage(baseline_id: str, client_id: str = None) -> Dict[
 
         sp = ",".join("?" for _ in step_ids)
 
-        # Step detection IDs per step
+        # Step detection IDs per step — only non-sigma detections
+        # contribute to coverage (sigma rules are potential, not applied)
         sd_rows = conn.execute(
-            f"SELECT step_id, id FROM step_detections WHERE step_id IN ({sp})", step_ids
+            f"SELECT step_id, id FROM step_detections "
+            f"WHERE step_id IN ({sp}) AND COALESCE(source, 'manual') != 'sigma'", step_ids
         ).fetchall()
         step_det_ids: Dict[str, set] = {}
         for sid, det_id in sd_rows:
@@ -2875,6 +2877,14 @@ def delete_playbook(playbook_id: str, client_id: str = None) -> bool:
             owner = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
             if not owner or owner[0] != client_id:
                 return False
+        # Cascade: delete child rows of each step first
+        step_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM playbook_steps WHERE playbook_id = ?", [playbook_id]
+        ).fetchall()]
+        if step_ids:
+            ph = ",".join("?" for _ in step_ids)
+            conn.execute(f"DELETE FROM step_detections WHERE step_id IN ({ph})", step_ids)
+            conn.execute(f"DELETE FROM step_techniques WHERE step_id IN ({ph})", step_ids)
         conn.execute("DELETE FROM playbook_steps WHERE playbook_id = ?", [playbook_id])
         conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
         cnt = conn.execute("DELETE FROM playbooks WHERE id = ?" + frag, [playbook_id] + params).rowcount
@@ -3043,8 +3053,8 @@ def get_system_baselines(
             has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
             bs_reason = next((bs.reason for bs in sys_blind_spots), "")
 
-            # Check if any detection for this step is applied to a host on this system
-            step_det_ids = {d.id for d in step.detections}
+            # Check if any non-sigma detection for this step is applied to a host on this system
+            step_det_ids = {d.id for d in step.detections if (d.source or 'manual') != 'sigma'}
             is_applied = bool(step_det_ids & applied_step_det_ids) if step_det_ids else False
 
             # 4-tier: green > grey > amber > red
@@ -3075,6 +3085,8 @@ def get_system_baselines(
             step_unapplied = []
             if include_detection_details:
                 for d in step.detections:
+                    if (d.source or "manual") == "sigma":
+                        continue  # sigma rules are not appliable
                     label = d.rule_ref or d.note or "Rule"
                     rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
                     entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
@@ -3423,10 +3435,13 @@ def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]
         host_ids = {h.id for h in hosts}
 
         # Check direct application: detection applied to at least one host in system,
-        # or applied at system level (for systems with no hosts)
+        # or applied at system level (for systems with no hosts).
+        # Sigma-sourced detections are excluded — they cannot be applied for coverage.
         sys_applied = []
         sys_unapplied = []
         for d in step.detections:
+            if (d.source or "manual") == "sigma":
+                continue  # sigma rules are not appliable
             det_hosts = applied_host_map.get(d.id, set())
             det_systems = applied_sys_map.get(d.id, set())
             if (host_ids and (det_hosts & host_ids)) or (system_id in det_systems):

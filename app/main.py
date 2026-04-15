@@ -130,6 +130,13 @@ async def lifespan(app: FastAPI):
         logger.info(f"Sigma rules pre-loaded: {rules_count} rules cached")
     except Exception as e:
         logger.warning(f"Failed to pre-load Sigma rules: {e}")
+
+    # Index Sigma rule metadata into the shared DB for fast SQL queries
+    try:
+        indexed = sigma_helper.index_sigma_rules()
+        logger.info(f"Sigma rules indexed: {indexed} rows in sigma_rules_index")
+    except Exception as e:
+        logger.warning(f"Sigma index build failed (non-fatal): {e}")
     
     # Warm up Sigma backends / pipelines so first conversion is instant
     try:

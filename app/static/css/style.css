@@ -5428,3 +5428,115 @@ body.light {
 .card .host-card:hover {
   background: var(--color-bg-action-hover);
 }
+
+/* ================================================================
+ * GENERATE BASELINES — Card-Grid Tech Selector
+ * ================================================================ */
+.gen-card-scroll {
+  max-height: 420px;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.gen-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+.gen-card {
+  background: var(--bg-level-2-subcard);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.75rem;
+}
+
+.gen-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-primary);
+  padding-bottom: 0.45rem;
+  margin-bottom: 0.4rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.gen-card-badge {
+  margin-left: auto;
+  font-size: 0.7rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  background: var(--bg-level-3-inner);
+  padding: 0.1rem 0.45rem;
+  border-radius: var(--radius-sm);
+}
+
+.gen-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.gen-tech-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.45rem;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.82rem;
+  transition: background 0.15s;
+}
+
+.gen-tech-row:hover {
+  background: var(--bg-level-3-inner);
+}
+
+.gen-tech-icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.gen-tech-row:hover .gen-tech-icon,
+.gen-tech-row:has(input:checked) .gen-tech-icon {
+  color: var(--color-primary);
+}
+
+.gen-tech-label {
+  flex: 1;
+  color: var(--color-text);
+}
+
+.gen-tech-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  min-width: 2rem;
+  text-align: right;
+}
+
+.gen-tech-row:has(input:checked) {
+  background: var(--color-primary-muted);
+}
+
+.gen-tech-row:has(input:checked) .gen-tech-label {
+  color: var(--color-primary);
+}
+
+.gen-tech-row:has(input:checked) .gen-tech-count {
+  color: var(--color-primary);
+}
+
+/* Preview baseline rows */
+.gen-preview-row:hover {
+  background: var(--color-bg-layer-4-hover);
+}
+
+.gen-preview-exists {
+  border-left: 2px solid var(--color-warning);
+}

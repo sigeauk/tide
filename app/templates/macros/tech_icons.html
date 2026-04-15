@@ -1,0 +1,54 @@
+{# ── Technology Brand Icons ─────────────────────────────────────
+   Maps tech names from _sigma_tech_catalog() to recognizable SVGs.
+   Major platforms get custom brand-inspired shapes; others map to
+   Lucide icons via the standard icon() macro.
+   ─────────────────────────────────────────────────────────────── #}
+{% from "macros/icons.html" import icon %}
+
+{# ── tech_icon(name, size) ──────────────────────────────────── #}
+{% macro tech_icon(name, size="16") %}
+{% set _lucide = {
+    'linux':            'terminal',
+    'macos':            'monitor',
+    'm365':             'layout-grid',
+    'google_workspace': 'grid-3x3',
+    'okta':             'lock',
+    'onelogin':         'lock',
+    'github':           'github',
+    'bitbucket':        'git-branch',
+    'cisco':            'wifi',
+    'fortigate':        'shield',
+    'paloalto':         'shield-check',
+    'firewall':         'shield',
+    'proxy':            'arrow-right-left',
+    'dns':              'globe',
+    'zeek':             'eye',
+    'antivirus':        'shield-check',
+} %}
+{% if name == 'windows' %}
+<svg class="icon tech-icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="1" y="1" width="10" height="10" rx="1.5"/><rect x="13" y="1" width="10" height="10" rx="1.5"/><rect x="1" y="13" width="10" height="10" rx="1.5"/><rect x="13" y="13" width="10" height="10" rx="1.5"/></svg>
+{% elif name == 'aws' %}
+<svg class="icon tech-icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="m8 15 3-3 3 2 3-4"/></svg>
+{% elif name == 'azure' %}
+<svg class="icon tech-icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M12 13v2"/><path d="M12 9h.01"/></svg>
+{% elif name == 'gcp' %}
+<svg class="icon tech-icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/><path d="M10 15l2-4 2 4"/></svg>
+{% elif name in _lucide %}
+{{ icon(_lucide[name], size) }}
+{% else %}
+{{ icon('cpu', size) }}
+{% endif %}
+{% endmacro %}
+
+{# ── bucket_icon(bucket_name, size) ─────────────────────────── #}
+{% macro bucket_icon(name, size="16") %}
+{% if 'Endpoint' in name %}
+{{ icon('monitor', size) }}
+{% elif 'Cloud' in name %}
+<svg class="icon" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>
+{% elif 'Network' in name %}
+{{ icon('shield', size) }}
+{% else %}
+{{ icon('layers', size) }}
+{% endif %}
+{% endmacro %}

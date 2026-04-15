@@ -1,0 +1,56 @@
+{% from "macros/icons.html" import icon %}
+<!-- Preview results — rendered inside #gen-preview-area -->
+<div style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:0.75rem 1rem;margin-top:0.75rem;background:var(--bg-level-2-subcard);">
+    <h4 style="font-size:0.9rem;margin:0 0 0.5rem;color:var(--color-primary);">
+        {{ icon('clipboard-list','14') }} Generation Preview
+    </h4>
+    {% if groups %}
+    <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.5rem;">
+        {{ new_groups|length }} new baseline{{ 's' if new_groups|length != 1 else '' }} covering {{ total_rules }} rule{{ 's' if total_rules != 1 else '' }}.
+        {% if existing_groups %}{{ existing_groups|length }} already exist (unchecked).{% endif %}
+        Deselect any you don't need.
+    </p>
+    <div style="display:flex;flex-direction:column;gap:0.2rem;max-height:240px;overflow-y:auto;">
+        {% for g in groups %}
+        <label class="gen-preview-row{% if g.exists %} gen-preview-exists{% endif %}"
+               style="display:flex;align-items:center;gap:0.45rem;padding:0.3rem 0.5rem;border-radius:var(--radius-sm);background:var(--bg-level-3-inner);font-size:0.82rem;cursor:pointer;">
+            <input type="checkbox" name="selected_baselines" value="{{ loop.index0 }}"
+                   {% if not g.exists %}checked{% endif %}
+                   {% if g.exists %}data-exists="1"{% endif %}
+                   form="gen-baselines-form"
+                   style="accent-color:var(--color-primary);width:13px;height:13px;flex-shrink:0;"
+                   onchange="!function(){var a=document.getElementById('gen-preview-area'),c=a.querySelectorAll('input[name=selected_baselines]:checked'),b=a.querySelector('.gen-btn-count');if(b)b.textContent=c.length}()">
+            <span style="flex:1;color:var(--color-text);{% if g.exists %}opacity:0.6;{% endif %}">
+                {{ g.name }}
+                {% if g.exists %}<span style="font-size:0.72rem;color:var(--color-warning);margin-left:0.3rem;">exists</span>{% endif %}
+            </span>
+            <span style="color:var(--color-text-muted);font-size:0.72rem;font-weight:600;min-width:2rem;text-align:right;">{{ g.count }}</span>
+        </label>
+        {% endfor %}
+    </div>
+
+    <!-- The actual Generate button -->
+    <div style="display:flex;justify-content:flex-end;margin-top:0.75rem;align-items:center;gap:0.5rem;">
+        <span id="gen-execute-indicator" class="htmx-indicator" style="font-size:0.82rem;color:var(--color-text-muted);">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;">
+                <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+            </svg>
+            Generating baselines…
+        </span>
+        <button class="btn btn-primary gen-btn-generate"
+                hx-post="/api/baselines/generate"
+                hx-include="#gen-baselines-form"
+                hx-target="#baseline-coverage"
+                hx-swap="innerHTML"
+                hx-indicator="#gen-execute-indicator"
+                hx-on::after-request="document.getElementById('generate-baselines-modal').style.display='none';"
+                style="display:flex;align-items:center;gap:0.35rem;">
+            {{ icon('zap','14') }} Generate <span class="gen-btn-count">{{ new_groups|length }}</span> Baseline{{ 's' if new_groups|length != 1 else '' }}
+        </button>
+    </div>
+    {% else %}
+    <p style="font-size:0.85rem;color:var(--color-warning);margin:0;">
+        {{ icon('alert-triangle','14') }} No matching rules found for the selected technologies.
+    </p>
+    {% endif %}
+</div>

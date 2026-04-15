@@ -1,4 +1,5 @@
 {% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
 
 <div style="display:flex;flex-wrap:wrap;gap:0.5rem;margin-bottom:0.75rem;">
     <div style="display:flex;align-items:center;gap:0.35rem;padding:0.3rem 0.45rem;border:1px solid var(--color-border-muted);border-radius:0.45rem;background:var(--bg-level-2);">
@@ -113,17 +114,26 @@
                 <div class="tech-card__body"
                      style="cursor:pointer;"
                      {% if step.step_id is defined and step.step_id %}onclick="window.location='/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}'"{% endif %}>
-                    <div style="display:flex;align-items:center;gap:0.5rem;">
-                        {% if step.display_technique_ids %}
-                        <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">{{ step.display_technique_ids | join(', ') }}</span>
-                        <span style="color:var(--color-text-muted);font-size:0.65rem;">&mdash;</span>
-                        {% endif %}
+                    <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
                         {% if step.step_id is defined and step.step_id %}
                         <a href="/baselines/{{ bl.playbook_id }}/tactics/{{ step.step_id }}"
                            class="tech-card__title tech-card__title--{{ step.status }}"
                            onclick="event.stopPropagation();">{{ step.title }}</a>
                         {% else %}
                         <span class="tech-card__title tech-card__title--{{ step.status }}">{{ step.title }}</span>
+                        {% endif %}
+                        {% if step.display_technique_ids %}
+                            {# Build coverage lookup from step.techniques list #}
+                            {% set ns_cov = namespace(map={}) %}
+                            {% if step.techniques is defined %}
+                              {% for t in step.techniques %}
+                                {% set _ = ns_cov.map.update({t.technique_id: t}) %}
+                              {% endfor %}
+                            {% endif %}
+                            {% for tid in step.display_technique_ids %}
+                            {% set t_info = ns_cov.map.get(tid, {}) %}
+                            {{ mitre_pill(tid, covered=t_info.get('has_detection', false), rule_count=t_info.get('rule_count', 0), clickable=true, size='sm') }}
+                            {% endfor %}
                         {% endif %}
                     </div>
                     {% if step.description %}

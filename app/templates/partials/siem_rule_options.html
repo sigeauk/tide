@@ -1,0 +1,94 @@
+{# Partial: siem_rule_options.html — SIEM rule search results for the Add SIEM Rule dropdown
+   Context: mapped_rules (list[DetectionRule]), all_rules (list[dict]), query (str), mapped_ids (set)
+#}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{% if mapped_rules or all_rules %}
+<div style="max-height:280px;overflow-y:auto;">
+    {% if mapped_rules %}
+    <div style="padding:0.35rem 0.65rem;font-size:0.68rem;font-weight:700;color:var(--color-success);text-transform:uppercase;letter-spacing:.5px;background:rgba(34,197,94,.06);border-bottom:1px solid var(--color-border-muted);">
+        Mapped to techniques on this step
+    </div>
+    {% for rule in mapped_rules %}
+    <button type="button" class="siem-rule-option"
+            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;background:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted);"
+            onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
+            onclick="selectSiemRule(this, '{{ rule.name | e }}')">
+        <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
+                {{ rule.name }}
+            </div>
+            <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+                {% if rule.mitre_ids %}
+                    {% for tech in rule.mitre_ids[:3] %}
+                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {% endfor %}
+                    {% if rule.mitre_ids|length > 3 %}
+                    <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>
+                    {% endif %}
+                {% endif %}
+                {% if rule.severity %}
+                <span class="severity-pill severity-{{ rule.severity.value | lower }}" style="font-size:0.6rem;margin-left:0.25rem;">
+                    {{ rule.severity.value | upper }}
+                </span>
+                {% endif %}
+                {% if rule.enabled %}
+                <span style="font-size:0.55rem;color:var(--color-success);">● Enabled</span>
+                {% else %}
+                <span style="font-size:0.55rem;color:var(--color-text-muted);">○ Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+    </button>
+    {% endfor %}
+    {% endif %}
+
+    {% if all_rules %}
+    <div style="padding:0.35rem 0.65rem;font-size:0.68rem;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;background:var(--color-surface-alt);border-bottom:1px solid var(--color-border-muted);">
+        All SIEM Rules
+    </div>
+    {% for rule in all_rules %}
+    {% if rule.rule_id not in mapped_ids %}
+    <button type="button" class="siem-rule-option"
+            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;background:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted);"
+            onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
+            onclick="selectSiemRule(this, '{{ rule.name | e }}')">
+        <div style="flex:1;min-width:0;">
+            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
+                {{ rule.name }}
+            </div>
+            <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+                {% if rule.mitre_ids %}
+                    {% for tech in rule.mitre_ids[:3] %}
+                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {% endfor %}
+                    {% if rule.mitre_ids|length > 3 %}
+                    <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>
+                    {% endif %}
+                {% endif %}
+                {% if rule.severity %}
+                <span class="severity-pill severity-{{ rule.severity | lower }}" style="font-size:0.6rem;margin-left:0.25rem;">
+                    {{ rule.severity | upper }}
+                </span>
+                {% endif %}
+                {% if rule.enabled %}
+                <span style="font-size:0.55rem;color:var(--color-success);">● Enabled</span>
+                {% else %}
+                <span style="font-size:0.55rem;color:var(--color-text-muted);">○ Disabled</span>
+                {% endif %}
+            </div>
+        </div>
+    </button>
+    {% endif %}
+    {% endfor %}
+    {% endif %}
+</div>
+{% elif query %}
+<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+    No SIEM rules found matching "{{ query }}"
+</div>
+{% else %}
+<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+    No SIEM rules available.
+</div>
+{% endif %}

@@ -1,0 +1,65 @@
+{% from "macros/icons.html" import icon %}
+{% from "macros/tech_icons.html" import tech_icon, bucket_icon %}
+<div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-header">
+        <h3 class="modal-title" style="color:var(--color-primary);">{{ icon('zap','16') }} Generate Detection Baselines</h3>
+        <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                onclick="document.getElementById('generate-baselines-modal').style.display='none'">&#x2715;</button>
+    </div>
+    <p style="font-size:0.85rem;color:var(--color-text-muted);margin:0 0 1rem;">
+        Select the technologies in your environment. TIDE will generate modular detection baselines
+        from <strong>{{ rule_count }}</strong> indexed Sigma rules and apply them to <strong>{{ system_name }}</strong>.
+    </p>
+
+    <form id="gen-baselines-form"
+          hx-post="/api/baselines/generate-preview"
+          hx-target="#gen-preview-area"
+          hx-swap="innerHTML"
+          hx-indicator="#gen-indicator">
+
+        <input type="hidden" name="system_id" value="{{ system_id }}">
+
+        <div class="gen-card-scroll">
+        <div class="gen-card-grid">
+        {% for bucket_name, techs in catalog.items() %}
+            <div class="gen-card">
+                <div class="gen-card-header">
+                    {{ bucket_icon(bucket_name, '15') }}
+                    <span>{{ bucket_name }}</span>
+                    <span class="gen-card-badge">{{ techs|length }}</span>
+                </div>
+                <div class="gen-card-body">
+                    {% for item in techs %}
+                    <label class="gen-tech-row">
+                        <input type="checkbox" name="techs" value="{{ item.tech }}"
+                               style="accent-color:var(--color-primary);width:14px;height:14px;flex-shrink:0;">
+                        <span class="gen-tech-icon">{{ tech_icon(item.tech, '14') }}</span>
+                        <span class="gen-tech-label">{{ item.label }}</span>
+                        <span class="gen-tech-count">{{ item.count }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+            </div>
+        {% endfor %}
+        </div>
+        </div>
+
+        <!-- ── Preview area (populated by HTMX POST) ───────────── -->
+        <div id="gen-preview-area"></div>
+
+        <!-- ── Actions ──────────────────────────────────────────── -->
+        <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;align-items:center;">
+            <span id="gen-indicator" class="htmx-indicator" style="font-size:0.82rem;color:var(--color-text-muted);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite;">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                </svg>
+                Scanning rules…
+            </span>
+            <button type="button" class="btn btn-secondary"
+                    onclick="document.getElementById('generate-baselines-modal').style.display='none'">Cancel</button>
+            <button type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.35rem;">
+                {{ icon('search','14') }} Preview
+            </button>
+        </div>
+    </form>
+</div>

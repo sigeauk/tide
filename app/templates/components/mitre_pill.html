@@ -44,6 +44,7 @@ Parameters:
     hx-get="/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
     hx-target="#slide-panel-container"
     hx-swap="innerHTML"
+    onclick="event.stopPropagation();"
     style="cursor: pointer;"
     {% endif %}
     title="{{ technique_id }}{% if covered %} Covered{% else %} Gap{% endif %}{% if rule_count > 0 %} - {{ rule_count }} rule{{ 's' if rule_count > 1 else '' }}{% endif %}">
@@ -83,6 +84,7 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
                 hx-get="/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
                 hx-target="#slide-panel-container"
                 hx-swap="innerHTML"
+                onclick="event.stopPropagation();"
                 style="cursor: pointer;"
                 {% endif %}
                 title="{{ mid }}">
