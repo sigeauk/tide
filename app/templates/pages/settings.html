@@ -423,9 +423,11 @@
 
             <div class="alert" style="margin: 0.75rem 0 1rem 0; font-size: 0.84rem;">
                 <p><strong>External Query API (HTTPS)</strong></p>
-                <p style="margin-top:0.35rem;">Endpoint: <code>POST /api/external/query</code></p>
+                <p style="margin-top:0.35rem;">Query endpoint: <code>POST /api/external/query</code></p>
+                <p style="margin-top:0.2rem;">List tenants: <code>GET /api/external/clients</code></p>
                 <p style="margin-top:0.2rem;">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
-                <p style="margin-top:0.2rem;">Request body: <code>{"sql": "SELECT ..."}</code></p>
+                <p style="margin-top:0.2rem;">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
+                <p style="margin-top:0.35rem; color:var(--color-text-muted);">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
             </div>
 
             <details style="margin: 0 0 1rem 0;">
@@ -434,6 +436,8 @@
                     <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
                     <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
                     <li>Maximum SQL length: <code>4000</code> characters</li>
+                    <li>Queries run against isolated tenant databases — each API key can only access tenants assigned to its owner</li>
+                    <li>Tenant DB is opened read-only; no writes are possible even if SQL validation were bypassed</li>
                     <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
                 </ul>
             </details>
@@ -448,22 +452,29 @@
             <details style="margin: 0 0 1rem 0;">
                 <summary style="cursor:pointer; font-weight:600;">cURL examples and responses</summary>
                 <div style="margin-top:0.6rem;">
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin-bottom:0.4rem;"><strong>Count all rules</strong></p>
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin-bottom:0.4rem;"><strong>List your tenants</strong></p>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s https://your-tide-host/api/external/clients \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE"</pre>
+<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem; margin-top:0.5rem;">{"clients":[{"id":"1b650e71-...","name":"Primary Client","slug":"primary"}]}</pre>
+
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Count all rules (single tenant — client_id optional)</strong></p>
 <pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
   -d '{"sql":"SELECT COUNT(*) AS total_rules FROM detection_rules"}'</pre>
 <pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem; margin-top:0.5rem;">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
 
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>List production rules by score</strong></p>
+                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Query a specific tenant</strong></p>
 <pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
-  -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules WHERE space = '\''production'\'' ORDER BY score DESC LIMIT 5"}'</pre>
+  -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 5", "client_id":"1b650e71-..."}'</pre>
 
                     <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Error examples</strong></p>
 <pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">401: {"detail":"Invalid or missing API key."}
 400: {"detail":"Only SELECT statements are allowed."}
+400: {"detail":"client_id is required when the API key owner has access to multiple tenants..."}
+403: {"detail":"API key does not have access to the requested tenant."}
 400: {"detail":"Forbidden SQL keyword: DROP"}</pre>
                 </div>
             </details>

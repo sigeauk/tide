@@ -3098,6 +3098,44 @@ class DatabaseService:
                 return row[1]  # client_id
         return None
 
+    def validate_api_key_full(self, raw_key: str) -> Optional[Dict[str, Any]]:
+        """Validate an API key and return the owner's accessible clients.
+
+        Returns dict with 'user_id' and 'client_ids' (list of client_ids the
+        owning user can access via user_clients), or None if the key is invalid.
+        """
+        import hashlib
+        key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT key_hash, created_by_user_id FROM api_keys WHERE key_hash = ?",
+                [key_hash],
+            ).fetchone()
+            if not row:
+                return None
+            conn.execute(
+                "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
+                [key_hash],
+            )
+            user_id = row[1]
+            if not user_id:
+                return None  # legacy key with no owner — cannot resolve tenants
+            # Resolve user's assigned clients
+            client_rows = conn.execute(
+                "SELECT uc.client_id, c.name, c.slug "
+                "FROM user_clients uc JOIN clients c ON c.id = uc.client_id "
+                "WHERE uc.user_id = ?",
+                [user_id],
+            ).fetchall()
+            return {
+                "user_id": user_id,
+                "client_ids": [r[0] for r in client_rows],
+                "clients": [
+                    {"id": r[0], "name": r[1], "slug": r[2]}
+                    for r in client_rows
+                ],
+            }
+
     def delete_api_key(self, key_hash: str) -> bool:
         """Revoke an API key by full hash."""
         with self.get_shared_connection() as conn:

@@ -51,7 +51,7 @@
             {# Rules count — only show if CVE matches inventoried infrastructure #}
             {% if cve.detections and cve.affected_hosts %}
             <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-primary);border:1px solid rgba(59,130,246,.3);">
-                {{ icon('shield','14') }} {{ cve.detections | length }} Rule{{ 's' if cve.detections | length != 1 }} Available
+                {{ icon('shield-check','14') }} {{ cve.detections | length }} Rule{{ 's' if cve.detections | length != 1 }} Available
             </span>
             {% endif %}
         </div>
@@ -97,7 +97,7 @@
             {% include "partials/cve_mitre_section.html" %}
         </div>
         <div class="card card-padded">
-            <h2 class="section-title">{{ icon('shield','16') }} Detection Rules</h2>
+            <h2 class="section-title">{{ icon('shield-check','16') }} Detection Rules</h2>
             {% include "partials/cve_detection_badge.html" %}
         </div>
     </div>

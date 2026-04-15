@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.3]
+
+### Fixed
+- **External query API broken with multi-tenant DBs:** `POST /api/external/query` was creating TEMP views against the shared DB which no longer contains tenant data in v4. Rewrote to resolve the API key owner's accessible tenants via `user_clients`, then open the target tenant DB directly in read-only mode. Added `client_id` field to the query request body (optional when the user has one tenant, required for multi-tenant users).
+
+### Added
+- **`GET /api/external/clients` endpoint:** New endpoint for API key holders to discover which tenants they can query. Returns client IDs, names, and slugs. Authenticated via `X-TIDE-API-KEY` header.
+- **`validate_api_key_full()` database method:** Returns the API key owner's user ID and full list of accessible clients (from `user_clients`), replacing the legacy `client_id`-on-`api_keys`-table approach.
+
 ## [4.0.2]
 
 ### Added

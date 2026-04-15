@@ -2,21 +2,26 @@
 External Data Sharing API — Sidecar query service for TIDE.
 
 Exposes a secure POST /api/external/query endpoint that allows authenticated
-external applications to run read-only SQL against the TIDE DuckDB database.
+external applications to run read-only SQL against TIDE tenant databases.
 
 Authentication: API key via X-TIDE-API-KEY header.
-Authorisation:  Only SELECT statements are permitted; results are scoped to
-                the client that owns the API key via temporary filtered views.
+Authorisation:  Only SELECT statements are permitted; queries run directly
+                against the tenant database identified by client_id.
+                The API key owner must have access to the requested tenant.
 """
 
 import re
 import logging
 
+import duckdb
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from typing import Optional, List
 
 from app.api.deps import DbDep
+from app.config import get_settings
+from app.services.tenant_manager import resolve_tenant_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -29,24 +34,15 @@ _FORBIDDEN_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Tables with a client_id column that must be tenant-scoped
-_TENANT_SCOPED_TABLES = [
-    "systems", "hosts", "software_inventory", "detection_rules",
-    "playbooks", "system_baselines", "system_baseline_snapshots",
-    "vuln_detections", "applied_detections", "cve_technique_overrides",
-    "classifications", "blind_spots", "api_keys",
-]
-
-# Reject explicit main.* references that would bypass temp-view scoping
-_SCHEMA_BYPASS_RE = re.compile(
-    r"\bmain\s*\.\s*(" + "|".join(_TENANT_SCOPED_TABLES) + r")\b",
-    re.IGNORECASE,
-)
-
 
 class QueryRequest(BaseModel):
     """Incoming query payload."""
     sql: str = Field(..., min_length=1, max_length=4000, description="SQL SELECT statement")
+    client_id: Optional[str] = Field(
+        None,
+        description="Target tenant (client) ID. Required when the API key owner has access to multiple tenants. "
+                    "Use GET /api/external/clients to discover available tenants.",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -54,6 +50,17 @@ class QueryResponse(BaseModel):
     columns: list[str]
     rows: list[dict]
     row_count: int
+
+
+class ClientInfo(BaseModel):
+    id: str
+    name: str
+    slug: str
+
+
+class ClientsResponse(BaseModel):
+    """Response listing accessible tenants for an API key."""
+    clients: List[ClientInfo]
 
 
 def _validate_sql(sql: str) -> None:
@@ -75,13 +82,27 @@ def _validate_sql(sql: str) -> None:
             detail=f"Forbidden SQL keyword: {match.group(0).upper()}",
         )
 
-    # Reject qualified schema references that bypass tenant-scoped views
-    bypass = _SCHEMA_BYPASS_RE.search(stripped)
-    if bypass:
+
+@router.get("/clients", response_model=ClientsResponse)
+def list_external_clients(
+    db: DbDep,
+    x_tide_api_key: str = Header(..., alias="X-TIDE-API-KEY"),
+):
+    """
+    List tenants (clients) accessible to this API key.
+
+    Returns the client IDs, names, and slugs that the API key owner
+    is assigned to.  Use the ``id`` value as ``client_id`` in query requests.
+    """
+    key_info = db.validate_api_key_full(x_tide_api_key)
+    if not key_info:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Qualified schema references not allowed: main.{bypass.group(1)}",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key.",
         )
+    return ClientsResponse(
+        clients=[ClientInfo(**c) for c in key_info["clients"]]
+    )
 
 
 @router.post("/query", response_model=QueryResponse)
@@ -91,42 +112,72 @@ def external_query(
     x_tide_api_key: str = Header(..., alias="X-TIDE-API-KEY"),
 ):
     """
-    Execute a read-only SQL query against the TIDE database.
+    Execute a read-only SQL query against a TIDE tenant database.
 
     Requires a valid API key in the X-TIDE-API-KEY header.
     Only SELECT (and WITH/CTE) statements are permitted.
-    All tenant-scoped tables are automatically filtered to the API key's
-    owning client via temporary views — callers see only their own data.
+
+    The ``client_id`` field selects which tenant database to query.
+    If the API key owner has access to exactly one tenant, ``client_id``
+    may be omitted and will default to that tenant.
+    Use ``GET /api/external/clients`` to discover available tenants.
     """
     # ── Auth ──
-    client_id = db.validate_api_key(x_tide_api_key)
-    if not client_id:
+    key_info = db.validate_api_key_full(x_tide_api_key)
+    if not key_info:
         logger.warning("External query rejected — invalid API key")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key.",
         )
 
+    allowed_client_ids = key_info["client_ids"]
+    if not allowed_client_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API key owner has no tenant access. Assign the user to at least one client.",
+        )
+
+    # ── Resolve target tenant ──
+    target_client_id = body.client_id
+    if not target_client_id:
+        if len(allowed_client_ids) == 1:
+            target_client_id = allowed_client_ids[0]
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="client_id is required when the API key owner has access to multiple tenants. "
+                       "Use GET /api/external/clients to list available tenants.",
+            )
+
+    if target_client_id not in allowed_client_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API key does not have access to the requested tenant.",
+        )
+
+    # ── Resolve tenant DB path ──
+    settings = get_settings()
+    tenant_db_path = resolve_tenant_db_path(target_client_id, settings.data_dir)
+    if not tenant_db_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tenant database not found for the requested client.",
+        )
+
     # ── SQL validation ──
     _validate_sql(body.sql)
 
-    # ── Execute with tenant-scoped views ──
+    # ── Execute against tenant DB (read-only) ──
     try:
-        with db.get_connection() as conn:
-            # Shadow every tenant-scoped table with a filtered temp view.
-            # DuckDB resolves temp views before main schema tables, so the
-            # caller's SQL transparently sees only their client's rows.
-            for table in _TENANT_SCOPED_TABLES:
-                conn.execute(
-                    f"CREATE OR REPLACE TEMP VIEW {table} AS "
-                    f"SELECT * FROM main.{table} WHERE client_id = ?",
-                    [client_id],
-                )
-
+        conn = duckdb.connect(tenant_db_path, read_only=True)
+        try:
             result = conn.execute(body.sql)
             columns = [desc[0] for desc in result.description]
             raw_rows = result.fetchall()
             rows = [dict(zip(columns, row)) for row in raw_rows]
+        finally:
+            conn.close()
     except HTTPException:
         raise
     except Exception as exc:
@@ -136,5 +187,5 @@ def external_query(
             detail=f"Query error: {exc}",
         )
 
-    logger.info(f"External query OK — {len(rows)} rows for client {client_id[:8]}…")
+    logger.info(f"External query OK — {len(rows)} rows for client {target_client_id[:8]}…")
     return QueryResponse(columns=columns, rows=rows, row_count=len(rows))

@@ -243,17 +243,32 @@ Located in `/app/data/` (volume mounted):
 
 ## External Query API (Sidecar)
 
-TIDE exposes a read-only SQL query endpoint that lets external applications (SOAR, dashboards, custom scripts) pull data directly from the TIDE database over HTTPS.
+TIDE exposes a read-only SQL query endpoint that lets external applications (SOAR, dashboards, custom scripts) pull data directly from TIDE tenant databases over HTTPS.
 
-### Endpoint
+Since v4, each client (tenant) has its own isolated database. API keys inherit the tenant access of the user who created them — if you can see tenants A and B in the UI, your API key can query both.
 
-```
-POST /api/external/query
-```
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/external/clients` | List tenants accessible to your API key |
+| `POST` | `/api/external/query` | Execute a read-only SQL query against a tenant database |
 
 ### Authentication
 
-Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are created in the TIDE UI under **Settings → API Keys**. Only the SHA-256 hash of the key is stored — the raw key is shown once at creation time.
+Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are created in the TIDE UI under **Settings → Profile → API Key Management**. Only the SHA-256 hash of the key is stored — the raw key is shown once at creation time.
+
+The API key inherits the tenant access of its creator via the `user_clients` table. To grant an API key access to additional tenants, assign the owning user to those clients in the Management Hub.
+
+### Tenant Selection
+
+Queries run against a specific tenant database. You specify which tenant via the `client_id` field in the request body:
+
+| Scenario | Behaviour |
+|----------|-----------|
+| User has **one** tenant | `client_id` is **optional** — auto-resolved |
+| User has **multiple** tenants | `client_id` is **required** — use `GET /api/external/clients` to discover IDs |
+| `client_id` not in user's access | **403 Forbidden** |
 
 ### Security Constraints
 
@@ -262,6 +277,8 @@ Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are c
 | **SELECT only** | The SQL must start with `SELECT` or `WITH` (CTEs are allowed) |
 | **Keyword blocklist** | `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `CREATE`, `REPLACE`, `TRUNCATE`, `ATTACH`, `DETACH`, `COPY`, `EXPORT`, `IMPORT`, `INSTALL`, `LOAD`, `CALL`, `PRAGMA`, `GRANT`, `REVOKE`, `SET` are all rejected |
 | **Max length** | 4 000 characters |
+| **Read-only DB** | Tenant database is opened in read-only mode — writes are impossible even if SQL validation were bypassed |
+| **Tenant isolation** | Each query runs against a physically separate DuckDB file — no cross-tenant data leakage |
 
 ### Available Tables
 
@@ -287,9 +304,20 @@ Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are c
 
 ### Request Format
 
+**Single-tenant user (client_id optional):**
+
 ```json
 {
-  "sql": "SELECT rule_id, name, severity, space, score FROM detection_rules WHERE space = 'production' ORDER BY score DESC LIMIT 10"
+  "sql": "SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 10"
+}
+```
+
+**Multi-tenant user (client_id required):**
+
+```json
+{
+  "sql": "SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 10",
+  "client_id": "1b650e71-db8e-4de4-852a-d67cada3fed7"
 }
 ```
 
@@ -313,6 +341,24 @@ Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are c
 
 ### curl Examples
 
+**Step 1 — Discover your tenants:**
+
+```bash
+curl -s https://your-tide-host/api/external/clients \
+  -H "X-TIDE-API-KEY: YOUR_KEY_HERE"
+```
+
+```json
+{
+  "clients": [
+    {"id": "1b650e71-...", "name": "Primary Client", "slug": "primary"},
+    {"id": "8bab9263-...", "name": "DC", "slug": "dc"}
+  ]
+}
+```
+
+**Step 2 — Query a tenant (single-tenant users can omit client_id):**
+
 **Count all detection rules:**
 
 ```bash
@@ -326,13 +372,13 @@ curl -s -X POST https://your-tide-host/api/external/query \
 {"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}
 ```
 
-**List rules by space with scores:**
+**Query a specific tenant:**
 
 ```bash
 curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
-  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE space = '\''production'\'' AND score IS NOT NULL ORDER BY score DESC LIMIT 5"}'
+  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE score IS NOT NULL ORDER BY score DESC LIMIT 5", "client_id": "8bab9263-..."}'
 ```
 
 ```json
@@ -374,6 +420,18 @@ curl -s -X POST https://your-tide-host/api/external/query \
   "row_count": 2
 }
 ```
+
+### Migration from v3 API
+
+If you were using the external query API before v4:
+
+| Before (v3) | After (v4) |
+|-------------|-----------|
+| Queries ran against shared `tide.duckdb` with auto-filtered views | Queries run against isolated tenant databases |
+| `client_id` was implicit (tied to the `api_keys` table) | `client_id` is explicit in the request body (or auto-resolved for single-tenant users) |
+| No tenant discovery endpoint | Use `GET /api/external/clients` to list your tenants |
+
+**For single-tenant users, the API is backward compatible — existing scripts will work without changes.** Multi-tenant users need to add the `client_id` field to their requests.
 ---
 
 ## Project Structure
