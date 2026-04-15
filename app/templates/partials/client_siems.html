@@ -18,7 +18,7 @@
 <div id="siems-body">
 {% if client_siems %}
 <div class="client-list">
-    {% for s in client_siems %}
+    {% for s in client_siems | sort(attribute='environment_role') %}
     {% set rc = siem_rule_counts.get(s.space, {}) if siem_rule_counts is defined and siem_rule_counts else {} %}
     <div class="client-list-item client-list-item--{% if s.is_active %}active{% else %}inactive{% endif %}">
         <div class="client-list-item__body">
@@ -36,7 +36,11 @@
             {% endif %}
             <span class="client-list-item__meta">{{ s.space or 'No space' }}</span>
             {% if rc %}
-            <span class="client-list-item__meta">{{ icon('file-text', '12') }} {{ rc.total }} rules ({{ rc.enabled }} enabled)</span>
+            <span class="client-list-item__meta">
+                {{ icon('file-text', '12') }} {{ rc.total }} rules
+                (<span style="color:var(--color-success);font-weight:600;">{{ rc.enabled }}</span> enabled,
+                <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
+            </span>
             {% endif %}
         </div>
     </div>

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.5]
+
+### Fixed
+- **CRITICAL: Cross-SIEM promotion now works correctly:** Previously, promoting a rule between staging and production SIEMs on **different Elastic instances** would silently fail — the rule was deleted from the source SIEM but never created on the target, causing data loss. The promotion engine now resolves per-SIEM connection details (`kibana_url`, `api_token_enc`) from `siem_inventory` for both source and target independently, building separate HTTP sessions for each.
+- **Promotion verifies target before deleting source:** After creating/updating a rule in the target space, the engine now performs a GET verification to confirm the rule actually exists before deleting it from the source. If verification fails, the source rule is preserved and the error is reported.
+- **Kibana default space URL handling in promotion:** Kibana's built-in "default" space uses `/api/...` URLs (no `/s/default/` prefix). All promotion helper functions now use `_space_api_prefix()` to produce the correct URL pattern for both default and named spaces.
+- **NULL space normalization to "default":** Empty or NULL space values in `client_siem_map` caused production SIEMs to be invisible to sync and promotion. All layers (`link_siem_to_client`, `link_client_siem`, `get_client_siem_spaces`, `get_client_siems`, `_distribute_rules_to_tenants`) now normalize empty/NULL space to `"default"`.
+- **Sync now uses SIEM inventory spaces instead of legacy `KIBANA_SPACES` env var:** `run_elastic_sync()` queries all distinct spaces from `client_siem_map` via `get_all_sync_spaces()` and passes them to `fetch_detection_rules()`. The `.env` `KIBANA_SPACES` variable is no longer required for sync.
+- **Management Hub user actions (roles, delete, toggle-active, create) now work correctly:** All interactive user management elements in the Management Hub had conflicting HTMX attributes — both a mutation verb (`hx-post`/`hx-delete`) and an `hx-get` to refresh the tab on the same element. HTMX only supports one verb attribute per element, so the `hx-get` silently overrode the mutation, causing role saves to revert, user deletions to fail, and toggle-active to have no effect. Fixed by adding dedicated management-specific endpoints (`/api/management/users/*`) and removing the conflicting `hx-get` attributes.
+
+### Changed
+- **Linked SIEMs UI: production first, colored rule counts:** On the client detail page, linked SIEMs are now sorted by `environment_role` (production before staging). Enabled rule counts display in green, disabled in muted grey.
+
+
 ## [4.0.4]
 
 ### Fixed

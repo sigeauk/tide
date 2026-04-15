@@ -773,6 +773,7 @@ def create_app() -> FastAPI:
             except Exception:
                 ctx["active_client"] = None
                 ctx["user_clients"] = []
+                ctx.setdefault("space_labels", {})
 
         return templates.TemplateResponse(request, name, ctx)
     

@@ -65,6 +65,88 @@ def tab_users(request: Request, db: DbDep, user: RequireAdmin):
     return _render_users_tab(users, all_roles, clients)
 
 
+def _refresh_users_tab(db) -> str:
+    """Re-render the management users tab after a mutation."""
+    users = db.get_all_users()
+    all_roles = db.get_all_roles()
+    for u in users:
+        u["_roles"] = db.get_user_roles(u["id"])
+        u["_client_ids"] = db.get_user_client_ids(u["id"])
+    clients = db.list_clients()
+    return _render_users_tab(users, all_roles, clients)
+
+
+@router.post("/users", response_class=HTMLResponse)
+async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin):
+    """Create a local user from the management hub."""
+    form = await request.form()
+    username = str(form.get("new_username", "")).strip()
+    email = str(form.get("new_email", "")).strip() or None
+    full_name = str(form.get("new_full_name", "")).strip() or None
+    password = str(form.get("new_password", ""))
+    roles = form.getlist("new_roles")
+
+    if not username or not password:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">Username and password are required.</div></div>'
+        )
+    if len(password) < 8:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">Password must be at least 8 characters.</div></div>'
+        )
+    existing = db.get_user_by_username(username)
+    if existing:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">Username already exists.</div></div>'
+        )
+
+    import bcrypt
+    pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    uid = db.create_user(username=username, email=email, full_name=full_name,
+                         password_hash=pw_hash, auth_provider="local")
+    if roles:
+        db.set_user_roles(uid, roles)
+
+    html = _refresh_users_tab(db)
+    return HTMLResponse(
+        f'<div hx-swap-oob="afterbegin:#toast-container">'
+        f'<div class="toast toast-success">User \'{_esc(username)}\' created.</div></div>{html}'
+    )
+
+
+@router.post("/users/{user_id}/roles", response_class=HTMLResponse)
+async def mgmt_update_user_roles(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+    """Update roles for a user from the management hub."""
+    form = await request.form()
+    roles = form.getlist("roles")
+    db.set_user_roles(user_id, roles)
+    return HTMLResponse(_refresh_users_tab(db))
+
+
+@router.post("/users/{user_id}/toggle-active", response_class=HTMLResponse)
+def mgmt_toggle_user_active(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+    """Toggle user active status from the management hub."""
+    db_user = db.get_user_by_id(user_id)
+    if db_user:
+        db.update_user(user_id, is_active=not db_user.get("is_active", True))
+    return HTMLResponse(_refresh_users_tab(db))
+
+
+@router.delete("/users/{user_id}", response_class=HTMLResponse)
+def mgmt_delete_user(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+    """Delete a user from the management hub."""
+    if user_id == user.id:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">You cannot delete your own account.</div></div>'
+        )
+    db.delete_user(user_id)
+    return HTMLResponse(_refresh_users_tab(db))
+
+
 @router.get("/tab/permissions", response_class=HTMLResponse)
 def tab_permissions(request: Request, db: DbDep, user: RequireAdmin):
     """Permissions tab partial for the management hub."""
@@ -207,7 +289,7 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     form = await request.form()
     siem_id = str(form.get("siem_id", "")).strip()
     environment_role = str(form.get("environment_role", "production")).strip()
-    space = str(form.get("space", "")).strip() or None
+    space = str(form.get("space", "")).strip() or "default"
     if not siem_id:
         return HTMLResponse("")
     if environment_role not in ("production", "staging"):
@@ -893,11 +975,9 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             <td>{source_badge}</td>
             <td>
                 <form class="inline-role-form"
-                      hx-post="/api/settings/users/{u['id']}/roles"
+                      hx-post="/api/management/users/{u['id']}/roles"
                       hx-target="#management-content"
-                      hx-swap="innerHTML"
-                      hx-get="/api/management/tab/users"
-                      hx-trigger="submit">
+                      hx-swap="innerHTML">
                     {role_checkboxes}
                     <button type="submit" class="btn btn-sm btn-secondary">Save</button>
                 </form>
@@ -905,10 +985,9 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             <td>
                 <label class="toggle-switch toggle-sm">
                     <input type="checkbox" {active_checked}
-                           hx-post="/api/settings/users/{u['id']}/toggle-active"
+                           hx-post="/api/management/users/{u['id']}/toggle-active"
                            hx-target="#management-content"
                            hx-swap="innerHTML"
-                           hx-get="/api/management/tab/users"
                            hx-trigger="change">
                     <span class="toggle-slider"></span>
                 </label>
@@ -931,11 +1010,10 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             </td>
             <td>
                 <button class="btn btn-danger btn-sm"
-                        hx-delete="/api/settings/users/{u['id']}"
+                        hx-delete="/api/management/users/{u['id']}"
                         hx-target="#management-content"
                         hx-swap="innerHTML"
-                        hx-get="/api/management/tab/users"
-                        hx-confirm="Delete user {u['username']}?">Del</button>
+                        hx-confirm="Delete user {_esc(u['username'])}?">Del</button>
             </td>
         </tr>'''
 
@@ -948,8 +1026,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
     add_form = f'''
     <details class="add-user-details" style="margin-bottom:1.5rem;">
         <summary class="btn btn-secondary btn-sm" style="cursor:pointer;">+ Add Local User</summary>
-        <form hx-post="/api/settings/users" hx-target="#management-content" hx-swap="innerHTML"
-              hx-get="/api/management/tab/users" hx-trigger="submit"
+        <form hx-post="/api/management/users" hx-target="#management-content" hx-swap="innerHTML"
               style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;padding:1rem;background:var(--color-bg-base);border-radius:var(--radius-md);">
             <div>
                 <label class="form-label" style="font-size:0.8rem;">Username *</label>

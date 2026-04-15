@@ -3489,6 +3489,7 @@ class DatabaseService:
         with self.get_shared_connection() as conn:
             query = (
                 "SELECT s.id, s.label, s.siem_type, s.elasticsearch_url, s.kibana_url, "
+                "s.api_token_enc, "
                 "m.environment_role, m.space, s.is_active, s.created_at "
                 "FROM siem_inventory s JOIN client_siem_map m ON s.id = m.siem_id "
                 "WHERE m.client_id = ?"
@@ -3500,12 +3501,23 @@ class DatabaseService:
             query += " ORDER BY m.environment_role, s.label"
             rows = conn.execute(query, params).fetchall()
             cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
+                    "api_token_enc",
                     "environment_role", "space", "is_active", "created_at"]
-            return [dict(zip(cols, r)) for r in rows]
+            result = []
+            for r in rows:
+                d = dict(zip(cols, r))
+                # Normalise NULL/empty space to 'default' (Kibana built-in space)
+                if not d.get("space") or not str(d["space"]).strip():
+                    d["space"] = "default"
+                result.append(d)
+            return result
 
     def link_client_siem(self, client_id: str, siem_id: str,
                          environment_role: str = "production", space: str = None):
         """Link a client to a SIEM from the inventory with an environment role."""
+        # Normalise empty/None space to 'default' (Kibana's built-in space)
+        if not space or not str(space).strip():
+            space = "default"
         with self.get_shared_connection() as conn:
             conn.execute(
                 "INSERT INTO client_siem_map (client_id, siem_id, environment_role, space) "
@@ -3549,13 +3561,26 @@ class DatabaseService:
 
     # --- Client-aware rule visibility helpers ---
 
+    def get_all_sync_spaces(self) -> List[str]:
+        """Get every distinct Kibana space across all client-SIEM mappings.
+        NULL/empty values are normalised to 'default'.
+        Used by the sync service to know which spaces to fetch rules from."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                "FROM client_siem_map"
+            ).fetchall()
+            return [r[0] for r in rows if r[0]]
+
     def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
         """Get the list of Kibana space names visible to a client.
-        If environment_role is specified, filter to just production or staging."""
+        If environment_role is specified, filter to just production or staging.
+        NULL/empty spaces are normalised to 'default' (Kibana's built-in space)."""
         with self.get_shared_connection() as conn:
             query = (
-                "SELECT DISTINCT m.space FROM client_siem_map m "
-                "WHERE m.client_id = ? AND m.space IS NOT NULL"
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(m.space), ''), 'default') "
+                "FROM client_siem_map m "
+                "WHERE m.client_id = ?"
             )
             params = [client_id]
             if environment_role:

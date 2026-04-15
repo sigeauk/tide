@@ -138,22 +138,22 @@ async def promote_rule(
 ):
     """
     Promote a rule from the client's staging space to their production space.
-    Source/target Kibana spaces are resolved from client_siem_map.
+    Source/target Kibana spaces AND SIEM connections are resolved from the inventory.
     """
     import asyncio
     from app.elastic_helper import promote_rule_to_production
     
-    staging_spaces = db.get_client_siem_spaces(client_id, environment_role="staging")
-    production_spaces = db.get_client_siem_spaces(client_id, environment_role="production")
+    staging_siems = db.get_client_siems(client_id, environment_role="staging")
+    production_siems = db.get_client_siems(client_id, environment_role="production")
 
-    if not staging_spaces:
+    if not staging_siems:
         return HTMLResponse(
             '<div class="toast toast-danger" onclick="this.remove()">'
             'No staging SIEM configured for this client.'
             '</div>',
             status_code=400
         )
-    if not production_spaces:
+    if not production_siems:
         return HTMLResponse(
             '<div class="toast toast-danger" onclick="this.remove()">'
             'No production SIEM configured for this client.'
@@ -162,12 +162,18 @@ async def promote_rule(
         )
 
     # Find the rule in any staging space
+    staging_spaces = [s["space"] for s in staging_siems if s.get("space")]
     rule = None
     source_space = None
-    for sp in staging_spaces:
+    source_siem = None
+    for siem in staging_siems:
+        sp = siem.get("space")
+        if not sp:
+            continue
         rule = db.get_rule_by_id(rule_id, sp)
         if rule:
             source_space = sp
+            source_siem = siem
             break
     
     if not rule:
@@ -178,7 +184,8 @@ async def promote_rule(
             status_code=404
         )
 
-    target_space = production_spaces[0]
+    target_siem = production_siems[0]
+    target_space = target_siem.get("space") or "default"
     
     # Get the raw_data for promotion
     if not rule.raw_data:
@@ -196,12 +203,20 @@ async def promote_rule(
         # Run the promotion (blocking call)
         loop = asyncio.get_event_loop()
         _src, _tgt = source_space, target_space
+        _src_url = source_siem.get("kibana_url")
+        _src_key = source_siem.get("api_token_enc")
+        _tgt_url = target_siem.get("kibana_url")
+        _tgt_key = target_siem.get("api_token_enc")
         success, message = await loop.run_in_executor(
             None,
             lambda: promote_rule_to_production(
                 rule_data=rule.raw_data,
                 source_space=_src,
-                target_space=_tgt
+                target_space=_tgt,
+                source_kibana_url=_src_url,
+                source_api_key=_src_key,
+                target_kibana_url=_tgt_url,
+                target_api_key=_tgt_key,
             )
         )
         

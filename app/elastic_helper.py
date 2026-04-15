@@ -405,16 +405,17 @@ def calculate_score(rule_data):
     })
     return rule_data
 
-def fetch_detection_rules(url_override=None, key_override=None, check_mappings=True, known_rule_keys=None):
+def fetch_detection_rules(url_override=None, key_override=None, check_mappings=True, known_rule_keys=None, spaces_override=None):
     """
     Fetch detection rules from Kibana spaces.
     known_rule_keys: set of (rule_id, space) tuples already in DB - skip mapping for these.
+    spaces_override: explicit list of Kibana spaces to sync (from siem_inventory).
+                     Falls back to KIBANA_SPACES env var for backward compatibility.
     """
     if known_rule_keys is None:
         known_rule_keys = set()
     base_url = url_override or os.getenv("ELASTIC_URL")
     api_key = key_override or os.getenv("ELASTIC_API_KEY")
-    kibana_spaces_raw = os.getenv("KIBANA_SPACES", "default")
 
     if not base_url or not api_key: return pd.DataFrame()
 
@@ -424,8 +425,12 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
     session.headers.update(headers)
     session.verify = False
 
-    # Parse comma-separated Kibana spaces
-    spaces = [s.strip() for s in kibana_spaces_raw.split(',') if s.strip()]
+    # Use DB-derived spaces when available, fall back to env var for legacy setups
+    if spaces_override:
+        spaces = list(spaces_override)
+    else:
+        kibana_spaces_raw = os.getenv("KIBANA_SPACES", "default")
+        spaces = [s.strip() for s in kibana_spaces_raw.split(',') if s.strip()]
     if not spaces:
         spaces = ['default']
     
@@ -616,19 +621,34 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
 # --- 5. PROMOTION FUNCTIONS ---
 # ==========================================
 
-def get_promotion_session():
-    """Get a session configured for Elastic API calls"""
-    base_url = os.getenv("ELASTIC_URL")
-    api_key = os.getenv("ELASTIC_API_KEY")
+def _space_api_prefix(base_url: str, space: str) -> str:
+    """Build the correct Kibana API URL prefix for a space.
     
+    Kibana's default space has NO /s/default/ prefix — it's just /api/...
+    Named spaces use /s/{space}/api/...
+    """
+    if not space or space.lower() == "default":
+        return f"{base_url}"
+    return f"{base_url}/s/{space}"
+
+
+def _make_session(api_key: str) -> "requests.Session":
+    """Build a requests session with the given API key."""
     session = requests.Session()
     session.headers.update({
         "kbn-xsrf": "true",
         "Content-Type": "application/json",
-        "Authorization": f"ApiKey {api_key}"
+        "Authorization": f"ApiKey {api_key}",
     })
     session.verify = False
-    return session, base_url
+    return session
+
+
+def get_promotion_session():
+    """Get a session configured for Elastic API calls (global env fallback)."""
+    base_url = os.getenv("ELASTIC_URL")
+    api_key = os.getenv("ELASTIC_API_KEY")
+    return _make_session(api_key), base_url
 
 
 def _fetch_preview_alerts(session, base_url, space, preview_id):
@@ -833,10 +853,13 @@ def preview_detection_rule(rule_data, space="default", lookback="24h"):
         return 0, [], str(e)
 
 
-def get_space_rule_ids(space):
-    """Get all rule_ids from a space"""
-    session, base_url = get_promotion_session()
-    url = f"{base_url}/s/{space}/api/detection_engine/rules/_find"
+def get_space_rule_ids(space, session=None, base_url=None):
+    """Get all rule_ids from a space.
+    Accepts optional session/base_url for cross-SIEM queries."""
+    if session is None or base_url is None:
+        session, base_url = get_promotion_session()
+    prefix = _space_api_prefix(base_url, space)
+    url = f"{prefix}/api/detection_engine/rules/_find"
     all_rules = []
     per_page = 100
     page = 1
@@ -860,10 +883,12 @@ def get_space_rule_ids(space):
     return {rule["rule_id"] for rule in all_rules}
 
 
-def get_exception_list(list_id, source_space):
+def get_exception_list(list_id, source_space, session=None, base_url=None):
     """Get exception list details from source space"""
-    session, base_url = get_promotion_session()
-    url = f"{base_url}/s/{source_space}/api/exception_lists/items/_find?list_id={list_id}"
+    if session is None or base_url is None:
+        session, base_url = get_promotion_session()
+    prefix = _space_api_prefix(base_url, source_space)
+    url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
     
     response = session.get(url)
     if response.status_code == 200:
@@ -874,10 +899,12 @@ def get_exception_list(list_id, source_space):
     return None
 
 
-def get_exception_list_entries(list_id, source_space):
+def get_exception_list_entries(list_id, source_space, session=None, base_url=None):
     """Get all entries from an exception list"""
-    session, base_url = get_promotion_session()
-    url = f"{base_url}/s/{source_space}/api/exception_lists/items/_find?list_id={list_id}"
+    if session is None or base_url is None:
+        session, base_url = get_promotion_session()
+    prefix = _space_api_prefix(base_url, source_space)
+    url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
     
     response = session.get(url)
     if response.status_code == 200:
@@ -887,9 +914,10 @@ def get_exception_list_entries(list_id, source_space):
     return []
 
 
-def create_exception_list_in_target(exc_object, target_space, rule_name):
+def create_exception_list_in_target(exc_object, target_space, rule_name, session=None, base_url=None):
     """Create a new exception list in the target space"""
-    session, base_url = get_promotion_session()
+    if session is None or base_url is None:
+        session, base_url = get_promotion_session()
     
     exc_object = exc_object.copy()
     # Remove read-only fields
@@ -903,7 +931,8 @@ def create_exception_list_in_target(exc_object, target_space, rule_name):
     exc_object["type"] = "rule_default"
     exc_object["namespace_type"] = "single"
     
-    url = f"{base_url}/s/{target_space}/api/exception_lists"
+    prefix = _space_api_prefix(base_url, target_space)
+    url = f"{prefix}/api/exception_lists"
     response = session.post(url, json=exc_object)
     
     if response.status_code in (200, 201):
@@ -914,9 +943,10 @@ def create_exception_list_in_target(exc_object, target_space, rule_name):
     return None
 
 
-def create_exception_entry_in_target(exc_entry, list_id, target_space):
+def create_exception_entry_in_target(exc_entry, list_id, target_space, session=None, base_url=None):
     """Create an exception entry in the target list"""
-    session, base_url = get_promotion_session()
+    if session is None or base_url is None:
+        session, base_url = get_promotion_session()
     
     exc_entry = exc_entry.copy()
     exc_entry["list_id"] = list_id
@@ -927,7 +957,8 @@ def create_exception_entry_in_target(exc_entry, list_id, target_space):
     for readonly in ["id", "_version", "created_at", "created_by", "updated_at", "updated_by", "tie_breaker_id", "meta"]:
         exc_entry.pop(readonly, None)
     
-    url = f"{base_url}/s/{target_space}/api/exception_lists/items"
+    prefix = _space_api_prefix(base_url, target_space)
+    url = f"{prefix}/api/exception_lists/items"
     response = session.post(url, json=exc_entry)
     
     if response.status_code in (200, 201):
@@ -937,20 +968,25 @@ def create_exception_entry_in_target(exc_entry, list_id, target_space):
     return None
 
 
-def create_exception_list_for_rule(exc_object, rule_name, source_space, target_space):
+def create_exception_list_for_rule(exc_object, rule_name, source_space, target_space,
+                                   source_session=None, source_base_url=None,
+                                   target_session=None, target_base_url=None):
     """Create a full exception list with entries for a rule"""
     old_list_id = exc_object.get("list_id")
     log_info(f"Creating exception list for {rule_name} in {target_space}")
     
-    created = create_exception_list_in_target(exc_object, target_space, rule_name)
+    created = create_exception_list_in_target(exc_object, target_space, rule_name,
+                                               session=target_session, base_url=target_base_url)
     if not created:
         log_error(f"Exception list for {rule_name} not created")
         return None
     
     # Copy all entries from the old list
-    items = get_exception_list_entries(old_list_id, source_space)
+    items = get_exception_list_entries(old_list_id, source_space,
+                                       session=source_session, base_url=source_base_url)
     for item in items:
-        create_exception_entry_in_target(item, created["list_id"], target_space)
+        create_exception_entry_in_target(item, created["list_id"], target_space,
+                                          session=target_session, base_url=target_base_url)
     
     return {
         "id": created["id"],
@@ -960,21 +996,35 @@ def create_exception_list_for_rule(exc_object, rule_name, source_space, target_s
     }
 
 
-def promote_rule_to_production(rule_data, source_space="staging", target_space="production"):
+def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
+                               source_kibana_url=None, source_api_key=None,
+                               target_kibana_url=None, target_api_key=None):
     """
-    Promote a rule from source space to target space.
-    Handles exceptions, creates/updates the rule, and deletes from source.
+    Promote a rule from source space to target space, potentially across different SIEMs.
+    
+    When source/target kibana_url and api_key are provided, each side uses its own
+    SIEM connection.  Falls back to global ELASTIC_URL / ELASTIC_API_KEY env vars.
     
     Returns: (success: bool, message: str)
     """
-    session, base_url = get_promotion_session()
+    # Build per-side sessions
+    if source_kibana_url and source_api_key:
+        src_session = _make_session(source_api_key)
+        src_base = source_kibana_url.rstrip("/")
+    else:
+        src_session, src_base = get_promotion_session()
+
+    if target_kibana_url and target_api_key:
+        tgt_session = _make_session(target_api_key)
+        tgt_base = target_kibana_url.rstrip("/")
+    else:
+        tgt_session, tgt_base = get_promotion_session()
     
     rule = rule_data.copy()
     rule_id = rule.get("rule_id")
     rule_name = rule.get("name")
-    rule_tags = set(rule.get("tags", []))
     
-    log_info(f"Promoting rule '{rule_name}' from {source_space} to {target_space}")
+    log_info(f"Promoting rule '{rule_name}' from {source_space}@{src_base} to {target_space}@{tgt_base}")
     
     # Remove space tags from the rule (staging, production, test)
     for tag in MOVING_TAGS:
@@ -986,7 +1036,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     rule.pop("execution_summary", None)
     
     # Get existing rule IDs in target space
-    existing_ids = get_space_rule_ids(target_space)
+    existing_ids = get_space_rule_ids(target_space, session=tgt_session, base_url=tgt_base)
     
     # Handle exception lists
     if rule.get("exceptions_list"):
@@ -996,26 +1046,30 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
         new_exceptions = []
         for exception in exceptions:
             exception_list_id = exception.get("list_id")
-            exc_obj = get_exception_list(exception_list_id, source_space)
+            exc_obj = get_exception_list(exception_list_id, source_space,
+                                          session=src_session, base_url=src_base)
             
             if exc_obj is not None:
-                new_exc = create_exception_list_for_rule(exc_obj, rule_name, source_space, target_space)
+                new_exc = create_exception_list_for_rule(
+                    exc_obj, rule_name, source_space, target_space,
+                    source_session=src_session, source_base_url=src_base,
+                    target_session=tgt_session, target_base_url=tgt_base,
+                )
                 if new_exc:
                     new_exceptions.append(new_exc)
         
         if new_exceptions:
             rule["exceptions_list"] = new_exceptions
     
-    # Create or update rule in target space
-    url = f"{base_url}/s/{target_space}/api/detection_engine/rules"
+    # ── CREATE / UPDATE in target ──
+    tgt_prefix = _space_api_prefix(tgt_base, target_space)
+    url = f"{tgt_prefix}/api/detection_engine/rules"
     
     if rule_id in existing_ids:
-        # Update existing rule (PUT)
-        response = session.put(url, json=rule)
+        response = tgt_session.put(url, json=rule)
         action = "Updated"
     else:
-        # Create new rule (POST)
-        response = session.post(url, json=rule)
+        response = tgt_session.post(url, json=rule)
         action = "Created"
     
     if response.status_code not in (200, 201):
@@ -1025,9 +1079,22 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     
     log_info(f"{action} rule '{rule_name}' in {target_space}")
     
-    # Delete rule from source space
-    delete_url = f"{base_url}/s/{source_space}/api/detection_engine/rules?rule_id={rule_id}"
-    delete_response = session.delete(delete_url)
+    # ── Verify the rule actually exists in the target before deleting from source ──
+    verify_prefix = _space_api_prefix(tgt_base, target_space)
+    verify_url = f"{verify_prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    verify_resp = tgt_session.get(verify_url)
+    if verify_resp.status_code != 200:
+        error_msg = (
+            f"Rule appeared to be {action.lower()} in {target_space} but verification "
+            f"failed ({verify_resp.status_code}). Source rule NOT deleted to prevent data loss."
+        )
+        log_error(error_msg)
+        return False, error_msg
+    
+    # ── DELETE from source ──
+    src_prefix = _space_api_prefix(src_base, source_space)
+    delete_url = f"{src_prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    delete_response = src_session.delete(delete_url)
     
     if delete_response.status_code not in (200, 204):
         warning_msg = f"Rule promoted but failed to delete from {source_space}: {delete_response.status_code}"

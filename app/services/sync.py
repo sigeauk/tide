@@ -31,8 +31,9 @@ def _distribute_rules_to_tenants():
 
         for client_id, db_filename in clients:
             spaces = shared_conn.execute(
-                "SELECT DISTINCT space FROM client_siem_map "
-                "WHERE client_id = ? AND space IS NOT NULL",
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                "FROM client_siem_map "
+                "WHERE client_id = ?",
                 [client_id],
             ).fetchall()
             space_list = [s[0] for s in spaces if s[0]]
@@ -233,8 +234,21 @@ def run_elastic_sync(force_mapping=False):
                         existing_rule_keys.add(key)
             logger.info(f"[perf] Loaded {len(existing_rule_data)} existing rules, {len(existing_rule_keys)} with mapping data, in {(_time.perf_counter() - _t_start)*1000:.0f}ms")
             
+            # Derive sync spaces from siem_inventory (management page)
+            # instead of the legacy KIBANA_SPACES env var.
+            configured_spaces = db.get_all_sync_spaces()
+            if configured_spaces:
+                logger.info(f"Sync spaces (from SIEM inventory): {configured_spaces}")
+            else:
+                # Fallback: no SIEM mappings yet — let fetch_detection_rules use env var
+                logger.info("No SIEM inventory mappings — falling back to KIBANA_SPACES env")
+
             _t_fetch = _time.perf_counter()
-            df = elastic_helper.fetch_detection_rules(check_mappings=True, known_rule_keys=existing_rule_keys)
+            df = elastic_helper.fetch_detection_rules(
+                check_mappings=True,
+                known_rule_keys=existing_rule_keys,
+                spaces_override=configured_spaces or None,
+            )
             
             if df is not None and not df.empty:
                 _t_save = _time.perf_counter()
@@ -264,9 +278,6 @@ def run_elastic_sync(force_mapping=False):
                 
                 # --- Subtractive sync: remove ghost rules from empty spaces ---
                 # Determine which configured spaces were NOT in the fetched data
-                from app.config import get_settings
-                settings = get_settings()
-                configured_spaces = settings.kibana_space_list
                 synced_spaces = set(df['space_id'].dropna().unique()) if 'space_id' in df.columns else set()
                 empty_spaces = [s for s in configured_spaces if s not in synced_spaces]
                 
