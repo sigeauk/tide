@@ -20,7 +20,7 @@ Shows full rule information including query, field mappings, and scores.
                    target="_blank" 
                    rel="noopener noreferrer"
                    class="btn btn-secondary btn-sm"
-                   title="Open in Kibana ({{ space | capitalize }})">
+                   title="Open in Kibana ({{ space_labels.get(space, space | capitalize) }})">
                     {{ icon_text('shield-check', 'Kibana', '14') }}
                 </a>
                 {% endif %}

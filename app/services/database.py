@@ -2063,18 +2063,40 @@ class DatabaseService:
                 pass
             return origins, sources
     
-    def get_promotion_metrics(self) -> Dict[str, Any]:
-        """Get metrics specifically for staging rules ready for promotion."""
+    def get_promotion_metrics(self, staging_spaces: List[str] = None,
+                              production_spaces: List[str] = None) -> Dict[str, Any]:
+        """Get metrics specifically for staging rules ready for promotion.
+
+        Args:
+            staging_spaces:  Kibana space names mapped as 'staging' environment_role.
+            production_spaces: Kibana space names mapped as 'production' environment_role.
+        If not provided, falls back to literal 'staging'/'production' space names.
+        """
         with self.get_connection() as conn:
-            # Get staging rules
-            staging_df = conn.execute(
-                "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
-            ).df()
-            
-            # Get production rules count
-            prod_result = conn.execute(
-                "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
-            ).fetchone()
+            # ── Build staging filter ──
+            if staging_spaces:
+                ph = ", ".join("?" for _ in staging_spaces)
+                staging_df = conn.execute(
+                    f"SELECT enabled, score, severity, name FROM detection_rules "
+                    f"WHERE LOWER(space) IN ({ph})",
+                    [s.lower() for s in staging_spaces],
+                ).df()
+            else:
+                staging_df = conn.execute(
+                    "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
+                ).df()
+
+            # ── Build production count ──
+            if production_spaces:
+                ph = ", ".join("?" for _ in production_spaces)
+                prod_result = conn.execute(
+                    f"SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) IN ({ph})",
+                    [s.lower() for s in production_spaces],
+                ).fetchone()
+            else:
+                prod_result = conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
+                ).fetchone()
             production_total = prod_result[0] if prod_result else 0
             
             if staging_df.empty:

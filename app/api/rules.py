@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 
+def _build_space_labels(db, client_id: str) -> dict:
+    """Build space → environment-role label mapping for the active client."""
+    try:
+        siems = db.get_client_siems(client_id)
+        return {s["space"]: f'{s["label"]} ({s["environment_role"].title()})' for s in siems if s.get("space")}
+    except Exception:
+        return {}
+
+
 @router.get("", response_class=HTMLResponse)
 def list_rules(
     request: Request,
@@ -60,6 +69,7 @@ def list_rules(
             "space": space or "",
             "enabled": enabled or "",
             "sort_by": sort_by,
+            "space_labels": _build_space_labels(db, client_id),
         }
         return templates.TemplateResponse(request, "partials/rules_grid.html", context)
     except Exception as e:
@@ -86,7 +96,7 @@ def get_metrics(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",
-        {"metrics": metrics, "last_sync_time": get_last_sync_time()}
+        {"metrics": metrics, "last_sync_time": get_last_sync_time(), "space_labels": _build_space_labels(db, client_id)}
     )
 
 
@@ -97,6 +107,7 @@ def get_rule_detail(
     db: DbDep,
     user: CurrentUser,
     settings: SettingsDep,
+    client_id: ActiveClient,
     space: str = Query("default"),
 ):
     """Get full rule details for modal display."""
@@ -115,7 +126,7 @@ def get_rule_detail(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "components/rule_detail_modal.html",
-        {"rule": rule, "env": settings}
+        {"rule": rule, "env": settings, "space_labels": _build_space_labels(db, client_id)}
     )
 
 
@@ -126,6 +137,7 @@ def validate_rule(
     db: DbDep,
     user: RequireUser,
     settings: SettingsDep,
+    client_id: ActiveClient,
     space: str = Query("default"),
 ):
     """Mark a rule as validated by the current user."""
@@ -140,16 +152,18 @@ def validate_rule(
     
     templates = request.app.state.templates
 
+    _sl = _build_space_labels(db, client_id) if client_id else {}
+
     # If called from the modal, re-render the modal instead of the card
     if request.headers.get("X-Return-Modal") == "true":
         return templates.TemplateResponse(
             request, "components/rule_detail_modal.html",
-            {"rule": rule, "env": settings}
+            {"rule": rule, "env": settings, "space_labels": _sl}
         )
 
     return templates.TemplateResponse(
         request, "components/rule_card.html",
-        {"rule": rule}
+        {"rule": rule, "space_labels": _sl}
     )
 
 
@@ -160,6 +174,7 @@ async def test_rule(
     db: DbDep,
     user: RequireUser,
     settings: SettingsDep,
+    client_id: ActiveClient,
     space: str = Query("default"),
 ):
     """Test a detection rule against live Elasticsearch data via the Kibana Preview API."""
@@ -202,6 +217,7 @@ async def test_rule(
                 "samples": samples,
                 "error": error,
                 "lookback": lookback,
+                "space_labels": _build_space_labels(db, client_id),
             }
         )
     except Exception as e:

@@ -24,7 +24,7 @@
                     <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
                 </svg>
                 {% endif %}
-                {{ (rule.space | default('default')) | capitalize }}
+                {{ space_labels.get(rule.space | default('default'), (rule.space | default('default')) | capitalize) }}
             </div>
             <div class="sev-pill sev-{{ sev_value }}">
                 {{ sev_value | upper }}
@@ -106,7 +106,7 @@
            rel="noopener noreferrer"
            class="btn btn-secondary btn-sm"
            data-kibana-link
-           title="Open in Kibana ({{ card_space | capitalize }})">
+           title="Open in Kibana ({{ space_labels.get(card_space, card_space | capitalize) }})">
             {{ icon_text('shield-check', 'Kibana', '14') }}
         </a>
     </div>

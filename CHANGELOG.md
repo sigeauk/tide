@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.4]
+
+### Fixed
+- **Promotion and Rule Health pages now use `environment_role` instead of hardcoded space names:** Previously, the Promotion page hardcoded `"staging"` and `"production"` as literal Kibana space names. Clients whose SIEM inventory maps environment roles to different space names (e.g., Production role → `staging` space) would see incorrect rule counts and broken promotion workflows. All promotion API endpoints, the page handler, and the database metrics query now resolve actual Kibana spaces from `client_siem_map.environment_role`.
+- **All UI surfaces now display environment role labels instead of raw Kibana space names:** Rule cards, rule detail modals, test result popups, metrics rows, the dashboard integration cards, and the Rule Health SIEM dropdown all resolve space names through `space_labels` (built from `client_siem_map`) to show friendly labels like "Elastic (Production)" instead of the literal Kibana space name. Kibana deep-links still use the actual space name in the URL.
+
 ## [4.0.3]
 
 ### Fixed

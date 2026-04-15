@@ -26,7 +26,7 @@
                 </div>
                 <div style="font-size: 0.85rem; color: var(--color-text-muted);">
                     <p>Query language: <strong>{{ rule.language }}</strong></p>
-                    <p>Space: <strong>{{ rule.space | capitalize }}</strong></p>
+                    <p>Space: <strong>{{ space_labels.get(rule.space, rule.space | capitalize) }}</strong></p>
                     <p>Time range: <strong>Last {{ lookback | default('24h') }}</strong></p>
                 </div>
             </div>

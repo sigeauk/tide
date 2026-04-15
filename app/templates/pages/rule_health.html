@@ -51,7 +51,7 @@
             hx-include="[name='search'], [name='enabled'], [name='sort_by']">
             <option value="">All SIEMs</option>
             {% for space in spaces %}
-            <option value="{{ space }}">{{ space | capitalize }}</option>
+            <option value="{{ space }}">{{ space_labels.get(space, space | capitalize) }}</option>
             {% endfor %}
         </select>
     </div>

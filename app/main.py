@@ -757,6 +757,19 @@ def create_app() -> FastAPI:
                     ctx["user_clients"] = [c for c in (_db.get_client(i) for i in _ids) if c]
                 else:
                     ctx["user_clients"] = []
+
+                # Build space → environment-role label mapping for the active client
+                if _cid and "space_labels" not in ctx:
+                    try:
+                        _siems = _db.get_client_siems(_cid)
+                        ctx["space_labels"] = {
+                            s["space"]: f'{s["label"]} ({s["environment_role"].title()})'
+                            for s in _siems if s.get("space")
+                        }
+                    except Exception:
+                        ctx["space_labels"] = {}
+                elif "space_labels" not in ctx:
+                    ctx["space_labels"] = {}
             except Exception:
                 ctx["active_client"] = None
                 ctx["user_clients"] = []
@@ -902,6 +915,14 @@ def create_app() -> FastAPI:
         metrics = db.get_rule_health_metrics(allowed_spaces=allowed_spaces)
         # Derive spaces from metrics (avoids a second DB connection)
         spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
+
+        # Build space → label mapping from client's SIEM inventory
+        client_siems = db.get_client_siems(_cid) if _cid else []
+        space_labels = {}
+        for s in client_siems:
+            sp = s.get("space")
+            if sp:
+                space_labels[sp] = f'{s["label"]} ({s["environment_role"].title()})'
         
         return render_template(
             "pages/rule_health.html",
@@ -911,6 +932,7 @@ def create_app() -> FastAPI:
                 "active_page": "rules",
                 "metrics": metrics,
                 "spaces": spaces,
+                "space_labels": space_labels,
                 "last_sync_time": get_last_sync_time(),
             }
         )
@@ -1088,7 +1110,26 @@ def create_app() -> FastAPI:
         from app.services.database import get_database_service
         db = get_database_service()
         
-        metrics = db.get_promotion_metrics()
+        # Resolve active client (same pattern as sigma_page / rule_health_page)
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+
+        staging_spaces = db.get_client_siem_spaces(_cid, environment_role="staging") if _cid else []
+        production_spaces = db.get_client_siem_spaces(_cid, environment_role="production") if _cid else []
+        
+        metrics = db.get_promotion_metrics(
+            staging_spaces=staging_spaces or None,
+            production_spaces=production_spaces or None,
+        )
         
         return render_template(
             "pages/promotion.html",
@@ -1097,6 +1138,8 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "promotion",
                 "metrics": metrics,
+                "staging_spaces": staging_spaces,
+                "production_spaces": production_spaces,
                 "last_sync_time": get_last_sync_time(),
             }
         )

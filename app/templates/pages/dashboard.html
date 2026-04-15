@@ -120,7 +120,7 @@
         {% for space_name in spaces %}
         {% set space = space_name.strip() %}
         <div class="integration-card">
-            <div class="integration-card-name">Kibana ({{ space | capitalize }})</div>
+            <div class="integration-card-name">{{ space_labels.get(space, 'Kibana (' ~ (space | capitalize) ~ ')') }}</div>
             <div class="integration-card-url">{{ env.elastic_url }}/s/{{ space }}</div>
             <span class="integration-card-status status-{{ 'active' if env.elastic_api_key else 'inactive' }}">{{ 'Connected' if env.elastic_api_key else 'No API Key' }}</span>
         </div>
