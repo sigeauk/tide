@@ -2823,6 +2823,7 @@ def generate_baseline_from_actor(
     technique_name_map: dict,
     baseline_name: str = "",
     description: str = "",
+    client_id: str = None,
 ) -> Playbook:
     """Create a Baseline Playbook from a Threat Actor's MITRE technique set.
 
@@ -2838,11 +2839,18 @@ def generate_baseline_from_actor(
 
     with _get_conn() as conn:
         # Create playbook
-        pb_row = conn.execute(
-            "INSERT INTO playbooks (name, description) VALUES (?, ?) "
-            "RETURNING id, name, description, created_at, updated_at",
-            [name, desc],
-        ).fetchone()
+        if client_id:
+            pb_row = conn.execute(
+                "INSERT INTO playbooks (name, description, client_id) VALUES (?, ?, ?) "
+                "RETURNING id, name, description, created_at, updated_at",
+                [name, desc, client_id],
+            ).fetchone()
+        else:
+            pb_row = conn.execute(
+                "INSERT INTO playbooks (name, description) VALUES (?, ?) "
+                "RETURNING id, name, description, created_at, updated_at",
+                [name, desc],
+            ).fetchone()
         playbook = Playbook(id=pb_row[0], name=pb_row[1], description=pb_row[2] or "",
                             created_at=pb_row[3], updated_at=pb_row[4])
 

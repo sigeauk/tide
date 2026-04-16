@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.6]
+
+### Fixed
+- **Sigma conversion broken in air-gapped environments:** `convert_sigma_rule()` preferred `sigma-cli` as a subprocess, which spawned a separate Python process that never inherited the module-level `mitre_attack.set_url()` pointing at the bundled MITRE ATT&CK JSON. The subprocess attempted to download ~45 MB from GitHub, causing a 30-second timeout and `"Conversion timed out"` error on every convert. Replaced the sigma-cli subprocess path entirely with the in-process pySigma API, which respects `set_url()` and works fully offline. Also enhanced the pySigma path to natively support file-based processing pipelines and templates (previously only available via sigma-cli) using `ProcessingPipeline.from_yaml()`.
+- **Create Baseline from Threat Actor(s) broken since v4.0.0:** `generate_baseline_from_actor()` in `inventory_engine.py` did not accept the `client_id` parameter passed by the `POST /api/heatmap/generate-baseline` route, causing a `TypeError` at runtime. Added `client_id` to the function signature and included it in the `INSERT INTO playbooks` statement, consistent with `create_playbook()`.
+
 ## [4.0.5]
 
 ### Fixed

@@ -460,12 +460,13 @@ def convert_sigma_rule(
     template_file: str = '',
 ) -> Tuple[bool, str]:
     """
-        Convert a Sigma rule using pySigma-compatible processing only.
+        Convert a Sigma rule using the in-process pySigma API.
 
-        Strategy:
-            1) Prefer sigma-cli (which wraps pySigma and supports file pipelines,
-                 template postprocessing and backend options).
-            2) Fall back to direct pySigma API when sigma-cli is unavailable.
+        Uses the pySigma Python API exclusively (never sigma-cli subprocess)
+        to guarantee air-gapped compatibility.  The module-level
+        ``mitre_attack.set_url()`` call points pySigma at the bundled
+        MITRE ATT&CK JSON; a sigma-cli subprocess would bypass that
+        and attempt a network fetch, breaking air-gapped deployments.
 
         Note: For Elasticsearch detection-rule output, UI format
         ``kibana_ndjson`` is mapped to native pySigma backend format
@@ -475,9 +476,6 @@ def convert_sigma_rule(
         (True, result_string)  on success
         (False, error_string)  on failure
     """
-    import subprocess
-    import shutil
-    import tempfile
 
     # Resolve saved processing pipelines.
     pipeline_disk_paths: List[str] = []
@@ -504,160 +502,73 @@ def convert_sigma_rule(
                 return False, f"Template file not found: {fname}"
             template_disk_paths.append(full)
 
-    # Apply explicit index overrides to template vars.index_names when templates
-    # are selected. This keeps index control inside the pySigma template path.
-    resolved_template_paths: List[str] = list(template_disk_paths)
-    if template_disk_paths and explicit_indices:
-        resolved_template_paths = []
-        for disk_path in template_disk_paths:
-            try:
-                with open(disk_path, 'r', encoding='utf-8') as f:
-                    tpl_data = yaml.safe_load(f.read()) or {}
-                vars_obj = tpl_data.get('vars') if isinstance(tpl_data.get('vars'), dict) else {}
-                vars_obj['index_names'] = explicit_indices
-                tpl_data['vars'] = vars_obj
-                with tempfile.NamedTemporaryFile(
-                    mode='w', suffix='.yml', delete=False, dir='/tmp'
-                ) as tf:
-                    yaml.dump(tpl_data, tf, default_flow_style=False, sort_keys=False)
-                    resolved_template_paths.append(tf.name)
-            except Exception as _e:
-                return False, f"Failed to apply index override to template {os.path.basename(disk_path)}: {_e}"
-
-    # Optional ad-hoc pipeline YAML from upload endpoint.
-    adhoc_pipeline_tmp: Optional[str] = None
-
     # Alias UI format to native backend format.
     selected_output_format = output_format
     if backend == 'elasticsearch' and output_format == 'kibana_ndjson':
         selected_output_format = 'default' if template_disk_paths else 'siem_rule_ndjson'
 
-    use_cli = bool(shutil.which('sigma'))
-
-    # ══════════════════════════════════════════════════════════════════════
-    # PATH A — sigma-cli (preferred)
-    # ══════════════════════════════════════════════════════════════════════
-    if use_cli:
-        target_map = {
-            'elasticsearch': 'lucene',
-            'eql':  'eql',
-            'esql': 'esql',
-            'splunk': 'splunk',
-            'microsoft365defender': 'kusto',
-        }
-        target = target_map.get(backend, 'lucene')
-
-        tmp_rule: Optional[str] = None
-        tmp_files: List[str] = []   # all temp files to clean up
-        try:
-            # Write rule to temp file
-            with tempfile.NamedTemporaryFile(
-                mode='w', suffix='.yml', delete=False, dir='/tmp'
-            ) as f:
-                f.write(yaml_content)
-                tmp_rule = f.name
-
-            cmd = ['sigma', 'convert', '-t', target]
-
-            if pipeline and pipeline != 'none':
-                cmd.extend(['-p', pipeline])
-
-            for disk_path in pipeline_disk_paths:
-                cmd.extend(['-p', disk_path])
-
-            for disk_path in resolved_template_paths:
-                if disk_path.startswith('/tmp/'):
-                    tmp_files.append(disk_path)
-                cmd.extend(['-p', disk_path])
-
-            if custom_pipeline_yaml and custom_pipeline_yaml.strip():
-                with tempfile.NamedTemporaryFile(
-                    mode='w', suffix='.yml', delete=False, dir='/tmp'
-                ) as f:
-                    f.write(custom_pipeline_yaml)
-                    adhoc_pipeline_tmp = f.name
-                    tmp_files.append(adhoc_pipeline_tmp)
-                cmd.extend(['-p', adhoc_pipeline_tmp])
-
-            if selected_output_format and selected_output_format != 'default':
-                cmd.extend(['-f', selected_output_format])
-
-            has_processing_pipeline = bool(
-                (pipeline and pipeline != 'none')
-                or pipeline_disk_paths
-                or resolved_template_paths
-                or (custom_pipeline_yaml and custom_pipeline_yaml.strip())
-            )
-            if not has_processing_pipeline:
-                cmd.append('--without-pipeline')
-
-            # Elastic SIEM rule formats can take index_names backend option.
-            if backend == 'elasticsearch' and selected_output_format in ('siem_rule', 'siem_rule_ndjson'):
-                effective_indices = explicit_indices or _dedupe_keep_order(get_elastic_indices())
-                for idx_name in effective_indices:
-                    cmd.extend(['-O', f'index_names={idx_name}'])
-
-            cmd.append(tmp_rule)
-
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            raw_output = proc.stdout.strip()
-            if proc.returncode != 0 and not raw_output:
-                return False, f"sigma-cli: {proc.stderr.strip()}"
-            return True, raw_output
-
-        except subprocess.TimeoutExpired:
-            return False, "Conversion timed out"
-        except Exception as exc:
-            log_error(f"[SIGMA] CLI conversion failed: {exc}")
-            return False, f"Conversion error: {exc}"
-        finally:
-            for f in ([tmp_rule] if tmp_rule else []) + tmp_files:
-                try:
-                    os.unlink(f)
-                except OSError:
-                    pass
-
-    # ══════════════════════════════════════════════════════════════════════
-    # PATH B — pure pySigma fallback
-    # ══════════════════════════════════════════════════════════════════════
-    if not use_cli:
-        log_info('[SIGMA] sigma-cli not available; falling back to pySigma API.')
-
     try:
         from sigma.rule import SigmaRule
         from sigma.collection import SigmaCollection
+        from sigma.processing.pipeline import ProcessingPipeline
 
         rule = SigmaRule.from_yaml(yaml_content)
         collection = SigmaCollection([rule])
 
-        # Build the processing pipeline from built-in selection only.
-        # File-based pipelines/templates require sigma-cli path.
-        if pipeline_disk_paths or template_disk_paths or (custom_pipeline_yaml and custom_pipeline_yaml.strip()):
-            return False, "Custom pipeline/template files require sigma-cli in this build"
+        # ── Assemble the processing pipeline ──────────────────────────
+        pipeline_parts: List[ProcessingPipeline] = []
 
-        processing_pipeline = None
+        # 1) Built-in named pipeline
         if pipeline and pipeline != 'none':
             if pipeline == 'sysmon':
                 from sigma.pipelines.sysmon import sysmon_pipeline
-                processing_pipeline = sysmon_pipeline()
+                pipeline_parts.append(sysmon_pipeline())
             elif pipeline == 'windows':
                 try:
                     from sigma.pipelines.windows import windows_logsource_pipeline
-                    processing_pipeline = windows_logsource_pipeline()
+                    pipeline_parts.append(windows_logsource_pipeline())
                 except ImportError:
                     from sigma.pipelines.windows import windows_pipeline
-                    processing_pipeline = windows_pipeline()
+                    pipeline_parts.append(windows_pipeline())
             elif pipeline == 'windows-audit':
                 from sigma.pipelines.windows import windows_audit_pipeline
-                processing_pipeline = windows_audit_pipeline()
+                pipeline_parts.append(windows_audit_pipeline())
             elif pipeline == 'ecs_windows':
                 try:
                     from sigma.pipelines.elasticsearch import ecs_windows
-                    processing_pipeline = ecs_windows()
+                    pipeline_parts.append(ecs_windows())
                 except ImportError:
                     pass
 
-        # Backend factory
+        # 2) Saved pipeline files from disk
+        for disk_path in pipeline_disk_paths:
+            with open(disk_path, 'r', encoding='utf-8') as f:
+                pipeline_parts.append(ProcessingPipeline.from_yaml(f.read()))
+
+        # 3) Saved template files (with optional index override)
+        for disk_path in template_disk_paths:
+            with open(disk_path, 'r', encoding='utf-8') as f:
+                tpl_yaml = f.read()
+            if explicit_indices:
+                tpl_data = yaml.safe_load(tpl_yaml) or {}
+                vars_obj = tpl_data.get('vars') if isinstance(tpl_data.get('vars'), dict) else {}
+                vars_obj['index_names'] = explicit_indices
+                tpl_data['vars'] = vars_obj
+                tpl_yaml = yaml.dump(tpl_data, default_flow_style=False, sort_keys=False)
+            pipeline_parts.append(ProcessingPipeline.from_yaml(tpl_yaml))
+
+        # 4) Ad-hoc pipeline YAML (upload / paste)
+        if custom_pipeline_yaml and custom_pipeline_yaml.strip():
+            pipeline_parts.append(ProcessingPipeline.from_yaml(custom_pipeline_yaml))
+
+        # Merge all pipeline parts into a single pipeline (or None).
+        processing_pipeline = None
+        if pipeline_parts:
+            processing_pipeline = pipeline_parts[0]
+            for extra in pipeline_parts[1:]:
+                processing_pipeline += extra
+
+        # ── Backend factory ───────────────────────────────────────────
         bk_kwargs: Dict = {}
         if processing_pipeline:
             bk_kwargs['processing_pipeline'] = processing_pipeline
