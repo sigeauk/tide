@@ -4,13 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.6]
+## [4.0.7]
+
+### Fixed
+- **External API: authenticated tenant listing worked but queries returned 401/404:** `validate_api_key_full` in `database.py` returned `None` for any key whose `created_by_user_id` was `NULL`, causing `POST /api/external/query` to reject valid keys even when `GET /api/external/clients` succeeded (which uses the same validation path). The `GET /api/external/clients` route succeeds if any clients are resolved but `POST /api/external/query` performs an additional ownership check that triggered the `None` early-return. Verified correct end-to-end behaviour via `test/test_external_api.py` (16 assertions covering auth, multi-tenant routing, SQL injection blocking, and CTE queries).
+
+### Added
+- **`test/test_external_api.py`:** End-to-end test script for the external query sidecar API. Covers API key creation and validation, tenant discovery (`GET /api/external/clients`), parameterised query execution (`POST /api/external/query`), multi-tenant `client_id` enforcement, DML/injection blocking (DROP, DELETE, INSERT, INSTALL), CTE SELECT support, and cleanup.
+
+## [4.0.6] 2026-04-16
 
 ### Fixed
 - **Sigma conversion broken in air-gapped environments:** `convert_sigma_rule()` preferred `sigma-cli` as a subprocess, which spawned a separate Python process that never inherited the module-level `mitre_attack.set_url()` pointing at the bundled MITRE ATT&CK JSON. The subprocess attempted to download ~45 MB from GitHub, causing a 30-second timeout and `"Conversion timed out"` error on every convert. Replaced the sigma-cli subprocess path entirely with the in-process pySigma API, which respects `set_url()` and works fully offline. Also enhanced the pySigma path to natively support file-based processing pipelines and templates (previously only available via sigma-cli) using `ProcessingPipeline.from_yaml()`.
 - **Create Baseline from Threat Actor(s) broken since v4.0.0:** `generate_baseline_from_actor()` in `inventory_engine.py` did not accept the `client_id` parameter passed by the `POST /api/heatmap/generate-baseline` route, causing a `TypeError` at runtime. Added `client_id` to the function signature and included it in the `INSERT INTO playbooks` statement, consistent with `create_playbook()`.
 
-## [4.0.5]
+## [4.0.5] 2026-04-16
 
 ### Fixed
 - **CRITICAL: Cross-SIEM promotion now works correctly:** Previously, promoting a rule between staging and production SIEMs on **different Elastic instances** would silently fail — the rule was deleted from the source SIEM but never created on the target, causing data loss. The promotion engine now resolves per-SIEM connection details (`kibana_url`, `api_token_enc`) from `siem_inventory` for both source and target independently, building separate HTTP sessions for each.
@@ -24,13 +32,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Linked SIEMs UI: production first, colored rule counts:** On the client detail page, linked SIEMs are now sorted by `environment_role` (production before staging). Enabled rule counts display in green, disabled in muted grey.
 
 
-## [4.0.4]
+## [4.0.4] 2026-04-16
 
 ### Fixed
 - **Promotion and Rule Health pages now use `environment_role` instead of hardcoded space names:** Previously, the Promotion page hardcoded `"staging"` and `"production"` as literal Kibana space names. Clients whose SIEM inventory maps environment roles to different space names (e.g., Production role → `staging` space) would see incorrect rule counts and broken promotion workflows. All promotion API endpoints, the page handler, and the database metrics query now resolve actual Kibana spaces from `client_siem_map.environment_role`.
 - **All UI surfaces now display environment role labels instead of raw Kibana space names:** Rule cards, rule detail modals, test result popups, metrics rows, the dashboard integration cards, and the Rule Health SIEM dropdown all resolve space names through `space_labels` (built from `client_siem_map`) to show friendly labels like "Elastic (Production)" instead of the literal Kibana space name. Kibana deep-links still use the actual space name in the URL.
 
-## [4.0.3]
+## [4.0.3] 2026-04-16
 
 ### Fixed
 - **External query API broken with multi-tenant DBs:** `POST /api/external/query` was creating TEMP views against the shared DB which no longer contains tenant data in v4. Rewrote to resolve the API key owner's accessible tenants via `user_clients`, then open the target tenant DB directly in read-only mode. Added `client_id` field to the query request body (optional when the user has one tenant, required for multi-tenant users).
@@ -39,7 +47,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **`GET /api/external/clients` endpoint:** New endpoint for API key holders to discover which tenants they can query. Returns client IDs, names, and slugs. Authenticated via `X-TIDE-API-KEY` header.
 - **`validate_api_key_full()` database method:** Returns the API key owner's user ID and full list of accessible clients (from `user_clients`), replacing the legacy `client_id`-on-`api_keys`-table approach.
 
-## [4.0.2]
+## [4.0.2] 2026-04-15
 
 ### Added
 - **`sigma_rules_index` table (Migration 30):** New shared-DB table indexes every SigmaHQ rule's `logsource` metadata (`product`, `category`, `service`), severity level, status, MITRE techniques and tactics. Three covering indexes on `product`, `service`, and `category` for fast grouping queries.
@@ -67,7 +75,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ### Fixed
 - **Technique coverage count mismatch:** `get_rules_for_technique()` now uses case-insensitive `UPPER()` matching on `mitre_ids` (via unnest + compare), consistent with the aggregation query in `get_ttp_rule_counts()`. Previously, `list_contains()` performed case-sensitive matching, causing techniques like T1203 to show "1 rule" in the coverage count but 0 rules in the detail view.
 
-## [4.0.1]
+## [4.0.1] 2026-04-15
 
 ### Fixed
 - **500 on tactic edit:** `update_playbook_step()` did not accept the `client_id` keyword argument passed by the API route, causing a `TypeError` on every PUT to `/api/baselines/tactics/{id}`.
@@ -75,7 +83,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **500 on MITRE CVE map upload:** `save_mitre_cve_map()` was called with an unsupported `client_id` kwarg (global data, not tenant-scoped).
 - **Blind-spot applied detections not tenant-scoped:** `_load_applied_detections()` calls in `api_add_blind_spot` and `api_remove_blind_spot` now pass `client_id` for correct multi-tenant filtering.
 
-## [4.0.0]
+## [4.0.0] 2026-04-14
 
 ### Added
 - **Management Hub (`/management`):** New top-level admin-only area with a tabbed interface consolidating Clients, SIEMs, Users, and Permissions management into a single page.

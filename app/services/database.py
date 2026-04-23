@@ -3105,19 +3105,19 @@ class DatabaseService:
         }
 
     def validate_api_key(self, raw_key: str) -> Optional[str]:
-        """Validate an API key. Returns the associated client_id if valid, else None."""
+        """Validate an API key. Returns the key_hash if valid, else None."""
         import hashlib
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT key_hash, client_id FROM api_keys WHERE key_hash = ?", [key_hash]
+                "SELECT key_hash FROM api_keys WHERE key_hash = ?", [key_hash]
             ).fetchone()
             if row:
                 conn.execute(
                     "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
                     [key_hash],
                 )
-                return row[1]  # client_id
+                return row[0]  # key_hash (truthy when valid)
         return None
 
     def validate_api_key_full(self, raw_key: str) -> Optional[Dict[str, Any]]:
