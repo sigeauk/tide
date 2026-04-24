@@ -1,59 +1,296 @@
 {% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
 {% block title %}Management - TIDE{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
+<link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
+<script defer src="/static/js/vendor/codemirror.min.js"></script>
+<script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
+{% endblock %}
 
 {% block content %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
     <div>
         <h1 class="page-title-hero">Management</h1>
-        <p class="page-subtitle">Administer clients, SIEM connections, users, and permissions.</p>
+        <p class="page-subtitle">Centralized administration for tenants, users, integrations, Sigma assets, and classifications.</p>
     </div>
 </div>
 
-<div class="settings-tabs">
-    <button class="settings-tab {% if active_tab == 'clients' %}active{% endif %}" data-tab="clients"
-            hx-get="/api/management/tab/clients" hx-target="#management-content" hx-swap="innerHTML"
-            onclick="activateMgmtTab(this,'clients')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
-        </svg>
-        Clients
-    </button>
-    <button class="settings-tab {% if active_tab == 'siems' %}active{% endif %}" data-tab="siems"
-            hx-get="/api/management/tab/siems" hx-target="#management-content" hx-swap="innerHTML"
-            onclick="activateMgmtTab(this,'siems')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/>
-            <line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/>
-        </svg>
-        SIEMs
-    </button>
-    <button class="settings-tab {% if active_tab == 'users' %}active{% endif %}" data-tab="users"
-            hx-get="/api/management/tab/users" hx-target="#management-content" hx-swap="innerHTML"
-            onclick="activateMgmtTab(this,'users')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-            <circle cx="9" cy="7" r="4"/>
-            <path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-        </svg>
-        Users
-    </button>
-    <button class="settings-tab {% if active_tab == 'permissions' %}active{% endif %}" data-tab="permissions"
-            hx-get="/api/management/tab/permissions" hx-target="#management-content" hx-swap="innerHTML"
-            onclick="activateMgmtTab(this,'permissions')">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
-            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-        </svg>
-        Permissions
-    </button>
+{# ------------------------------------------------------------------ #}
+{# Tenants & Users — preserves the existing 3 sub-tabs (Clients /     #}
+{# Users / Permissions). Default sub-tab honours the legacy ?tab=     #}
+{# query parameter when one is supplied.                              #}
+{# ------------------------------------------------------------------ #}
+{% set tu_tab = active_tab if active_tab in ('clients', 'users', 'permissions') else 'clients' %}
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('users', '18') }}
+        <span class="mgmt-section__title">Tenants &amp; Users</span>
+        <span class="mgmt-section__hint">Clients, users, role permissions</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <div class="settings-tabs settings-tabs--inline">
+            <button class="settings-tab {% if tu_tab == 'clients' %}active{% endif %}"
+                    hx-get="/api/management/tab/clients" hx-target="#management-content" hx-swap="innerHTML"
+                    onclick="activateMgmtTab(this,'clients')">
+                {{ icon('users', '16') }} Clients
+            </button>
+            <button class="settings-tab {% if tu_tab == 'users' %}active{% endif %}"
+                    hx-get="/api/management/tab/users" hx-target="#management-content" hx-swap="innerHTML"
+                    onclick="activateMgmtTab(this,'users')">
+                {{ icon('user', '16') }} Users
+            </button>
+            <button class="settings-tab {% if tu_tab == 'permissions' %}active{% endif %}"
+                    hx-get="/api/management/tab/permissions" hx-target="#management-content" hx-swap="innerHTML"
+                    onclick="activateMgmtTab(this,'permissions')">
+                {{ icon('lock', '16') }} Permissions
+            </button>
+        </div>
+        <div class="settings-panel active" id="management-content"
+             hx-get="/api/management/tab/{{ tu_tab }}"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading…</div>
+        </div>
+    </div>
+</details>
+
+{# ------------------------------------------------------------------ #}
+{# Integrations — SIEM, Threat Intel, GitLab, Keycloak                #}
+{# Each sub-section auto-loads its own card list via hx-trigger=load. #}
+{# ------------------------------------------------------------------ #}
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('link', '18') }}
+        <span class="mgmt-section__title">Integrations</span>
+        <span class="mgmt-section__hint">SIEMs, threat intel, source control, identity</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <details class="mgmt-subsection" open>
+            <summary class="mgmt-subsection__summary">
+                {{ icon('shield-check', '16') }}
+                <span class="mgmt-subsection__title">SIEMs</span>
+                <span class="mgmt-subsection__hint">Elastic, Splunk, Sentinel</span>
+            </summary>
+            <div id="mgmt-sub-siems" class="mgmt-subsection__body"
+                 hx-get="/api/management/tab/siems" hx-trigger="load" hx-swap="innerHTML">
+                <div class="text-secondary" style="padding:1rem;">Loading SIEMs…</div>
+            </div>
+        </details>
+
+        <details class="mgmt-subsection" open>
+            <summary class="mgmt-subsection__summary">
+                {{ icon('target', '16') }}
+                <span class="mgmt-subsection__title">Threat Intel</span>
+                <span class="mgmt-subsection__hint">OpenCTI sources</span>
+            </summary>
+            <div id="mgmt-sub-opencti" class="mgmt-subsection__body"
+                 hx-get="/api/management/tab/threat-intel" hx-trigger="load" hx-swap="innerHTML">
+                <div class="text-secondary" style="padding:1rem;">Loading Threat Intel…</div>
+            </div>
+        </details>
+
+        <details class="mgmt-subsection" open>
+            <summary class="mgmt-subsection__summary">
+                {{ icon('gitlab', '16') }}
+                <span class="mgmt-subsection__title">GitLab</span>
+                <span class="mgmt-subsection__hint">Report publishing destinations</span>
+            </summary>
+            <div id="mgmt-sub-gitlab" class="mgmt-subsection__body"
+                 hx-get="/api/management/tab/gitlab" hx-trigger="load" hx-swap="innerHTML">
+                <div class="text-secondary" style="padding:1rem;">Loading GitLab…</div>
+            </div>
+        </details>
+
+        <details class="mgmt-subsection" open>
+            <summary class="mgmt-subsection__summary">
+                {{ icon('key', '16') }}
+                <span class="mgmt-subsection__title">Keycloak</span>
+                <span class="mgmt-subsection__hint">SSO identity provider (global)</span>
+            </summary>
+            <div id="mgmt-sub-keycloak" class="mgmt-subsection__body"
+                 hx-get="/api/management/tab/keycloak" hx-trigger="load" hx-swap="innerHTML">
+                <div class="text-secondary" style="padding:1rem;">Loading Keycloak…</div>
+            </div>
+        </details>
+    </div>
+</details>
+
+{# ------------------------------------------------------------------ #}
+{# Sigma Assets and Classifications sections are rendered in a later  #}
+{# phase — placeholders kept here so the IA is visible to the user.   #}
+{# ------------------------------------------------------------------ #}
+<details class="mgmt-section" id="mgmt-sigma-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('file-code', '18') }}
+        <span class="mgmt-section__title">Sigma Assets</span>
+        <span class="mgmt-section__hint">Pipelines &amp; templates (assign per tenant)</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
+            Manage pySigma <code style="color:var(--color-primary);">ProcessingPipeline</code> and
+            postprocessing <code style="color:var(--color-primary);">template</code> YAML files.
+            Each file is assigned to one or more tenants — Sigma conversions for a tenant
+            see only the assets assigned to that tenant.
+        </p>
+
+        <details class="mgmt-subsection" open>
+            <summary class="mgmt-subsection__summary">
+                <span class="mgmt-subsection__title">Custom Pipelines</span>
+                <span class="mgmt-subsection__hint">./data/sigma_pipelines/</span>
+            </summary>
+            <div class="mgmt-subsection__body">
+                <div style="display:grid;grid-template-columns:220px 1fr;gap:1rem;align-items:start;">
+                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                        <div id="pipeline-list"
+                             style="display:flex;flex-direction:column;gap:0.15rem;min-height:140px;max-height:340px;
+                                    border:1px solid var(--color-border);border-radius:var(--radius-sm);
+                                    padding:0.4rem;overflow-y:auto;background:var(--color-bg-action);">
+                            <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
+                        </div>
+                        <div style="display:flex;gap:0.35rem;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="pipelineNew()" style="flex:1;">
+                                + New Pipeline
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadPipelineList()" title="Refresh" style="padding:0 0.6rem;">
+                                &#8635;
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                        <div style="display:flex;gap:0.5rem;align-items:center;">
+                            <input type="text" id="pipeline-name-input" class="form-input"
+                                   placeholder="pipeline-name" style="flex:1;min-width:0;font-size:0.85rem;">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="pipelineSave()">Save</button>
+                            <button type="button" class="btn btn-danger btn-sm" id="pipeline-delete-btn"
+                                    onclick="pipelineDelete()" style="display:none;">Delete</button>
+                        </div>
+                        <textarea id="pipeline-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
+                        <div id="pipeline-tenants-row"
+                             style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
+                            <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
+                            <span id="pipeline-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
+                            <button type="button" class="btn btn-secondary btn-sm"
+                                    onclick="openSigmaAssignModal('pipeline')"
+                                    style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
+                                Assign tenants…
+                            </button>
+                        </div>
+                        <div id="pipeline-status" style="font-size:0.75rem;min-height:1.2em;"></div>
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="mgmt-subsection">
+            <summary class="mgmt-subsection__summary">
+                <span class="mgmt-subsection__title">Postprocessing Templates</span>
+                <span class="mgmt-subsection__hint">./data/sigma_templates/</span>
+            </summary>
+            <div class="mgmt-subsection__body">
+                <div style="display:grid;grid-template-columns:220px 1fr;gap:1rem;align-items:start;">
+                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                        <div id="template-list"
+                             style="display:flex;flex-direction:column;gap:0.15rem;min-height:140px;max-height:340px;
+                                    border:1px solid var(--color-border);border-radius:var(--radius-sm);
+                                    padding:0.4rem;overflow-y:auto;background:var(--color-bg-action);">
+                            <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
+                        </div>
+                        <div style="display:flex;gap:0.35rem;">
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="templateNew()" style="flex:1;">
+                                + New Template
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadTemplateList()" title="Refresh" style="padding:0 0.6rem;">
+                                &#8635;
+                            </button>
+                        </div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
+                        <div style="display:flex;gap:0.5rem;align-items:center;">
+                            <input type="text" id="template-name-input" class="form-input"
+                                   placeholder="template-name" style="flex:1;min-width:0;font-size:0.85rem;">
+                            <button type="button" class="btn btn-primary btn-sm" onclick="templateSave()">Save</button>
+                            <button type="button" class="btn btn-danger btn-sm" id="template-delete-btn"
+                                    onclick="templateDelete()" style="display:none;">Delete</button>
+                        </div>
+                        <textarea id="template-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
+                        <div id="template-tenants-row"
+                             style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
+                            <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
+                            <span id="template-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
+                            <button type="button" class="btn btn-secondary btn-sm"
+                                    onclick="openSigmaAssignModal('template')"
+                                    style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
+                                Assign tenants…
+                            </button>
+                        </div>
+                        <div id="template-status" style="font-size:0.75rem;min-height:1.2em;"></div>
+                    </div>
+                </div>
+            </div>
+        </details>
+    </div>
+</details>
+
+<!-- Tenant assignment modal for sigma assets -->
+<div class="modal-overlay" id="sigma-assign-modal" style="display:none;"
+     onclick="if(event.target===this) closeSigmaAssignModal()">
+    <div class="modal" style="max-width:420px;">
+        <div class="modal-header">
+            <h3 id="sigma-assign-title">Assign tenants</h3>
+            <button class="modal-close" onclick="closeSigmaAssignModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="text-secondary" style="font-size:0.82rem;margin-bottom:0.75rem;">
+                Pick at least one tenant. The asset is only available to Sigma conversions
+                for the tenants you select here.
+            </p>
+            <div id="sigma-assign-checkboxes"
+                 style="display:flex;flex-direction:column;gap:0.35rem;max-height:280px;overflow-y:auto;
+                        padding:0.5rem;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
+                <span class="text-secondary" style="font-size:0.78rem;">Loading clients…</span>
+            </div>
+            <div id="sigma-assign-error" class="text-danger" style="font-size:0.78rem;margin-top:0.5rem;min-height:1em;"></div>
+        </div>
+        <div class="modal-footer">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="closeSigmaAssignModal()">Cancel</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveSigmaAssignment()">Save assignment</button>
+        </div>
+    </div>
 </div>
 
-<div class="settings-panel active" id="management-content"
-     hx-get="/api/management/tab/{{ active_tab }}"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-    <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading...</div>
-</div>
+<details class="mgmt-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('tag', '18') }}
+        <span class="mgmt-section__title">Classifications</span>
+        <span class="mgmt-section__hint">Per-tenant data classification labels</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
+            Classifications are applied to systems to indicate handling restrictions.
+            Changes here apply to the active tenant
+            (<code style="color:var(--color-primary);">active_client_id</code> cookie).
+        </p>
+
+        <form hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful){this.reset();}"
+              style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
+            <input type="text" name="name" class="form-input" placeholder="Classification name" required
+                   style="min-width:160px;max-width:220px;font-size:0.85rem;">
+            <input type="color" name="color" value="#6b7280" title="Pick a colour"
+                   style="width:36px;height:36px;border:var(--border-card);border-radius:var(--radius-sm);cursor:pointer;padding:2px;">
+            <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Add</button>
+        </form>
+
+        <div id="clf-list"
+             hx-get="/api/inventory/classifications"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="text-secondary" style="font-size:0.8rem;">Loading...</span>
+        </div>
+    </div>
+</details>
 
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
 <div class="modal-overlay" id="client-modal" style="display:none;"
@@ -168,6 +405,131 @@
                 <div style="display:flex;gap:0.5rem;">
                     <button type="button" class="btn btn-secondary" onclick="closeSiemModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Create / Edit OpenCTI Modal ───────────────────────────────── -->
+<div class="modal-overlay" id="opencti-modal" style="display:none;"
+     onclick="if(event.target===this) closeOpenCTIModal()">
+    <div class="modal-content modal-sm" style="max-width:500px;">
+        <div class="modal-header">
+            <h3 class="modal-title" id="opencti-modal-title">New OpenCTI Instance</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeOpenCTIModal()">&#x2715;</button>
+        </div>
+        <form id="opencti-form" onsubmit="return submitOpenCTIForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="opencti-form-id" value="">
+            <div>
+                <label for="opencti-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="opencti-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
+            </div>
+            <div>
+                <label for="opencti-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
+            </div>
+            <div>
+                <label for="opencti-form-token" class="form-label">API Token</label>
+                <input type="password" id="opencti-form-token" class="form-input"
+                       placeholder="Leave blank to keep existing" autocomplete="new-password">
+            </div>
+            <div id="opencti-test-result" style="min-height:1.5rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testOpenCTIConnection()"
+                        id="opencti-test-btn">Test Connection</button>
+                <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeOpenCTIModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Create / Edit GitLab Modal ─────────────────────────────────── -->
+<div class="modal-overlay" id="gitlab-modal" style="display:none;"
+     onclick="if(event.target===this) closeGitLabModal()">
+    <div class="modal-content modal-sm" style="max-width:500px;">
+        <div class="modal-header">
+            <h3 class="modal-title" id="gitlab-modal-title">New GitLab Instance</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeGitLabModal()">&#x2715;</button>
+        </div>
+        <form id="gitlab-form" onsubmit="return submitGitLabForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="gitlab-form-id" value="">
+            <div>
+                <label for="gitlab-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="gitlab-form-label" class="form-input" required maxlength="200" placeholder="Internal GitLab">
+            </div>
+            <div>
+                <label for="gitlab-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
+            </div>
+            <div>
+                <label for="gitlab-form-token" class="form-label">Access Token</label>
+                <input type="password" id="gitlab-form-token" class="form-input"
+                       placeholder="Leave blank to keep existing" autocomplete="new-password">
+            </div>
+            <div>
+                <label for="gitlab-form-group" class="form-label">Default Group / Namespace</label>
+                <input type="text" id="gitlab-form-group" class="form-input" maxlength="200"
+                       placeholder="security-team">
+                <span class="text-secondary" style="font-size:0.75rem;">GitLab group where reports will be pushed.</span>
+            </div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
+                <button type="button" class="btn btn-secondary" onclick="closeGitLabModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Create / Edit Keycloak Modal ─────────────────────────────────── -->
+<div class="modal-overlay" id="keycloak-modal" style="display:none;"
+     onclick="if(event.target===this) closeKeycloakModal()">
+    <div class="modal-content modal-sm" style="max-width:500px;">
+        <div class="modal-header">
+            <h3 class="modal-title" id="keycloak-modal-title">New Keycloak Instance</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeKeycloakModal()">&#x2715;</button>
+        </div>
+        <form id="keycloak-form" onsubmit="return submitKeycloakForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="keycloak-form-id" value="">
+            <div>
+                <label for="keycloak-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="keycloak-form-label" class="form-input" required maxlength="200" placeholder="Corporate SSO">
+            </div>
+            <div>
+                <label for="keycloak-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="keycloak-form-url" class="form-input" required placeholder="https://keycloak.example.com">
+            </div>
+            <div>
+                <label for="keycloak-form-realm" class="form-label">Realm</label>
+                <input type="text" id="keycloak-form-realm" class="form-input" placeholder="master" value="master">
+                <span class="text-secondary" style="font-size:0.75rem;">The Keycloak realm name (default: master).</span>
+            </div>
+            <div>
+                <label for="keycloak-form-client-id" class="form-label">Client ID</label>
+                <input type="text" id="keycloak-form-client-id" class="form-input"
+                       placeholder="Leave blank to keep existing">
+            </div>
+            <div>
+                <label for="keycloak-form-client-secret" class="form-label">Client Secret</label>
+                <input type="password" id="keycloak-form-client-secret" class="form-input"
+                       placeholder="Leave blank to keep existing" autocomplete="new-password">
+            </div>
+            <div id="keycloak-test-result" style="min-height:1.5rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testKeycloakConnection()"
+                        id="keycloak-test-btn">Test Connection</button>
+                <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeKeycloakModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
                 </div>
             </div>
         </form>
@@ -347,8 +709,9 @@ async function submitSiemForm(e) {
         }
         closeSiemModal();
         var html = await resp.text();
-        document.getElementById('management-content').innerHTML = html;
-        htmx.process(document.getElementById('management-content'));
+        var panel = document.getElementById('mgmt-sub-siems') || document.getElementById('management-content');
+        panel.innerHTML = html;
+        htmx.process(panel);
     } catch (ex) {
         showToast('Network error', 'error');
     }
@@ -362,6 +725,7 @@ async function testSiemConnection() {
     result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
 
     var formData = new FormData();
+    formData.append('siem_id', document.getElementById('siem-form-id').value);
     formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
     formData.append('api_token', document.getElementById('siem-form-token').value);
     formData.append('siem_type', document.getElementById('siem-form-type').value);
@@ -374,5 +738,577 @@ async function testSiemConnection() {
     }
     btn.disabled = false;
 }
+
+// OpenCTI modal
+function showCreateOpenCTIModal() {
+    document.getElementById('opencti-modal-title').textContent = 'New OpenCTI Instance';
+    document.getElementById('opencti-form-submit').textContent = 'Create';
+    document.getElementById('opencti-form-id').value = '';
+    document.getElementById('opencti-form-label').value = '';
+    document.getElementById('opencti-form-url').value = '';
+    document.getElementById('opencti-form-token').value = '';
+    document.getElementById('opencti-modal').style.display = 'flex';
+}
+
+function editOpenCTI(id, label, url) {
+    document.getElementById('opencti-modal-title').textContent = 'Edit OpenCTI Instance';
+    document.getElementById('opencti-form-submit').textContent = 'Save';
+    document.getElementById('opencti-form-id').value = id;
+    document.getElementById('opencti-form-label').value = label;
+    document.getElementById('opencti-form-url').value = url;
+    document.getElementById('opencti-form-token').value = '';
+    document.getElementById('opencti-modal').style.display = 'flex';
+}
+
+function closeOpenCTIModal() {
+    document.getElementById('opencti-modal').style.display = 'none';
+}
+
+async function testOpenCTIConnection() {
+    var btn = document.getElementById('opencti-test-btn');
+    var result = document.getElementById('opencti-test-result');
+    btn.disabled = true;
+    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
+    var formData = new FormData();
+    formData.append('opencti_id', document.getElementById('opencti-form-id').value);
+    formData.append('url', document.getElementById('opencti-form-url').value);
+    formData.append('token', document.getElementById('opencti-form-token').value);
+    try {
+        var resp = await fetch('/api/management/opencti/test-connection', {method: 'POST', body: formData});
+        result.innerHTML = await resp.text();
+    } catch (ex) {
+        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
+    }
+    btn.disabled = false;
+}
+
+async function submitOpenCTIForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('opencti-form-id').value;
+    var formData = new FormData();
+    formData.append('label', document.getElementById('opencti-form-label').value);
+    formData.append('url', document.getElementById('opencti-form-url').value);
+    formData.append('token', document.getElementById('opencti-form-token').value);
+
+    var url = id ? '/api/management/opencti/' + id : '/api/management/opencti';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {method: method, body: formData});
+        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
+        closeOpenCTIModal();
+        var html = await resp.text();
+        var panel = document.getElementById('mgmt-sub-opencti') || document.getElementById('management-content');
+        panel.innerHTML = html;
+        htmx.process(panel);
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+// GitLab modal
+function showCreateGitLabModal() {
+    document.getElementById('gitlab-modal-title').textContent = 'New GitLab Instance';
+    document.getElementById('gitlab-form-submit').textContent = 'Create';
+    document.getElementById('gitlab-form-id').value = '';
+    document.getElementById('gitlab-form-label').value = '';
+    document.getElementById('gitlab-form-url').value = '';
+    document.getElementById('gitlab-form-token').value = '';
+    document.getElementById('gitlab-form-group').value = '';
+    document.getElementById('gitlab-modal').style.display = 'flex';
+}
+
+function editGitLab(id, label, url, group) {
+    document.getElementById('gitlab-modal-title').textContent = 'Edit GitLab Instance';
+    document.getElementById('gitlab-form-submit').textContent = 'Save';
+    document.getElementById('gitlab-form-id').value = id;
+    document.getElementById('gitlab-form-label').value = label;
+    document.getElementById('gitlab-form-url').value = url;
+    document.getElementById('gitlab-form-token').value = '';
+    document.getElementById('gitlab-form-group').value = group === '—' ? '' : group;
+    document.getElementById('gitlab-modal').style.display = 'flex';
+}
+
+function closeGitLabModal() {
+    document.getElementById('gitlab-modal').style.display = 'none';
+}
+
+async function submitGitLabForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('gitlab-form-id').value;
+    var formData = new FormData();
+    formData.append('label', document.getElementById('gitlab-form-label').value);
+    formData.append('url', document.getElementById('gitlab-form-url').value);
+    formData.append('token', document.getElementById('gitlab-form-token').value);
+    formData.append('default_group', document.getElementById('gitlab-form-group').value);
+
+    var url = id ? '/api/management/gitlab/' + id : '/api/management/gitlab';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {method: method, body: formData});
+        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
+        closeGitLabModal();
+        var html = await resp.text();
+        var panel = document.getElementById('mgmt-sub-gitlab') || document.getElementById('management-content');
+        panel.innerHTML = html;
+        htmx.process(panel);
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+// Keycloak modal
+function showCreateKeycloakModal() {
+    document.getElementById('keycloak-modal-title').textContent = 'New Keycloak Instance';
+    document.getElementById('keycloak-form-submit').textContent = 'Create';
+    document.getElementById('keycloak-form-id').value = '';
+    document.getElementById('keycloak-form-label').value = '';
+    document.getElementById('keycloak-form-url').value = '';
+    document.getElementById('keycloak-form-realm').value = 'master';
+    document.getElementById('keycloak-form-client-id').value = '';
+    document.getElementById('keycloak-form-client-secret').value = '';
+    document.getElementById('keycloak-modal').style.display = 'flex';
+}
+
+function editKeycloak(id, label, url, realm) {
+    document.getElementById('keycloak-modal-title').textContent = 'Edit Keycloak Instance';
+    document.getElementById('keycloak-form-submit').textContent = 'Save';
+    document.getElementById('keycloak-form-id').value = id;
+    document.getElementById('keycloak-form-label').value = label;
+    document.getElementById('keycloak-form-url').value = url;
+    document.getElementById('keycloak-form-realm').value = realm || 'master';
+    document.getElementById('keycloak-form-client-id').value = '';
+    document.getElementById('keycloak-form-client-secret').value = '';
+    document.getElementById('keycloak-modal').style.display = 'flex';
+}
+
+function closeKeycloakModal() {
+    document.getElementById('keycloak-modal').style.display = 'none';
+}
+
+async function submitKeycloakForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('keycloak-form-id').value;
+    var formData = new FormData();
+    formData.append('label', document.getElementById('keycloak-form-label').value);
+    formData.append('url', document.getElementById('keycloak-form-url').value);
+    formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
+    formData.append('client_id', document.getElementById('keycloak-form-client-id').value);
+    formData.append('client_secret', document.getElementById('keycloak-form-client-secret').value);
+
+    var url = id ? '/api/management/keycloak/' + id : '/api/management/keycloak';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {method: method, body: formData});
+        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
+        closeKeycloakModal();
+        var html = await resp.text();
+        var panel = document.getElementById('mgmt-sub-keycloak') || document.getElementById('management-content');
+        panel.innerHTML = html;
+        htmx.process(panel);
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
+
+async function testKeycloakConnection() {
+    var btn = document.getElementById('keycloak-test-btn');
+    var result = document.getElementById('keycloak-test-result');
+    btn.disabled = true;
+    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
+    var formData = new FormData();
+    formData.append('keycloak_id', document.getElementById('keycloak-form-id').value);
+    formData.append('url', document.getElementById('keycloak-form-url').value);
+    formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
+    try {
+        var resp = await fetch('/api/management/keycloak/test-connection', {method: 'POST', body: formData});
+        result.innerHTML = await resp.text();
+    } catch (ex) {
+        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
+    }
+    btn.disabled = false;
+}
+</script>
+
+<script>
+// ===== Sigma Assets — pipeline & template editor =====
+var _pipelineCurrentFile = null;
+var _pipelineCM = null;
+var _pendingPipelineContent = null;
+var _templateCurrentFile = null;
+var _templateCM = null;
+var _pendingTemplateContent = null;
+var _sigmaAssignmentsCache = { pipeline: {}, template: {} };
+var _sigmaAssignTarget = { type: null, filename: null };
+var _sigmaClientsCache = null;
+
+function _sigmaApiJson(url, options) {
+    var opts = Object.assign({ credentials: 'same-origin' }, options || {});
+    return fetch(url, opts).then(function(r) {
+        var ct = (r.headers.get('content-type') || '').toLowerCase();
+        if (r.status === 401) {
+            window.location.href = '/login?next=/management';
+            throw new Error('Authentication required');
+        }
+        if (!ct.includes('application/json')) {
+            if (r.redirected || ct.includes('text/html')) {
+                window.location.href = '/login?next=/management';
+                throw new Error('Session expired');
+            }
+            throw new Error('Unexpected response type from API');
+        }
+        return r.json().then(function(body) {
+            if (!r.ok) {
+                throw new Error((body && (body.detail || body.message)) || ('Request failed (' + r.status + ')'));
+            }
+            return body;
+        });
+    });
+}
+
+function _setStatus(elId, msg, isError) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    el.textContent = msg;
+    el.style.color = isError ? 'var(--color-danger, #f85149)' : 'var(--color-success, #3fb950)';
+}
+function pl_status(msg, isError) { _setStatus('pipeline-status', msg, isError); }
+function tpl_status(msg, isError) { _setStatus('template-status', msg, isError); }
+
+function _renderTenantChips(assetType, filename) {
+    var el = document.getElementById(assetType + '-tenants-chips');
+    if (!el) return;
+    var clients = (_sigmaAssignmentsCache[assetType] || {})[filename] || [];
+    if (!filename) {
+        el.innerHTML = '<span class="text-secondary" style="font-size:0.75rem;">— save first —</span>';
+        return;
+    }
+    if (!clients.length) {
+        el.innerHTML = '<span class="badge badge-warn" style="font-size:0.7rem;">unassigned</span>';
+        return;
+    }
+    el.innerHTML = clients.map(function(c) {
+        return '<span class="badge badge-info" style="font-size:0.7rem;">' + (c.name || c.id) + '</span>';
+    }).join('');
+}
+
+function _refreshAssignmentsFor(assetType) {
+    return _sigmaApiJson('/api/sigma/assignments/' + assetType + '?_v=' + Date.now())
+        .then(function(map) {
+            _sigmaAssignmentsCache[assetType] = map || {};
+            var current = (assetType === 'pipeline') ? _pipelineCurrentFile : _templateCurrentFile;
+            _renderTenantChips(assetType, current);
+        })
+        .catch(function() { /* non-fatal */ });
+}
+
+window.loadPipelineList = function() {
+    var bust = Date.now();
+    return _sigmaApiJson('/api/sigma/saved-pipelines?_v=' + bust)
+        .then(function(pipelines) {
+            var list = document.getElementById('pipeline-list');
+            if (!list) return;
+            if (!pipelines.length) {
+                list.innerHTML = '<span style="color:var(--color-text-muted);font-size:0.78rem;">No pipelines saved.</span>';
+                return _refreshAssignmentsFor('pipeline');
+            }
+            list.innerHTML = pipelines.map(function(pl) {
+                var active = _pipelineCurrentFile === pl.filename;
+                var safeFile = encodeURIComponent(pl.filename);
+                return '<button type="button" class="pipeline-list-item" data-file="' + safeFile + '" '
+                    + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
+                    + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
+                    + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
+                    + 'font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                    + pl.display + '</button>';
+            }).join('');
+            return _refreshAssignmentsFor('pipeline');
+        })
+        .catch(function(err) { pl_status(err.message || 'Failed to load pipelines.', true); });
+};
+
+window.pipelineLoad = function(filename) {
+    _sigmaApiJson('/api/sigma/saved-pipelines/' + encodeURIComponent(filename))
+        .then(function(data) {
+            _pipelineCurrentFile = data.filename;
+            document.getElementById('pipeline-name-input').value = data.filename.replace(/\.ya?ml$/, '');
+            if (_pipelineCM) {
+                _pipelineCM.setValue(data.content);
+                setTimeout(function() { _pipelineCM.refresh(); }, 80);
+            } else {
+                _pendingPipelineContent = data.content;
+                initPipelineEditor();
+            }
+            document.getElementById('pipeline-delete-btn').style.display = '';
+            _renderTenantChips('pipeline', data.filename);
+            loadPipelineList();
+            pl_status('');
+        })
+        .catch(function(err) { pl_status(err.message || 'Failed to load pipeline.', true); });
+};
+
+window.pipelineNew = function() {
+    _pipelineCurrentFile = null;
+    document.getElementById('pipeline-name-input').value = '';
+    var stub = 'name: my-custom-pipeline\npriority: 20\n\ntransformations:\n  - id: map_fields\n    type: field_name_mapping\n    mapping:\n      Image: process.executable\n';
+    if (_pipelineCM) _pipelineCM.setValue(stub);
+    document.getElementById('pipeline-delete-btn').style.display = 'none';
+    _renderTenantChips('pipeline', null);
+    pl_status('');
+};
+
+window.pipelineSave = function() {
+    var name = document.getElementById('pipeline-name-input').value.trim();
+    if (!name) { pl_status('Enter a name.', true); return; }
+    var content = _pipelineCM ? _pipelineCM.getValue() : '';
+    var fd = new FormData();
+    fd.append('name', name);
+    fd.append('content', content);
+    _sigmaApiJson('/api/sigma/saved-pipelines', { method: 'POST', body: fd })
+        .then(function(data) {
+            _pipelineCurrentFile = data.filename;
+            document.getElementById('pipeline-delete-btn').style.display = '';
+            pl_status('Saved: ' + data.filename);
+            return loadPipelineList();
+        })
+        .catch(function(err) { pl_status(err.message || 'Failed to save pipeline.', true); });
+};
+
+window.pipelineDelete = function() {
+    if (!_pipelineCurrentFile || !confirm('Delete this pipeline?')) return;
+    _sigmaApiJson('/api/sigma/saved-pipelines/' + encodeURIComponent(_pipelineCurrentFile), { method: 'DELETE' })
+        .then(function() { pipelineNew(); loadPipelineList(); })
+        .catch(function(err) { pl_status(err.message || 'Failed to delete pipeline.', true); });
+};
+
+window.loadTemplateList = function() {
+    var bust = Date.now();
+    return _sigmaApiJson('/api/sigma/saved-templates?_v=' + bust)
+        .then(function(templates) {
+            var list = document.getElementById('template-list');
+            if (!list) return;
+            if (!templates.length) {
+                list.innerHTML = '<span style="color:var(--color-text-muted);font-size:0.78rem;">No templates saved.</span>';
+                return _refreshAssignmentsFor('template');
+            }
+            list.innerHTML = templates.map(function(tpl) {
+                var active = _templateCurrentFile === tpl.filename;
+                var safeFile = encodeURIComponent(tpl.filename);
+                return '<button type="button" class="template-list-item" data-file="' + safeFile + '" '
+                    + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
+                    + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
+                    + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
+                    + 'font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                    + tpl.display + '</button>';
+            }).join('');
+            return _refreshAssignmentsFor('template');
+        })
+        .catch(function(err) { tpl_status(err.message || 'Failed to load templates.', true); });
+};
+
+window.templateLoad = function(filename) {
+    _sigmaApiJson('/api/sigma/saved-templates/' + encodeURIComponent(filename))
+        .then(function(data) {
+            _templateCurrentFile = data.filename;
+            document.getElementById('template-name-input').value = data.filename.replace(/\.ya?ml$/, '');
+            if (_templateCM) {
+                _templateCM.setValue(data.content);
+                setTimeout(function() { _templateCM.refresh(); }, 80);
+            } else {
+                _pendingTemplateContent = data.content;
+                initTemplateEditor();
+            }
+            document.getElementById('template-delete-btn').style.display = '';
+            _renderTenantChips('template', data.filename);
+            loadTemplateList();
+            tpl_status('');
+        })
+        .catch(function(err) { tpl_status(err.message || 'Failed to load template.', true); });
+};
+
+window.templateNew = function() {
+    _templateCurrentFile = null;
+    document.getElementById('template-name-input').value = '';
+    var stub = 'vars:\n  index_names:\n    - logs-*\npostprocessing:\n  - type: template\n    template: |+\n      {{ query }}\n';
+    if (_templateCM) _templateCM.setValue(stub);
+    document.getElementById('template-delete-btn').style.display = 'none';
+    _renderTenantChips('template', null);
+    tpl_status('');
+};
+
+window.templateSave = function() {
+    var name = document.getElementById('template-name-input').value.trim();
+    if (!name) { tpl_status('Enter a name.', true); return; }
+    var content = _templateCM ? _templateCM.getValue() : '';
+    var fd = new FormData();
+    fd.append('name', name);
+    fd.append('content', content);
+    _sigmaApiJson('/api/sigma/saved-templates', { method: 'POST', body: fd })
+        .then(function(data) {
+            _templateCurrentFile = data.filename;
+            document.getElementById('template-delete-btn').style.display = '';
+            tpl_status('Saved: ' + data.filename);
+            return loadTemplateList();
+        })
+        .catch(function(err) { tpl_status(err.message || 'Failed to save template.', true); });
+};
+
+window.templateDelete = function() {
+    if (!_templateCurrentFile || !confirm('Delete this template?')) return;
+    _sigmaApiJson('/api/sigma/saved-templates/' + encodeURIComponent(_templateCurrentFile), { method: 'DELETE' })
+        .then(function() { templateNew(); loadTemplateList(); })
+        .catch(function(err) { tpl_status(err.message || 'Failed to delete template.', true); });
+};
+
+function initPipelineEditor() {
+    if (typeof CodeMirror === 'undefined') { setTimeout(initPipelineEditor, 300); return; }
+    var el = document.getElementById('pipeline-yaml-editor');
+    if (!el || el._cmInited) return;
+    el._cmInited = true;
+    _pipelineCM = CodeMirror.fromTextArea(el, {
+        mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2
+    });
+    _pipelineCM.setSize(null, 300);
+    if (_pendingPipelineContent) {
+        _pipelineCM.setValue(_pendingPipelineContent);
+        _pendingPipelineContent = null;
+    }
+}
+
+function initTemplateEditor() {
+    if (typeof CodeMirror === 'undefined') { setTimeout(initTemplateEditor, 300); return; }
+    var el = document.getElementById('template-yaml-editor');
+    if (!el || el._cmInited) return;
+    el._cmInited = true;
+    _templateCM = CodeMirror.fromTextArea(el, {
+        mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2
+    });
+    _templateCM.setSize(null, 300);
+    if (_pendingTemplateContent) {
+        _templateCM.setValue(_pendingTemplateContent);
+        _pendingTemplateContent = null;
+    }
+}
+
+function initSigmaListHandlers() {
+    var pList = document.getElementById('pipeline-list');
+    if (pList && !pList._bound) {
+        pList._bound = true;
+        pList.addEventListener('click', function(e) {
+            var btn = e.target.closest('.pipeline-list-item');
+            if (!btn) return;
+            var raw = btn.getAttribute('data-file') || '';
+            if (raw) pipelineLoad(decodeURIComponent(raw));
+        });
+    }
+    var tList = document.getElementById('template-list');
+    if (tList && !tList._bound) {
+        tList._bound = true;
+        tList.addEventListener('click', function(e) {
+            var btn = e.target.closest('.template-list-item');
+            if (!btn) return;
+            var raw = btn.getAttribute('data-file') || '';
+            if (raw) templateLoad(decodeURIComponent(raw));
+        });
+    }
+}
+
+// ===== Tenant assignment modal =====
+
+function _loadClientsForAssign() {
+    if (_sigmaClientsCache) return Promise.resolve(_sigmaClientsCache);
+    return _sigmaApiJson('/api/clients').then(function(clients) {
+        _sigmaClientsCache = clients || [];
+        return _sigmaClientsCache;
+    });
+}
+
+window.openSigmaAssignModal = function(assetType) {
+    var current = (assetType === 'pipeline') ? _pipelineCurrentFile : _templateCurrentFile;
+    if (!current) {
+        alert('Save the ' + assetType + ' first, then assign tenants.');
+        return;
+    }
+    _sigmaAssignTarget = { type: assetType, filename: current };
+    document.getElementById('sigma-assign-title').textContent =
+        'Assign tenants — ' + current;
+    document.getElementById('sigma-assign-error').textContent = '';
+    var modal = document.getElementById('sigma-assign-modal');
+    modal.style.display = 'flex';
+    var box = document.getElementById('sigma-assign-checkboxes');
+    box.innerHTML = '<span class="text-secondary" style="font-size:0.78rem;">Loading clients…</span>';
+    var assigned = (_sigmaAssignmentsCache[assetType] || {})[current] || [];
+    var assignedIds = new Set(assigned.map(function(c) { return c.id; }));
+    _loadClientsForAssign().then(function(clients) {
+        if (!clients.length) {
+            box.innerHTML = '<span class="text-secondary" style="font-size:0.78rem;">No clients defined.</span>';
+            return;
+        }
+        box.innerHTML = clients.map(function(c) {
+            var checked = assignedIds.has(c.id) ? 'checked' : '';
+            return '<label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.82rem;">'
+                 + '<input type="checkbox" value="' + c.id + '" ' + checked + '> '
+                 + (c.name || c.id) + '</label>';
+        }).join('');
+    }).catch(function(err) {
+        box.innerHTML = '<span class="text-danger" style="font-size:0.78rem;">' + (err.message || 'Failed to load clients.') + '</span>';
+    });
+};
+
+window.closeSigmaAssignModal = function() {
+    document.getElementById('sigma-assign-modal').style.display = 'none';
+    _sigmaAssignTarget = { type: null, filename: null };
+};
+
+window.saveSigmaAssignment = function() {
+    var t = _sigmaAssignTarget;
+    if (!t.type || !t.filename) return;
+    var checks = document.querySelectorAll('#sigma-assign-checkboxes input[type=checkbox]:checked');
+    var ids = Array.prototype.map.call(checks, function(c) { return c.value; });
+    var errEl = document.getElementById('sigma-assign-error');
+    errEl.textContent = '';
+    if (!ids.length) {
+        errEl.textContent = 'Pick at least one tenant.';
+        return;
+    }
+    _sigmaApiJson('/api/sigma/assignments/' + t.type + '/' + encodeURIComponent(t.filename), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_ids: ids })
+    }).then(function() {
+        closeSigmaAssignModal();
+        _refreshAssignmentsFor(t.type);
+    }).catch(function(err) {
+        errEl.textContent = err.message || 'Failed to save assignment.';
+    });
+};
+
+// Init when the Sigma section is opened
+(function initSigmaAssetsSection() {
+    var section = document.getElementById('mgmt-sigma-section');
+    if (!section) return;
+    var inited = false;
+    function maybeInit() {
+        if (inited) return;
+        inited = true;
+        initSigmaListHandlers();
+        initPipelineEditor();
+        initTemplateEditor();
+        loadPipelineList();
+        loadTemplateList();
+    }
+    if (section.open) maybeInit();
+    section.addEventListener('toggle', function() {
+        if (section.open) {
+            maybeInit();
+            setTimeout(function() {
+                if (_pipelineCM) _pipelineCM.refresh();
+                if (_templateCM) _templateCM.refresh();
+            }, 80);
+        }
+    });
+})();
 </script>
 {% endblock %}

@@ -200,12 +200,40 @@ async def test_rule(
             status_code=400
         )
     
+    # Resolve the SIEM for this rule's space on the active client.
+    # Kibana "spaces" are an Elastic-side partition; the app's production/staging
+    # environment_role is set per-tenant in client_siem_map when a SIEM is
+    # assigned. A rule's stored `space` value therefore uniquely identifies one
+    # (client, siem, environment_role) tuple, from which kibana_url + api_token
+    # are sourced. Do NOT fall back to global .env vars.
+    siem = None
+    try:
+        for s in db.get_client_siems(client_id):
+            if (s.get("space") or "default") == space:
+                siem = s
+                break
+    except Exception:
+        logger.exception("Failed to resolve SIEM for client %s space %s", client_id, space)
+
+    if not siem or not siem.get("kibana_url") or not siem.get("api_token_enc"):
+        return HTMLResponse(
+            '<div class="test-result test-error">'
+            f"No SIEM is assigned to this client for space '{space}'. "
+            "Add a SIEM to this tenant in Settings and re-test."
+            '</div>',
+            status_code=400,
+        )
+
     try:
         from app.elastic_helper import preview_detection_rule
         loop = asyncio.get_event_loop()
         hit_count, samples, error = await loop.run_in_executor(
             None,
-            lambda: preview_detection_rule(rule.raw_data, space, lookback=lookback)
+            lambda: preview_detection_rule(
+                rule.raw_data, space, lookback=lookback,
+                kibana_url=siem["kibana_url"],
+                api_key=siem["api_token_enc"],
+            )
         )
         
         templates = request.app.state.templates

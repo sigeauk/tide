@@ -1,4 +1,4 @@
-"""
+﻿"""
 API routes for Sigma Converter.
 Provides endpoints for rule browsing, conversion, validation, and SIEM deployment.
 """
@@ -311,7 +311,7 @@ async def upload_pipeline(
         )
 
 
-# ─── Saved Pipeline CRUD ─────────────────────────────────────────────────────
+# â”€â”€â”€ Saved Pipeline CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/saved-pipelines")
 def list_saved_pipelines(request: Request, user: CurrentUser) -> JSONResponse:
@@ -364,16 +364,21 @@ async def save_pipeline(
 def delete_saved_pipeline(
     request: Request,
     user: CurrentUser,
+    db: DbDep,
     filename: str,
 ) -> JSONResponse:
-    """Delete a saved pipeline YAML by filename."""
+    """Delete a saved pipeline YAML by filename and clear tenant assignments."""
     ok, msg = sigma.delete_pipeline_file(filename)
     if not ok:
         raise HTTPException(status_code=404, detail=msg)
+    try:
+        db.delete_sigma_asset_assignments("pipeline", msg)
+    except Exception as exc:
+        logger.warning(f"could not clear pipeline assignments for {msg}: {exc}")
     return JSONResponse({"status": "ok", "deleted": msg})
 
 
-# ─── Saved Template CRUD ────────────────────────────────────────────────────
+# â”€â”€â”€ Saved Template CRUD â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @router.get("/saved-templates")
 def list_saved_templates(request: Request, user: CurrentUser) -> JSONResponse:
@@ -422,10 +427,76 @@ async def save_template(
 def delete_saved_template(
     request: Request,
     user: CurrentUser,
+    db: DbDep,
     filename: str,
 ) -> JSONResponse:
-    """Delete a saved template YAML by filename."""
+    """Delete a saved template YAML by filename and clear tenant assignments."""
     ok, msg = sigma.delete_template_file(filename)
     if not ok:
         raise HTTPException(status_code=404, detail=msg)
+    try:
+        db.delete_sigma_asset_assignments("template", msg)
+    except Exception as exc:
+        logger.warning(f"could not clear template assignments for {msg}: {exc}")
     return JSONResponse({"status": "ok", "deleted": msg})
+
+
+
+# --- Sigma asset tenant assignments (Migration 33) ---------------------------
+
+_VALID_ASSET_TYPES = {"pipeline", "template"}
+
+
+@router.get("/assignments/{asset_type}")
+def list_sigma_assignments(
+    request: Request,
+    user: CurrentUser,
+    db: DbDep,
+    asset_type: str,
+) -> JSONResponse:
+    """Return {filename: [{id, name}, ...]} for every assignment of this asset type.
+
+    Used by the Management hub Sigma Assets editor to render the chips next to each file.
+    """
+    if asset_type not in _VALID_ASSET_TYPES:
+        raise HTTPException(status_code=400, detail="asset_type must be 'pipeline' or 'template'")
+    return JSONResponse(db.list_sigma_asset_assignments(asset_type))
+
+
+@router.get("/assignments/{asset_type}/{filename}")
+def get_sigma_assignment(
+    request: Request,
+    user: CurrentUser,
+    db: DbDep,
+    asset_type: str,
+    filename: str,
+) -> JSONResponse:
+    """Return [{id, name}, ...] of clients assigned to a single file."""
+    if asset_type not in _VALID_ASSET_TYPES:
+        raise HTTPException(status_code=400, detail="asset_type must be 'pipeline' or 'template'")
+    return JSONResponse({"filename": filename, "clients": db.get_sigma_asset_clients(asset_type, filename)})
+
+
+@router.put("/assignments/{asset_type}/{filename}")
+async def set_sigma_assignment(
+    request: Request,
+    user: CurrentUser,
+    db: DbDep,
+    asset_type: str,
+    filename: str,
+) -> JSONResponse:
+    """Replace the tenant assignment set for a sigma asset.
+
+    Body: {"client_ids": ["uuid", ...]} - must be non-empty (force-assign-on-save).
+    """
+    if asset_type not in _VALID_ASSET_TYPES:
+        raise HTTPException(status_code=400, detail="asset_type must be 'pipeline' or 'template'")
+    body = await request.json()
+    client_ids = body.get("client_ids") or []
+    if not isinstance(client_ids, list) or not client_ids:
+        raise HTTPException(status_code=422, detail="client_ids must be a non-empty list")
+    cleaned = [str(c).strip() for c in client_ids if str(c).strip()]
+    if not cleaned:
+        raise HTTPException(status_code=422, detail="client_ids must contain at least one valid id")
+    count = db.set_sigma_asset_assignments(asset_type, filename, cleaned)
+    return JSONResponse({"status": "ok", "filename": filename, "client_count": count})

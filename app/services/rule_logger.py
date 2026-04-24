@@ -16,7 +16,7 @@ import os
 import logging
 import glob
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -166,44 +166,77 @@ def cleanup_old_logs(log_path: str, retention_days: int = 7) -> int:
 
 
 def run_rule_log_export(db) -> int:
-    """
-    Main entry point for scheduled rule log export.
-    Reads settings from app_settings table, exports if enabled, and cleans up
-    old files.  Writes to ALL active paths (app data dir + host mount).
-    
+    """Main entry point for scheduled rule log export.
+
+    v4.0.8+: Iterates ``db.list_logging_enabled_siems()`` and writes a per-SIEM
+    log file under ``/app/data/log/rules/<siem_label>/``. Each SIEM carries its
+    own retention. Falls back to the legacy global behaviour (driven by
+    ``app_settings.rule_log_enabled`` / ``rule_log_retention_days``) when no
+    SIEM has logging turned on.
+
     Args:
         db: DatabaseService instance
-    
+
     Returns:
-        Number of rules exported (0 if disabled)
+        Total number of rules exported across all targets (0 if disabled).
     """
     try:
+        per_siem: List[Dict] = []
+        try:
+            per_siem = db.list_logging_enabled_siems() or []
+        except Exception as exc:
+            logger.warning(f"list_logging_enabled_siems failed, falling back to legacy: {exc}")
+
+        # ---- Per-SIEM export path (preferred) ----
+        if per_siem:
+            base_paths = _get_write_paths()
+            total = 0
+            for siem in per_siem:
+                label = (siem.get("label") or siem.get("id") or "siem").strip()
+                # Sanitise the label for use as a directory name.
+                safe_label = "".join(
+                    c if c.isalnum() or c in ("-", "_", ".") else "_"
+                    for c in label
+                ) or "siem"
+                retention = int(siem.get("log_retention_days") or 7)
+                count_for_siem = 0
+                for base in base_paths:
+                    target_dir = os.path.join(base, safe_label)
+                    n = export_rule_logs(db, target_dir)
+                    if n > count_for_siem:
+                        count_for_siem = n
+                    cleanup_old_logs(target_dir, retention)
+                logger.info(
+                    f"Rule log export for SIEM '{label}' "
+                    f"(retention={retention}d): {count_for_siem} rules"
+                )
+                total += count_for_siem
+            return total
+
+        # ---- Legacy global path (back-compat) ----
         settings = db.get_all_settings()
-        
         enabled = settings.get("rule_log_enabled", "false").lower() == "true"
         if not enabled:
-            logger.debug("Rule logging is disabled, skipping export")
+            logger.debug("Rule logging is disabled (no per-SIEM config and global flag is off), skipping export")
             return 0
-        
+
         retention_days = int(settings.get("rule_log_retention_days", "7"))
         write_paths = _get_write_paths()
-        
-        # Export current rules to every active path
+
         count = 0
         for path in write_paths:
             n = export_rule_logs(db, path)
             if n > count:
                 count = n
-        
-        # Clean up old logs in every active path
+
         for path in write_paths:
             cleanup_old_logs(path, retention_days)
-        
+
         if len(write_paths) > 1:
             logger.info(f"Rule logs written to {len(write_paths)} locations: {write_paths}")
-        
+
         return count
-        
+
     except Exception as e:
         logger.error(f"Rule log export job failed: {e}")
         return 0

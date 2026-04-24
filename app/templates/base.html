@@ -22,9 +22,11 @@
 </head>
 <body hx-boost="true" hx-ext="head-support">
     <!-- App Layout Container -->
-    <div class="app-layout">
+    <div class="app-layout{% if not user %} no-sidebar{% endif %}">
         <!-- Sidebar -->
+        {% if user %}
         {% include "components/sidebar.html" %}
+        {% endif %}
         
         <!-- Main Content Area -->
         <main class="main-content">

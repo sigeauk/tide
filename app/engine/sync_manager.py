@@ -335,8 +335,8 @@ def _do_fetch_cve_opencti(cve_id: str) -> Optional[Dict]:
 # OpenCTI — bulk vulnerability index (all CVEs + actors, cached 1 h)
 # ---------------------------------------------------------------------------
 
-_octi_bulk_cache: Optional[Dict[str, Dict]] = None
-_octi_bulk_cache_ts: float = 0.0
+_octi_bulk_cache: Dict[str, Dict[str, Dict]] = {}
+_octi_bulk_cache_ts: Dict[str, float] = {}
 _OCTI_BULK_TTL = 3600.0
 
 _OCTI_BULK_VULN_QUERY = """
@@ -387,37 +387,51 @@ query BulkVulnerabilities($cursor: ID, $count: Int!) {
 """
 
 
-def fetch_opencti_vuln_index() -> Dict[str, Dict]:
+def fetch_opencti_vuln_index(client_id: Optional[str] = None) -> Dict[str, Dict]:
     """
-    Return the full OpenCTI vulnerability index, fetching and caching if needed.
+    Return the full OpenCTI vulnerability index for the given client, fetching
+    and caching if needed.
+
+    OpenCTI is a per-tenant integration: the URL/token must come from the
+    ``client_opencti_map`` + ``opencti_inventory`` tables. If ``client_id`` is
+    None or the client has no OpenCTI assigned, an empty index is returned so
+    enrichment is skipped (no cross-tenant leakage).
 
     Returns ``{CVE-ID: {description, cvss_score, cpe_ranges, actors}}``.
     """
     global _octi_bulk_cache, _octi_bulk_cache_ts
+    if not client_id:
+        return {}
     now = time.monotonic()
-    if _octi_bulk_cache is not None and (now - _octi_bulk_cache_ts) < _OCTI_BULK_TTL:
-        return _octi_bulk_cache
-    result = _do_fetch_opencti_vuln_index()
-    _octi_bulk_cache = result
-    _octi_bulk_cache_ts = now
+    cached = _octi_bulk_cache.get(client_id) if isinstance(_octi_bulk_cache, dict) else None
+    ts = _octi_bulk_cache_ts.get(client_id, 0.0) if isinstance(_octi_bulk_cache_ts, dict) else 0.0
+    if cached is not None and (now - ts) < _OCTI_BULK_TTL:
+        return cached
+    result = _do_fetch_opencti_vuln_index(client_id)
+    if not isinstance(_octi_bulk_cache, dict):
+        _octi_bulk_cache = {}
+        _octi_bulk_cache_ts = {}
+    _octi_bulk_cache[client_id] = result
+    _octi_bulk_cache_ts[client_id] = now
     return result
 
 
-def _do_fetch_opencti_vuln_index() -> Dict[str, Dict]:
+def _do_fetch_opencti_vuln_index(client_id: str) -> Dict[str, Dict]:
     try:
         from app.config import get_settings
+        from app.services.database import get_db
         import requests as _req
 
-        settings = get_settings()
-        if not settings.opencti_url or not settings.opencti_token:
+        cfg = get_db().get_client_opencti_config(client_id)
+        if not cfg or not cfg.get("url") or not cfg.get("token"):
             return {}
 
         headers = {
-            "Authorization": f"Bearer {settings.opencti_token}",
+            "Authorization": f"Bearer {cfg['token']}",
             "Content-Type": "application/json",
         }
-        ssl_ctx = settings.ssl_context
-        base = settings.opencti_url.rstrip("/") + "/graphql"
+        ssl_ctx = get_settings().ssl_context
+        base = cfg["url"].rstrip("/") + "/graphql"
         page_size = 50
 
         index: Dict[str, Dict] = {}
@@ -517,16 +531,16 @@ def evaluate_opencti_ranges(
 # ---------------------------------------------------------------------------
 
 def clear_opencti_vuln_cache() -> None:
-    """Flush all in-process OpenCTI caches (per-CVE and bulk index)."""
+    """Flush all in-process OpenCTI caches (per-CVE and per-tenant bulk index)."""
     global _octi_bulk_cache, _octi_bulk_cache_ts
     _octi_vuln_cache.clear()
     _octi_vuln_cache_ts.clear()
-    _octi_bulk_cache = None
-    _octi_bulk_cache_ts = 0.0
-    # Allow inventory_engine to re-trigger a background warm-up
+    _octi_bulk_cache = {}
+    _octi_bulk_cache_ts = {}
+    # Allow inventory_engine to re-trigger a background warm-up per tenant
     try:
         import app.inventory_engine as _ie
-        _ie._octi_warmup_started = False
+        _ie._octi_warmup_started = {}
     except Exception:
         pass
 

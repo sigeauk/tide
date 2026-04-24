@@ -712,13 +712,28 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
     return 0, [], None
 
 
-def preview_detection_rule(rule_data, space="default", lookback="24h"):
+def preview_detection_rule(rule_data, space="default", lookback="24h",
+                           kibana_url=None, api_key=None):
     """
     Test a detection rule against live Elasticsearch data using the Kibana Preview API.
     Returns (hit_count, sample_results, error) tuple.
+
+    Prefer passing ``kibana_url`` and ``api_key`` resolved from the per-tenant
+    ``siem_inventory``/``client_siem_map``. The ``get_promotion_session`` fallback
+    is retained only for legacy callers and will fail cleanly if no global
+    ``ELASTIC_URL`` is set.
     """
-    session, base_url = get_promotion_session()
-    
+    if kibana_url and api_key:
+        session, base_url = _make_session(api_key), kibana_url
+    else:
+        session, base_url = get_promotion_session()
+
+    if not base_url:
+        return 0, [], (
+            "No Kibana URL resolved for this rule's space. Ensure the active "
+            "client has a SIEM assigned in Settings covering this space."
+        )
+
     if space.lower() == "default":
         endpoint = f"{base_url}/api/detection_engine/rules/preview"
     else:

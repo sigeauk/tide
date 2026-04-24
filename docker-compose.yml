@@ -12,6 +12,9 @@ services:
       - VALIDATION_FILE=/app/data/checkedRule.json
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      # Bootstrap admin created on first run (no existing users). Change before deploy.
+      - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-admin}
+      - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-TIDEadmin}
     volumes:
       - ./data:/app/data
       - ${RULE_LOG_PATH:-./data/log/rules}:/mnt/rule-logs

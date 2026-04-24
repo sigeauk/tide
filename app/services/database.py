@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 30
+SCHEMA_VERSION = 33
 
 
 class DatabaseService:
@@ -1139,6 +1139,152 @@ class DatabaseService:
                 "for Sigma logsource metadata indexing"
             )
 
+        # ── Migration 31: OpenCTI and GitLab inventory tables ────────
+        if current_version < 31:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS opencti_inventory (
+                    id VARCHAR PRIMARY KEY DEFAULT (gen_random_uuid()::VARCHAR),
+                    label VARCHAR NOT NULL,
+                    url VARCHAR NOT NULL,
+                    token_enc VARCHAR,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_opencti_map (
+                    client_id VARCHAR NOT NULL,
+                    opencti_id VARCHAR NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (client_id, opencti_id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS gitlab_inventory (
+                    id VARCHAR PRIMARY KEY DEFAULT (gen_random_uuid()::VARCHAR),
+                    label VARCHAR NOT NULL,
+                    url VARCHAR NOT NULL,
+                    token_enc VARCHAR,
+                    default_group VARCHAR,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_gitlab_map (
+                    client_id VARCHAR NOT NULL,
+                    gitlab_id VARCHAR NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (client_id, gitlab_id)
+                )
+            """)
+            self._set_schema_version(conn, 31)
+            logger.info(
+                "Migration 31: Created opencti_inventory, client_opencti_map, "
+                "gitlab_inventory, client_gitlab_map tables"
+            )
+
+        # ── Migration 32: Keycloak inventory table ────────────────────
+        if current_version < 32:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS keycloak_inventory (
+                    id VARCHAR PRIMARY KEY DEFAULT (gen_random_uuid()::VARCHAR),
+                    label VARCHAR NOT NULL,
+                    url VARCHAR NOT NULL,
+                    realm VARCHAR NOT NULL DEFAULT 'master',
+                    client_id_enc VARCHAR,
+                    client_secret_enc VARCHAR,
+                    is_active BOOLEAN DEFAULT true,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            self._set_schema_version(conn, 32)
+            logger.info("Migration 32: Created keycloak_inventory table")
+
+        # ── Migration 33: Management Hub consolidation ────────────────
+        # 1. Per-instance Test-Connection status persistence
+        # 2. Logging-on-SIEM (rule-score export configured per SIEM)
+        # 3. Sigma asset (pipeline/template) tenant assignment
+        # 4. Migrate legacy app_settings.rule_log_* keys to each tenant's
+        #    primary client → first production SIEM (best-effort).
+        if current_version < 33:
+            for tbl in ("siem_inventory", "opencti_inventory",
+                        "gitlab_inventory", "keycloak_inventory"):
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS last_test_status VARCHAR")
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS last_test_at TIMESTAMP")
+                conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS last_test_message VARCHAR")
+
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS log_enabled BOOLEAN DEFAULT FALSE")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS log_target_space VARCHAR")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS log_schedule VARCHAR DEFAULT '00:00'")
+            conn.execute("ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS log_retention_days INTEGER DEFAULT 7")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sigma_asset_assignments (
+                    asset_type VARCHAR NOT NULL,
+                    filename   VARCHAR NOT NULL,
+                    client_id  VARCHAR NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (asset_type, filename, client_id)
+                )
+            """)
+
+            # Legacy app_settings rule_log_* migration → primary SIEM per client.
+            # app_settings has composite PK (client_id, key, value).  We move the
+            # global toggle/schedule/retention onto the FIRST production SIEM
+            # linked to each client and drop the legacy rows.  log_target_space
+            # stays NULL so the user explicitly picks production vs staging.
+            try:
+                migrated_clients = 0
+                client_rows = conn.execute(
+                    "SELECT DISTINCT client_id FROM app_settings "
+                    "WHERE key IN ('rule_log_enabled','rule_log_schedule','rule_log_retention_days')"
+                ).fetchall()
+                for (cid,) in client_rows:
+                    siem_row = conn.execute(
+                        "SELECT siem_id FROM client_siem_map "
+                        "WHERE client_id = ? AND environment_role = 'production' "
+                        "ORDER BY assigned_at LIMIT 1",
+                        [cid],
+                    ).fetchone()
+                    if not siem_row:
+                        continue
+                    siem_id = siem_row[0]
+                    settings_map = dict(conn.execute(
+                        "SELECT key, value FROM app_settings WHERE client_id = ? "
+                        "AND key IN ('rule_log_enabled','rule_log_schedule','rule_log_retention_days')",
+                        [cid],
+                    ).fetchall())
+                    enabled = str(settings_map.get('rule_log_enabled', 'false')).lower() == 'true'
+                    schedule = settings_map.get('rule_log_schedule', '00:00') or '00:00'
+                    try:
+                        retention = int(settings_map.get('rule_log_retention_days', 7) or 7)
+                    except (TypeError, ValueError):
+                        retention = 7
+                    conn.execute(
+                        "UPDATE siem_inventory SET log_enabled = ?, log_schedule = ?, "
+                        "log_retention_days = ? WHERE id = ?",
+                        [enabled, schedule, retention, siem_id],
+                    )
+                    migrated_clients += 1
+                conn.execute(
+                    "DELETE FROM app_settings WHERE key IN "
+                    "('rule_log_enabled','rule_log_schedule','rule_log_retention_days')"
+                )
+                logger.info(f"Migration 33: migrated logging config for {migrated_clients} client(s) to SIEM inventory")
+            except Exception as exc:
+                logger.warning(f"Migration 33: legacy log-settings migration skipped: {exc}")
+
+            self._set_schema_version(conn, 33)
+            logger.info(
+                "Migration 33: Management Hub consolidation — last_test_* columns on "
+                "all 4 inventory tables, log_enabled/log_target_space/log_schedule/"
+                "log_retention_days on siem_inventory, sigma_asset_assignments table"
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -1193,15 +1339,19 @@ class DatabaseService:
             row = conn.execute("SELECT count(*) FROM users").fetchone()
             if row and row[0] == 0:
                 import bcrypt
-                default_pw = bcrypt.hashpw(b"admin", bcrypt.gensalt()).decode()
+                from app.config import get_settings
+                settings = get_settings()
+                bootstrap_username = settings.bootstrap_admin_username or "admin"
+                bootstrap_password = (settings.bootstrap_admin_password or "admin").encode()
+                default_pw = bcrypt.hashpw(bootstrap_password, bcrypt.gensalt()).decode()
                 conn.execute(
                     "INSERT INTO users (username, email, full_name, password_hash, auth_provider, is_active) "
-                    "VALUES ('admin', 'admin@localhost', 'Default Admin', ?, 'local', true)",
-                    [default_pw],
+                    "VALUES (?, 'admin@localhost', 'Default Admin', ?, 'local', true)",
+                    [bootstrap_username, default_pw],
                 )
                 # Assign ADMIN role to the bootstrap user
                 admin_user_id = conn.execute(
-                    "SELECT id FROM users WHERE username = 'admin'"
+                    "SELECT id FROM users WHERE username = ?", [bootstrap_username]
                 ).fetchone()[0]
                 admin_role_id = conn.execute(
                     "SELECT id FROM roles WHERE name = 'ADMIN'"
@@ -1220,7 +1370,7 @@ class DatabaseService:
                         "VALUES (?, ?, true) ON CONFLICT DO NOTHING",
                         [admin_user_id, default_client[0]],
                     )
-                logger.info("Bootstrap admin user created (username: admin, password: admin)")
+                logger.info(f"Bootstrap admin user created (username: {bootstrap_username})")
             else:
                 logger.info(f"Users table has {row[0]} user(s), skipping bootstrap")
         except Exception as e:
@@ -3392,11 +3542,18 @@ class DatabaseService:
             rows = conn.execute(
                 "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
                 "extra_config, is_active, "
+                "last_test_status, last_test_at, last_test_message, "
+                "log_enabled, log_target_space, log_schedule, log_retention_days, "
+                "production_space, staging_space, "
                 "created_at, updated_at "
                 "FROM siem_inventory ORDER BY label"
             ).fetchall()
             cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
-                    "extra_config", "is_active", "created_at", "updated_at"]
+                    "extra_config", "is_active",
+                    "last_test_status", "last_test_at", "last_test_message",
+                    "log_enabled", "log_target_space", "log_schedule", "log_retention_days",
+                    "production_space", "staging_space",
+                    "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
     def get_siem_inventory_item(self, siem_id: str) -> Optional[Dict]:
@@ -3559,7 +3716,427 @@ class DatabaseService:
                 [siem_id, client_id],
             )
 
-    # --- Client-aware rule visibility helpers ---
+    # --- OpenCTI Inventory ---
+
+    def list_opencti_inventory(self) -> List[Dict]:
+        """List all OpenCTI instances in the centralized inventory."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, url, token_enc, is_active, "
+                "last_test_status, last_test_at, last_test_message, "
+                "created_at, updated_at "
+                "FROM opencti_inventory ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "url", "token_enc", "is_active",
+                    "last_test_status", "last_test_at", "last_test_message",
+                    "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_opencti_active_instances(self) -> List[Dict]:
+        """Return active OpenCTI instances with their tokens (for sync service)."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, url, token_enc "
+                "FROM opencti_inventory WHERE is_active = true ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "url", "token_enc"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def create_opencti_inventory_item(self, label: str, url: str,
+                                      token_enc: str = None) -> Dict:
+        """Create an OpenCTI instance in the inventory."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO opencti_inventory (label, url, token_enc) VALUES (?, ?, ?)",
+                [label, url, token_enc],
+            )
+            row = conn.execute(
+                "SELECT id, label, url, is_active, created_at, updated_at "
+                "FROM opencti_inventory WHERE label = ? ORDER BY created_at DESC LIMIT 1",
+                [label],
+            ).fetchone()
+            cols = ["id", "label", "url", "is_active", "created_at", "updated_at"]
+            return dict(zip(cols, row))
+
+    def update_opencti_inventory_item(self, opencti_id: str, **fields) -> bool:
+        """Update an OpenCTI instance in the inventory."""
+        allowed = {"label", "url", "token_enc", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [opencti_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE opencti_inventory SET {set_clause}, updated_at = now() WHERE id = ?",
+                values,
+            )
+        return True
+
+    def delete_opencti_inventory_item(self, opencti_id: str) -> bool:
+        """Delete an OpenCTI instance from the inventory and remove all client mappings."""
+        with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM client_opencti_map WHERE opencti_id = ?", [opencti_id])
+            deleted = conn.execute(
+                "DELETE FROM opencti_inventory WHERE id = ? RETURNING id", [opencti_id]
+            ).fetchone()
+        return deleted is not None
+
+    def get_opencti_clients(self, opencti_id: str) -> List[Dict]:
+        """Get all clients linked to an OpenCTI instance."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.slug FROM clients c "
+                "JOIN client_opencti_map m ON c.id = m.client_id "
+                "WHERE m.opencti_id = ? ORDER BY c.name",
+                [opencti_id],
+            ).fetchall()
+            return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+
+    def get_client_opencti_instances(self, client_id: str) -> List[Dict]:
+        """Get all OpenCTI instances linked to a client."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT o.id, o.label, o.url, o.is_active "
+                "FROM opencti_inventory o JOIN client_opencti_map m ON o.id = m.opencti_id "
+                "WHERE m.client_id = ? ORDER BY o.label",
+                [client_id],
+            ).fetchall()
+            cols = ["id", "label", "url", "is_active"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def get_client_opencti_config(self, client_id: str) -> Optional[Dict]:
+        """Return the first active OpenCTI instance (with token) linked to a client.
+
+        Used by tenant-scoped enrichment paths to avoid cross-tenant data leakage.
+        Returns None when the client has no OpenCTI assigned.
+        """
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT o.id, o.label, o.url, o.token_enc "
+                "FROM opencti_inventory o JOIN client_opencti_map m ON o.id = m.opencti_id "
+                "WHERE m.client_id = ? AND COALESCE(o.is_active, TRUE) = TRUE "
+                "ORDER BY o.label LIMIT 1",
+                [client_id],
+            ).fetchone()
+            if not row:
+                return None
+            return {"id": row[0], "label": row[1], "url": row[2], "token": row[3]}
+
+    def link_client_opencti(self, client_id: str, opencti_id: str):
+        """Link a client to an OpenCTI instance."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO client_opencti_map (client_id, opencti_id) "
+                "VALUES (?, ?) ON CONFLICT DO NOTHING",
+                [client_id, opencti_id],
+            )
+
+    def unlink_client_opencti(self, client_id: str, opencti_id: str):
+        """Unlink a client from an OpenCTI instance."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "DELETE FROM client_opencti_map WHERE client_id = ? AND opencti_id = ?",
+                [client_id, opencti_id],
+            )
+
+    # --- GitLab Inventory ---
+
+    def list_gitlab_inventory(self) -> List[Dict]:
+        """List all GitLab instances in the centralized inventory."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, url, default_group, is_active, "
+                "last_test_status, last_test_at, last_test_message, "
+                "created_at, updated_at "
+                "FROM gitlab_inventory ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "url", "default_group", "is_active",
+                    "last_test_status", "last_test_at", "last_test_message",
+                    "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def create_gitlab_inventory_item(self, label: str, url: str,
+                                     token_enc: str = None,
+                                     default_group: str = None) -> Dict:
+        """Create a GitLab instance in the inventory."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO gitlab_inventory (label, url, token_enc, default_group) "
+                "VALUES (?, ?, ?, ?)",
+                [label, url, token_enc, default_group],
+            )
+            row = conn.execute(
+                "SELECT id, label, url, default_group, is_active, created_at, updated_at "
+                "FROM gitlab_inventory WHERE label = ? ORDER BY created_at DESC LIMIT 1",
+                [label],
+            ).fetchone()
+            cols = ["id", "label", "url", "default_group", "is_active", "created_at", "updated_at"]
+            return dict(zip(cols, row))
+
+    def update_gitlab_inventory_item(self, gitlab_id: str, **fields) -> bool:
+        """Update a GitLab instance in the inventory."""
+        allowed = {"label", "url", "token_enc", "default_group", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [gitlab_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE gitlab_inventory SET {set_clause}, updated_at = now() WHERE id = ?",
+                values,
+            )
+        return True
+
+    def delete_gitlab_inventory_item(self, gitlab_id: str) -> bool:
+        """Delete a GitLab instance from the inventory and remove all client mappings."""
+        with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM client_gitlab_map WHERE gitlab_id = ?", [gitlab_id])
+            deleted = conn.execute(
+                "DELETE FROM gitlab_inventory WHERE id = ? RETURNING id", [gitlab_id]
+            ).fetchone()
+        return deleted is not None
+
+    def get_gitlab_clients(self, gitlab_id: str) -> List[Dict]:
+        """Get all clients linked to a GitLab instance."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name, c.slug FROM clients c "
+                "JOIN client_gitlab_map m ON c.id = m.client_id "
+                "WHERE m.gitlab_id = ? ORDER BY c.name",
+                [gitlab_id],
+            ).fetchall()
+            return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+
+    def get_client_gitlab_instances(self, client_id: str) -> List[Dict]:
+        """Get all GitLab instances linked to a client."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT g.id, g.label, g.url, g.default_group, g.is_active "
+                "FROM gitlab_inventory g JOIN client_gitlab_map m ON g.id = m.gitlab_id "
+                "WHERE m.client_id = ? ORDER BY g.label",
+                [client_id],
+            ).fetchall()
+            cols = ["id", "label", "url", "default_group", "is_active"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def link_client_gitlab(self, client_id: str, gitlab_id: str):
+        """Link a client to a GitLab instance."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO client_gitlab_map (client_id, gitlab_id) "
+                "VALUES (?, ?) ON CONFLICT DO NOTHING",
+                [client_id, gitlab_id],
+            )
+
+    def unlink_client_gitlab(self, client_id: str, gitlab_id: str):
+        """Unlink a client from a GitLab instance."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "DELETE FROM client_gitlab_map WHERE client_id = ? AND gitlab_id = ?",
+                [client_id, gitlab_id],
+            )
+
+    # --- Keycloak Inventory ---
+
+    def list_keycloak_inventory(self) -> List[Dict]:
+        """List all Keycloak instances in the centralized inventory."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, url, realm, client_id_enc, client_secret_enc, "
+                "is_active, last_test_status, last_test_at, last_test_message, "
+                "created_at, updated_at "
+                "FROM keycloak_inventory ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
+                    "is_active", "last_test_status", "last_test_at", "last_test_message",
+                    "created_at", "updated_at"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    def create_keycloak_inventory_item(self, label: str, url: str, realm: str = "master",
+                                       client_id_enc: str = None,
+                                       client_secret_enc: str = None) -> Dict:
+        """Create a Keycloak instance in the inventory."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [label, url, realm, client_id_enc, client_secret_enc],
+            )
+            row = conn.execute(
+                "SELECT id, label, url, realm, client_id_enc, client_secret_enc, is_active, "
+                "created_at, updated_at FROM keycloak_inventory "
+                "WHERE label = ? ORDER BY created_at DESC LIMIT 1",
+                [label],
+            ).fetchone()
+            cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
+                    "is_active", "created_at", "updated_at"]
+            return dict(zip(cols, row))
+
+    def update_keycloak_inventory_item(self, keycloak_id: str, **fields) -> bool:
+        """Update a Keycloak instance in the inventory."""
+        allowed = {"label", "url", "realm", "client_id_enc", "client_secret_enc", "is_active"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [keycloak_id]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE keycloak_inventory SET {set_clause}, updated_at = now() WHERE id = ?",
+                values,
+            )
+        return True
+
+    def delete_keycloak_inventory_item(self, keycloak_id: str) -> bool:
+        """Delete a Keycloak instance from the inventory."""
+        with self.get_shared_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM keycloak_inventory WHERE id = ? RETURNING id", [keycloak_id]
+            ).fetchone()
+        return deleted is not None
+
+    # --- Inventory test-status persistence (Migration 33) ---
+
+    _INVENTORY_TABLE_BY_KIND = {
+        "siems":    "siem_inventory",
+        "siem":     "siem_inventory",
+        "opencti":  "opencti_inventory",
+        "gitlab":   "gitlab_inventory",
+        "keycloak": "keycloak_inventory",
+    }
+
+    def update_inventory_test_status(self, kind: str, item_id: str,
+                                     status: str, message: str = None) -> bool:
+        """Persist the result of a Test-Connection click on an inventory item.
+
+        ``kind`` is one of: 'siems' | 'opencti' | 'gitlab' | 'keycloak'.
+        ``status`` is one of: 'pass' | 'fail' (legacy 'success' is mapped to
+        'pass' so older callers keep working).
+        """
+        table = self._INVENTORY_TABLE_BY_KIND.get(kind)
+        if not table:
+            return False
+        # Normalise legacy "success" → "pass" (pill renderer expects pass/fail).
+        if status == "success":
+            status = "pass"
+        if status not in ("pass", "fail"):
+            return False
+        msg = (message or "")[:500]
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                f"UPDATE {table} SET last_test_status = ?, last_test_at = now(), "
+                f"last_test_message = ? WHERE id = ?",
+                [status, msg, item_id],
+            )
+        return True
+
+    def update_siem_logging_config(self, siem_id: str, *, enabled: bool,
+                                   target_space: str = None,
+                                   schedule: str = "00:00",
+                                   retention_days: int = 7) -> bool:
+        """Persist rule-score logging configuration on a SIEM inventory item."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "UPDATE siem_inventory SET log_enabled = ?, log_target_space = ?, "
+                "log_schedule = ?, log_retention_days = ?, updated_at = now() "
+                "WHERE id = ?",
+                [bool(enabled), target_space or None,
+                 (schedule or "00:00").strip() or "00:00",
+                 int(retention_days or 7), siem_id],
+            )
+        return True
+
+    def list_logging_enabled_siems(self) -> List[Dict]:
+        """Return every SIEM with ``log_enabled = TRUE``.
+
+        Used by ``services/rule_logger.py`` to drive per-SIEM rule-score export.
+        """
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, label, siem_type, kibana_url, elasticsearch_url, "
+                "api_token_enc, log_target_space, log_schedule, log_retention_days "
+                "FROM siem_inventory WHERE log_enabled = TRUE ORDER BY label"
+            ).fetchall()
+            cols = ["id", "label", "siem_type", "kibana_url", "elasticsearch_url",
+                    "api_token_enc", "log_target_space", "log_schedule", "log_retention_days"]
+            return [dict(zip(cols, r)) for r in rows]
+
+    # --- Sigma asset (pipeline / template) tenant assignments (Migration 33) ---
+
+    def list_sigma_asset_assignments(self, asset_type: str) -> Dict[str, List[Dict]]:
+        """Return ``{filename: [{id, name}, ...]}`` for every assigned filename.
+
+        ``asset_type`` is 'pipeline' or 'template'.
+        """
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT a.filename, c.id, c.name FROM sigma_asset_assignments a "
+                "JOIN clients c ON c.id = a.client_id "
+                "WHERE a.asset_type = ? ORDER BY a.filename, c.name",
+                [asset_type],
+            ).fetchall()
+        out: Dict[str, List[Dict]] = {}
+        for fname, cid, cname in rows:
+            out.setdefault(fname, []).append({"id": cid, "name": cname})
+        return out
+
+    def get_sigma_asset_clients(self, asset_type: str, filename: str) -> List[Dict]:
+        """Return tenants assigned to a single sigma asset file."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.name FROM sigma_asset_assignments a "
+                "JOIN clients c ON c.id = a.client_id "
+                "WHERE a.asset_type = ? AND a.filename = ? ORDER BY c.name",
+                [asset_type, filename],
+            ).fetchall()
+        return [{"id": r[0], "name": r[1]} for r in rows]
+
+    def set_sigma_asset_assignments(self, asset_type: str, filename: str,
+                                    client_ids: List[str]) -> int:
+        """Replace the tenant assignment set for a sigma asset.
+
+        Returns the number of assignment rows after the update.  Caller MUST
+        validate that ``client_ids`` is non-empty (force-assign-on-save rule).
+        """
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "DELETE FROM sigma_asset_assignments WHERE asset_type = ? AND filename = ?",
+                [asset_type, filename],
+            )
+            for cid in client_ids:
+                conn.execute(
+                    "INSERT INTO sigma_asset_assignments (asset_type, filename, client_id) "
+                    "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                    [asset_type, filename, cid],
+                )
+            count = conn.execute(
+                "SELECT count(*) FROM sigma_asset_assignments "
+                "WHERE asset_type = ? AND filename = ?",
+                [asset_type, filename],
+            ).fetchone()[0]
+        return int(count)
+
+    def delete_sigma_asset_assignments(self, asset_type: str, filename: str) -> int:
+        """Remove all assignments for a sigma asset (called when the file is deleted)."""
+        with self.get_shared_connection() as conn:
+            removed = conn.execute(
+                "DELETE FROM sigma_asset_assignments WHERE asset_type = ? AND filename = ? "
+                "RETURNING client_id",
+                [asset_type, filename],
+            ).fetchall()
+        return len(removed)
+
+    def list_sigma_assets_for_client(self, asset_type: str, client_id: str) -> List[str]:
+        """Return filenames of sigma assets assigned to a client."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT filename FROM sigma_asset_assignments "
+                "WHERE asset_type = ? AND client_id = ? ORDER BY filename",
+                [asset_type, client_id],
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def get_all_sync_spaces(self) -> List[str]:
         """Get every distinct Kibana space across all client-SIEM mappings.

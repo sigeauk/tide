@@ -902,51 +902,64 @@ def _kev_to_cve_match(kev, affected_hosts=None, matched_software=None, technique
     )
 
 
-_octi_warmup_started: bool = False
+_octi_warmup_started: Dict[str, bool] = {}
 _octi_warmup_lock = threading.Lock()
 
 
-def _ensure_opencti_index_warm() -> bool:
+def _ensure_opencti_index_warm(client_id: str) -> bool:
     """
-    Return True if the OpenCTI bulk index is already cached.
+    Return True if the OpenCTI bulk index for ``client_id`` is already cached.
     If not, start a one-shot background thread to warm it and return False
     so the caller can skip the enrichment for this request.
+
+    The cache is keyed by client_id because OpenCTI is a per-tenant integration
+    (configured via ``client_opencti_map``/``opencti_inventory``). A global
+    cache would leak one tenant's threat intel across tenants.
     """
     from app.engine.sync_manager import fetch_opencti_vuln_index, _octi_bulk_cache
-    global _octi_warmup_started
-    if _octi_bulk_cache is not None:
+    if not client_id:
+        return False
+    if isinstance(_octi_bulk_cache, dict) and _octi_bulk_cache.get(client_id) is not None:
         return True
     with _octi_warmup_lock:
-        if not _octi_warmup_started:
-            _octi_warmup_started = True
-            t = threading.Thread(target=fetch_opencti_vuln_index, daemon=True, name="octi-warmup")
+        if not _octi_warmup_started.get(client_id):
+            _octi_warmup_started[client_id] = True
+            t = threading.Thread(
+                target=fetch_opencti_vuln_index,
+                args=(client_id,),
+                daemon=True,
+                name=f"octi-warmup-{client_id[:8]}",
+            )
             t.start()
-            logger.info("[opencti-index] Background warm-up started")
+            logger.info("[opencti-index] Background warm-up started for client %s", client_id)
     return False
 
 
 def _match_software_against_opencti(
     software_list: list,
     host_sw_cpes: List[str],
+    client_id: Optional[str] = None,
 ) -> Dict[str, Dict]:
     """
-    Match host software CPEs against the OpenCTI vulnerability index using strict
-    CPE identity (part/vendor/product) matching.
+    Match host software CPEs against the active client's OpenCTI vulnerability
+    index using strict CPE identity (part/vendor/product) matching.
 
-    Returns {cve_id: {description, cvss_score, actors, matched_software}} for
-    every CVE in OpenCTI whose affected-software CPEs identity-match at least
-    one host CPE. Version filtering is applied where OpenCTI provides version data.
+    OpenCTI is per-tenant: without a ``client_id`` — or when the client has no
+    OpenCTI assigned — this returns an empty map so no cross-tenant data is
+    exposed.
 
-    This is intentionally separate from _match_software_against_kev so the KEV
-    overview page is unaffected.
+    Returns {cve_id: {description, cvss_score, actors, matched_software}}.
     """
     from app.engine.sync_manager import fetch_opencti_vuln_index, evaluate_opencti_ranges
     from app.engine.cpe_validator import Cpe
 
-    if not _ensure_opencti_index_warm():
+    if not client_id:
+        return {}
+
+    if not _ensure_opencti_index_warm(client_id):
         return {}   # cache still warming in background — skip enrichment this request
 
-    index = fetch_opencti_vuln_index()
+    index = fetch_opencti_vuln_index(client_id)
     if not index or not host_sw_cpes:
         return {}
 
@@ -1067,8 +1080,8 @@ def get_host_vulnerabilities(host_id, client_id: str = None):
     if kev:
         matched_map = _match_software_against_kev(software, kev, host_os=host.os or "")
 
-    # --- OpenCTI CPE identity matching (enrichment) ---
-    octi_map = _match_software_against_opencti(software, host_sw_cpes)
+    # --- OpenCTI CPE identity matching (enrichment, per-tenant) ---
+    octi_map = _match_software_against_opencti(software, host_sw_cpes, client_id=client_id)
 
     # Merge: collect all CVE IDs from both sources
     all_cve_ids = set(matched_map) | set(octi_map)
@@ -1137,8 +1150,8 @@ def get_system_vulnerabilities(system_id, client_id: str = None):
         if kev:
             kev_matches = _match_software_against_kev(software, kev, host_os=host.os or "")
 
-        # OpenCTI CPE-identity matches for this host
-        octi_matches = _match_software_against_opencti(software, host_sw_cpes)
+        # OpenCTI CPE-identity matches for this host (per-tenant)
+        octi_matches = _match_software_against_opencti(software, host_sw_cpes, client_id=client_id)
 
         for cve_id in set(kev_matches) | set(octi_matches):
             sw_names = list(dict.fromkeys(
@@ -1343,7 +1356,7 @@ def get_system_summaries(client_id: str = None):
                 host_vulns.update(m.keys())
                 vuln_cves.update(m.keys())
             host_sw_cpes = [sw.cpe for sw in software if sw.cpe]
-            octi = _match_software_against_opencti(software, host_sw_cpes)
+            octi = _match_software_against_opencti(software, host_sw_cpes, client_id=client_id)
             host_vulns.update(octi.keys())
             vuln_cves.update(octi.keys())
             if host_vulns:
@@ -1394,7 +1407,7 @@ def get_host_summaries(system_id, client_id: str = None):
                 m = _match_software_against_kev(software, kev, host_os=host.os or "")
                 vuln_cves.update(m.keys())
             host_sw_cpes = [sw.cpe for sw in software if sw.cpe]
-            octi = _match_software_against_opencti(software, host_sw_cpes)
+            octi = _match_software_against_opencti(software, host_sw_cpes, client_id=client_id)
             vuln_cves.update(octi.keys())
             vuln_count = len(vuln_cves)
             # Only count as detected if a detection is actually applied to this host or its system

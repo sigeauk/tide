@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     db_path: str = Field(default="/app/data/tide.duckdb", alias="DB_PATH")
     trigger_dir: str = Field(default="/app/data/triggers", alias="TRIGGER_DIR")
     validation_file: str = Field(default="/app/data/checkedRule.json", alias="VALIDATION_FILE")
+
+    # --- BOOTSTRAP ADMIN ---
+    # Credentials for the default admin account created on first run (no existing users).
+    # Set these in docker-compose.yml environment section; they are only used once.
+    bootstrap_admin_username: str = Field(default="admin", alias="BOOTSTRAP_ADMIN_USERNAME")
+    bootstrap_admin_password: str = Field(default="admin", alias="BOOTSTRAP_ADMIN_PASSWORD")
     
     # --- ELASTICSEARCH ---
     elasticsearch_url: str = Field(default="http://elasticsearch:9200", alias="ELASTICSEARCH_URL")

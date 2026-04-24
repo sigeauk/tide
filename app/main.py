@@ -1332,6 +1332,11 @@ def create_app() -> FastAPI:
         # Available SIEMs — show all so same SIEM can be linked as production + staging
         all_siems = db.list_siem_inventory()
         available_siems = all_siems
+        # OpenCTI instances linked to this client
+        client_opencti = db.get_client_opencti_instances(client_id)
+        all_opencti = db.list_opencti_inventory()
+        linked_opencti_ids = {o["id"] for o in client_opencti}
+        available_opencti = [o for o in all_opencti if o["id"] not in linked_opencti_ids]
         # Available users not yet assigned
         all_users = db.get_all_users()
         assigned_user_ids = {u["id"] for u in client_users}
@@ -1374,6 +1379,8 @@ def create_app() -> FastAPI:
                 "client_users": client_users,
                 "available_siems": available_siems,
                 "available_users": available_users,
+                "client_opencti": client_opencti,
+                "available_opencti": available_opencti,
                 "client_systems": client_systems,
                 "client_baselines": client_baselines,
                 "available_systems": available_systems,
@@ -1391,7 +1398,10 @@ def create_app() -> FastAPI:
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url="/", status_code=302)
         tab = request.query_params.get("tab", "clients")
-        if tab not in ("clients", "siems", "users", "permissions"):
+        # The Management page now uses collapsible sections; only the
+        # Tenants & Users sub-tabs (clients/users/permissions) honour ?tab=.
+        # Legacy values redirect to the default sub-tab so old bookmarks still work.
+        if tab not in ("clients", "users", "permissions"):
             tab = "clients"
         return render_template(
             "pages/management.html",

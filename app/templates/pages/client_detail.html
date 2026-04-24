@@ -35,6 +35,10 @@
         <div class="metric-value">{{ client_siems | length }}</div>
     </div>
     <div class="metric-card">
+        <div class="metric-label">{{ icon('shield', '16') }} Threat Intel</div>
+        <div class="metric-value">{{ client_opencti | length }}</div>
+    </div>
+    <div class="metric-card">
         <div class="metric-label">{{ icon('monitor', '16') }} Systems</div>
         <div class="metric-value">{{ client_systems | length }}</div>
     </div>
@@ -60,6 +64,13 @@
 <div class="card card-padded card-mb" id="client-siems-card">
     <div id="client-siems-section">
         {% include "partials/client_siems.html" %}
+    </div>
+</div>
+
+<!-- Linked Threat Intel (OpenCTI) Section -->
+<div class="card card-padded card-mb" id="client-opencti-card">
+    <div id="client-opencti-section">
+        {% include "partials/client_opencti.html" %}
     </div>
 </div>
 

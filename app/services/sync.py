@@ -141,28 +141,37 @@ def run_mitre_sync():
             
             # --- Phase 2: Sync from OpenCTI ---
             octi_actors = 0
-            octi_url = settings.opencti_url
-            octi_token = settings.opencti_token
-            
-            if octi_url and octi_token:
-                logger.info("Starting OpenCTI sync...")
+
+            # Prefer instances configured in the Management panel (DB); fall back to env vars.
+            octi_instances = db.get_opencti_active_instances() if hasattr(db, "get_opencti_active_instances") else []
+            if not octi_instances and settings.opencti_url and settings.opencti_token:
+                octi_instances = [{"url": settings.opencti_url, "token_enc": settings.opencti_token, "label": "env-config"}]
+
+            for _octi in octi_instances:
+                octi_url = _octi.get("url")
+                octi_token = _octi.get("token_enc")
+                octi_label = _octi.get("label", "OpenCTI")
+                if not (octi_url and octi_token):
+                    continue
+                logger.info(f"Starting OpenCTI sync from {octi_label} ({octi_url})...")
                 try:
                     df_octi = cti_helper.get_threat_landscape(octi_url, octi_token)
                     if not df_octi.empty:
-                        # Ensure source column says "OCTI"
                         df_octi['source'] = df_octi['source'].apply(
                             lambda x: "OCTI" if isinstance(x, str) else x
                         )
                         from app.database import save_threat_data
-                        octi_actors = save_threat_data(df_octi)
-                        logger.info(f"OpenCTI sync complete. Updated {octi_actors} actors.")
+                        count = save_threat_data(df_octi)
+                        octi_actors += count
+                        logger.info(f"OpenCTI sync complete for {octi_label}. Updated {count} actors.")
                     else:
-                        logger.warning("No actors returned from OpenCTI.")
+                        logger.warning(f"No actors returned from OpenCTI ({octi_label}).")
                 except Exception as e:
-                    logger.error(f"OpenCTI sync failed: {e}")
+                    logger.error(f"OpenCTI sync failed for {octi_label}: {e}")
                     import traceback
                     logger.error(traceback.format_exc())
-            else:
+
+            if not octi_instances:
                 logger.info("OpenCTI not configured, skipping.")
             
             total = mitre_actors + octi_actors
