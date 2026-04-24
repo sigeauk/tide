@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.9]
+
+### Fixed
+- **External Query API — `README.md` examples returned `403 Forbidden` for multi-tenant API keys:** The documented `curl` payloads embedded `client_id` values as truncated UUIDs (`"client_id": "8bab9263-..."`, `"client_id": "1b650e71-..."`) inside fully-quoted JSON `-d` blocks. The ellipsis was not placeholder syntax — it was sent on the wire as a literal string, which `external_query()` in `app/api/external_sharing.py` correctly rejects via the `target_client_id not in allowed_client_ids` membership check (HTTP 403, `"API key does not have access to the requested tenant."`). The 4.0.7 fix to `validate_api_key_full()` did not change the request schema; the schema has been correct since 4.0.3 when `client_id` was first introduced as a request body field. No code change required — the FastAPI route, `QueryRequest` Pydantic model, and `validate_api_key_full()` ownership resolution all behave as designed. README updated to use a clearly-marked `<TENANT_CLIENT_ID>` placeholder (mirroring the existing `YOUR_KEY_HERE` convention), to print full UUIDs in the `GET /api/external/clients` sample response, and to call out that the API performs an exact string match against `user_clients.client_id` so any abbreviation returns 403. Validated end-to-end through the public nginx 443 ingress using an ephemeral `curlimages/curl` container on the host network: `GET /api/external/clients` → 200 with three tenants, `POST /api/external/query` with truncated UUID → 403, `POST /api/external/query` with full UUID → 200.
+
 ## [4.0.8]
 
 ### Added

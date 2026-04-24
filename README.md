@@ -314,10 +314,12 @@ Queries run against a specific tenant database. You specify which tenant via the
 
 **Multi-tenant user (client_id required):**
 
+Replace `<TENANT_CLIENT_ID>` with the full UUID returned by `GET /api/external/clients`. The `id` field is the **complete UUID** (e.g. `1b650e71-db8e-4de4-852a-d67cada3fed7`) — do **not** abbreviate it, the API string-compares the value against `user_clients.client_id` and any truncation returns `403 Forbidden`.
+
 ```json
 {
   "sql": "SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 10",
-  "client_id": "1b650e71-db8e-4de4-852a-d67cada3fed7"
+  "client_id": "<TENANT_CLIENT_ID>"
 }
 ```
 
@@ -341,6 +343,12 @@ Queries run against a specific tenant database. You specify which tenant via the
 
 ### curl Examples
 
+> ⚠️ **Replace `your-tide-host` with the actual hostname of your TIDE deployment** (e.g. `tide.example.local`, or `tide` if it resolves on your network). Leaving the literal placeholder will cause curl to fail with `Could not resolve host` (exit code 6) and return no output.
+>
+> Replace `YOUR_KEY_HERE` with the API key shown once at creation time in **Settings → Profile → API Key Management**.
+>
+> Add `-k` if your TIDE instance uses a self-signed certificate.
+
 **Step 1 — Discover your tenants:**
 
 ```bash
@@ -351,11 +359,13 @@ curl -s https://your-tide-host/api/external/clients \
 ```json
 {
   "clients": [
-    {"id": "1b650e71-...", "name": "Primary Client", "slug": "primary"},
-    {"id": "8bab9263-...", "name": "DC", "slug": "dc"}
+    {"id": "1b650e71-db8e-4de4-852a-d67cada3fed7", "name": "Primary Client", "slug": "primary"},
+    {"id": "8bab9263-2c1b-4b0f-9288-407729eef30d", "name": "DC",             "slug": "dc"}
   ]
 }
 ```
+
+> **Use the full `id` UUID verbatim** as `client_id` in subsequent `POST /api/external/query` calls. Truncated values (e.g. `8bab9263-...`) are not pattern-matched by the API and will return `403 Forbidden`.
 
 **Step 2 — Query a tenant (single-tenant users can omit client_id):**
 
@@ -374,11 +384,13 @@ curl -s -X POST https://your-tide-host/api/external/query \
 
 **Query a specific tenant:**
 
+Replace `<TENANT_CLIENT_ID>` with a full UUID from `GET /api/external/clients`. The example below uses the `DC` tenant from the previous response.
+
 ```bash
 curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
-  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE score IS NOT NULL ORDER BY score DESC LIMIT 5", "client_id": "8bab9263-..."}'
+  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE score IS NOT NULL ORDER BY score DESC LIMIT 5", "client_id": "<TENANT_CLIENT_ID>"}'
 ```
 
 ```json
@@ -420,6 +432,55 @@ curl -s -X POST https://your-tide-host/api/external/query \
   "row_count": 2
 }
 ```
+
+### Fully-Worked End-to-End Example
+
+This is what a real working session looks like. The hostname (`tide.example.local`), the API key, and the `client_id` UUID are **all** filled in with realistic values — copy this pattern and substitute your own hostname, key, and tenant ID.
+
+**1. List tenants:**
+
+```bash
+curl -s -k https://tide.example.local/api/external/clients \
+  -H "X-TIDE-API-KEY: 2Ln5RLGZ6gFqsTB75_LdrmnRkkAY8KLorKuJV7jn6Sg"
+```
+
+```json
+{"clients":[
+  {"id":"1b650e71-db8e-4de4-852a-d67cada3fed7","name":"Primary Client","slug":"primary"},
+  {"id":"8bab9263-2c1b-4b0f-9288-407729eef30d","name":"DC","slug":"dc"},
+  {"id":"c59b8726-cd15-40ad-b5bd-fe2da6f3fae7","name":"Marvel","slug":"marvel"}
+]}
+```
+
+**2. Query the `Marvel` tenant using its full UUID:**
+
+```bash
+curl -s -k -X POST https://tide.example.local/api/external/query \
+  -H "Content-Type: application/json" \
+  -H "X-TIDE-API-KEY: 2Ln5RLGZ6gFqsTB75_LdrmnRkkAY8KLorKuJV7jn6Sg" \
+  -d '{"sql": "SELECT rule_id, name, severity, score FROM detection_rules WHERE score IS NOT NULL ORDER BY score DESC LIMIT 5", "client_id": "c59b8726-cd15-40ad-b5bd-fe2da6f3fae7"}'
+```
+
+```json
+{
+  "columns": ["rule_id","name","severity","score"],
+  "rows": [
+    {"rule_id":"a1b2c3","name":"Credential Dumping via LSASS","severity":"critical","score":98},
+    {"rule_id":"d4e5f6","name":"Suspicious PowerShell Execution","severity":"high","score":92}
+  ],
+  "row_count": 2
+}
+```
+
+### Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| curl exits with code **6** (`Could not resolve host`) and no JSON | URL still contains the literal `your-tide-host` placeholder | Replace `your-tide-host` with your real TIDE hostname |
+| curl exits with code **60** (SSL certificate problem) | Self-signed cert on TIDE | Add `-k` to the curl command |
+| `401 Unauthorized` | Missing/invalid `X-TIDE-API-KEY` header | Re-generate the key in **Settings → Profile → API Key Management** |
+| `403 Forbidden` on a query | `client_id` truncated, mistyped, or not assigned to your user | Use the exact full UUID from `GET /api/external/clients` |
+| `400 Bad Request` mentioning a keyword | SQL contains a blocked keyword (`DROP`, `INSERT`, `PRAGMA`, etc.) | Rewrite as a `SELECT`/`WITH` query only |
 
 ### Migration from v3 API
 
