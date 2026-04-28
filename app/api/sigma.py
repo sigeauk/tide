@@ -191,16 +191,32 @@ def deploy_to_siem(
             '<div class="alert alert-warning">Convert a rule first before deploying</div>'
         )
 
-    # Validate the target space belongs to this client
-    allowed_spaces = db.get_client_siem_spaces(client_id)
-    if space not in allowed_spaces:
+    # Validate the target space belongs to this client AND resolve the SIEM
+    # connection details from siem_inventory / client_siem_map. The legacy
+    # ELASTIC_URL/ELASTIC_API_KEY env fallback was removed in 4.0.10 — the
+    # rule MUST be deployed to the SIEM the active tenant has assigned for
+    # this space.
+    target_siem = None
+    for s in db.get_client_siems(client_id):
+        if (s.get("space") or "default") == space:
+            target_siem = s
+            break
+    if not target_siem:
         return HTMLResponse(
             '<div class="alert alert-danger">Deployment blocked: target SIEM is not linked to your client.</div>'
+        )
+    if not target_siem.get("kibana_url") or not target_siem.get("api_token_enc"):
+        return HTMLResponse(
+            '<div class="alert alert-danger">Deployment blocked: '
+            f"the SIEM assigned for space '{space}' has no kibana_url / api_token configured."
+            '</div>'
         )
 
     success, message = sigma.send_rule_to_siem(
         yaml_content=yaml_content,
         space=space,
+        kibana_url=target_siem["kibana_url"],
+        api_key=target_siem["api_token_enc"],
         enabled=enabled,
         index_pattern=index_pattern or None,
         pipeline_file=pipeline_file,

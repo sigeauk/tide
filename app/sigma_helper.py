@@ -1128,6 +1128,8 @@ def build_detection_rule_dict(
 def send_rule_to_siem(
     yaml_content: str,
     space: str,
+    kibana_url: str,
+    api_key: str,
     enabled: bool = False,
     index_pattern: Optional[str] = None,
     pipeline_file: str = '',
@@ -1144,6 +1146,8 @@ def send_rule_to_siem(
     Args:
         yaml_content: Original Sigma rule YAML
         space: Kibana space to deploy to (e.g. ``staging``, ``production``)
+        kibana_url: Per-tenant Kibana base URL (from ``siem_inventory.kibana_url``).
+        api_key: Per-tenant Kibana API key (from ``siem_inventory.api_token_enc``).
         enabled: Whether to enable the rule immediately after creation/update
         index_pattern: Comma-separated index patterns (overrides pipeline)
         pipeline_file: Comma-separated filenames of saved pipelines in PIPELINE_DIR
@@ -1192,10 +1196,12 @@ def send_rule_to_siem(
     title = payload.get('name', 'Unknown Rule')
     rule_id = payload.get('rule_id', '')
 
-    kibana_url = os.getenv('ELASTIC_URL', '')
-    api_key = os.getenv('ELASTIC_API_KEY', '')
     if not kibana_url or not api_key:
-        return False, "Missing ELASTIC_URL or ELASTIC_API_KEY in environment"
+        # The legacy ELASTIC_URL/ELASTIC_API_KEY env-var fallback was removed in
+        # 4.0.10. Callers MUST resolve the SIEM from siem_inventory /
+        # client_siem_map for the active tenant and pass kibana_url + api_key.
+        return False, ("No SIEM resolved for the active tenant/space. "
+                       "Assign a SIEM in the Management page and retry.")
 
     headers = {
         "kbn-xsrf": "true",

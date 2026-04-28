@@ -110,6 +110,23 @@ async def require_admin(
     return user
 
 
+async def require_superadmin(
+    user: Annotated[User, Depends(require_auth)]
+) -> User:
+    """Dependency: Require platform-wide super-admin (Keycloak `superadmin` group).
+
+    A tenant ADMIN can manage their own client through the management panel,
+    but operations that affect the *global* client list (create / delete) are
+    restricted to super-admins.
+    """
+    if not user.is_superadmin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Super-admin access required",
+        )
+    return user
+
+
 def require_role(role_name: str):
     """Factory: Create a dependency that requires a specific role."""
     async def _check(user: Annotated[User, Depends(require_auth)]) -> User:
@@ -153,6 +170,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[Optional[User], Depends(get_current_user)]
 RequireUser = Annotated[User, Depends(require_auth)]
 RequireAdmin = Annotated[User, Depends(require_admin)]
+RequireSuperadmin = Annotated[User, Depends(require_superadmin)]
 
 
 async def get_active_client(
@@ -209,8 +227,11 @@ async def get_active_client(
             detail="No active client selected. Set X-Client-ID header or switch client.",
         )
 
-    # Validate access: admin can access any client; skip when auth disabled
-    if user and not user.is_admin():
+    # Validate access:
+    # - Superadmin (Keycloak `superadmin` group) bypasses everything.
+    # - Otherwise the user must be a member of the resolved client. Per-tenant
+    #   ADMIN no longer implies access to other tenants.
+    if user and not user.is_superadmin:
         with db.get_connection() as conn:
             allowed = conn.execute(
                 "SELECT 1 FROM user_clients WHERE user_id = ? AND client_id = ?",
@@ -233,6 +254,26 @@ async def get_active_client(
 
     # Stash on request state for downstream use
     request.state.client_id = client_id
+
+    # Refresh the user's role list to reflect THIS tenant only. After this point
+    # `user.roles` and `user.is_admin()` reason about the active tenant — the
+    # full per-tenant map is preserved on `user.client_roles`.
+    if user is not None:
+        user.active_client_id = client_id
+        if user.is_superadmin:
+            user.roles = ["ADMIN"]
+        else:
+            user.roles = list(user.client_roles.get(client_id, []))
+        # Refresh the permissions map so sidebar / page gating reflects the
+        # roles held in the active tenant only. Superadmins keep an empty map
+        # because their bypass lives in `can_read` / `can_write`.
+        try:
+            if user.is_superadmin:
+                user.permissions = {}
+            else:
+                user.permissions = db.get_user_permissions(user.id, client_id=client_id)
+        except Exception:  # pragma: no cover - permissions optional
+            user.permissions = {}
 
     # Set tenant DB context if multi-DB mode is active
     settings = get_settings()

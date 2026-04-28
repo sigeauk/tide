@@ -18,16 +18,16 @@
 </div>
 
 {# ------------------------------------------------------------------ #}
-{# Tenants & Users — preserves the existing 3 sub-tabs (Clients /     #}
-{# Users / Permissions). Default sub-tab honours the legacy ?tab=     #}
-{# query parameter when one is supplied.                              #}
+{# Tenants & Users \u2014 two sub-tabs (Clients / Users). The legacy        #}
+{# "permissions" tab now lives in its own top-level "Role Templates"  #}
+{# section below; legacy ?tab=permissions falls back to Clients.      #}
 {# ------------------------------------------------------------------ #}
-{% set tu_tab = active_tab if active_tab in ('clients', 'users', 'permissions') else 'clients' %}
+{% set tu_tab = active_tab if active_tab in ('clients', 'users') else 'clients' %}
 <details class="mgmt-section" open>
     <summary class="mgmt-section__summary">
         {{ icon('users', '18') }}
         <span class="mgmt-section__title">Tenants &amp; Users</span>
-        <span class="mgmt-section__hint">Clients, users, role permissions</span>
+        <span class="mgmt-section__hint">Clients and global user directory</span>
     </summary>
     <div class="mgmt-section__body">
         <div class="settings-tabs settings-tabs--inline">
@@ -41,20 +41,19 @@
                     onclick="activateMgmtTab(this,'users')">
                 {{ icon('user', '16') }} Users
             </button>
-            <button class="settings-tab {% if tu_tab == 'permissions' %}active{% endif %}"
-                    hx-get="/api/management/tab/permissions" hx-target="#management-content" hx-swap="innerHTML"
-                    onclick="activateMgmtTab(this,'permissions')">
-                {{ icon('lock', '16') }} Permissions
-            </button>
         </div>
         <div class="settings-panel active" id="management-content"
              hx-get="/api/management/tab/{{ tu_tab }}"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading…</div>
+            <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading\u2026</div>
         </div>
     </div>
 </details>
+
+{# Role Templates have been moved to the Client Detail page \u2014 they are now
+   tenant-scoped and edited from /clients/{id}. Use the active-tenant link on
+   the Tenants & Users tab to manage role permissions for a specific client. #}
 
 {# ------------------------------------------------------------------ #}
 {# Integrations — SIEM, Threat Intel, GitLab, Keycloak                #}

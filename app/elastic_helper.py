@@ -209,8 +209,14 @@ def flatten_properties(props, prefix=""):
             fields[field_name] = v.get("type", "unknown")
     return fields
 
-def get_batch_mappings(session, base_url, index_field_map):
-    es_direct_url = os.getenv("ELASTICSEARCH_URL")
+def get_batch_mappings(session, base_url, index_field_map, es_direct_url=None):
+    """Fetch field mappings for a batch of index patterns.
+
+    ``es_direct_url`` (optional) bypasses the Kibana console proxy and queries
+    Elasticsearch directly. It is resolved per-tenant from
+    ``siem_inventory.elasticsearch_url`` by callers — the global
+    ``ELASTICSEARCH_URL`` env var fallback was removed in 4.0.10.
+    """
     global_cache = {}
 
     unique_patterns = [i for i in index_field_map.keys() if i]
@@ -405,32 +411,39 @@ def calculate_score(rule_data):
     })
     return rule_data
 
-def fetch_detection_rules(url_override=None, key_override=None, check_mappings=True, known_rule_keys=None, spaces_override=None):
+def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
+                          known_rule_keys=None, elasticsearch_url=None):
+    """Fetch detection rules from a single SIEM's Kibana instance.
+
+    All connection parameters are now mandatory and resolved per-tenant from
+    ``siem_inventory`` / ``client_siem_map``. The legacy ``ELASTIC_URL`` /
+    ``ELASTIC_API_KEY`` / ``KIBANA_SPACES`` env-var fallbacks were removed in
+    4.0.10 — every call site must pass real values.
+
+    Args:
+        kibana_url: Base Kibana URL for this SIEM (from ``siem_inventory.kibana_url``).
+        api_key: Kibana API key (from ``siem_inventory.api_token_enc``).
+        spaces: List of Kibana spaces to fetch rules from for this SIEM.
+        check_mappings: When True, validate field mappings against ES.
+        known_rule_keys: ``(rule_id, space)`` tuples already in DB — mapping is
+            skipped for these (lazy mapping).
+        elasticsearch_url: Optional direct Elasticsearch URL (from
+            ``siem_inventory.elasticsearch_url``) used to bypass the Kibana
+            console proxy when fetching index mappings.
     """
-    Fetch detection rules from Kibana spaces.
-    known_rule_keys: set of (rule_id, space) tuples already in DB - skip mapping for these.
-    spaces_override: explicit list of Kibana spaces to sync (from siem_inventory).
-                     Falls back to KIBANA_SPACES env var for backward compatibility.
-    """
+    if not kibana_url or not api_key:
+        log_error("fetch_detection_rules: kibana_url and api_key are required")
+        return pd.DataFrame()
     if known_rule_keys is None:
         known_rule_keys = set()
-    base_url = url_override or os.getenv("ELASTIC_URL")
-    api_key = key_override or os.getenv("ELASTIC_API_KEY")
 
-    if not base_url or not api_key: return pd.DataFrame()
-
-    base_url = base_url.rstrip('/')
+    base_url = kibana_url.rstrip('/')
     headers = {"kbn-xsrf": "true", "Authorization": f"ApiKey {api_key}", "Content-Type": "application/json"}
     session = requests.Session()
     session.headers.update(headers)
     session.verify = False
 
-    # Use DB-derived spaces when available, fall back to env var for legacy setups
-    if spaces_override:
-        spaces = list(spaces_override)
-    else:
-        kibana_spaces_raw = os.getenv("KIBANA_SPACES", "default")
-        spaces = [s.strip() for s in kibana_spaces_raw.split(',') if s.strip()]
+    spaces = [s.strip() for s in (spaces or []) if s and s.strip()]
     if not spaces:
         spaces = ['default']
     
@@ -546,7 +559,8 @@ def fetch_detection_rules(url_override=None, key_override=None, check_mappings=T
 
         mapping_cache = {}
         if check_mappings and index_request_map:
-            mapping_cache = get_batch_mappings(session, base_url, index_request_map)
+            mapping_cache = get_batch_mappings(session, base_url, index_request_map,
+                                              es_direct_url=elasticsearch_url)
         
         processed_rules = []
         for meta in rule_meta_list:
@@ -644,22 +658,17 @@ def _make_session(api_key: str) -> "requests.Session":
     return session
 
 
-def get_promotion_session():
-    """Get a session configured for Elastic API calls (global env fallback)."""
-    base_url = os.getenv("ELASTIC_URL")
-    api_key = os.getenv("ELASTIC_API_KEY")
-    return _make_session(api_key), base_url
-
-
-def _fetch_preview_alerts(session, base_url, space, preview_id):
+def _fetch_preview_alerts(session, base_url, space, preview_id, es_direct_url=None):
     """
     Fetch alerts from the temporary preview index after Kibana's Preview API (8.7+).
     Returns (hit_count, alerts_list, error_or_None).
     Retries briefly because Kibana writes alerts asynchronously after returning the previewId.
+
+    ``es_direct_url`` is resolved per-tenant from ``siem_inventory.elasticsearch_url``;
+    the global ``ELASTICSEARCH_URL`` env-var fallback was removed in 4.0.10.
     """
     import time as _time
 
-    es_direct_url = os.getenv("ELASTICSEARCH_URL")
     index = f".preview.alerts-security.alerts-{space}"
     search_body = {
         "query": {
@@ -713,26 +722,22 @@ def _fetch_preview_alerts(session, base_url, space, preview_id):
 
 
 def preview_detection_rule(rule_data, space="default", lookback="24h",
-                           kibana_url=None, api_key=None):
+                           kibana_url=None, api_key=None, elasticsearch_url=None):
     """
     Test a detection rule against live Elasticsearch data using the Kibana Preview API.
     Returns (hit_count, sample_results, error) tuple.
 
-    Prefer passing ``kibana_url`` and ``api_key`` resolved from the per-tenant
-    ``siem_inventory``/``client_siem_map``. The ``get_promotion_session`` fallback
-    is retained only for legacy callers and will fail cleanly if no global
-    ``ELASTIC_URL`` is set.
+    ``kibana_url``, ``api_key`` and (optionally) ``elasticsearch_url`` are
+    resolved per-tenant from ``siem_inventory`` / ``client_siem_map`` by the
+    caller. The legacy global ``ELASTIC_URL`` / ``ELASTIC_API_KEY`` /
+    ``ELASTICSEARCH_URL`` env-var fallbacks were removed in 4.0.10.
     """
-    if kibana_url and api_key:
-        session, base_url = _make_session(api_key), kibana_url
-    else:
-        session, base_url = get_promotion_session()
-
-    if not base_url:
+    if not kibana_url or not api_key:
         return 0, [], (
-            "No Kibana URL resolved for this rule's space. Ensure the active "
+            "No SIEM connection resolved for this rule's space. Ensure the active "
             "client has a SIEM assigned in Settings covering this space."
         )
+    session, base_url = _make_session(api_key), kibana_url
 
     if space.lower() == "default":
         endpoint = f"{base_url}/api/detection_engine/rules/preview"
@@ -836,7 +841,9 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
             # Newer API (8.7+): alerts stored in a temporary index, not in the response body.
             # We must query .preview.alerts-security.alerts-<space> to get the actual results.
             preview_id = data["previewId"]
-            hit_count, alerts, fetch_error = _fetch_preview_alerts(session, base_url, space, preview_id)
+            hit_count, alerts, fetch_error = _fetch_preview_alerts(
+                session, base_url, space, preview_id, es_direct_url=elasticsearch_url
+            )
             if fetch_error:
                 return 0, [], fetch_error
         else:
@@ -868,11 +875,9 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
         return 0, [], str(e)
 
 
-def get_space_rule_ids(space, session=None, base_url=None):
-    """Get all rule_ids from a space.
-    Accepts optional session/base_url for cross-SIEM queries."""
-    if session is None or base_url is None:
-        session, base_url = get_promotion_session()
+def get_space_rule_ids(space, session, base_url):
+    """Get all rule_ids from a space. Caller must supply session and base_url
+    resolved from the per-tenant ``siem_inventory`` row."""
     prefix = _space_api_prefix(base_url, space)
     url = f"{prefix}/api/detection_engine/rules/_find"
     all_rules = []
@@ -898,10 +903,9 @@ def get_space_rule_ids(space, session=None, base_url=None):
     return {rule["rule_id"] for rule in all_rules}
 
 
-def get_exception_list(list_id, source_space, session=None, base_url=None):
-    """Get exception list details from source space"""
-    if session is None or base_url is None:
-        session, base_url = get_promotion_session()
+def get_exception_list(list_id, source_space, session, base_url):
+    """Get exception list details from source space. Caller must supply session
+    and base_url resolved from the per-tenant ``siem_inventory`` row."""
     prefix = _space_api_prefix(base_url, source_space)
     url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
     
@@ -914,10 +918,9 @@ def get_exception_list(list_id, source_space, session=None, base_url=None):
     return None
 
 
-def get_exception_list_entries(list_id, source_space, session=None, base_url=None):
-    """Get all entries from an exception list"""
-    if session is None or base_url is None:
-        session, base_url = get_promotion_session()
+def get_exception_list_entries(list_id, source_space, session, base_url):
+    """Get all entries from an exception list. Caller must supply session and
+    base_url resolved from the per-tenant ``siem_inventory`` row."""
     prefix = _space_api_prefix(base_url, source_space)
     url = f"{prefix}/api/exception_lists/items/_find?list_id={list_id}"
     
@@ -929,11 +932,9 @@ def get_exception_list_entries(list_id, source_space, session=None, base_url=Non
     return []
 
 
-def create_exception_list_in_target(exc_object, target_space, rule_name, session=None, base_url=None):
-    """Create a new exception list in the target space"""
-    if session is None or base_url is None:
-        session, base_url = get_promotion_session()
-    
+def create_exception_list_in_target(exc_object, target_space, rule_name, session, base_url):
+    """Create a new exception list in the target space. Caller must supply
+    session and base_url resolved from the per-tenant ``siem_inventory`` row."""
     exc_object = exc_object.copy()
     # Remove read-only fields
     for readonly in ["_version", "version", "created_at", "created_by", "updated_at", "updated_by", "tie_breaker_id", "meta"]:
@@ -958,11 +959,9 @@ def create_exception_list_in_target(exc_object, target_space, rule_name, session
     return None
 
 
-def create_exception_entry_in_target(exc_entry, list_id, target_space, session=None, base_url=None):
-    """Create an exception entry in the target list"""
-    if session is None or base_url is None:
-        session, base_url = get_promotion_session()
-    
+def create_exception_entry_in_target(exc_entry, list_id, target_space, session, base_url):
+    """Create an exception entry in the target list. Caller must supply session
+    and base_url resolved from the per-tenant ``siem_inventory`` row."""
     exc_entry = exc_entry.copy()
     exc_entry["list_id"] = list_id
     exc_entry["namespace_type"] = "single"
@@ -1016,24 +1015,23 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
                                target_kibana_url=None, target_api_key=None):
     """
     Promote a rule from source space to target space, potentially across different SIEMs.
-    
-    When source/target kibana_url and api_key are provided, each side uses its own
-    SIEM connection.  Falls back to global ELASTIC_URL / ELASTIC_API_KEY env vars.
-    
+
+    Source/target ``kibana_url`` and ``api_key`` are resolved per-tenant from
+    ``siem_inventory`` / ``client_siem_map`` by the caller. The legacy global
+    ``ELASTIC_URL`` / ``ELASTIC_API_KEY`` env-var fallbacks were removed in 4.0.10
+    — both sides MUST be supplied.
+
     Returns: (success: bool, message: str)
     """
-    # Build per-side sessions
-    if source_kibana_url and source_api_key:
-        src_session = _make_session(source_api_key)
-        src_base = source_kibana_url.rstrip("/")
-    else:
-        src_session, src_base = get_promotion_session()
+    if not (source_kibana_url and source_api_key):
+        return False, "Promotion requires source SIEM kibana_url + api_key (none resolved)."
+    if not (target_kibana_url and target_api_key):
+        return False, "Promotion requires target SIEM kibana_url + api_key (none resolved)."
 
-    if target_kibana_url and target_api_key:
-        tgt_session = _make_session(target_api_key)
-        tgt_base = target_kibana_url.rstrip("/")
-    else:
-        tgt_session, tgt_base = get_promotion_session()
+    src_session = _make_session(source_api_key)
+    src_base = source_kibana_url.rstrip("/")
+    tgt_session = _make_session(target_api_key)
+    tgt_base = target_kibana_url.rstrip("/")
     
     rule = rule_data.copy()
     rule_id = rule.get("rule_id")

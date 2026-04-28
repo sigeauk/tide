@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.deps import DbDep, RequireUser, RequireAdmin, ActiveClient
+from app.api.deps import DbDep, RequireUser, RequireAdmin, RequireSuperadmin, ActiveClient
 from app.models.client import (
     ClientCreate, ClientUpdate,
     SIEMConfigCreate, SIEMConfigUpdate,
@@ -25,8 +25,8 @@ router = APIRouter(prefix="/api/clients", tags=["clients"])
 
 @router.get("", response_class=JSONResponse)
 def list_clients(db: DbDep, user: RequireUser):
-    """List clients the user has access to. Admins see all."""
-    if user.is_admin():
+    """List clients the user has access to. Super-admins see all tenants."""
+    if user.is_superadmin:
         clients = db.list_clients()
     else:
         client_ids = db.get_user_client_ids(user.id)
@@ -36,8 +36,8 @@ def list_clients(db: DbDep, user: RequireUser):
 
 
 @router.post("", response_class=JSONResponse, status_code=201)
-def create_client(data: ClientCreate, db: DbDep, user: RequireAdmin):
-    """Create a new client (admin only)."""
+def create_client(data: ClientCreate, db: DbDep, user: RequireSuperadmin):
+    """Create a new client (super-admin only)."""
     client = db.create_client(data.name, data.slug, data.description)
     logger.info(f"Client created: {client['name']} (slug={client['slug']}) by {user.username}")
     return client
@@ -46,7 +46,7 @@ def create_client(data: ClientCreate, db: DbDep, user: RequireAdmin):
 @router.get("/{client_id}", response_class=JSONResponse)
 def get_client(client_id: str, db: DbDep, user: RequireUser):
     """Get a single client by ID."""
-    if not user.is_admin():
+    if not user.is_superadmin:
         allowed = client_id in db.get_user_client_ids(user.id)
         if not allowed:
             raise HTTPException(status_code=403, detail="Access denied to this client")
@@ -57,8 +57,10 @@ def get_client(client_id: str, db: DbDep, user: RequireUser):
 
 
 @router.put("/{client_id}", response_class=JSONResponse)
-def update_client(client_id: str, data: ClientUpdate, db: DbDep, user: RequireAdmin):
-    """Update a client (admin only)."""
+def update_client(client_id: str, data: ClientUpdate, db: DbDep, user: RequireUser):
+    """Update a client. Super-admins or the tenant's own ADMIN may edit it."""
+    if not user.is_superadmin and not user.is_admin(client_id=client_id):
+        raise HTTPException(status_code=403, detail="Admin access for this client required")
     client = db.update_client(client_id, name=data.name, description=data.description)
     if not client:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -66,8 +68,8 @@ def update_client(client_id: str, data: ClientUpdate, db: DbDep, user: RequireAd
 
 
 @router.delete("/{client_id}", response_class=JSONResponse)
-def delete_client(client_id: str, db: DbDep, user: RequireAdmin):
-    """Delete a client (admin only). Cannot delete the default client."""
+def delete_client(client_id: str, db: DbDep, user: RequireSuperadmin):
+    """Delete a client (super-admin only). Cannot delete the default client."""
     existing = db.get_client(client_id)
     if not existing:
         raise HTTPException(status_code=404, detail="Client not found")
@@ -92,8 +94,9 @@ def switch_client(
     client_id: str = Form(...),
 ):
     """Switch the user's active client. Sets a cookie and returns client info."""
-    # Validate access
-    if not user.is_admin():
+    # Validate access — super-admins can hop between any client; everyone else
+    # must be a member of the target tenant.
+    if not user.is_superadmin:
         if client_id not in db.get_user_client_ids(user.id):
             raise HTTPException(status_code=403, detail="Access denied to this client")
 

@@ -8,12 +8,13 @@ import logging
 import threading
 import uuid as _uuid
 from html import escape as _esc
+from typing import Optional
 
 import requests as http_requests
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import DbDep, RequireAdmin
+from app.api.deps import DbDep, RequireAdmin, ActiveClient
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,19 @@ router = APIRouter(prefix="/api/management", tags=["management"])
 # ---------------------------------------------------------------------------
 
 @router.get("/tab/clients", response_class=HTMLResponse)
-def tab_clients(request: Request, db: DbDep, user: RequireAdmin):
-    """Clients tab partial for the management hub."""
+def tab_clients(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
+    """Clients tab partial for the management hub.
+
+    Super-admins see every tenant; tenant admins only see clients they belong
+    to (which always includes the active client).
+    """
     from app.inventory_engine import list_systems, list_playbooks
     from app.services.tenant_manager import tenant_context_for
-    clients = db.list_clients()
+    if user.is_superadmin:
+        clients = db.list_clients()
+    else:
+        allowed = set(db.get_user_client_ids(user.id))
+        clients = [c for c in db.list_clients() if c["id"] in allowed]
     for c in clients:
         c["_siem_count"] = len(db.get_client_siems(c["id"]))
         c["_user_count"] = len(db.get_client_users(c["id"]))
@@ -45,46 +54,87 @@ def tab_clients(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.get("/tab/siems", response_class=HTMLResponse)
-def tab_siems(request: Request, db: DbDep, user: RequireAdmin):
-    """SIEMs tab partial for the management hub."""
+def tab_siems(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
+    """SIEMs tab partial for the management hub. Tenant admins see only SIEMs linked to their clients."""
     siems = db.list_siem_inventory()
     for s in siems:
         s["_clients"] = db.get_siem_clients(s["id"])
+    if not user.is_superadmin:
+        allowed = set(db.get_user_client_ids(user.id))
+        siems = [
+            s for s in siems
+            if any(c.get("id") in allowed for c in (s.get("_clients") or []))
+        ]
     return _render_siems_tab(siems)
 
 
+def _filter_users_for_admin(db, user, users):
+    """Return only users that share a tenant with the requesting admin.
+
+    Super-admins see everyone. Tenant admins see users who are members of any
+    client they themselves administer.
+    """
+    if user.is_superadmin:
+        return users
+    admin_clients = {
+        cid for cid, roles in (user.client_roles or {}).items()
+        if any(r.upper() == "ADMIN" for r in roles)
+    }
+    if not admin_clients:
+        return []
+    return [
+        u for u in users
+        if admin_clients & set(db.get_user_client_ids(u["id"]))
+    ]
+
+
 @router.get("/tab/users", response_class=HTMLResponse)
-def tab_users(request: Request, db: DbDep, user: RequireAdmin):
+def tab_users(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
     """Users tab partial for the management hub."""
-    users = db.get_all_users()
+    users = _filter_users_for_admin(db, user, db.get_all_users())
     all_roles = db.get_all_roles()
     for u in users:
-        u["_roles"] = db.get_user_roles(u["id"])
+        u["_roles"] = db.get_user_roles(u["id"], client_id=client_id)
         u["_client_ids"] = db.get_user_client_ids(u["id"])
-    clients = db.list_clients()
+    if user.is_superadmin:
+        clients = db.list_clients()
+    else:
+        allowed = set(db.get_user_client_ids(user.id))
+        clients = [c for c in db.list_clients() if c["id"] in allowed]
     return _render_users_tab(users, all_roles, clients)
 
 
-def _refresh_users_tab(db) -> str:
+def _refresh_users_tab(db, user=None, client_id: Optional[str] = None) -> str:
     """Re-render the management users tab after a mutation."""
     users = db.get_all_users()
+    if user is not None:
+        users = _filter_users_for_admin(db, user, users)
     all_roles = db.get_all_roles()
     for u in users:
-        u["_roles"] = db.get_user_roles(u["id"])
+        u["_roles"] = db.get_user_roles(u["id"], client_id=client_id)
         u["_client_ids"] = db.get_user_client_ids(u["id"])
-    clients = db.list_clients()
+    if user is not None and not user.is_superadmin:
+        allowed = set(db.get_user_client_ids(user.id))
+        clients = [c for c in db.list_clients() if c["id"] in allowed]
+    else:
+        clients = db.list_clients()
     return _render_users_tab(users, all_roles, clients)
 
 
 @router.post("/users", response_class=HTMLResponse)
-async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin):
-    """Create a local user from the management hub."""
+async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
+    """Create a local user from the management hub.
+
+    The new user is assigned to the *active* client. Role assignment now happens
+    per-tenant from the Client Detail page — the create form has no roles field.
+    """
     form = await request.form()
     username = str(form.get("new_username", "")).strip()
     email = str(form.get("new_email", "")).strip() or None
     full_name = str(form.get("new_full_name", "")).strip() or None
     password = str(form.get("new_password", ""))
-    roles = form.getlist("new_roles")
+    # Roles are no longer assigned at creation time \u2014 they are managed per-tenant
+    # from the Client Detail page.
 
     if not username or not password:
         return HTMLResponse(
@@ -107,32 +157,52 @@ async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin):
     pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     uid = db.create_user(username=username, email=email, full_name=full_name,
                          password_hash=pw_hash, auth_provider="local")
-    if roles:
-        db.set_user_roles(uid, roles)
+    db.assign_user_to_client(uid, client_id, is_default=True)
 
-    html = _refresh_users_tab(db)
+    html = _refresh_users_tab(db, user=user, client_id=client_id)
     return HTMLResponse(
         f'<div hx-swap-oob="afterbegin:#toast-container">'
-        f'<div class="toast toast-success">User \'{_esc(username)}\' created.</div></div>{html}'
+        f'<div class="toast toast-success">User \'{_esc(username)}\' created. Assign roles from the client detail page.</div></div>{html}'
     )
 
 
 @router.post("/users/{user_id}/roles", response_class=HTMLResponse)
-async def mgmt_update_user_roles(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Update roles for a user from the management hub."""
+async def mgmt_update_user_roles(request: Request, user_id: str, db: DbDep,
+                                  user: RequireAdmin, client_id: ActiveClient):
+    """Update roles for a user in the *active* client only."""
+    # Tenant admins can only mutate users that share their admin tenants.
+    if not user.is_superadmin:
+        target_clients = set(db.get_user_client_ids(user_id))
+        admin_clients = {
+            cid for cid, roles in (user.client_roles or {}).items()
+            if any(r.upper() == "ADMIN" for r in roles)
+        }
+        if not (target_clients & admin_clients):
+            return HTMLResponse(
+                '<div hx-swap-oob="afterbegin:#toast-container">'
+                '<div class="toast toast-warning">You do not administer any tenant this user belongs to.</div></div>',
+                status_code=200,
+            )
+        if client_id not in admin_clients:
+            return HTMLResponse(
+                '<div hx-swap-oob="afterbegin:#toast-container">'
+                '<div class="toast toast-warning">You can only edit roles for the tenant you administer.</div></div>',
+                status_code=200,
+            )
     form = await request.form()
     roles = form.getlist("roles")
-    db.set_user_roles(user_id, roles)
-    return HTMLResponse(_refresh_users_tab(db))
+    db.set_user_roles(user_id, roles, client_id=client_id)
+    return HTMLResponse(_refresh_users_tab(db, user=user, client_id=client_id))
 
 
 @router.post("/users/{user_id}/toggle-active", response_class=HTMLResponse)
-def mgmt_toggle_user_active(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+def mgmt_toggle_user_active(request: Request, user_id: str, db: DbDep,
+                             user: RequireAdmin, client_id: ActiveClient):
     """Toggle user active status from the management hub."""
     db_user = db.get_user_by_id(user_id)
     if db_user:
         db.update_user(user_id, is_active=not db_user.get("is_active", True))
-    return HTMLResponse(_refresh_users_tab(db))
+    return HTMLResponse(_refresh_users_tab(db, user=user, client_id=client_id))
 
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse)
@@ -1335,14 +1405,85 @@ async def move_from(request: Request, client_id: str,
 
 @router.post("/clients/{client_id}/users", response_class=HTMLResponse)
 async def assign_user_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
-    """Assign a user to a client."""
+    """Assign a user to a client, optionally with a tenant-scoped role."""
     form = await request.form()
     user_id = str(form.get("user_id", "")).strip()
+    role_name = str(form.get("role", "")).strip()
     if not user_id:
         return HTMLResponse("")
     db.assign_user_to_client(user_id, client_id)
-    logger.info(f"User {user_id} assigned to client {client_id} by {user.username}")
+    if role_name:
+        db.set_user_roles(user_id, [role_name], client_id=client_id)
+    logger.info(
+        f"User {user_id} assigned to client {client_id} "
+        f"(role={role_name or 'none'}) by {user.username}"
+    )
     return _render_client_users_partial(client_id, db, toast="User assigned.")
+
+
+@router.put("/clients/{client_id}/users/{user_id}/role", response_class=HTMLResponse)
+async def update_client_user_role(request: Request, client_id: str, user_id: str,
+                                  db: DbDep, user: RequireAdmin):
+    """Replace the user's role for THIS tenant only. Empty role clears it."""
+    form = await request.form()
+    role_name = str(form.get("role", "")).strip()
+    db.set_user_roles(user_id, [role_name] if role_name else [], client_id=client_id)
+    logger.info(
+        f"User {user_id} role on client {client_id} set to '{role_name or 'none'}' by {user.username}"
+    )
+    return _render_client_users_partial(
+        client_id, db,
+        toast=f"Role updated to {role_name or 'none'}.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-client Role Templates (permissions matrix scoped to one tenant)
+# ---------------------------------------------------------------------------
+
+@router.get("/clients/{client_id}/permissions", response_class=HTMLResponse)
+def get_client_permissions(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+    """Render the per-tenant Role Templates matrix for this client."""
+    return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
+
+
+@router.post("/clients/{client_id}/permissions", response_class=HTMLResponse)
+async def update_client_permission(request: Request, client_id: str,
+                                    db: DbDep, user: RequireAdmin):
+    """Toggle a single role\u00d7resource permission scoped to this tenant."""
+    form = await request.form()
+    role_id = str(form.get("role_id", "")).strip()
+    resource = str(form.get("resource", "")).strip()
+    access = str(form.get("access", "")).strip()  # 'read' | 'write'
+    state = str(form.get("state", "")).strip()    # 'on' | 'off'
+
+    if not role_id or not resource or access not in ("read", "write"):
+        return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
+
+    # ADMIN role always has full access \u2014 do not let it be edited away.
+    with db.get_connection() as conn:
+        admin_check = conn.execute(
+            "SELECT name FROM roles WHERE id = ?", [role_id]
+        ).fetchone()
+        if admin_check and admin_check[0] == "ADMIN":
+            return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
+        row = conn.execute(
+            "SELECT can_read, can_write FROM role_permissions "
+            "WHERE role_id = ? AND resource = ? AND client_id = ?",
+            [role_id, resource, client_id],
+        ).fetchone()
+    cur_read = bool(row[0]) if row else False
+    cur_write = bool(row[1]) if row else False
+    new_val = state == "on"
+    if access == "read":
+        db.set_permission(role_id, resource, new_val, cur_write, client_id=client_id)
+    else:
+        db.set_permission(role_id, resource, cur_read, new_val, client_id=client_id)
+    logger.info(
+        f"Permission {role_id}/{resource}/{access}={new_val} on client "
+        f"{client_id} by {user.username}"
+    )
+    return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
 
 
 @router.delete("/clients/{client_id}/users/{user_id}", response_class=HTMLResponse)
@@ -1735,7 +1876,11 @@ def _siem_empty_state() -> str:
 
 
 def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
-    """Render the Users tab content with Manage Clients action."""
+    """Render the Users tab content with Manage Clients action.
+
+    The Roles column has moved to the Client Detail page — this tab is now
+    a global directory only (username, source, active, last login, clients).
+    """
     if not users:
         return '<p class="text-muted" style="font-size:0.85rem;">No users found.</p>'
 
@@ -1748,16 +1893,6 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             source_badge = '<span class="badge badge-primary">Hybrid</span>'
         else:
             source_badge = '<span class="badge badge-secondary">Local</span>'
-
-        # Roles
-        role_checkboxes = ""
-        user_roles = u.get("_roles", [])
-        for r in all_roles:
-            checked = "checked" if r["name"] in user_roles else ""
-            role_checkboxes += (
-                f'<label class="role-checkbox"><input type="checkbox" name="roles" '
-                f'value="{r["name"]}" {checked}> {r["name"]}</label> '
-            )
 
         active_checked = "checked" if u.get("is_active") else ""
         last_login = str(u["last_login"])[:19] if u.get("last_login") else "Never"
@@ -1778,15 +1913,6 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             <td>{u['username']}</td>
             <td>{u.get('email') or '-'}</td>
             <td>{source_badge}</td>
-            <td>
-                <form class="inline-role-form"
-                      hx-post="/api/management/users/{u['id']}/roles"
-                      hx-target="#management-content"
-                      hx-swap="innerHTML">
-                    {role_checkboxes}
-                    <button type="submit" class="btn btn-sm btn-secondary">Save</button>
-                </form>
-            </td>
             <td>
                 <label class="toggle-switch toggle-sm">
                     <input type="checkbox" {active_checked}
@@ -1822,15 +1948,12 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
             </td>
         </tr>'''
 
-    # Add user form
-    role_options = ""
-    for r in all_roles:
-        checked = "checked" if r["name"] == "ANALYST" else ""
-        role_options += f'<label class="role-checkbox"><input type="checkbox" name="new_roles" value="{r["name"]}" {checked}> {r["name"]}</label> '
-
-    add_form = f'''
+    add_form = '''
     <details class="add-user-details" style="margin-bottom:1.5rem;">
         <summary class="btn btn-secondary btn-sm" style="cursor:pointer;">+ Add Local User</summary>
+        <p class="text-secondary" style="font-size:0.78rem;margin:0.5rem 0 0;">
+            Roles are assigned per-tenant from the Client Detail page after creation.
+        </p>
         <form hx-post="/api/management/users" hx-target="#management-content" hx-swap="innerHTML"
               style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;padding:1rem;background:var(--color-bg-base);border-radius:var(--radius-md);">
             <div>
@@ -1850,10 +1973,6 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
                 <input type="password" name="new_password" class="form-input" required minlength="8" placeholder="Min 8 chars" autocomplete="new-password">
             </div>
             <div style="grid-column:1/-1;">
-                <label class="form-label" style="font-size:0.8rem;">Roles</label>
-                <div style="display:flex;gap:1rem;">{role_options}</div>
-            </div>
-            <div style="grid-column:1/-1;">
                 <button type="submit" class="btn btn-primary btn-sm">Create User</button>
             </div>
         </form>
@@ -1864,18 +1983,23 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
     <table class="mapping-table">
         <thead><tr>
             <th>Username</th><th>Email</th><th>Source</th>
-            <th>Roles</th><th>Active</th><th>Last Login</th>
+            <th>Active</th><th>Last Login</th>
             <th>Clients</th><th></th>
         </tr></thead>
         <tbody>{rows}</tbody>
     </table>'''
 
 
-def _render_permissions_tab(db) -> str:
-    """Render the permissions matrix (reuses settings logic)."""
+def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
+    """Render the role permissions matrix.
+
+    With ``client_id`` set the matrix is scoped to that tenant and the toggle
+    POSTs to the per-client endpoint. With ``client_id=None`` the legacy
+    global view is rendered (kept for back-compat with stale bookmarks).
+    """
     roles = [r for r in db.get_all_roles() if r["name"] != "ADMIN"]
     resources = db.get_all_resources()
-    matrix = db.get_permissions_matrix()
+    matrix = db.get_permissions_matrix(client_id=client_id)
 
     lookup = {}
     for entry in matrix:
@@ -1896,6 +2020,13 @@ def _render_permissions_tab(db) -> str:
     ]
     tab_resources = [res for res in tab_order if res in tab_resources] + \
                     [res for res in tab_resources if res not in tab_order]
+
+    if client_id:
+        post_url = f"/api/management/clients/{client_id}/permissions"
+        target_id = f"permissions-matrix-{client_id}"
+    else:
+        post_url = "/api/settings/permissions"
+        target_id = "permissions-matrix"
 
     def _label(res):
         parts = res.split(":", 1)
@@ -1920,16 +2051,16 @@ def _render_permissions_tab(db) -> str:
                     <div style="display:flex;gap:0.5rem;justify-content:center;align-items:center;">
                         <label class="role-checkbox" title="Read">
                             <input type="checkbox" name="perm" {r_chk}
-                                hx-post="/api/settings/permissions"
+                                hx-post="{post_url}"
                                 hx-vals='{{"role_id":"{role_id}","resource":"{res}","access":"read","state":"{("off" if r_chk else "on")}"}}'
-                                hx-target="#permissions-matrix"
+                                hx-target="#{target_id}"
                                 hx-swap="innerHTML"> R
                         </label>
                         <label class="role-checkbox" title="Write">
                             <input type="checkbox" name="perm" {w_chk}
-                                hx-post="/api/settings/permissions"
+                                hx-post="{post_url}"
                                 hx-vals='{{"role_id":"{role_id}","resource":"{res}","access":"write","state":"{("off" if w_chk else "on")}"}}'
-                                hx-target="#permissions-matrix"
+                                hx-target="#{target_id}"
                                 hx-swap="innerHTML"> W
                         </label>
                     </div>
@@ -1939,12 +2070,20 @@ def _render_permissions_tab(db) -> str:
 
     role_headers = "".join(f'<th style="text-align:center;">{r["name"]}</th>' for r in roles)
 
+    blurb = (
+        "Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) "
+        "each page and settings tab <em>for this tenant</em>. The ADMIN role always has full access "
+        "and is not shown below. Changes take effect on next login."
+        if client_id else
+        "Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) each page and settings tab. "
+        "The ADMIN role always has full access and is not shown below. Changes take effect on next login."
+    )
+
     return f'''
     <p style="font-size:0.8rem;color:var(--color-text-secondary);margin:0 0 1rem 0;">
-        Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) each page and settings tab.
-        The ADMIN role always has full access and is not shown below. Changes take effect on next login.
+        {blurb}
     </p>
-    <div id="permissions-matrix">
+    <div id="{target_id}">
         <table class="mapping-table">
             <thead><tr><th>Resource</th>{role_headers}</tr></thead>
             <tbody>
@@ -2293,6 +2432,12 @@ def _render_client_users_partial(client_id: str, db, toast: str = None) -> HTMLR
     client = db.get_client(client_id)
     client_users = db.get_client_users(client_id)
     all_users = db.get_all_users()
+    all_roles = db.get_all_roles()
+    # Decorate each assigned user with their current role for THIS tenant so
+    # the template can pre-select the dropdown without doing N queries itself.
+    for u in client_users:
+        roles = db.get_user_roles(u["id"], client_id=client_id)
+        u["_current_role"] = roles[0] if roles else ""
     assigned_ids = {u["id"] for u in client_users}
     available_users = [u for u in all_users if u["id"] not in assigned_ids]
 
@@ -2302,6 +2447,7 @@ def _render_client_users_partial(client_id: str, db, toast: str = None) -> HTMLR
     html = template.render(
         client=client, client_users=client_users,
         available_users=available_users,
+        all_roles=all_roles,
     )
 
     toast_html = ""

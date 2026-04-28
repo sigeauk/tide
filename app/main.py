@@ -1341,6 +1341,11 @@ def create_app() -> FastAPI:
         all_users = db.get_all_users()
         assigned_user_ids = {u["id"] for u in client_users}
         available_users = [u for u in all_users if u["id"] not in assigned_user_ids]
+        # Roles available for tenant assignment + each assigned user's current role.
+        all_roles = db.get_all_roles()
+        for u in client_users:
+            roles_in_tenant = db.get_user_roles(u["id"], client_id=client_id)
+            u["_current_role"] = roles_in_tenant[0] if roles_in_tenant else ""
         # Systems and baselines assigned to this client
         from app.inventory_engine import list_systems, list_playbooks, get_system_summaries
         from app.services.tenant_manager import tenant_context_for
@@ -1379,6 +1384,7 @@ def create_app() -> FastAPI:
                 "client_users": client_users,
                 "available_siems": available_siems,
                 "available_users": available_users,
+                "all_roles": all_roles,
                 "client_opencti": client_opencti,
                 "available_opencti": available_opencti,
                 "client_systems": client_systems,
@@ -1399,9 +1405,10 @@ def create_app() -> FastAPI:
             return RedirectResponse(url="/", status_code=302)
         tab = request.query_params.get("tab", "clients")
         # The Management page now uses collapsible sections; only the
-        # Tenants & Users sub-tabs (clients/users/permissions) honour ?tab=.
-        # Legacy values redirect to the default sub-tab so old bookmarks still work.
-        if tab not in ("clients", "users", "permissions"):
+        # Tenants & Users sub-tabs (clients/users) honour ?tab=. Legacy
+        # values (incl. the retired "permissions" sub-tab, now the
+        # top-level Role Templates section) fall back to the default.
+        if tab not in ("clients", "users"):
             tab = "clients"
         return render_template(
             "pages/management.html",

@@ -1,5 +1,6 @@
 {# Partial: client_users.html
-   Context: client_users (list of user dicts), client (dict), available_users (list)
+   Context: client_users (list of user dicts, each with _current_role),
+            client (dict), available_users (list), all_roles (list of role dicts)
 #}
 {% from "macros/icons.html" import icon %}
 
@@ -31,6 +32,32 @@
             {% if u.email %}
             <span class="client-list-item__meta">{{ u.email }}</span>
             {% endif %}
+            {% if all_roles is defined and all_roles %}
+            <span class="client-list-item__meta" style="display:inline-flex;align-items:center;gap:0.35rem;">
+                <span class="text-secondary" style="font-size:0.72rem;">Role:</span>
+                <select class="form-input"
+                        style="font-size:0.75rem;padding:0.15rem 0.35rem;height:auto;width:auto;"
+                        hx-put="/api/management/clients/{{ client.id }}/users/{{ u.id }}/role"
+                        hx-target="#client-users-section" hx-swap="innerHTML"
+                        hx-trigger="change"
+                        name="role">
+                    <option value=""{% if not u._current_role %} selected{% endif %}>— none —</option>
+                    {% for r in all_roles %}
+                    <option value="{{ r.name }}"{% if u._current_role == r.name %} selected{% endif %}>{{ r.name }}</option>
+                    {% endfor %}
+                </select>
+            </span>
+            {% endif %}
+        </div>
+        <div style="display:flex;align-items:center;gap:0.35rem;margin-left:auto;" onclick="event.stopPropagation();">
+            <button class="btn btn-ghost btn-sm text-danger"
+                    hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
+                    hx-target="#client-users-section" hx-swap="innerHTML"
+                    hx-confirm="Remove '{{ u.username }}' from this client?"
+                    title="Remove user from this client"
+                    style="padding:0.2rem 0.45rem;font-size:0.72rem;">
+                {{ icon('x', '12') }} Remove
+            </button>
         </div>
     </div>
     {% endfor %}
@@ -87,6 +114,15 @@
                     <option value="{{ u.id }}">{{ u.username }}{% if u.full_name %} &mdash; {{ u.full_name }}{% endif %}{% if u.email %} ({{ u.email }}){% endif %}</option>
                     {% endfor %}
                 </select>
+                {% if all_roles is defined and all_roles %}
+                <label class="form-label">Role for this client</label>
+                <select name="role" class="form-input">
+                    <option value="">— none (no role) —</option>
+                    {% for r in all_roles %}
+                    <option value="{{ r.name }}"{% if r.name == 'ANALYST' %} selected{% endif %}>{{ r.name }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
                 <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Assign User</button>
             </form>
             {% endif %}

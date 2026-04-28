@@ -242,26 +242,58 @@ def run_elastic_sync(force_mapping=False):
                     if isinstance(raw, dict) and raw.get('results'):
                         existing_rule_keys.add(key)
             logger.info(f"[perf] Loaded {len(existing_rule_data)} existing rules, {len(existing_rule_keys)} with mapping data, in {(_time.perf_counter() - _t_start)*1000:.0f}ms")
-            
-            # Derive sync spaces from siem_inventory (management page)
-            # instead of the legacy KIBANA_SPACES env var.
-            configured_spaces = db.get_all_sync_spaces()
-            if configured_spaces:
-                logger.info(f"Sync spaces (from SIEM inventory): {configured_spaces}")
-            else:
-                # Fallback: no SIEM mappings yet — let fetch_detection_rules use env var
-                logger.info("No SIEM inventory mappings — falling back to KIBANA_SPACES env")
+
+            # Iterate every active SIEM in the inventory and fetch its rules
+            # using its OWN kibana_url + api_token + elasticsearch_url. The
+            # legacy global ELASTIC_URL/ELASTIC_API_KEY env-var fallback was
+            # removed in 4.0.10 — every SIEM must self-describe in
+            # siem_inventory or it will not be synced.
+            siems = [s for s in db.list_siem_inventory() if s.get("is_active")]
+            if not siems:
+                logger.warning("No active SIEMs in inventory — nothing to sync. "
+                               "Add a SIEM via the Management page.")
+                return 0
 
             _t_fetch = _time.perf_counter()
-            df = elastic_helper.fetch_detection_rules(
-                check_mappings=True,
-                known_rule_keys=existing_rule_keys,
-                spaces_override=configured_spaces or None,
-            )
-            
+            import pandas as _pd
+            frames = []
+            all_configured_spaces: set = set()
+            for siem in siems:
+                # Re-read to get the encrypted/raw token (list_siem_inventory omits it)
+                full = db.get_siem_inventory_item(siem["id"]) or {}
+                kurl = full.get("kibana_url") or siem.get("kibana_url")
+                token = full.get("api_token_enc")
+                es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
+                spaces = db.get_siem_spaces(siem["id"])
+                if not spaces:
+                    # SIEM exists but no client mapping yet — fall back to its declared
+                    # production/staging spaces so logging/preview still discover rules.
+                    spaces = [sp for sp in [siem.get("production_space"),
+                                            siem.get("staging_space")] if sp]
+                if not (kurl and token and spaces):
+                    logger.info(f"Skipping SIEM '{siem.get('label')}' — missing url/token/spaces")
+                    continue
+                all_configured_spaces.update(spaces)
+                logger.info(f"Fetching from SIEM '{siem.get('label')}' @ {kurl} spaces={spaces}")
+                try:
+                    siem_df = elastic_helper.fetch_detection_rules(
+                        kibana_url=kurl,
+                        api_key=token,
+                        spaces=spaces,
+                        check_mappings=True,
+                        known_rule_keys=existing_rule_keys,
+                        elasticsearch_url=es_url,
+                    )
+                    if siem_df is not None and not siem_df.empty:
+                        frames.append(siem_df)
+                except Exception as e:
+                    logger.error(f"Fetch failed for SIEM '{siem.get('label')}': {e}")
+
+            df = _pd.concat(frames, ignore_index=True) if frames else _pd.DataFrame()
+
             if df is not None and not df.empty:
                 _t_save = _time.perf_counter()
-                logger.info(f"[perf] fetch_detection_rules completed in {(_t_save - _t_fetch)*1000:.0f}ms")
+                logger.info(f"[perf] fetch_detection_rules (per-SIEM) completed in {(_t_save - _t_fetch)*1000:.0f}ms")
                 audit_records = df.to_dict('records')
                 
                 # Lazy Mapping: restore scores and mapping data for rules that were skipped
@@ -286,15 +318,14 @@ def run_elastic_sync(force_mapping=False):
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
                 # --- Subtractive sync: remove ghost rules from empty spaces ---
-                # Determine which configured spaces were NOT in the fetched data
                 synced_spaces = set(df['space_id'].dropna().unique()) if 'space_id' in df.columns else set()
-                empty_spaces = [s for s in configured_spaces if s not in synced_spaces]
+                empty_spaces = [s for s in all_configured_spaces if s not in synced_spaces]
                 
                 if empty_spaces:
                     logger.info(f"Subtractive sync: clearing ghost rules from empty spaces: {empty_spaces}")
                     db.delete_rules_for_spaces(empty_spaces)
                 
-                logger.info(f"Synced {count} rules from Elastic")
+                logger.info(f"Synced {count} rules from {len(siems)} SIEM(s)")
                 
                 # Distribute rules to per-tenant databases
                 try:
@@ -306,8 +337,9 @@ def run_elastic_sync(force_mapping=False):
             else:
                 # No rules returned from Elastic — this is likely a connectivity or auth issue.
                 # DO NOT delete existing rules — preserve the baseline to avoid data loss.
-                logger.warning("No rules fetched from Elastic — preserving existing rules in database. "
-                               "Check ELASTIC_URL, ELASTIC_API_KEY, and KIBANA_SPACES configuration.")
+                logger.warning("No rules fetched from any SIEM — preserving existing rules in database. "
+                               "Check the per-SIEM kibana_url, api_token, and space configuration "
+                               "in the Management page.")
                 return 0
         finally:
             os.chdir(original_cwd)

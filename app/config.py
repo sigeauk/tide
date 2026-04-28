@@ -80,9 +80,10 @@ class Settings(BaseSettings):
     bootstrap_admin_password: str = Field(default="admin", alias="BOOTSTRAP_ADMIN_PASSWORD")
     
     # --- ELASTICSEARCH ---
-    elasticsearch_url: str = Field(default="http://elasticsearch:9200", alias="ELASTICSEARCH_URL")
-    elastic_url: str = Field(default="http://kibana:5601", alias="ELASTIC_URL")
-    elastic_api_key: str = Field(default="", alias="ELASTIC_API_KEY")
+    # Per-tenant Elasticsearch / Kibana / API-key are now stored in the
+    # `siem_inventory` table and resolved via `client_siem_map`. The legacy
+    # global ELASTICSEARCH_URL / ELASTIC_URL / ELASTIC_API_KEY fields were
+    # removed in 4.0.10 — every connection MUST be resolved per-tenant.
     kibana_spaces: str = Field(default="production, staging", alias="KIBANA_SPACES")
     elastic_indices: str = Field(
         default="logs-*, winlogbeat-*, filebeat-*",

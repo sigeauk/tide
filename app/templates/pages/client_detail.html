@@ -345,6 +345,31 @@
     </div>
 </div>
 
+<!-- Role Templates (per-tenant permissions matrix) -->
+<div class="card card-padded card-mb" id="client-role-templates-card">
+    <div class="client-section-toggle"
+         onclick="var b=document.getElementById('role-templates-body');var c=document.getElementById('role-templates-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+        <span class="client-list-item__icon">{% from "macros/icons.html" import icon %}{{ icon('lock', '14') }}</span>
+        <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Role Templates</h2>
+        <span class="badge badge-neutral" style="font-size:0.68rem;">Per-tenant</span>
+        <span id="role-templates-chev" class="client-section-toggle__chevron"
+              style="transform:rotate(0deg);">{{ icon('chevron-right', '16') }}</span>
+    </div>
+    <div id="role-templates-body" style="display:none;">
+        <p class="text-secondary" style="font-size:0.8rem;margin:0.5rem 0 0.75rem 0;">
+            Read / write capabilities for each role <strong>in {{ client.name }}</strong>.
+            Changes apply only to this tenant; users assigned the same role in another
+            client will continue to use that client's template. ADMIN always has full access.
+        </p>
+        <div id="client-role-templates"
+             hx-get="/api/management/clients/{{ client.id }}/permissions"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <div class="text-secondary" style="padding:1rem;">Loading role templates\u2026</div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}

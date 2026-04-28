@@ -233,6 +233,7 @@ async def test_rule(
                 rule.raw_data, space, lookback=lookback,
                 kibana_url=siem["kibana_url"],
                 api_key=siem["api_token_enc"],
+                elasticsearch_url=siem.get("elasticsearch_url"),
             )
         )
         

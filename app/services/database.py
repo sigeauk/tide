@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 33
+SCHEMA_VERSION = 35
 
 
 class DatabaseService:
@@ -1285,6 +1285,145 @@ class DatabaseService:
                 "log_retention_days on siem_inventory, sigma_asset_assignments table"
             )
 
+        # ── Migration 34: Tenant-scoped roles + superadmin flag + KC group passthrough ──
+        # - Adds users.is_superadmin (mapped from Keycloak `superadmin` group).
+        # - Recreates user_roles with a client_id column so an ADMIN in DC is not
+        #   automatically an ADMIN in Marvel. Existing global roles are expanded
+        #   into one row per (user, client) the user is assigned to, preserving
+        #   current effective behaviour.
+        if current_version < 34:
+            # 34.1 — superadmin flag on users.
+            try:
+                cols = {
+                    r[1] for r in conn.execute("PRAGMA table_info('users')").fetchall()
+                }
+            except Exception:
+                cols = set()
+            if "is_superadmin" not in cols:
+                conn.execute(
+                    "ALTER TABLE users ADD COLUMN is_superadmin BOOLEAN DEFAULT false"
+                )
+
+            # 34.2 — Recreate user_roles with client_id.
+            # Read existing rows, drop, recreate with the new PK, then expand each
+            # existing (user_id, role_id) into one row per assigned client.
+            try:
+                legacy_rows = conn.execute(
+                    "SELECT user_id, role_id FROM user_roles"
+                ).fetchall()
+            except Exception:
+                legacy_rows = []
+
+            try:
+                conn.execute("DROP TABLE IF EXISTS user_roles")
+            except Exception:
+                pass
+
+            conn.execute(
+                """
+                CREATE TABLE user_roles (
+                    user_id VARCHAR NOT NULL,
+                    client_id VARCHAR NOT NULL,
+                    role_id VARCHAR NOT NULL,
+                    assigned_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (user_id, client_id, role_id)
+                )
+                """
+            )
+
+            # Backfill: each legacy global role → one row per (user, client) the
+            # user is already assigned to. If the user has no client assignment,
+            # fall back to the default client so they don't lose access.
+            default_cid_row = conn.execute(
+                "SELECT id FROM clients WHERE is_default = true LIMIT 1"
+            ).fetchone()
+            default_cid = default_cid_row[0] if default_cid_row else None
+
+            backfilled = 0
+            for uid, rid in legacy_rows:
+                client_ids = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT client_id FROM user_clients WHERE user_id = ?",
+                        [uid],
+                    ).fetchall()
+                ]
+                if not client_ids and default_cid:
+                    client_ids = [default_cid]
+                for cid in client_ids:
+                    conn.execute(
+                        "INSERT INTO user_roles (user_id, client_id, role_id) "
+                        "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                        [uid, cid, rid],
+                    )
+                    backfilled += 1
+
+            # 34.3 — Promote any existing 'admin' user account to superadmin so the
+            # bootstrap account keeps full management access through the migration.
+            try:
+                conn.execute(
+                    "UPDATE users SET is_superadmin = true "
+                    "WHERE LOWER(username) = 'admin' AND auth_provider = 'local'"
+                )
+            except Exception:
+                pass
+
+            self._set_schema_version(conn, 34)
+            logger.info(
+                "Migration 34: Tenant-scoped roles — added users.is_superadmin, "
+                "rebuilt user_roles with client_id, backfilled %d (user,client,role) "
+                "rows from %d legacy global rows",
+                backfilled,
+                len(legacy_rows),
+            )
+
+        # ── Migration 35: Tenant-scoped role permissions ──
+        # Adds `client_id` to role_permissions so the Role Templates matrix
+        # is edited per-tenant from the client detail page. Existing global
+        # rows (client_id IS NULL) are fanned out into one per current client
+        # and then dropped, so every tenant starts with the previous defaults.
+        if current_version < 35:
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE role_permissions_v35 (
+                        id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                        role_id VARCHAR NOT NULL,
+                        client_id VARCHAR,
+                        resource VARCHAR NOT NULL,
+                        can_read BOOLEAN DEFAULT false,
+                        can_write BOOLEAN DEFAULT false,
+                        UNIQUE(role_id, client_id, resource)
+                    )
+                    """
+                )
+                rp35_rows = 0
+                client_rows = conn.execute("SELECT id FROM clients").fetchall()
+                if client_rows:
+                    legacy = conn.execute(
+                        "SELECT role_id, resource, can_read, can_write FROM role_permissions"
+                    ).fetchall()
+                    for cid, in client_rows:
+                        for role_id, resource, cr, cw in legacy:
+                            conn.execute(
+                                "INSERT INTO role_permissions_v35 "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                                [role_id, cid, resource, cr, cw],
+                            )
+                            rp35_rows += 1
+                conn.execute("DROP TABLE role_permissions")
+                conn.execute("ALTER TABLE role_permissions_v35 RENAME TO role_permissions")
+            except Exception as exc:
+                logger.error(f"Migration 35 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 35)
+            logger.info(
+                "Migration 35: Tenant-scoped role permissions — fanned legacy "
+                "global rows into %d per-(role,client,resource) rows.",
+                rp35_rows,
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -1345,26 +1484,27 @@ class DatabaseService:
                 bootstrap_password = (settings.bootstrap_admin_password or "admin").encode()
                 default_pw = bcrypt.hashpw(bootstrap_password, bcrypt.gensalt()).decode()
                 conn.execute(
-                    "INSERT INTO users (username, email, full_name, password_hash, auth_provider, is_active) "
-                    "VALUES (?, 'admin@localhost', 'Default Admin', ?, 'local', true)",
+                    "INSERT INTO users (username, email, full_name, password_hash, auth_provider, is_active, is_superadmin) "
+                    "VALUES (?, 'admin@localhost', 'Default Admin', ?, 'local', true, true)",
                     [bootstrap_username, default_pw],
                 )
-                # Assign ADMIN role to the bootstrap user
+                # Assign ADMIN role to the bootstrap user (in the default client only —
+                # superadmin flag grants implicit access to every other tenant).
                 admin_user_id = conn.execute(
                     "SELECT id FROM users WHERE username = ?", [bootstrap_username]
                 ).fetchone()[0]
                 admin_role_id = conn.execute(
                     "SELECT id FROM roles WHERE name = 'ADMIN'"
                 ).fetchone()[0]
-                conn.execute(
-                    "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                    [admin_user_id, admin_role_id],
-                )
-                # Assign bootstrap admin to default client
                 default_client = conn.execute(
                     "SELECT id FROM clients WHERE is_default = true LIMIT 1"
                 ).fetchone()
                 if default_client:
+                    conn.execute(
+                        "INSERT INTO user_roles (user_id, client_id, role_id) "
+                        "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                        [admin_user_id, default_client[0], admin_role_id],
+                    )
                     conn.execute(
                         "INSERT INTO user_clients (user_id, client_id, is_default) "
                         "VALUES (?, ?, true) ON CONFLICT DO NOTHING",
@@ -1378,70 +1518,62 @@ class DatabaseService:
     
     # --- USER / RBAC DATA ---
 
+    _USER_COLS = [
+        "id", "username", "email", "full_name", "password_hash", "keycloak_id",
+        "auth_provider", "is_active", "is_superadmin", "change_on_next_login",
+        "created_at", "updated_at", "last_login",
+    ]
+    _USER_SELECT = (
+        "SELECT id, username, email, full_name, password_hash, keycloak_id, "
+        "auth_provider, is_active, is_superadmin, change_on_next_login, "
+        "created_at, updated_at, last_login FROM users"
+    )
+
     def get_user_by_username(self, username: str) -> Optional[Dict]:
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
-                "FROM users WHERE LOWER(username) = LOWER(?)", [username]
+                self._USER_SELECT + " WHERE LOWER(username) = LOWER(?)", [username]
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
-                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
-            ))
+            return dict(zip(self._USER_COLS, row))
 
     def get_user_by_email(self, email: str) -> Optional[Dict]:
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
-                "FROM users WHERE LOWER(email) = LOWER(?)", [email]
+                self._USER_SELECT + " WHERE LOWER(email) = LOWER(?)", [email]
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
-                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
-            ))
+            return dict(zip(self._USER_COLS, row))
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
-                "FROM users WHERE id = ?", [user_id]
+                self._USER_SELECT + " WHERE id = ?", [user_id]
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
-                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
-            ))
+            return dict(zip(self._USER_COLS, row))
 
     def get_user_by_keycloak_id(self, keycloak_id: str) -> Optional[Dict]:
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT id, username, email, full_name, password_hash, keycloak_id, "
-                "auth_provider, is_active, change_on_next_login, created_at, updated_at, last_login "
-                "FROM users WHERE keycloak_id = ?", [keycloak_id]
+                self._USER_SELECT + " WHERE keycloak_id = ?", [keycloak_id]
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
-                ["id", "username", "email", "full_name", "password_hash", "keycloak_id",
-                 "auth_provider", "is_active", "change_on_next_login", "created_at", "updated_at", "last_login"], row
-            ))
+            return dict(zip(self._USER_COLS, row))
 
     def get_all_users(self) -> List[Dict]:
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT id, username, email, full_name, keycloak_id, "
-                "auth_provider, is_active, created_at, last_login FROM users ORDER BY username"
+                "auth_provider, is_active, is_superadmin, created_at, last_login "
+                "FROM users ORDER BY username"
             ).fetchall()
             cols = ["id", "username", "email", "full_name", "keycloak_id",
-                    "auth_provider", "is_active", "created_at", "last_login"]
+                    "auth_provider", "is_active", "is_superadmin", "created_at", "last_login"]
             return [dict(zip(cols, r)) for r in rows]
 
     def create_user(self, username: str, email: str = None, full_name: str = None,
@@ -1459,7 +1591,8 @@ class DatabaseService:
     def update_user(self, user_id: str, **fields) -> bool:
         allowed = {
             "username", "email", "full_name", "password_hash", "is_active",
-            "keycloak_id", "auth_provider", "change_on_next_login", "last_login"
+            "keycloak_id", "auth_provider", "change_on_next_login", "last_login",
+            "is_superadmin",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -1479,35 +1612,117 @@ class DatabaseService:
             conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
             conn.execute("DELETE FROM users WHERE id = ?", [user_id])
 
-    def get_user_roles(self, user_id: str) -> List[str]:
+    def get_user_roles(self, user_id: str, client_id: Optional[str] = None) -> List[str]:
+        """Return role names for a user.
+
+        - When `client_id` is provided, return roles assigned in that tenant only.
+        - When `client_id` is None, return the DISTINCT union across all tenants
+          (compatible with legacy callers that treated roles as global).
+        """
+        with self.get_shared_connection() as conn:
+            if client_id is None:
+                rows = conn.execute(
+                    "SELECT DISTINCT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
+                    "WHERE ur.user_id = ?", [user_id]
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
+                    "WHERE ur.user_id = ? AND ur.client_id = ?", [user_id, client_id]
+                ).fetchall()
+            return [r[0] for r in rows]
+
+    def get_user_role_map(self, user_id: str) -> Dict[str, List[str]]:
+        """Return {client_id: [role_name, ...]} for the user across all tenants."""
         with self.get_shared_connection() as conn:
             rows = conn.execute(
-                "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
-                "WHERE ur.user_id = ?", [user_id]
+                "SELECT ur.client_id, r.name FROM user_roles ur "
+                "JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ?",
+                [user_id],
             ).fetchall()
-            return [r[0] for r in rows]
+        out: Dict[str, List[str]] = {}
+        for cid, name in rows:
+            out.setdefault(cid, []).append(name)
+        return out
 
     def get_all_roles(self) -> List[Dict]:
         with self.get_shared_connection() as conn:
             rows = conn.execute("SELECT id, name, description FROM roles ORDER BY name").fetchall()
             return [dict(zip(["id", "name", "description"], r)) for r in rows]
 
-    def set_user_roles(self, user_id: str, role_names: List[str]):
+    def set_user_roles(
+        self,
+        user_id: str,
+        role_names: List[str],
+        client_id: Optional[str] = None,
+    ):
+        """Set a user's roles.
+
+        - With `client_id`: replaces only that tenant's roles.
+        - Without `client_id` (legacy): replaces roles across every client the
+          user is currently assigned to (or the default client when the user has
+          no assignments). Falls back to the system default when neither exists.
+        """
         with self.get_shared_connection() as conn:
-            conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
+            if client_id is not None:
+                conn.execute(
+                    "DELETE FROM user_roles WHERE user_id = ? AND client_id = ?",
+                    [user_id, client_id],
+                )
+                target_clients = [client_id]
+            else:
+                conn.execute("DELETE FROM user_roles WHERE user_id = ?", [user_id])
+                target_clients = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT client_id FROM user_clients WHERE user_id = ?",
+                        [user_id],
+                    ).fetchall()
+                ]
+                if not target_clients:
+                    default_cid = self._get_default_client_id(conn)
+                    if default_cid:
+                        target_clients = [default_cid]
             for rn in role_names:
-                role_row = conn.execute("SELECT id FROM roles WHERE name = ?", [rn]).fetchone()
-                if role_row:
+                role_row = conn.execute(
+                    "SELECT id FROM roles WHERE name = ?", [rn]
+                ).fetchone()
+                if not role_row:
+                    continue
+                for cid in target_clients:
                     conn.execute(
-                        "INSERT INTO user_roles (user_id, role_id) VALUES (?, ?) ON CONFLICT DO NOTHING",
-                        [user_id, role_row[0]],
+                        "INSERT INTO user_roles (user_id, client_id, role_id) "
+                        "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                        [user_id, cid, role_row[0]],
                     )
 
+    def set_user_superadmin(self, user_id: str, value: bool) -> None:
+        """Toggle the superadmin flag — bypasses tenant role checks everywhere."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "UPDATE users SET is_superadmin = ?, updated_at = now() WHERE id = ?",
+                [bool(value), user_id],
+            )
+
     def jit_provision_keycloak_user(self, keycloak_id: str, username: str,
-                                     email: str = None, full_name: str = None) -> Dict:
+                                     email: str = None, full_name: str = None,
+                                     kc_role: Optional[str] = None,
+                                     is_superadmin: Optional[bool] = None) -> Dict:
+        """Provision/refresh a Keycloak-backed user record.
+
+        - `kc_role` (one of ADMIN / ENGINEER / ANALYST) is applied to the user's
+          Primary Client only. Other tenant assignments are left untouched so a
+          TIDE admin can grant additional access without it being overwritten on
+          every login. Pass `None` to skip role sync.
+        - `is_superadmin` reflects membership of the Keycloak `superadmin` group.
+          Pass `None` to leave the flag untouched.
+        """
         existing = self.get_user_by_keycloak_id(keycloak_id)
         if existing:
             self.update_user(existing["id"], email=email, full_name=full_name, last_login=datetime.now())
+            if is_superadmin is not None:
+                self.set_user_superadmin(existing["id"], is_superadmin)
+            self._sync_kc_role_to_primary(existing["id"], kc_role)
             return self.get_user_by_keycloak_id(keycloak_id)
         # Link existing account by username only if it is already SSO-capable.
         # Local-only accounts must never be auto-upgraded by SSO login.
@@ -1554,17 +1769,41 @@ class DatabaseService:
             username=final_username, email=email_for_new, full_name=full_name,
             keycloak_id=keycloak_id, auth_provider="keycloak",
         )
-        # Default new Keycloak users to ANALYST role
-        role_row = None
-        with self.get_shared_connection() as conn:
-            role_row = conn.execute("SELECT id FROM roles WHERE name = 'ANALYST'").fetchone()
-        if role_row:
-            self.set_user_roles(uid, ["ANALYST"])
-        # Assign new user to default client
+        # Assign new user to default (Primary) client first, then map their role
+        # there. Role sync only ever touches the Primary Client — admins assign
+        # additional tenants in the management UI.
         default_cid = self.get_default_client_id()
         if default_cid:
             self.assign_user_to_client(uid, default_cid, is_default=True)
+        if is_superadmin is not None:
+            self.set_user_superadmin(uid, is_superadmin)
+        # Default to ANALYST when no group mapping was supplied.
+        self._sync_kc_role_to_primary(uid, kc_role or "ANALYST")
         return self.get_user_by_id(uid)
+
+    def _sync_kc_role_to_primary(self, user_id: str, kc_role: Optional[str]) -> None:
+        """Replace the user's roles in the Primary (default) Client with `kc_role`.
+
+        Other tenant assignments are intentionally left alone so admins can grant
+        cross-tenant access in TIDE without having it wiped on the next SSO login.
+        """
+        if not kc_role:
+            return
+        kc_role = kc_role.upper().strip()
+        if kc_role not in {"ADMIN", "ENGINEER", "ANALYST"}:
+            return
+        primary_cid = self.get_default_client_id()
+        if not primary_cid:
+            return
+        # Make sure the user is still a member of the Primary Client.
+        with self.get_shared_connection() as conn:
+            already = conn.execute(
+                "SELECT 1 FROM user_clients WHERE user_id = ? AND client_id = ?",
+                [user_id, primary_cid],
+            ).fetchone()
+        if not already:
+            self.assign_user_to_client(user_id, primary_cid, is_default=False)
+        self.set_user_roles(user_id, [kc_role], client_id=primary_cid)
 
     # --- ROLE PERMISSIONS ---
 
@@ -1577,16 +1816,32 @@ class DatabaseService:
             ).fetchall()
             return [dict(zip(["id", "resource", "can_read", "can_write"], r)) for r in rows]
 
-    def get_permissions_matrix(self) -> List[Dict]:
-        """Get full permissions matrix: all roles × resources."""
+    def get_permissions_matrix(self, client_id: Optional[str] = None) -> List[Dict]:
+        """Get the role×resource permissions matrix.
+
+        With ``client_id`` set the matrix is scoped to that tenant only — this
+        is what the Client Detail page edits. With ``client_id=None`` the
+        legacy behaviour returns every row (used by the deprecated global view).
+        """
         with self.get_shared_connection() as conn:
-            rows = conn.execute(
-                "SELECT rp.id, r.name AS role_name, r.id AS role_id, "
-                "rp.resource, rp.can_read, rp.can_write "
-                "FROM role_permissions rp "
-                "JOIN roles r ON r.id = rp.role_id "
-                "ORDER BY r.name, rp.resource"
-            ).fetchall()
+            if client_id is not None:
+                rows = conn.execute(
+                    "SELECT rp.id, r.name AS role_name, r.id AS role_id, "
+                    "rp.resource, rp.can_read, rp.can_write "
+                    "FROM role_permissions rp "
+                    "JOIN roles r ON r.id = rp.role_id "
+                    "WHERE rp.client_id = ? "
+                    "ORDER BY r.name, rp.resource",
+                    [client_id],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT rp.id, r.name AS role_name, r.id AS role_id, "
+                    "rp.resource, rp.can_read, rp.can_write "
+                    "FROM role_permissions rp "
+                    "JOIN roles r ON r.id = rp.role_id "
+                    "ORDER BY r.name, rp.resource"
+                ).fetchall()
             cols = ["id", "role_name", "role_id", "resource", "can_read", "can_write"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -1598,13 +1853,27 @@ class DatabaseService:
             ).fetchall()
             return [r[0] for r in rows]
 
-    def set_permission(self, role_id: str, resource: str, can_read: bool, can_write: bool):
-        """Set a single role×resource permission (upsert)."""
+    def set_permission(self, role_id: str, resource: str, can_read: bool, can_write: bool,
+                        client_id: Optional[str] = None):
+        """Upsert a role×resource permission, optionally scoped to a tenant.
+
+        ``client_id=None`` writes a legacy global row (still supported by the
+        old `/api/settings/permissions` endpoint); the per-client UI on the
+        Client Detail page always supplies a tenant id.
+        """
         with self.get_shared_connection() as conn:
-            existing = conn.execute(
-                "SELECT id FROM role_permissions WHERE role_id = ? AND resource = ?",
-                [role_id, resource],
-            ).fetchone()
+            if client_id is None:
+                existing = conn.execute(
+                    "SELECT id FROM role_permissions "
+                    "WHERE role_id = ? AND resource = ? AND client_id IS NULL",
+                    [role_id, resource],
+                ).fetchone()
+            else:
+                existing = conn.execute(
+                    "SELECT id FROM role_permissions "
+                    "WHERE role_id = ? AND resource = ? AND client_id = ?",
+                    [role_id, resource, client_id],
+                ).fetchone()
             if existing:
                 conn.execute(
                     "UPDATE role_permissions SET can_read = ?, can_write = ? WHERE id = ?",
@@ -1612,9 +1881,9 @@ class DatabaseService:
                 )
             else:
                 conn.execute(
-                    "INSERT INTO role_permissions (role_id, resource, can_read, can_write) "
-                    "VALUES (?, ?, ?, ?)",
-                    [role_id, resource, can_read, can_write],
+                    "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    [role_id, client_id, resource, can_read, can_write],
                 )
 
     def check_permission(self, role_names: List[str], resource: str) -> Dict[str, bool]:
@@ -1634,20 +1903,37 @@ class DatabaseService:
             can_write = any(r[1] for r in rows)
             return {"can_read": can_read, "can_write": can_write}
 
-    def get_user_permissions(self, user_id: str) -> Dict[str, Dict[str, bool]]:
+    def get_user_permissions(self, user_id: str,
+                              client_id: Optional[str] = None) -> Dict[str, Dict[str, bool]]:
         """Get all permissions for a user based on their roles.
+
+        When ``client_id`` is provided the resolution is scoped to the roles the
+        user holds in that tenant only — this is what powers the sidebar /
+        page-gating data flow once the user activates a tenant. When omitted the
+        legacy global behaviour (merge across every tenant) is preserved so
+        callers loading a fresh login session keep working.
+
         Returns {resource: {can_read, can_write}}."""
-        roles = self.get_user_roles(user_id)
+        roles = self.get_user_roles(user_id, client_id=client_id)
         if not roles:
             return {}
         with self.get_shared_connection() as conn:
             placeholders = ", ".join("?" for _ in roles)
-            rows = conn.execute(
-                f"SELECT rp.resource, rp.can_read, rp.can_write FROM role_permissions rp "
-                f"JOIN roles r ON r.id = rp.role_id "
-                f"WHERE r.name IN ({placeholders})",
-                roles,
-            ).fetchall()
+            if client_id is not None:
+                # Per-tenant lookup: only rows scoped to this tenant matter.
+                rows = conn.execute(
+                    f"SELECT rp.resource, rp.can_read, rp.can_write FROM role_permissions rp "
+                    f"JOIN roles r ON r.id = rp.role_id "
+                    f"WHERE r.name IN ({placeholders}) AND rp.client_id = ?",
+                    roles + [client_id],
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"SELECT rp.resource, rp.can_read, rp.can_write FROM role_permissions rp "
+                    f"JOIN roles r ON r.id = rp.role_id "
+                    f"WHERE r.name IN ({placeholders})",
+                    roles,
+                ).fetchall()
             perms = {}
             for resource, can_read, can_write in rows:
                 if resource not in perms:
@@ -3363,9 +3649,33 @@ class DatabaseService:
                 "SELECT id, name, slug, description, is_default, created_at, updated_at "
                 "FROM clients WHERE slug = ?", [slug]
             ).fetchone()
-            return dict(zip(
+            new_client = dict(zip(
                 ["id", "name", "slug", "description", "is_default", "created_at", "updated_at"], row
             ))
+            # Seed Role Template defaults for the new client by copying from
+            # the default tenant (or, failing that, any tenant). Without this
+            # the client would start with an empty matrix and every page would
+            # 403 for ANALYST/ENGINEER users until an admin saved each cell.
+            try:
+                src = conn.execute(
+                    "SELECT id FROM clients WHERE is_default = true LIMIT 1"
+                ).fetchone()
+                if not src:
+                    src = conn.execute(
+                        "SELECT id FROM clients WHERE id != ? LIMIT 1", [new_client["id"]]
+                    ).fetchone()
+                if src:
+                    conn.execute(
+                        "INSERT INTO role_permissions "
+                        "(role_id, client_id, resource, can_read, can_write) "
+                        "SELECT role_id, ?, resource, can_read, can_write "
+                        "FROM role_permissions WHERE client_id = ? "
+                        "ON CONFLICT DO NOTHING",
+                        [new_client["id"], src[0]],
+                    )
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning(f"Could not seed role permissions for client {new_client['id']}: {exc}")
+            return new_client
 
     def update_client(self, client_id: str, **fields) -> Optional[Dict]:
         """Update a client. Allowed fields: name, description. Returns updated client or None."""
@@ -4146,6 +4456,17 @@ class DatabaseService:
             rows = conn.execute(
                 "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
                 "FROM client_siem_map"
+            ).fetchall()
+            return [r[0] for r in rows if r[0]]
+
+    def get_siem_spaces(self, siem_id: str) -> List[str]:
+        """Get every distinct Kibana space mapped to a single SIEM via client_siem_map.
+        NULL/empty values are normalised to 'default'."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                "FROM client_siem_map WHERE siem_id = ?",
+                [siem_id],
             ).fetchall()
             return [r[0] for r in rows if r[0]]
 

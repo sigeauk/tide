@@ -202,11 +202,45 @@ class AuthService:
             logger.error(f"Token validation error: {type(e).__name__}: {e}")
             return None
     
+    # --- Keycloak group/role -> TIDE role mapping ---
+
+    _KC_ROLE_PRIORITY = ("ADMIN", "ENGINEER", "ANALYST")
+
+    def _map_kc_token_to_role(self, token_data: "TokenData") -> tuple:
+        """Inspect token claims and return (kc_role, is_superadmin).
+
+        Pulls from both `groups` (e.g. `/admins`, `engineer`) and `realm_access.roles`.
+        Highest-priority role wins (ADMIN > ENGINEER > ANALYST). When nothing
+        matches we return ANALYST so first-time SSO users still land somewhere.
+        """
+        if token_data is None:
+            return "ANALYST", False
+        names = set()
+        for g in (token_data.groups or []):
+            # Keycloak groups are usually returned as paths like '/admins'
+            for part in str(g).strip("/").split("/"):
+                if part:
+                    names.add(part.upper())
+        for r in token_data.roles or []:
+            names.add(str(r).upper())
+        is_super = "SUPERADMIN" in names
+        # Look for any singular/plural variant of the three TIDE roles.
+        match_table = {
+            "ADMIN": {"ADMIN", "ADMINS"},
+            "ENGINEER": {"ENGINEER", "ENGINEERS"},
+            "ANALYST": {"ANALYST", "ANALYSTS"},
+        }
+        for canonical in self._KC_ROLE_PRIORITY:
+            if names & match_table[canonical]:
+                return canonical, is_super
+        return "ANALYST", is_super
+
     def get_user_from_token(self, token: str) -> Optional[User]:
         """Validate Keycloak JWT and return User model with JIT provisioning."""
         token_data = self.validate_token(token)
         if not token_data:
             return None
+        kc_role, is_super = self._map_kc_token_to_role(token_data)
         # JIT provision: sync the Keycloak user into the local DB
         try:
             from app.services.database import get_database_service
@@ -216,12 +250,16 @@ class AuthService:
                 username=token_data.preferred_username or token_data.sub,
                 email=token_data.email,
                 full_name=token_data.name,
+                kc_role=kc_role,
+                is_superadmin=is_super,
             )
             if db_user and not db_user.get("is_active", True):
                 logger.warning(f"Keycloak user {token_data.preferred_username} is deactivated in TIDE")
                 return None
+            client_role_map = db.get_user_role_map(db_user["id"]) if db_user else {}
             db_roles = db.get_user_roles(db_user["id"]) if db_user else []
-            user = User.from_token(token_data, db_user=db_user, db_roles=db_roles)
+            user = User.from_token(token_data, db_user=db_user, db_roles=db_roles,
+                                    client_roles=client_role_map)
             if db_user:
                 user.permissions = db.get_user_permissions(db_user["id"])
             return user
@@ -367,8 +405,9 @@ class AuthService:
                 return None
             db.update_user(db_user["id"], last_login=datetime.now())
             db_roles = db.get_user_roles(db_user["id"])
+            client_role_map = db.get_user_role_map(db_user["id"])
             logger.info(f"Local login successful for '{username}' (provider={provider}) with roles {db_roles}")
-            user = User.from_db(db_user, db_roles)
+            user = User.from_db(db_user, db_roles, client_roles=client_role_map)
             user.permissions = db.get_user_permissions(db_user["id"])
             return user
 
@@ -383,8 +422,9 @@ class AuthService:
         if can_try_sso:
             tokens = self._authenticate_via_keycloak(username, password)
             if tokens:
+                token_data = self._token_data_from_password_grant(tokens)
+                kc_role, is_super = self._map_kc_token_to_role(token_data) if token_data else ("ANALYST", False)
                 if not db_user:
-                    token_data = self._token_data_from_password_grant(tokens)
                     if not token_data:
                         return None
                     db_user = db.jit_provision_keycloak_user(
@@ -392,12 +432,47 @@ class AuthService:
                         username=token_data.preferred_username or username,
                         email=token_data.email,
                         full_name=token_data.name,
+                        kc_role=kc_role,
+                        is_superadmin=is_super,
+                    )
+                else:
+                    # Existing SSO/hybrid user — re-sync KC role + superadmin flag
+                    # so demoting in Keycloak takes effect on the next login.
+                    if token_data is not None:
+                        db.jit_provision_keycloak_user(
+                            keycloak_id=db_user.get("keycloak_id") or token_data.sub,
+                            username=db_user.get("username") or username,
+                            email=db_user.get("email") or token_data.email,
+                            full_name=db_user.get("full_name") or token_data.name,
+                            kc_role=kc_role,
+                            is_superadmin=is_super,
+                        )
+
+                # Offline-fallback backfill: now that we know the password is
+                # genuine (Keycloak just told us so) cache a bcrypt hash on the
+                # local row. Future logins succeed without needing Keycloak,
+                # which is the behaviour the operator expects after first SSO.
+                try:
+                    if not db_user.get("password_hash"):
+                        new_hash = bcrypt.hashpw(
+                            password.encode(), bcrypt.gensalt()
+                        ).decode()
+                        db.update_user(db_user["id"], password_hash=new_hash)
+                        logger.info(
+                            "Stored offline-fallback bcrypt hash for SSO user '%s'",
+                            username,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Could not store offline-fallback hash for '%s': %s",
+                        username, exc,
                     )
 
                 db.update_user(db_user["id"], last_login=datetime.now())
                 db_roles = db.get_user_roles(db_user["id"])
+                client_role_map = db.get_user_role_map(db_user["id"])
                 logger.info(f"SSO user '{username}' authenticated via Keycloak password grant")
-                user = User.from_db(db_user, db_roles)
+                user = User.from_db(db_user, db_roles, client_roles=client_role_map)
                 user.permissions = db.get_user_permissions(db_user["id"])
                 return user
 
@@ -425,7 +500,8 @@ class AuthService:
             if not db_user or not db_user.get("is_active", True):
                 return None
             db_roles = db.get_user_roles(db_user["id"])
-            user = User.from_db(db_user, db_roles)
+            client_role_map = db.get_user_role_map(db_user["id"])
+            user = User.from_db(db_user, db_roles, client_roles=client_role_map)
             user.permissions = db.get_user_permissions(db_user["id"])
             return user
         except Exception:
