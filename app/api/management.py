@@ -37,7 +37,7 @@ def tab_clients(request: Request, db: DbDep, user: RequireAdmin, client_id: Acti
     Super-admins see every tenant; tenant admins only see clients they belong
     to (which always includes the active client).
     """
-    from app.inventory_engine import list_systems, list_playbooks
+    from app.inventory_engine import count_systems, count_playbooks
     from app.services.tenant_manager import tenant_context_for
     if user.is_superadmin:
         clients = db.list_clients()
@@ -45,17 +45,32 @@ def tab_clients(request: Request, db: DbDep, user: RequireAdmin, client_id: Acti
         allowed = set(db.get_user_client_ids(user.id))
         clients = [c for c in db.list_clients() if c["id"] in allowed]
     for c in clients:
-        c["_siem_count"] = len(db.get_client_siems(c["id"]))
-        c["_user_count"] = len(db.get_client_users(c["id"]))
-        with tenant_context_for(c["id"]):
-            c["_system_count"] = len(list_systems(client_id=c["id"]))
-            c["_baseline_count"] = len(list_playbooks(client_id=c["id"]))
+        try:
+            c["_siem_count"] = len(db.get_client_siems(c["id"]))
+        except Exception:
+            logger.exception("tab_clients: get_client_siems failed for %s", c["id"])
+            c["_siem_count"] = 0
+        try:
+            c["_user_count"] = len(db.get_client_users(c["id"]))
+        except Exception:
+            logger.exception("tab_clients: get_client_users failed for %s", c["id"])
+            c["_user_count"] = 0
+        try:
+            with tenant_context_for(c["id"]):
+                c["_system_count"] = count_systems(client_id=c["id"])
+                c["_baseline_count"] = count_playbooks(client_id=c["id"])
+        except Exception:
+            logger.exception("tab_clients: tenant counts failed for %s", c["id"])
+            c["_system_count"] = 0
+            c["_baseline_count"] = 0
     return _render_clients_tab(clients)
 
 
 @router.get("/tab/siems", response_class=HTMLResponse)
 def tab_siems(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
-    """SIEMs tab partial for the management hub. Tenant admins see only SIEMs linked to their clients."""
+    """SIEMs tab partial for the management hub. Tenant admins see SIEMs linked to
+    their clients **plus** any unassigned SIEMs (so freshly-created or orphaned
+    inventory items don't vanish on the next refresh — see 4.0.12 fix)."""
     siems = db.list_siem_inventory()
     for s in siems:
         s["_clients"] = db.get_siem_clients(s["id"])
@@ -63,7 +78,8 @@ def tab_siems(request: Request, db: DbDep, user: RequireAdmin, client_id: Active
         allowed = set(db.get_user_client_ids(user.id))
         siems = [
             s for s in siems
-            if any(c.get("id") in allowed for c in (s.get("_clients") or []))
+            if not s.get("_clients")  # unassigned — visible to every admin
+            or any(c.get("id") in allowed for c in (s.get("_clients") or []))
         ]
     return _render_siems_tab(siems)
 
@@ -955,6 +971,7 @@ async def update_siem_logging(
     enabled = (form.get("enabled") or "").lower() in ("on", "true", "1")
     target_space = (form.get("target_space") or "").strip() or None
     schedule = (form.get("schedule") or "00:00").strip() or "00:00"
+    destination_path = (form.get("destination_path") or "").strip() or None
     try:
         retention_days = max(1, min(365, int(form.get("retention_days") or 7)))
     except (TypeError, ValueError):
@@ -966,10 +983,12 @@ async def update_siem_logging(
         target_space=target_space,
         schedule=schedule,
         retention_days=retention_days,
+        destination_path=destination_path,
     )
     logger.info(
         f"siem logging updated for {siem_id} by {user.username}: "
-        f"enabled={enabled} space={target_space} schedule={schedule} retention={retention_days}"
+        f"enabled={enabled} space={target_space} schedule={schedule} "
+        f"retention={retention_days} dest={destination_path or '<default>'}"
     )
 
     # Reschedule the daily job so a new HH:MM is honoured without a restart.
@@ -1729,6 +1748,7 @@ def _siem_logging_block_html(s: dict) -> str:
     target_space = s.get("log_target_space") or ""
     schedule = s.get("log_schedule") or "00:00"
     retention = s.get("log_retention_days") or 7
+    destination = s.get("log_destination_path") or ""
     prod = s.get("production_space") or ""
     stage = s.get("staging_space") or ""
 
@@ -1790,6 +1810,12 @@ def _siem_logging_block_html(s: dict) -> str:
                         <span class="text-secondary">Retention (days)</span>
                         <input type="number" name="retention_days" min="1" max="365" value="{int(retention)}"
                                class="form-input" style="font-size:0.8rem;padding:0.25rem 0.4rem;width:80px;">
+                        <span class="text-secondary">Destination path</span>
+                        <input type="text" name="destination_path" class="form-input"
+                               value="{escape(destination)}"
+                               placeholder="/app/data/log/rules (default)"
+                               style="font-size:0.8rem;padding:0.25rem 0.4rem;"
+                               title="Container path where this SIEM's rule-score logs are written. Leave blank to use the default (/app/data/log/rules/&lt;label&gt;/). Mounted via RULE_LOG_PATH in docker-compose.">
                         <div style="grid-column:1 / -1;display:flex;gap:0.4rem;justify-content:flex-end;margin-top:0.3rem;">
                             <button type="submit" class="btn btn-primary btn-sm">Save</button>
                         </div>

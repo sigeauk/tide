@@ -199,16 +199,25 @@ def run_rule_log_export(db) -> int:
                     for c in label
                 ) or "siem"
                 retention = int(siem.get("log_retention_days") or 7)
+                # Per-SIEM destination override (added in 4.0.12). When set,
+                # write ONLY there and skip the default app/host fan-out so the
+                # operator gets a single, predictable output location per SIEM.
+                custom_dest = (siem.get("log_destination_path") or "").strip()
+                if custom_dest:
+                    targets = [custom_dest]
+                else:
+                    targets = [os.path.join(base, safe_label) for base in base_paths]
+
                 count_for_siem = 0
-                for base in base_paths:
-                    target_dir = os.path.join(base, safe_label)
+                for target_dir in targets:
                     n = export_rule_logs(db, target_dir)
                     if n > count_for_siem:
                         count_for_siem = n
                     cleanup_old_logs(target_dir, retention)
                 logger.info(
                     f"Rule log export for SIEM '{label}' "
-                    f"(retention={retention}d): {count_for_siem} rules"
+                    f"(retention={retention}d, dest={custom_dest or '<default>'}): "
+                    f"{count_for_siem} rules"
                 )
                 total += count_for_siem
             return total

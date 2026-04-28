@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 35
+SCHEMA_VERSION = 36
 
 
 class DatabaseService:
@@ -1422,6 +1422,25 @@ class DatabaseService:
                 "Migration 35: Tenant-scoped role permissions — fanned legacy "
                 "global rows into %d per-(role,client,resource) rows.",
                 rp35_rows,
+            )
+
+        # ── Migration 36: Per-SIEM rule-log destination path ──
+        # Restores the operator-controlled output directory that existed pre-4.0.8
+        # (when the global ``RULE_LOG_PATH`` setting drove the exporter). The new
+        # column is per-SIEM so two SIEMs can write to different mounts; NULL means
+        # "use the container default" (``/app/data/log/rules/<siem_label>/``).
+        if current_version < 36:
+            try:
+                conn.execute(
+                    "ALTER TABLE siem_inventory ADD COLUMN IF NOT EXISTS log_destination_path VARCHAR"
+                )
+            except Exception as exc:
+                logger.error(f"Migration 36 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 36)
+            logger.info(
+                "Migration 36: Added siem_inventory.log_destination_path "
+                "(per-SIEM rule-log output directory; NULL = container default)"
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -3549,10 +3568,16 @@ class DatabaseService:
                 "SELECT key_hash FROM api_keys WHERE key_hash = ?", [key_hash]
             ).fetchone()
             if row:
-                conn.execute(
-                    "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
-                    [key_hash],
-                )
+                # last_used_at is best-effort metadata. Under concurrent external-API
+                # traffic DuckDB raises 'Constraint Error: Conflict on update' on the
+                # shared connection — swallowing it keeps the request succeeding.
+                try:
+                    conn.execute(
+                        "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
+                        [key_hash],
+                    )
+                except Exception as exc:
+                    logger.debug(f"validate_api_key: last_used_at update skipped ({exc})")
                 return row[0]  # key_hash (truthy when valid)
         return None
 
@@ -3571,10 +3596,13 @@ class DatabaseService:
             ).fetchone()
             if not row:
                 return None
-            conn.execute(
-                "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
-                [key_hash],
-            )
+            try:
+                conn.execute(
+                    "UPDATE api_keys SET last_used_at = now() WHERE key_hash = ?",
+                    [key_hash],
+                )
+            except Exception as exc:
+                logger.debug(f"validate_api_key_full: last_used_at update skipped ({exc})")
             user_id = row[1]
             if not user_id:
                 return None  # legacy key with no owner — cannot resolve tenants
@@ -3854,6 +3882,7 @@ class DatabaseService:
                 "extra_config, is_active, "
                 "last_test_status, last_test_at, last_test_message, "
                 "log_enabled, log_target_space, log_schedule, log_retention_days, "
+                "log_destination_path, "
                 "production_space, staging_space, "
                 "created_at, updated_at "
                 "FROM siem_inventory ORDER BY label"
@@ -3862,6 +3891,7 @@ class DatabaseService:
                     "extra_config", "is_active",
                     "last_test_status", "last_test_at", "last_test_message",
                     "log_enabled", "log_target_space", "log_schedule", "log_retention_days",
+                    "log_destination_path",
                     "production_space", "staging_space",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
@@ -4345,16 +4375,23 @@ class DatabaseService:
     def update_siem_logging_config(self, siem_id: str, *, enabled: bool,
                                    target_space: str = None,
                                    schedule: str = "00:00",
-                                   retention_days: int = 7) -> bool:
-        """Persist rule-score logging configuration on a SIEM inventory item."""
+                                   retention_days: int = 7,
+                                   destination_path: str = None) -> bool:
+        """Persist rule-score logging configuration on a SIEM inventory item.
+
+        ``destination_path`` is an optional per-SIEM override for the output
+        directory. ``None`` (or empty) keeps the container default.
+        """
         with self.get_shared_connection() as conn:
             conn.execute(
                 "UPDATE siem_inventory SET log_enabled = ?, log_target_space = ?, "
-                "log_schedule = ?, log_retention_days = ?, updated_at = now() "
-                "WHERE id = ?",
+                "log_schedule = ?, log_retention_days = ?, log_destination_path = ?, "
+                "updated_at = now() WHERE id = ?",
                 [bool(enabled), target_space or None,
                  (schedule or "00:00").strip() or "00:00",
-                 int(retention_days or 7), siem_id],
+                 int(retention_days or 7),
+                 (destination_path or "").strip() or None,
+                 siem_id],
             )
         return True
 
@@ -4366,11 +4403,13 @@ class DatabaseService:
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT id, label, siem_type, kibana_url, elasticsearch_url, "
-                "api_token_enc, log_target_space, log_schedule, log_retention_days "
+                "api_token_enc, log_target_space, log_schedule, log_retention_days, "
+                "log_destination_path "
                 "FROM siem_inventory WHERE log_enabled = TRUE ORDER BY label"
             ).fetchall()
             cols = ["id", "label", "siem_type", "kibana_url", "elasticsearch_url",
-                    "api_token_enc", "log_target_space", "log_schedule", "log_retention_days"]
+                    "api_token_enc", "log_target_space", "log_schedule",
+                    "log_retention_days", "log_destination_path"]
             return [dict(zip(cols, r)) for r in rows]
 
     # --- Sigma asset (pipeline / template) tenant assignments (Migration 33) ---

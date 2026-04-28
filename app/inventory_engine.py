@@ -298,6 +298,21 @@ def list_systems(client_id: str = None):
         ).fetchall()
     return [_row_to_system(r) for r in rows]
 
+
+def count_systems(client_id: str = None) -> int:
+    """Lightweight COUNT(*) for the systems table, scoped to the tenant context.
+
+    Avoids materialising full `System` rows + their child queries when a caller
+    only needs the cardinality (e.g. badge counts on the Management hub).
+    """
+    frag, params = _cf("", client_id)
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM systems WHERE 1=1" + frag,
+            params,
+        ).fetchone()
+    return int(row[0]) if row else 0
+
 def _cascade_system_client(conn, system_id: str, new_client_id: str):
     """Cascade client_id change to all child tables of a system."""
     child_tables_with_system_id = [
@@ -2389,6 +2404,21 @@ def list_playbooks(client_id: str = None) -> List[Playbook]:
         pb.tactics = _get_playbook_steps(r[0])
         result.append(pb)
     return result
+
+
+def count_playbooks(client_id: str = None) -> int:
+    """Lightweight COUNT(*) for the playbooks (baselines) table.
+
+    Used by the Management hub badge count to avoid the per-playbook
+    `_get_playbook_steps` fan-out triggered by `list_playbooks`.
+    """
+    frag, params = _cf("", client_id)
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM playbooks WHERE 1=1" + frag,
+            params,
+        ).fetchone()
+    return int(row[0]) if row else 0
 
 def assign_baseline_to_client(baseline_id: str, client_id: str) -> bool:
     with _get_conn() as conn:
