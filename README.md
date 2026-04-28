@@ -1,6 +1,6 @@
 # Threat Informed Detection Engine (TIDE)
 
-TIDE is a **standalone, containerized platform** for Detection Engineering lifecycle management. It provides a "Human-in-the-Loop" interface for managing detection rules, analyzing threat coverage, and automating security workflows.
+TIDE is a **standalone, containerized platform** for Detection Engineering lifecycle management. It provides a "Human-in-the-Loop" interface for managing detection rules, analyzing threat coverage, and automating security workflows.  
 
 ---
 
