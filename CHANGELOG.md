@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.10]
+## [4.0.11]
 
 ### Added
 - **Per-tenant Role Templates on the Client Detail page (`app/templates/pages/client_detail.html`):** New collapsible "Role Templates" section appears at the bottom of every client page. The body lazy-loads via `hx-get="/api/management/clients/{cid}/permissions"` (`get_client_permissions`) and renders the same role × resource matrix as before, but every checkbox toggle posts to `update_client_permission()` (`POST /api/management/clients/{cid}/permissions`) and writes through `db.set_permission(role_id, resource, can_read, can_write, client_id=cid)` so permission changes are scoped to *this* tenant only. ADMIN role rows are intentionally excluded (and the endpoint silently rejects edits to ADMIN to preserve full access). The previous global "Role Templates" section has been removed from the Management page.
