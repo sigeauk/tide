@@ -181,10 +181,14 @@ def deploy_to_siem(
     index_pattern: str = Form(""),
     pipeline_file: str = Form(""),
     template_file: str = Form(""),
+    siem_id: str = Form(""),
 ):
     """
     Deploy a converted Sigma rule to Elastic SIEM.
     Validates that the target space belongs to the active client's linked SIEMs.
+    Since 4.0.13 the form may include ``siem_id`` to disambiguate when the
+    client has multiple SIEMs sharing the same space name; otherwise we fall
+    back to the first space-match (legacy behaviour) and log a WARN.
     """
     if not yaml_content.strip() or not raw_query.strip():
         return HTMLResponse(
@@ -195,12 +199,25 @@ def deploy_to_siem(
     # connection details from siem_inventory / client_siem_map. The legacy
     # ELASTIC_URL/ELASTIC_API_KEY env fallback was removed in 4.0.10 — the
     # rule MUST be deployed to the SIEM the active tenant has assigned for
-    # this space.
+    # this space. Prefer explicit siem_id when supplied (4.0.13+).
     target_siem = None
-    for s in db.get_client_siems(client_id):
-        if (s.get("space") or "default") == space:
-            target_siem = s
-            break
+    client_siems = db.get_client_siems(client_id)
+    if siem_id:
+        for s in client_siems:
+            if s.get("id") == siem_id:
+                target_siem = s
+                break
+    else:
+        logger.warning(
+            "sigma deploy: siem_id missing for space=%s client=%s — "
+            "falling back to first space-match (DEPRECATED, ambiguous when "
+            "multiple SIEMs share a space name)",
+            space, client_id,
+        )
+        for s in client_siems:
+            if (s.get("space") or "default") == space:
+                target_siem = s
+                break
     if not target_siem:
         return HTMLResponse(
             '<div class="alert alert-danger">Deployment blocked: target SIEM is not linked to your client.</div>'

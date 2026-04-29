@@ -67,6 +67,17 @@ async def local_login(
         )
     
     user = result
+    # 4.1.0 P1: structured login audit (success path).
+    try:
+        from app.services.log_context import audit_log
+        audit_log(
+            "login_success",
+            user_id=str(user.id),
+            username=user.username,
+            method="local",
+        )
+    except Exception:
+        pass
     # Create session token and set cookie
     session_token = auth.create_session_token(user.id)
     

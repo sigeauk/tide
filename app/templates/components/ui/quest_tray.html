@@ -1,0 +1,54 @@
+{# 4.1.0 P6 (redesign) — Coverage Quest tray.
+
+   Rendered just above the breadcrumb in base.html when an active quest
+   exists for the current user. The redesigned quest is scoped to a
+   (baseline, system) pair — there is no longer a "Threat" step.
+
+   Inputs:
+       quest — dict from quest_service.quest_summary() with fields
+               id, baseline_id, baseline_name, system_id, system_name,
+               current_technique_id, completed_technique_ids[],
+               covered_count, technique_total.
+#}
+{% if quest %}
+<div class="quest-tray" data-quest-id="{{ quest.id }}">
+  <div class="quest-tray__steps">
+    <span class="quest-tray__step{% if quest.baseline_name %} is-done{% endif %}">
+      Baseline
+      {% if quest.baseline_name %}
+        <a href="/baselines/{{ quest.baseline_id }}"><strong>{{ quest.baseline_name }}</strong></a>
+      {% endif %}
+    </span>
+    <span class="quest-tray__sep">›</span>
+    <span class="quest-tray__step{% if quest.system_name %} is-done{% endif %}">
+      System
+      {% if quest.system_name %}
+        <a href="/systems/{{ quest.system_id }}"><strong>{{ quest.system_name }}</strong></a>
+      {% endif %}
+    </span>
+    <span class="quest-tray__sep">›</span>
+    <span class="quest-tray__step{% if quest.current_technique_id %} is-active{% endif %}">
+      Cover
+      {% if quest.current_technique_id %}
+        <a href="/quest/{{ quest.id }}"><strong>{{ quest.current_technique_id }}</strong></a>
+      {% else %}
+        <a href="/quest/{{ quest.id }}">resume</a>
+      {% endif %}
+    </span>
+    {% set done = quest.covered_count if quest.covered_count is defined else (quest.completed_technique_ids or []) | length %}
+    {% set total = quest.technique_total or 0 %}
+    {% if total %}
+      <span class="quest-tray__sep">·</span>
+      <span class="quest-tray__count">{{ done }} / {{ total }} covered</span>
+    {% elif done %}
+      <span class="quest-tray__sep">·</span>
+      <span class="quest-tray__count">{{ done }} covered</span>
+    {% endif %}
+  </div>
+  <div class="quest-tray__actions">
+    <button class="btn btn-link btn-sm"
+            hx-post="/api/quest/{{ quest.id }}/end"
+            hx-confirm="End this coverage quest? Updates you've made will persist on the baseline.">End quest</button>
+  </div>
+</div>
+{% endif %}

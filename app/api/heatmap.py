@@ -13,6 +13,7 @@ import time
 
 from app.api.deps import ActiveClient, DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
+from app.services.ttl_cache import heatmap_matrix_cache
 
 import logging
 
@@ -65,9 +66,38 @@ def get_heatmap_matrix(
     """
     Generate MITRE ATT&CK heatmap matrix for selected actors.
     Returns HTML partial for HTMX swap.
+
+    4.1.0 P7: the expensive HeatmapData build is cached per
+    (tenant, normalized actor set, show_defense, normalized source filter)
+    for ~30s via ttl_cache.heatmap_matrix_cache. Rendering the template
+    against the cached dataclass is fast; only the database queries +
+    matrix assembly are skipped on a hit. Tenant scoping is enforced by
+    putting client_id first in the cache key.
     """
+    # Stable cache key — tuple of frozensets so ?actors=A&actors=B and
+    # ?actors=B&actors=A hit the same cell. None client_id (super-admin
+    # cross-tenant view) is its own keyspace and never collides with a
+    # specific tenant.
+    cache_key = (
+        "heatmap-matrix",
+        client_id or "__global__",
+        frozenset(actors or ()),
+        bool(show_defense),
+        frozenset((s or "").strip().lower() for s in (source_filter or ()) if s),
+    )
+
+    cached = heatmap_matrix_cache.get(cache_key)
+    if cached[0]:
+        heatmap_data = cached[1]
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            request,
+            "partials/heatmap_matrix.html",
+            {"data": heatmap_data},
+        )
+
     # Get data from database
-    all_actors = db.get_threat_actors()
+    all_actors = db.get_threat_actors(client_id=client_id)
     covered_ttps = db.get_all_covered_ttps(client_id=client_id)
     ttp_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
     ttp_map = db.get_technique_map()
@@ -172,7 +202,9 @@ def get_heatmap_matrix(
         defense_count=defense_count,
         coverage_pct=coverage_pct,
     )
-    
+
+    heatmap_matrix_cache.set(cache_key, heatmap_data)
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
@@ -194,7 +226,7 @@ def search_actors(
     Search threat actors by name or alias.
     Returns HTML options for actor select.
     """
-    actors = db.get_threat_actors()
+    actors = db.get_threat_actors(client_id=client_id)
     
     if actor_search:
         search_lower = actor_search.lower()
@@ -429,7 +461,7 @@ def generate_baseline_from_heatmap(
     if not names:
         raise HTTPException(status_code=400, detail="No actor names provided")
 
-    all_actors = db.get_threat_actors()
+    all_actors = db.get_threat_actors(client_id=client_id)
     selected = [a for a in all_actors if a.name in names]
     if not selected:
         raise HTTPException(status_code=404, detail="No matching actors found")

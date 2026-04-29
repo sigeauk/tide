@@ -113,6 +113,20 @@ def switch_client(
         max_age=86400 * 365,  # 1 year
     )
     logger.info(f"User {user.username} switched to client {client['name']}")
+    # 4.1.0 P1: structured audit trail — emit a tide.audit JSON line so support
+    # bundles can answer "who switched where, and when?" without grepping the
+    # human-readable INFO line above.
+    try:
+        from app.services.log_context import audit_log
+        audit_log(
+            "client_switch",
+            user_id=str(user.id),
+            username=user.username,
+            target_client_id=client_id,
+            target_client_name=client["name"],
+        )
+    except Exception:
+        pass
     return response
 
 

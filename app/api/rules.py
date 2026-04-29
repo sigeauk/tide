@@ -109,9 +109,15 @@ def get_rule_detail(
     settings: SettingsDep,
     client_id: ActiveClient,
     space: str = Query("default"),
+    siem_id: Optional[str] = Query(
+        None,
+        description="SIEM that owns this rule. Required for unambiguous "
+                    "resolution when multiple SIEMs share a space name. "
+                    "Falls back to first space-match (with WARN) if absent.",
+    ),
 ):
     """Get full rule details for modal display."""
-    rule = db.get_rule_by_id(rule_id, space)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
     
     if not rule:
         return HTMLResponse(
@@ -139,16 +145,17 @@ def validate_rule(
     settings: SettingsDep,
     client_id: ActiveClient,
     space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
 ):
     """Mark a rule as validated by the current user."""
-    rule = db.get_rule_by_id(rule_id, space)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
     
     if not rule:
         return HTMLResponse('<div class="empty-state">Rule not found</div>', status_code=404)
     
     username = user.name or user.username if user else "Unknown"
     db.save_validation(rule.name, username)
-    rule = db.get_rule_by_id(rule_id, space)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
     
     templates = request.app.state.templates
 
@@ -176,6 +183,14 @@ async def test_rule(
     settings: SettingsDep,
     client_id: ActiveClient,
     space: str = Query("default"),
+    siem_id: Optional[str] = Query(
+        None,
+        description="SIEM that owns this rule. Required since 4.0.13 for "
+                    "unambiguous Kibana selection when multiple SIEMs are "
+                    "mapped to the same space name. The legacy fallback "
+                    "(first SIEM matching the space) is retained for one "
+                    "release with a WARN log + UI banner.",
+    ),
 ):
     """Test a detection rule against live Elasticsearch data via the Kibana Preview API."""
     import asyncio
@@ -187,7 +202,7 @@ async def test_rule(
     if lookback not in allowed:
         lookback = "24h"
     
-    rule = db.get_rule_by_id(rule_id, space)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
     if not rule:
         return HTMLResponse(
             '<div class="test-result test-error">Rule not found</div>',
@@ -200,20 +215,55 @@ async def test_rule(
             status_code=400
         )
     
-    # Resolve the SIEM for this rule's space on the active client.
-    # Kibana "spaces" are an Elastic-side partition; the app's production/staging
-    # environment_role is set per-tenant in client_siem_map when a SIEM is
-    # assigned. A rule's stored `space` value therefore uniquely identifies one
-    # (client, siem, environment_role) tuple, from which kibana_url + api_token
-    # are sourced. Do NOT fall back to global .env vars.
+    # Resolve the SIEM for this rule. The PREFERRED path (4.0.13+) is to use
+    # the explicit siem_id query param — either passed by the rule_detail_modal
+    # template (which knows rule.siem_id) or inferred from rule.siem_id below.
+    # Falling back to space-only matching is ambiguous when two SIEMs share a
+    # Kibana space name (e.g. both expose 'production') and was the root cause
+    # of the 4.0.7→4.0.11 Test Rule 401 regression — the first SIEM matching
+    # the space won, sending the request to the wrong Kibana with the wrong
+    # API key. Until callers all pass siem_id we keep the fallback alive but
+    # log loudly so it shows up in support bundles.
+    resolved_siem_id = siem_id or getattr(rule, "siem_id", None)
     siem = None
     try:
-        for s in db.get_client_siems(client_id):
+        client_siems = db.get_client_siems(client_id)
+    except Exception:
+        client_siems = []
+        logger.exception("Failed to load client SIEMs for client %s", client_id)
+
+    if resolved_siem_id:
+        for s in client_siems:
+            if s.get("id") == resolved_siem_id:
+                siem = s
+                break
+        if siem is None:
+            logger.warning(
+                "test_rule: rule siem_id=%s is not assigned to active client %s; "
+                "refusing to fall back to space-match to avoid leaking across tenants",
+                resolved_siem_id, client_id,
+            )
+            return HTMLResponse(
+                '<div class="test-result test-error">'
+                f"This rule was synced from a SIEM that is not assigned to the "
+                f"current tenant. Re-assign the SIEM in Settings or run a sync "
+                f"to refresh."
+                '</div>',
+                status_code=400,
+            )
+    else:
+        # Legacy fallback: first SIEM whose space matches. Logged at WARN so
+        # operators can see the deprecated path being exercised.
+        logger.warning(
+            "test_rule: siem_id missing for rule_id=%s space=%s client=%s — "
+            "falling back to first space-match (DEPRECATED, ambiguous when "
+            "multiple SIEMs share a space name; callers must pass siem_id)",
+            rule_id, space, client_id,
+        )
+        for s in client_siems:
             if (s.get("space") or "default") == space:
                 siem = s
                 break
-    except Exception:
-        logger.exception("Failed to resolve SIEM for client %s space %s", client_id, space)
 
     if not siem or not siem.get("kibana_url") or not siem.get("api_token_enc"):
         return HTMLResponse(
@@ -223,6 +273,21 @@ async def test_rule(
             '</div>',
             status_code=400,
         )
+
+    # Diagnostic context (4.0.13): customer upgraded 4.0.7 -> 4.0.11 and the
+    # Test Rule popup started returning 401. The wire-format request is
+    # byte-identical to 4.0.7 — only the source of kibana_url / api_key changed
+    # (was .env, now siem_inventory). Log enough to compare without leaking
+    # the secret: SIEM label, kibana_url, space, env role, key prefix + length.
+    _key = siem.get("api_token_enc") or ""
+    logger.info(
+        "test_rule resolved SIEM client=%s space=%s siem_label=%s siem_id=%s "
+        "kibana_url=%s env_role=%s api_key_prefix=%s api_key_len=%d es_url=%s",
+        client_id, space, siem.get("label"), siem.get("id"),
+        siem.get("kibana_url"), siem.get("environment_role"),
+        _key[:8] + "..." if _key else "<empty>", len(_key),
+        siem.get("elasticsearch_url"),
+    )
 
     try:
         from app.elastic_helper import preview_detection_rule

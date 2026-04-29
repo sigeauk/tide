@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 36
+SCHEMA_VERSION = 37
 
 
 class DatabaseService:
@@ -76,14 +76,49 @@ class DatabaseService:
         """
         from app.services.tenant_manager import get_tenant_db_path
         db_path = get_tenant_db_path() or self.db_path
-        conn = None
+
+        # 4.1.0 P2 — Tenant-scope guard. If we're inside a request that the
+        # middleware classified as tenant-required AND no tenant context is
+        # active, the caller is about to read from the *shared* DB on a route
+        # that should be tenant-scoped. This is the exact class of bug that
+        # caused the 4.0.13 OpenCTI leak. Emit a tide.error JSON line so the
+        # incident is greppable; default mode is warn-only (logs the leak,
+        # serves the request) but `TIDE_ISOLATION_STRICT=1` upgrades to a
+        # hard 500 so the regression cannot ship.
+        if get_tenant_db_path() is None:
+            try:
+                from app.services.log_context import get_context
+                ctx = get_context()
+                if ctx.get("tenant_required"):
+                    msg = (
+                        f"isolation_violation route={ctx.get('route')} "
+                        f"user={ctx.get('user_id')} req={ctx.get('request_id')}"
+                    )
+                    logger.error(msg)
+                    if os.getenv("TIDE_ISOLATION_STRICT", "0") == "1":
+                        raise RuntimeError(
+                            "Tenant context required for "
+                            f"{ctx.get('method')} {ctx.get('route')} "
+                            "(set X-Client-ID header or use ActiveClient dep)"
+                        )
+            except RuntimeError:
+                raise
+            except Exception:  # pragma: no cover - guard must never break a request
+                pass
+
+        # 4.1.0 P3 — connection pool. The pool itself handles per-path
+        # mutual exclusion (Queue with maxsize=MAX_PER_TENANT) so we no
+        # longer need self._conn_lock around the connect() call. We do
+        # still retry on lock contention because a *different* process
+        # (e.g. the sync worker) could be holding a write lock on the
+        # underlying file.
+        from app.services.connection_pool import get_pool
+        pool = get_pool()
         attempt = 0
-        
         while attempt < retries:
             try:
-                with self._conn_lock:
-                    conn = duckdb.connect(db_path, read_only=False)
-                yield conn
+                with pool.acquire(db_path) as conn:
+                    yield conn
                 return
             except duckdb.IOException as e:
                 if "lock" in str(e).lower():
@@ -95,10 +130,6 @@ class DatabaseService:
             except Exception as e:
                 logger.error(f"DB Connection failed: {e}")
                 raise
-            finally:
-                if conn:
-                    conn.close()
-        
         raise duckdb.IOException("Database locked by another process.")
 
     @contextmanager
@@ -108,14 +139,13 @@ class DatabaseService:
         ignoring any active tenant context.  Used for auth, RBAC,
         client management, and SIEM inventory operations.
         """
-        conn = None
+        from app.services.connection_pool import get_pool
+        pool = get_pool()
         attempt = 0
-        
         while attempt < retries:
             try:
-                with self._conn_lock:
-                    conn = duckdb.connect(self.db_path, read_only=False)
-                yield conn
+                with pool.acquire(self.db_path) as conn:
+                    yield conn
                 return
             except duckdb.IOException as e:
                 if "lock" in str(e).lower():
@@ -127,10 +157,6 @@ class DatabaseService:
             except Exception as e:
                 logger.error(f"Shared DB Connection failed: {e}")
                 raise
-            finally:
-                if conn:
-                    conn.close()
-        
         raise duckdb.IOException("Shared database locked by another process.")
     
     def _get_schema_version(self, conn) -> int:
@@ -1443,6 +1469,70 @@ class DatabaseService:
                 "(per-SIEM rule-log output directory; NULL = container default)"
             )
 
+        # ── Migration 37: SIEM-aware detection_rules ──
+        # Pre-4.0.13 the table PK was (rule_id, space) only — a global identifier
+        # with no notion of which SIEM the rule came from. When a tenant has two
+        # SIEMs that both expose the same Kibana space name (e.g. 'production'),
+        # rules from both SIEMs collide on insert (last writer wins) and the
+        # Test Rule / Promotion / coverage queries silently route to the wrong
+        # Kibana — manifesting as 401s, missing rules, and incorrect counts.
+        # Adds a NOT NULL ``siem_id`` column, rebuilds PK as (rule_id, siem_id),
+        # and WIPES the table. The next sync rebuilds it correctly with each
+        # row's true ``siem_id`` populated by the per-SIEM fetch loop in
+        # ``services/sync.py``. No operator data is lost (the table is purely
+        # cached SIEM state — no manual notes, overrides, or annotations live
+        # here). The UI surfaces a banner asking the operator to run a sync.
+        if current_version < 37:
+            try:
+                row_count = conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules"
+                ).fetchone()[0]
+            except Exception:
+                row_count = 0
+
+            try:
+                conn.execute("DROP TABLE IF EXISTS detection_rules")
+                conn.execute("""
+                    CREATE TABLE detection_rules (
+                        rule_id VARCHAR NOT NULL,
+                        siem_id VARCHAR NOT NULL,
+                        name VARCHAR,
+                        severity VARCHAR,
+                        author VARCHAR,
+                        enabled INTEGER,
+                        space VARCHAR,
+                        score INTEGER,
+                        quality_score INTEGER,
+                        meta_score INTEGER,
+                        score_mapping INTEGER,
+                        score_field_type INTEGER,
+                        score_search_time INTEGER,
+                        score_language INTEGER,
+                        score_note INTEGER,
+                        score_override INTEGER,
+                        score_tactics INTEGER,
+                        score_techniques INTEGER,
+                        score_author INTEGER,
+                        score_highlights INTEGER,
+                        last_updated TIMESTAMP,
+                        mitre_ids VARCHAR[],
+                        raw_data JSON,
+                        PRIMARY KEY (rule_id, siem_id)
+                    )
+                """)
+            except Exception as exc:
+                logger.error(f"Migration 37 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 37)
+            logger.warning(
+                "Migration 37: detection_rules rebuilt with PK (rule_id, siem_id) "
+                "and WIPED (%d rows removed). Trigger a sync (Settings → Sync, or "
+                "POST /api/admin/sync) to repopulate with siem_id correctly "
+                "assigned per SIEM. The next scheduled sync will also do this "
+                "automatically. See CHANGELOG [4.0.13].",
+                row_count,
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -2185,18 +2275,21 @@ class DatabaseService:
         return rules, total, last_sync
     
     def get_existing_rule_keys(self) -> set:
-        """Get set of (rule_id, space) tuples for all rules in the database.
-        Used for lazy mapping: skip Elasticsearch mapping checks for known rules."""
+        """Get set of (rule_id, siem_id) tuples for all rules in the database.
+        Used for lazy mapping: skip Elasticsearch mapping checks for known rules.
+        Keyed by ``siem_id`` since 4.0.13 — the same Elastic prebuilt rule_id can
+        legitimately exist in multiple SIEMs and must not collide."""
         with self.get_connection() as conn:
-            rows = conn.execute("SELECT rule_id, space FROM detection_rules").fetchall()
+            rows = conn.execute("SELECT rule_id, siem_id FROM detection_rules").fetchall()
             return {(row[0], row[1]) for row in rows}
-    
+
     def get_existing_rule_data(self) -> dict:
-        """Get existing rule scores and raw_data keyed by (rule_id, space).
-        Used to preserve mapping data for rules that skip mapping during lazy sync."""
+        """Get existing rule scores and raw_data keyed by (rule_id, siem_id).
+        Used to preserve mapping data for rules that skip mapping during lazy sync.
+        Keyed by ``siem_id`` since 4.0.13 (see ``get_existing_rule_keys``)."""
         with self.get_connection() as conn:
             rows = conn.execute(
-                "SELECT rule_id, space, score, quality_score, meta_score, "
+                "SELECT rule_id, siem_id, space, score, quality_score, meta_score, "
                 "score_mapping, score_field_type, score_search_time, score_language, "
                 "score_note, score_override, score_tactics, score_techniques, "
                 "score_author, score_highlights, raw_data "
@@ -2206,7 +2299,7 @@ class DatabaseService:
             result = {}
             for row in rows:
                 d = dict(zip(columns, row))
-                key = (d['rule_id'], d['space'])
+                key = (d['rule_id'], d['siem_id'])
                 # Parse raw_data JSON to get results
                 raw = d.get('raw_data')
                 if isinstance(raw, str):
@@ -2217,37 +2310,79 @@ class DatabaseService:
                 d['raw_data'] = raw
                 result[key] = d
             return result
-    
-    def move_rule_space(self, rule_id: str, from_space: str, to_space: str):
-        """Move a rule from one space to another in DuckDB (for instant UI update after promotion)."""
+
+    def move_rule_space(self, rule_id: str, from_space: str, to_space: str,
+                        siem_id: Optional[str] = None):
+        """Move a rule from one space to another in DuckDB (for instant UI update
+        after promotion). When ``siem_id`` is supplied (4.0.13+), the move is
+        scoped to that SIEM only so an in-place promote within SIEM A doesn't
+        accidentally rename SIEM B's identically-keyed rule."""
         with self.get_connection() as conn:
-            # Delete any existing rule with same ID in target space (avoid PK conflict)
-            conn.execute(
-                "DELETE FROM detection_rules WHERE rule_id = ? AND space = ?",
-                [rule_id, to_space]
-            )
-            # Move the rule
-            conn.execute(
-                "UPDATE detection_rules SET space = ? WHERE rule_id = ? AND space = ?",
-                [to_space, rule_id, from_space]
-            )
+            if siem_id is None:
+                # Legacy fallback: scope by space only. Logged at WARN because
+                # this is ambiguous when multiple SIEMs share a space name.
+                logger.warning(
+                    "move_rule_space called without siem_id (rule_id=%s %s->%s) — "
+                    "this is ambiguous across SIEMs; update caller to pass siem_id",
+                    rule_id, from_space, to_space,
+                )
+                conn.execute(
+                    "DELETE FROM detection_rules WHERE rule_id = ? AND space = ?",
+                    [rule_id, to_space]
+                )
+                conn.execute(
+                    "UPDATE detection_rules SET space = ? WHERE rule_id = ? AND space = ?",
+                    [to_space, rule_id, from_space]
+                )
+            else:
+                # SIEM-scoped: target row may already exist for the same SIEM
+                # (e.g. a previous promotion left a duplicate). Drop it first.
+                conn.execute(
+                    "DELETE FROM detection_rules "
+                    "WHERE rule_id = ? AND space = ? AND siem_id = ?",
+                    [rule_id, to_space, siem_id]
+                )
+                conn.execute(
+                    "UPDATE detection_rules SET space = ? "
+                    "WHERE rule_id = ? AND space = ? AND siem_id = ?",
+                    [to_space, rule_id, from_space, siem_id]
+                )
             conn.execute("CHECKPOINT")
-        logger.info(f"Moved rule {rule_id} from '{from_space}' to '{to_space}' in DB")
-    
-    def get_rule_by_id(self, rule_id: str, space: str = "default") -> Optional[DetectionRule]:
-        """Get a single rule by ID and space."""
+        logger.info(
+            "Moved rule %s from '%s' to '%s' in DB (siem_id=%s)",
+            rule_id, from_space, to_space, siem_id or '<unscoped>',
+        )
+
+    def get_rule_by_id(self, rule_id: str, space: str = "default",
+                       siem_id: Optional[str] = None) -> Optional[DetectionRule]:
+        """Get a single rule by ID and space.
+
+        Since 4.0.13, ``siem_id`` may be supplied to scope the lookup to a
+        specific SIEM. When omitted, the lookup falls back to (rule_id, space)
+        and emits a debug log noting the result may be ambiguous if multiple
+        SIEMs share the space name. If multiple rows match in fallback mode the
+        first row is returned (matches pre-4.0.13 behaviour).
+        """
         with self.get_connection() as conn:
-            result = conn.execute(
-                "SELECT * FROM detection_rules WHERE rule_id = ? AND space = ?",
-                [rule_id, space]
-            ).fetchone()
-            
+            if siem_id is not None:
+                result = conn.execute(
+                    "SELECT * FROM detection_rules "
+                    "WHERE rule_id = ? AND space = ? AND siem_id = ?",
+                    [rule_id, space, siem_id]
+                ).fetchone()
+            else:
+                result = conn.execute(
+                    "SELECT * FROM detection_rules WHERE rule_id = ? AND space = ? "
+                    "LIMIT 1",
+                    [rule_id, space]
+                ).fetchone()
+
             if result:
                 columns = [desc[0] for desc in conn.description]
                 row = dict(zip(columns, result))
                 validation_data = self._load_validation_data()
                 return self._row_to_rule(row, validation_data)
-        
+
         return None
     
     @staticmethod
@@ -2347,6 +2482,7 @@ class DatabaseService:
 
         return DetectionRule(
             rule_id=_ss(row.get('rule_id')),
+            siem_id=_ss(row.get('siem_id')) or None,
             name=rule_name,
             severity=severity,
             author=_ss(row.get('author'), 'Unknown'),
@@ -2633,9 +2769,38 @@ class DatabaseService:
             }
     
     # --- THREAT ACTOR OPERATIONS ---
-    
-    def get_threat_actors(self) -> List[ThreatActor]:
-        """Get all threat actors ordered by TTP count."""
+
+    def _client_has_opencti(self, client_id: Optional[str]) -> bool:
+        """Return True when *client_id* has at least one OpenCTI instance linked.
+
+        Used to decide whether OpenCTI-sourced threat actors should be visible
+        to a tenant. ``None``/empty client_id is treated as "no link" so any
+        unauthenticated / pre-tenant code paths see the MITRE baseline only.
+        """
+        if not client_id:
+            return False
+        try:
+            with self.get_shared_connection() as conn:
+                row = conn.execute(
+                    "SELECT 1 FROM client_opencti_map WHERE client_id = ? LIMIT 1",
+                    [client_id],
+                ).fetchone()
+            return bool(row)
+        except Exception as exc:
+            logger.warning(f"_client_has_opencti({client_id}) failed: {exc}")
+            return False
+
+    def get_threat_actors(self, client_id: Optional[str] = None) -> List[ThreatActor]:
+        """Get all threat actors ordered by TTP count.
+
+        When ``client_id`` is supplied and the tenant has **no** OpenCTI instance
+        linked (`client_opencti_map`), actors whose ``source`` array does not
+        include any MITRE source are filtered out so OpenCTI-only intel from
+        another tenant does not leak into the Threat Landscape / Heatmap. The
+        legacy ``client_id=None`` behaviour returns every actor unchanged so
+        background sync jobs and report exports keep working.
+        """
+        include_opencti_only = client_id is None or self._client_has_opencti(client_id)
         with self.get_connection() as conn:
             df = conn.execute(
                 "SELECT * FROM threat_actors ORDER BY ttp_count DESC"
@@ -2675,7 +2840,21 @@ class DatabaseService:
                     source=source if isinstance(source, list) else [],
                     last_updated=row.get('last_updated'),
                 ))
-            
+
+            if not include_opencti_only:
+                # Tenant has no OpenCTI link — keep only actors that came from
+                # at least one MITRE source. Anything sourced solely from a
+                # different tenant's OpenCTI feed is hidden.
+                _MITRE_SOURCES = {
+                    "mitre", "enterprise", "mobile", "ics",
+                    "mitre:enterprise", "mitre:mobile", "mitre:ics",
+                    "mitre-enterprise", "mitre-mobile", "mitre-ics",
+                }
+                actors = [
+                    a for a in actors
+                    if any((s or "").strip().lower() in _MITRE_SOURCES for s in (a.source or []))
+                ]
+
             return actors
     
     def get_covered_ttps_by_space(self, space: str = "production") -> Set[str]:
@@ -2723,12 +2902,36 @@ class DatabaseService:
             # Threat actors are intentionally global (MITRE ATT&CK / OpenCTI
             # reference data shared across all clients).  Only rule *coverage*
             # is scoped to the active client's production SIEM spaces below.
+            # NOTE: when the tenant has NO OpenCTI link, OpenCTI-only actors
+            # are filtered out post-fetch so the landscape totals match what
+            # the operator actually sees on /threats and /heatmap.
             df = conn.execute(
-                "SELECT ttp_count, ttps, origin, source FROM threat_actors"
+                "SELECT name, ttp_count, ttps, origin, source FROM threat_actors"
             ).df()
-            
+
             if df.empty:
                 return ThreatLandscapeMetrics()
+
+            include_opencti_only = client_id is None or self._client_has_opencti(client_id)
+            if not include_opencti_only and 'source' in df.columns:
+                _MITRE_SOURCES = {
+                    "mitre", "enterprise", "mobile", "ics",
+                    "mitre:enterprise", "mitre:mobile", "mitre:ics",
+                    "mitre-enterprise", "mitre-mobile", "mitre-ics",
+                }
+
+                def _has_mitre(src) -> bool:
+                    if src is None:
+                        return False
+                    if hasattr(src, 'tolist'):
+                        src = src.tolist()
+                    if not isinstance(src, list):
+                        return False
+                    return any((s or "").strip().lower() in _MITRE_SOURCES for s in src)
+
+                df = df[df['source'].apply(_has_mitre)].reset_index(drop=True)
+                if df.empty:
+                    return ThreatLandscapeMetrics()
             
             # Get covered TTPs inline (avoid nested connection)
             if prod_spaces is not None:
@@ -3388,10 +3591,34 @@ class DatabaseService:
         df['space'] = df['space_id'].fillna('default') if 'space_id' in df.columns else 'default'
         df['last_updated'] = datetime.now()
         df['mitre_ids'] = df['mitre_ids'].apply(lambda x: x if isinstance(x, list) else [])
-        
-        # Get unique spaces being synced - we'll delete all rules from these spaces first
-        synced_spaces = df['space'].unique().tolist()
-        logger.info(f"Syncing rules for spaces: {synced_spaces}")
+
+        # 4.0.13: every record must carry the originating siem_id so the new
+        # composite PK (rule_id, siem_id) is satisfied and so subtractive
+        # deletes can be scoped to the SIEM that returned the data. Records
+        # missing siem_id are dropped with a warning rather than silently
+        # colliding under a NULL key (which would also violate NOT NULL).
+        if 'siem_id' not in df.columns:
+            df['siem_id'] = None
+        missing_siem = df['siem_id'].isna().sum()
+        if missing_siem:
+            logger.warning(
+                "save_audit_results: dropping %d rule rows with no siem_id "
+                "(caller must stamp siem_id on every record — see services/sync.py)",
+                int(missing_siem),
+            )
+            df = df.dropna(subset=['siem_id'])
+            if df.empty:
+                return 0
+
+        # Scope of this write: the (siem_id, space) pairs we are refreshing.
+        # Anything matching one of these pairs in the DB will be replaced.
+        synced_scopes = (
+            df[['siem_id', 'space']]
+            .drop_duplicates()
+            .itertuples(index=False, name=None)
+        )
+        synced_scopes = list(synced_scopes)
+        logger.info(f"Syncing rules for (siem_id, space) scopes: {synced_scopes}")
         
         # Build raw_data to include both the original rule AND the field mapping results
         def build_raw_data(row):
@@ -3410,7 +3637,7 @@ class DatabaseService:
         df['raw_data'] = df.apply(build_raw_data, axis=1)
 
         target_cols = [
-            'rule_id', 'name', 'severity', 'author', 'enabled', 'space',
+            'rule_id', 'siem_id', 'name', 'severity', 'author', 'enabled', 'space',
             'score', 'quality_score', 'meta_score',
             'score_mapping', 'score_field_type', 'score_search_time', 
             'score_language', 'score_note', 'score_override', 'score_tactics',
@@ -3425,25 +3652,30 @@ class DatabaseService:
         
         df_final = df[target_cols].copy()
         
-        # Check for duplicates within the incoming data (same rule_id + space)
-        duplicates = df_final[df_final.duplicated(subset=['rule_id', 'space'], keep='first')]
+        # Check for duplicates within the incoming data (same rule_id + siem_id)
+        duplicates = df_final[df_final.duplicated(subset=['rule_id', 'siem_id'], keep='first')]
         if not duplicates.empty:
             dup_names = duplicates['name'].tolist()
-            logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
-            df_final = df_final.drop_duplicates(subset=['rule_id', 'space'], keep='first')
+            logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + siem_id): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
+            df_final = df_final.drop_duplicates(subset=['rule_id', 'siem_id'], keep='first')
 
         with self.get_connection() as conn:
             try:
                 conn.execute("BEGIN TRANSACTION")
                 
-                # Delete existing rules from synced spaces to ensure live data
-                # This ensures removed rules don't persist in the database
-                for space in synced_spaces:
-                    deleted = conn.execute(
-                        "DELETE FROM detection_rules WHERE space = ?",
-                        [space]
-                    ).fetchone()
-                    logger.debug(f"Cleared rules from space '{space}'")
+                # Delete existing rules from synced (siem_id, space) scopes so
+                # rules removed upstream don't persist as ghosts. Scoped by
+                # siem_id since 4.0.13 — a sync of SIEM A must NEVER touch
+                # SIEM B's rows even if both share the same space name.
+                for siem_id_v, space in synced_scopes:
+                    conn.execute(
+                        "DELETE FROM detection_rules "
+                        "WHERE space = ? AND siem_id = ?",
+                        [space, siem_id_v]
+                    )
+                    logger.debug(
+                        f"Cleared rules from siem_id={siem_id_v} space='{space}'"
+                    )
                 
                 # Insert fresh rules
                 conn.register('rules_source', df_final)
@@ -3456,7 +3688,10 @@ class DatabaseService:
                 conn.execute("COMMIT")
                 
                 count = len(df_final)
-                logger.info(f"Synced {count} detection rules to database (replaced rules in spaces: {synced_spaces})")
+                logger.info(
+                    f"Synced {count} detection rules to database "
+                    f"(replaced rules in scopes: {synced_scopes})"
+                )
                 
             except Exception as e:
                 try:
@@ -3475,10 +3710,17 @@ class DatabaseService:
         
         return count
 
-    def delete_rules_for_spaces(self, spaces: List[str]) -> int:
+    def delete_rules_for_spaces(self, spaces: List[str],
+                                siem_id: Optional[str] = None) -> int:
         """
         Delete all rules belonging to the given spaces (subtractive sync).
         Used to remove ghost rules when a space returns 0 rules from Elastic.
+
+        Since 4.0.13, when ``siem_id`` is supplied the delete is scoped to that
+        SIEM only — critical when two SIEMs share a space name and only one
+        of them came back empty. When ``siem_id`` is None the call falls back
+        to the legacy (space-only) behaviour and logs a WARN, because a
+        space-only delete can wipe a healthy SIEM's rules.
         """
         if not spaces:
             return 0
@@ -3486,14 +3728,46 @@ class DatabaseService:
         total_deleted = 0
         with self.get_connection() as conn:
             try:
-                for space in spaces:
-                    before = conn.execute(
-                        "SELECT COUNT(*) FROM detection_rules WHERE space = ?", [space]
-                    ).fetchone()[0]
-                    if before > 0:
-                        conn.execute("DELETE FROM detection_rules WHERE space = ?", [space])
-                        logger.info(f"Subtractive sync: deleted {before} ghost rules from space '{space}'")
-                        total_deleted += before
+                if siem_id is None:
+                    logger.warning(
+                        "delete_rules_for_spaces called without siem_id for spaces=%s — "
+                        "this can remove rules from unrelated SIEMs that share a space "
+                        "name. Update caller to pass siem_id.",
+                        spaces,
+                    )
+                    for space in spaces:
+                        before = conn.execute(
+                            "SELECT COUNT(*) FROM detection_rules WHERE space = ?",
+                            [space],
+                        ).fetchone()[0]
+                        if before > 0:
+                            conn.execute(
+                                "DELETE FROM detection_rules WHERE space = ?",
+                                [space],
+                            )
+                            logger.info(
+                                f"Subtractive sync: deleted {before} ghost rules "
+                                f"from space '{space}' (no siem scope)"
+                            )
+                            total_deleted += before
+                else:
+                    for space in spaces:
+                        before = conn.execute(
+                            "SELECT COUNT(*) FROM detection_rules "
+                            "WHERE space = ? AND siem_id = ?",
+                            [space, siem_id],
+                        ).fetchone()[0]
+                        if before > 0:
+                            conn.execute(
+                                "DELETE FROM detection_rules "
+                                "WHERE space = ? AND siem_id = ?",
+                                [space, siem_id],
+                            )
+                            logger.info(
+                                f"Subtractive sync: deleted {before} ghost rules "
+                                f"from siem_id={siem_id} space='{space}'"
+                            )
+                            total_deleted += before
                 conn.execute("CHECKPOINT")
             except Exception as e:
                 logger.error(f"Failed to delete ghost rules: {e}")

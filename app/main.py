@@ -17,19 +17,66 @@ import time
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
+# 4.1.0 P1: structured JSON logging with per-request context. Replaces the
+# old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
+# "json" — set to anything else for human-readable lines in dev).
+from app.services.log_context import (
+    configure_logging,
+    RequestContextMiddleware,
+    audit_log,
+    error_log,
 )
+configure_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
 # Background task scheduler
 scheduler = AsyncIOScheduler()
+
+# ── Migration 37 (4.0.13) re-sync advisory ──
+# Surfaced both as a Jinja global (for the in-app banner) and as a response
+# header (X-TIDE-Resync-Required) so JSON / external API consumers see the
+# same notice. The check is one COUNT query, cached for one minute to avoid
+# hammering DuckDB on every htmx fragment render.
+_migration37_cache = {"ts": 0.0, "needed": False}
+
+
+def migration37_resync_required() -> bool:
+    """Return True if Migration 37 left the rule cache empty and a sync hasn't
+    repopulated it yet. False on any error (fail-closed for the banner so a
+    transient DB hiccup doesn't spam every page with a warning)."""
+    now = time.time()
+    if now - _migration37_cache["ts"] < 60:
+        return _migration37_cache["needed"]
+    needed = False
+    try:
+        from app.services.database import get_database_service
+        _db = get_database_service()
+        with _db.get_connection() as _conn:
+            ver_row = _conn.execute(
+                "SELECT MAX(version) FROM schema_version"
+            ).fetchone()
+            ver = int(ver_row[0]) if ver_row and ver_row[0] is not None else 0
+            if ver >= 37:
+                rules = int(_conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules"
+                ).fetchone()[0])
+                siems = int(_conn.execute(
+                    "SELECT COUNT(*) FROM siem_inventory WHERE is_active"
+                ).fetchone()[0])
+                # Banner only fires when the table is empty AND at least one
+                # active SIEM exists \u2014 the wipe only matters if there were
+                # rules to repopulate. Fresh installs with zero SIEMs would
+                # otherwise see a misleading "resync required" warning.
+                needed = rules == 0 and siems > 0
+    except Exception:
+        needed = False
+    _migration37_cache["ts"] = now
+    _migration37_cache["needed"] = needed
+    return needed
+
 
 # ── Sync status tracking ──
 _sync_status = {
@@ -166,6 +213,13 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     scheduler.shutdown()
+    # 4.1.0 P3 — close all pooled DuckDB connections so the file locks
+    # are released cleanly before uvicorn exits.
+    try:
+        from app.services.connection_pool import get_pool
+        get_pool().close_all()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"ConnectionPool close_all failed: {exc}")
     logger.info("TIDE shutdown complete")
 
 
@@ -595,8 +649,20 @@ def create_app() -> FastAPI:
     
     # Add authentication middleware
     app.add_middleware(AuthMiddleware)
-    
-    # Request timing middleware – logs page loads and exposes Server-Timing header
+
+    # 4.1.0 P1: RequestContextMiddleware allocates the request_id, populates
+    # the structured-logging contextvar, sets X-Request-ID, and emits one
+    # tide.perf JSON line per request. Added LAST so it wraps the rest
+    # outermost (Starlette middleware order: last-added = outermost). All
+    # subsequent log records — including those emitted by AuthMiddleware and
+    # the route handler — automatically inherit the request id, route, method,
+    # plus the user_id / client_id that get_active_client backfills.
+    app.add_middleware(RequestContextMiddleware)
+
+    # Header-only middleware: the perf logging itself moved to
+    # RequestContextMiddleware (above). This pass remains so DevTools still
+    # sees Server-Timing and the Migration 37 advisory header continues to be
+    # surfaced on every non-static response.
     @app.middleware("http")
     async def timing_middleware(request: Request, call_next):
         import time as _time
@@ -604,21 +670,65 @@ def create_app() -> FastAPI:
         start = _time.perf_counter()
         response = await call_next(request)
         elapsed_ms = (_time.perf_counter() - start) * 1000
-        # Skip static assets
         if not path.startswith("/static"):
-            # Server-Timing header visible in browser DevTools Network tab
             response.headers["Server-Timing"] = f"total;dur={elapsed_ms:.1f}"
             if elapsed_ms > 500:
                 logger.warning(f"Slow request: {request.method} {path} took {elapsed_ms:.0f}ms")
-            elif elapsed_ms > 200:
-                logger.info(f"Request: {request.method} {path} took {elapsed_ms:.0f}ms")
+            # 4.0.13 Migration 37 advisory header: surfaces the same "resync
+            # required after upgrade" notice that the UI banner shows, so
+            # external API consumers (sync_to_sigea, custom integrations,
+            # CLI scripts, future SDK) can detect the empty post-migration
+            # state without scraping HTML. The header is omitted entirely
+            # when no resync is required so legacy clients don't see noise.
+            try:
+                if migration37_resync_required():
+                    response.headers["X-TIDE-Resync-Required"] = "1"
+                    response.headers["X-TIDE-Resync-Reason"] = (
+                        "migration-37: detection_rules wiped on upgrade to "
+                        "4.0.13; trigger POST /api/admin/sync to repopulate"
+                    )
+            except Exception:
+                pass
         return response
     
     # Exception handler for 401 errors (handle HTMX requests)
     from fastapi import HTTPException as FastAPIHTTPException
     from fastapi.exceptions import RequestValidationError
     from starlette.exceptions import HTTPException as StarletteHTTPException
-    
+
+    # 4.1.0 P1: catch-all unhandled-exception handler emits one structured
+    # tide.error log line (with traceback) and echoes the request id back to
+    # the caller via X-TIDE-Error-Id so support bundles can correlate the
+    # response with the JSON log entry.
+    @app.exception_handler(Exception)
+    async def unhandled_exception_handler(request: Request, exc: Exception):
+        if isinstance(exc, StarletteHTTPException):
+            # Let the dedicated handler below take it (auth redirects etc.).
+            raise exc
+        request_id = getattr(request.state, "request_id", "-")
+        error_log(
+            "unhandled_exception",
+            exc=exc,
+            path=request.url.path,
+            method=request.method,
+        )
+        from fastapi.responses import JSONResponse
+        if request.url.path.startswith("/api/"):
+            resp = JSONResponse(
+                status_code=500,
+                content={"detail": "Internal server error.", "request_id": request_id},
+            )
+        else:
+            resp = HTMLResponse(
+                content=(
+                    f"<h1>Internal server error</h1>"
+                    f"<p>Reference: <code>{request_id}</code></p>"
+                ),
+                status_code=500,
+            )
+        resp.headers["X-TIDE-Error-Id"] = request_id
+        return resp
+
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: StarletteHTTPException):
         # JSON API endpoints should return JSON errors, not HTML redirects
@@ -646,6 +756,22 @@ def create_app() -> FastAPI:
     # Mount static files
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.mount("/static", StaticFiles(directory=static_path), name="static")
+
+    # 4.1.0 P4 — Immutable-cache header for content-hashed bundles. Only
+    # paths under /static/css/dist/ or /static/js/dist/ are eligible (those
+    # filenames embed a 12-char content hash; safe to cache for a year).
+    # All other /static/* assets keep whatever the StaticFiles app emitted.
+    # Done in FastAPI rather than nginx because the nginx container does
+    # not bind-mount the app static dir, so every /static request proxies
+    # to uvicorn anyway — adding the header here is the only place it can
+    # actually take effect.
+    @app.middleware("http")
+    async def _immutable_dist_cache(request: Request, call_next):
+        response = await call_next(request)
+        path = request.url.path
+        if path.startswith("/static/css/dist/") or path.startswith("/static/js/dist/"):
+            response.headers["Cache-Control"] = "public, immutable, max-age=31536000"
+        return response
     
     # Setup templates
     templates_path = os.path.join(os.path.dirname(__file__), "templates")
@@ -709,7 +835,82 @@ def create_app() -> FastAPI:
 
     # --- Add global template variables so all templates have access ---
     templates.env.globals["env"] = settings
-    
+
+    # Re-export the module-level helper as a Jinja global so every page can
+    # render the Migration 37 banner without each route plumbing the flag
+    # through context.
+    templates.env.globals["migration37_resync_required"] = migration37_resync_required
+
+    # 4.1.0 P4 — content-hashed asset bundles. Reads app/static/manifest.json
+    # produced by `python -m app.scripts.build_assets` (run at container
+    # build time). Templates use `{{ asset('styles.css') }}` and get back
+    # the immutable hashed URL `/static/css/dist/styles-<hash>.css`.
+    # In dev (no manifest) we fall back to the un-hashed source path with
+    # a version-based query string so the hot-reload workflow keeps working.
+    import json as _json
+    _manifest_path = os.path.join(static_path, "manifest.json")
+    _asset_manifest: dict = {}
+    try:
+        with open(_manifest_path, "r", encoding="utf-8") as _mf:
+            _asset_manifest = _json.load(_mf)
+        logger.info(f"Asset manifest loaded: {len(_asset_manifest)} bundle(s)")
+    except FileNotFoundError:
+        logger.warning(
+            "Asset manifest missing at %s — falling back to un-hashed source paths. "
+            "Run `python -m app.scripts.build_assets` to produce it.",
+            _manifest_path,
+        )
+    except Exception as _exc:
+        logger.warning(f"Asset manifest unreadable ({_exc}); using fallback paths")
+
+    _ASSET_FALLBACK = {
+        "styles.css": f"/static/css/style.css?v={settings.tide_version}",
+        "app.js": f"/static/js/app.js?v={settings.tide_version}",
+    }
+
+    def asset(name: str) -> str:
+        """Resolve a logical asset name to its URL.
+
+        Order of resolution:
+          1. manifest.json (production / post-build)
+          2. _ASSET_FALLBACK with ?v=<version> (dev hot-reload, missing build)
+          3. /static/<name> as a last resort
+        """
+        if name in _asset_manifest:
+            return _asset_manifest[name]
+        if name in _ASSET_FALLBACK:
+            return _ASSET_FALLBACK[name]
+        return f"/static/{name}"
+
+    templates.env.globals["asset"] = asset
+
+    # 4.1.0 P5 — route-metadata-driven breadcrumbs. Templates use
+    # `{{ crumbs(request) }}` (or implicitly via the breadcrumb macro)
+    # to fetch the trail. Resolution order in route_metadata.get_crumbs:
+    # handler override (request.state.crumbs) → static registry → empty.
+    from app.services.route_metadata import get_crumbs as _get_crumbs
+
+    templates.env.globals["crumbs"] = _get_crumbs
+
+    # 4.1.0 P6 — active coverage quest exposed to every template so the
+    # quest tray can render above the breadcrumb when one is in flight.
+    # Resolves silently to None on any error (unauth, no tenant, etc.).
+    def _active_quest(request):
+        try:
+            from app.services.quest import get_quest_id_from_request, get_quest
+            qid = get_quest_id_from_request(request)
+            if not qid:
+                return None
+            q = get_quest(qid)
+            if q and q.get("status") == "active":
+                from app.services.quest import quest_summary
+                return quest_summary(q)
+        except Exception:
+            return None
+        return None
+
+    templates.env.globals["active_quest"] = _active_quest
+
     # --- Helper function to render templates with global context ---
     def render_template(name: str, request: Request, context: dict = None):
         """Render template with global context variables (brand_hue, cache_bust, active_client)."""
@@ -789,13 +990,50 @@ def create_app() -> FastAPI:
     app.include_router(external_sharing.router)
     app.include_router(clients_api.router)
     app.include_router(management_api.router)
+    app.include_router(quest_api.router)
     
     # --- HEALTH CHECK ---
     
     @app.get("/health")
     async def health_check():
         """Health check endpoint for container orchestration."""
-        return {"status": "healthy", "version": settings.tide_version}
+        body = {"status": "healthy", "version": settings.tide_version}
+        # 4.1.0 P3 — surface pool counters so ops can watch hit-rate without
+        # scraping logs. Cheap (one OrderedDict snapshot under a Lock).
+        try:
+            from app.services.connection_pool import get_pool
+            body["db_pool"] = get_pool().stats()
+        except Exception:  # pragma: no cover
+            pass
+        # Surface the Migration 37 advisory in the JSON body too so monitoring
+        # tooling that polls /health can alert on it without parsing headers.
+        if migration37_resync_required():
+            body["resync_required"] = True
+            body["resync_reason"] = (
+                "migration-37: detection_rules wiped on upgrade to 4.0.13; "
+                "POST /api/admin/sync to repopulate"
+            )
+        return body
+
+    @app.get("/api/system/migration-status")
+    async def migration_status():
+        """Machine-readable migration / resync state for external API consumers.
+
+        Returned regardless of auth state \u2014 contains no tenant data, only the
+        global advisory flag set by Migration 37 (4.0.13). Lets sync_to_sigea,
+        CLI scripts, and integration tests check post-upgrade state without
+        scraping the HTML banner or relying on the response header.
+        """
+        return {
+            "schema_version_expected": __import__(
+                "app.services.database", fromlist=["SCHEMA_VERSION"]
+            ).SCHEMA_VERSION,
+            "resync_required": migration37_resync_required(),
+            "resync_reason": (
+                "migration-37"
+                if migration37_resync_required() else None
+            ),
+        }
     
     # --- LOGIN PAGE (public) ---
     
@@ -946,7 +1184,22 @@ def create_app() -> FastAPI:
         from app.services.report_generator import CLASSIFICATION_OPTIONS
 
         db = get_database_service()
-        actors = db.get_threat_actors()
+
+        # Resolve the active tenant so OpenCTI-only actors are filtered out for
+        # tenants without an OpenCTI link (mirrors the chain in /threats).
+        _cid = request.cookies.get("active_client_id")
+        if not _cid and user:
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    _cid = row[0]
+        if not _cid:
+            _cid = db.get_default_client_id()
+
+        actors = db.get_threat_actors(client_id=_cid)
 
         # Derive distinct sources from loaded actors for the source filter
         # Normalise raw DB values to human-friendly display names
@@ -1023,7 +1276,16 @@ def create_app() -> FastAPI:
             _cid = db.get_default_client_id()
         
         # Single combined query for all metrics (1 connection, 1 validation load)
-        rule_metrics, promotion_metrics, threat_metrics = db.get_dashboard_metrics(client_id=_cid)
+        # 4.1.0 P7 — cache rollup per tenant for ~60s. The dashboard is the
+        # single most-hit page after login, and the metric set is an aggregate
+        # of aggregates (rule scores, validation freshness, threat counts) that
+        # changes much slower than the rule-edit pulse. Cache is per
+        # client_id so tenants never see each other's roll-ups.
+        from app.services.ttl_cache import dashboard_cache
+        rule_metrics, promotion_metrics, threat_metrics = dashboard_cache.get_or_compute(
+            ("dashboard-metrics", _cid or "__global__"),
+            lambda: db.get_dashboard_metrics(client_id=_cid),
+        )
         
         # Integration / repo status (same as settings page)
         env_settings = get_settings()
@@ -1291,7 +1553,6 @@ def create_app() -> FastAPI:
                 "env": env_settings,
                 "repo_status": repo_status,
                 "sigma_indices": sigma_mod.get_elastic_indices(),
-                "sigma_spaces": sigma_mod.get_kibana_spaces(),
                 "classifications": list_classifications(),
             }
         )
@@ -1364,7 +1625,7 @@ def create_app() -> FastAPI:
         siem_rule_counts = {}
         try:
             import duckdb
-            conn = duckdb.connect(str(db.db_path), read_only=True)
+            conn = duckdb.connect(str(db.db_path), read_only=False)  # 4.1.0 P3: pool conflict
             rows = conn.execute(
                 "SELECT space, COUNT(*) as total, SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) as enabled FROM detection_rules WHERE space IS NOT NULL GROUP BY space"
             ).fetchall()

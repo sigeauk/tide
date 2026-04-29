@@ -40,6 +40,10 @@ class ValidationRecord(BaseModel):
 class DetectionRule(BaseModel):
     """Detection rule from Elastic Security."""
     rule_id: str
+    # SIEM that this rule was synced from. NOT NULL in the DB since 4.0.13
+    # (Migration 37). Optional on the model only because some legacy code
+    # paths construct DetectionRule without round-tripping through the DB.
+    siem_id: Optional[str] = None
     name: str
     severity: Severity = Severity.LOW
     author: str = "Unknown"

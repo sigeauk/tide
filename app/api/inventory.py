@@ -1676,13 +1676,16 @@ def api_update_tactic_technique(
 
 
 def _build_rule_name_lookup(client_id: str = None) -> dict:
-    """Build rule_name -> {rule_id, space} lookup for clickable rule names."""
+    """Build rule_name -> {rule_id, space} lookup for clickable rule names.
+
+    NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
+    shared schema no longer carries a `client_id` column. The table is already
+    tenant-scoped (by tenant DB routing) so we skip the legacy
+    `WHERE client_id = ?` filter that would BinderException against the
+    current schema."""
     with _get_conn_inline() as conn:
-        frag = " AND client_id = ?" if client_id else ""
-        params = [client_id] if client_id else []
         rows = conn.execute(
-            "SELECT rule_id, name, space FROM detection_rules WHERE 1=1" + frag,
-            params,
+            "SELECT rule_id, name, space FROM detection_rules"
         ).fetchall()
     return {r[1]: {"rule_id": r[0], "space": r[2] or "default"} for r in rows}
 

@@ -2389,7 +2389,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     siem_rule_counts = {}
     try:
         import duckdb
-        conn = duckdb.connect(str(db.db_path), read_only=True)
+        conn = duckdb.connect(str(db.db_path), read_only=False)  # 4.1.0 P3: pool conflict
         rows = conn.execute(
             "SELECT space, COUNT(*) as total, SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) as enabled "
             "FROM detection_rules WHERE space IS NOT NULL GROUP BY space"

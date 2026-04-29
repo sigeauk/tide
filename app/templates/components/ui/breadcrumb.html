@@ -1,0 +1,32 @@
+{# 4.1.0 P5 — Breadcrumb component.
+
+    Renders a semantic <nav aria-label="Breadcrumb"> driven by the
+    `crumbs` global (populated from app/services/route_metadata.py).
+
+    Usage:
+      breadcrumb(request)              -- uses crumbs from request
+      breadcrumb(items=[...])          -- pass an explicit list of (label,href) tuples
+
+    Renders nothing when the trail is empty so unmapped pages stay clean.
+#}
+{% macro breadcrumb(request=None, items=None) %}
+    {% set trail = items if items is not none else (crumbs(request) if request else []) %}
+    {% if trail %}
+    <nav class="breadcrumb" aria-label="Breadcrumb">
+        <ol class="breadcrumb__list">
+        {% for label, href in trail %}
+            <li class="breadcrumb__item{% if loop.last %} breadcrumb__item--current{% endif %}">
+                {% if href and not loop.last %}
+                    <a class="breadcrumb__link" href="{{ href }}">{{ label }}</a>
+                {% else %}
+                    <span aria-current="page">{{ label }}</span>
+                {% endif %}
+                {% if not loop.last %}
+                    <span class="breadcrumb__separator" aria-hidden="true">›</span>
+                {% endif %}
+            </li>
+        {% endfor %}
+        </ol>
+    </nav>
+    {% endif %}
+{% endmacro %}

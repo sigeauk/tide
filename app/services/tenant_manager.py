@@ -61,7 +61,13 @@ def resolve_tenant_db_path(client_id: str, data_dir: str) -> Optional[str]:
 def refresh_tenant_cache(data_dir: str, shared_db_path: str):
     """Reload the client_id → db_filename mapping from the shared database."""
     try:
-        conn = duckdb.connect(shared_db_path, read_only=True)
+        # 4.1.0 P3 — must NOT pass read_only=True. The connection pool keeps
+        # a writable handle on shared_db_path alive between requests, and
+        # DuckDB refuses to open the same file with a different read_only
+        # config ("Can't open a connection to same database file with a
+        # different configuration than existing connections"). Writable is
+        # safe here: we only run SELECT.
+        conn = duckdb.connect(shared_db_path, read_only=False)
         try:
             # Check if db_filename column exists
             cols = conn.execute("DESCRIBE clients").fetchall()
@@ -234,9 +240,14 @@ def _create_tenant_schema(conn):
     """)
 
     # ── Detection rules ──
+    # PK is (rule_id, siem_id) since 4.0.13 (Migration 37 in shared schema):
+    # the same Elastic prebuilt rule can exist in multiple SIEMs and the old
+    # (rule_id, space) PK collided. ``space`` is retained as a data column
+    # because the Kibana preview/Test Rule URL still needs it.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS detection_rules (
-            rule_id VARCHAR,
+            rule_id VARCHAR NOT NULL,
+            siem_id VARCHAR NOT NULL,
             name VARCHAR,
             severity VARCHAR,
             author VARCHAR,
@@ -259,7 +270,7 @@ def _create_tenant_schema(conn):
             mitre_ids VARCHAR[],
             raw_data JSON,
             client_id VARCHAR,
-            PRIMARY KEY (rule_id, space)
+            PRIMARY KEY (rule_id, siem_id)
         )
     """)
 
@@ -463,6 +474,24 @@ def _create_tenant_schema(conn):
             space VARCHAR,
             assigned_at TIMESTAMP DEFAULT now(),
             PRIMARY KEY (client_id, siem_id, environment_role)
+        )
+    """)
+
+    # ── Coverage Quest persistence (4.1.0 P6) ──
+    # New tenant DBs get the table up front; pre-existing tenant DBs
+    # have it lazily created on first use by app/services/quest.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS quests (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            user_id VARCHAR NOT NULL,
+            threat_actor_id VARCHAR,
+            system_id VARCHAR,
+            baseline_id VARCHAR,
+            current_technique_id VARCHAR,
+            completed_technique_ids VARCHAR[],
+            status VARCHAR DEFAULT 'active',
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
         )
     """)
 

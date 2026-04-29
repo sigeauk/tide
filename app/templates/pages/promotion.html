@@ -118,10 +118,8 @@
      hx-get="/api/promotion"
      hx-trigger="load, refreshPromotion from:body"
      hx-swap="innerHTML">
-    <div class="empty-state">
-        <div class="loading-spinner"></div>
-        <p>Loading staging rules...</p>
-    </div>
+    {% from "components/ui/loading_state.html" import loading_state %}
+    {{ loading_state("Loading staging rules\u2026") }}
 </div>
 
 <!-- Slide Panel Container for MITRE technique details -->

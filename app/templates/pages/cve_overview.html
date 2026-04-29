@@ -78,9 +78,8 @@
          hx-get="/api/inventory/cve-overview-partial"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <div style="padding:2rem;text-align:center;color:var(--color-muted);">
-            {{ icon('loader','24') }} Loading CVE catalogue…
-        </div>
+        {% from "components/ui/loading_state.html" import loading_state %}
+        {{ loading_state("Loading CVE catalogue\u2026") }}
     </div>
 </div>
 
@@ -94,7 +93,7 @@ async function uploadFile(inputId, endpoint, targetId, successMsg) {
     const inp = document.getElementById(inputId);
     if (!inp || !inp.files.length) return;
     const status = document.getElementById('upload-status');
-    if (status) status.innerHTML = '<span class="loading-spinner" style="width:14px;height:14px;"></span> Uploading…';
+    if (status) status.innerHTML = '<span class="loading-state" style="flex-direction:row;padding:0;gap:0.5rem;"><span class="loading-spinner" style="width:14px;height:14px;"></span><span>Uploading…</span></span>';
     const fd = new FormData();
     fd.append('file', inp.files[0]);
     inp.value = ''; // reset so same file can be re-selected

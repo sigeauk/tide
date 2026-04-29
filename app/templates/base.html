@@ -5,15 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}TIDE{% endblock %}</title>
     
-    <!-- TIDE Semantic CSS -->
-    <link rel="stylesheet" href="/static/css/style.css?v={{ cache_bust | default(range(1, 99999) | random) }}">
+    <!-- TIDE Semantic CSS — content-hashed bundle (4.1.0 P4) -->
+    <link rel="stylesheet" href="{{ asset('styles.css') }}">
     
     <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
     <script defer src="/static/js/htmx.min.js?v={{ cache_bust | default('0') }}"></script>
     <script defer src="/static/js/vendor/head-support.min.js?v={{ cache_bust | default('0') }}"></script>
     
-    <!-- TIDE Application JavaScript -->
-    <script defer src="/static/js/app.js?v={{ cache_bust | default(range(1, 99999) | random) }}"></script>
+    <!-- TIDE Application JavaScript — content-hashed bundle (4.1.0 P4) -->
+    <script defer src="{{ asset('app.js') }}"></script>
     
     <!-- Favicon -->
     <link rel="icon" type="image/png" href="/static/icons/tide 48x48.png">
@@ -30,6 +30,37 @@
         
         <!-- Main Content Area -->
         <main class="main-content">
+            {# 4.1.0 P5 — route-metadata-driven breadcrumb. Renders
+               nothing when route_metadata.resolve_crumbs() returns []
+               so unmapped pages stay clean. Pages that already render
+               their own breadcrumb inline should migrate to use the
+               component (see components/ui/breadcrumb.html). #}
+            {% if user %}
+                {# 4.1.0 P6 — coverage quest tray sits above the breadcrumb
+                   so it remains visible across every page reached during
+                   the journey. Resolves to None when no quest is active. #}
+                {% set _quest = active_quest(request) %}
+                {% if _quest %}
+                    {% with quest=_quest %}{% include "components/ui/quest_tray.html" %}{% endwith %}
+                {% endif %}
+                {% from "components/ui/breadcrumb.html" import breadcrumb %}
+                {{ breadcrumb(request) }}
+            {% endif %}
+            {# 4.0.13 / Migration 37: detection_rules schema changed and the
+               table was wiped on upgrade. Show a persistent banner until a
+               sync repopulates it so operators don't see empty rule grids
+               and assume the upgrade broke things. #}
+            {% if user and migration37_resync_required and migration37_resync_required() %}
+            <div class="alert alert-warning" style="margin: 0 0 1rem 0;">
+                <strong>Action required after upgrade to 4.0.13:</strong>
+                The detection-rules cache was rebuilt with per-SIEM scoping
+                (Migration 37) and is currently empty. Trigger a sync from
+                <a href="/settings">Settings</a> (or call
+                <code>POST /api/admin/sync</code>) to repopulate. Until then,
+                rule lists, dashboard counts, and the Test Rule popup will be
+                empty for every tenant.
+            </div>
+            {% endif %}
             {% block content %}{% endblock %}
         </main>
     </div>

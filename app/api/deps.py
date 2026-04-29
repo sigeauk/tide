@@ -255,6 +255,19 @@ async def get_active_client(
     # Stash on request state for downstream use
     request.state.client_id = client_id
 
+    # 4.1.0 P1: enrich the structured logging contextvar so every subsequent
+    # log line for this request carries the resolved tenant + user. The
+    # middleware seeded the dict with placeholders; we mutate it in-place so
+    # the contextvar token reset still works.
+    try:
+        from app.services.log_context import set_context_fields
+        set_context_fields(
+            client_id=client_id,
+            user_id=str(user.id) if user is not None else "-",
+        )
+    except Exception:  # pragma: no cover - logging must never break a request
+        pass
+
     # Refresh the user's role list to reflect THIS tenant only. After this point
     # `user.roles` and `user.is_admin()` reason about the active tenant — the
     # full per-tenant map is preserved on `user.client_roles`.

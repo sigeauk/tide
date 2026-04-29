@@ -103,10 +103,8 @@
      hx-get="/api/threats"
      hx-trigger="load, refreshThreats from:body"
      hx-swap="innerHTML">
-    <div class="empty-state">
-        <div class="loading-spinner"></div>
-        <p>Loading threat actors...</p>
-    </div>
+    {% from "components/ui/loading_state.html" import loading_state %}
+    {{ loading_state("Loading threat actors\u2026") }}
 </div>
 
 <!-- Slide Panel Container (for TTP detail popups) -->

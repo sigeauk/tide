@@ -10,10 +10,67 @@ import sys
 logger = logging.getLogger(__name__)
 
 
+def _ensure_tenant_detection_rules_v37(tenant_conn) -> None:
+    """Ensure the tenant DB's ``detection_rules`` table has the v37 schema
+    (composite PK on (rule_id, siem_id) with NOT NULL ``siem_id`` column).
+
+    Older tenant DBs created before 4.0.13 have the legacy schema and lack
+    ``siem_id``. We rebuild the table from scratch \u2014 there is no operator
+    state to preserve since the table is purely a cache of upstream rules
+    that ``_distribute_rules_to_tenants`` repopulates on every sync.
+    """
+    try:
+        cols = tenant_conn.execute("DESCRIBE detection_rules").fetchall()
+        col_names = {c[0] for c in cols}
+    except Exception:
+        col_names = set()
+    if 'siem_id' in col_names:
+        return
+    logger.info(
+        "Tenant DB: rebuilding detection_rules with v37 schema "
+        "(adding siem_id column)"
+    )
+    tenant_conn.execute("DROP TABLE IF EXISTS detection_rules")
+    tenant_conn.execute("""
+        CREATE TABLE detection_rules (
+            rule_id VARCHAR NOT NULL,
+            siem_id VARCHAR NOT NULL,
+            name VARCHAR,
+            severity VARCHAR,
+            author VARCHAR,
+            enabled INTEGER,
+            space VARCHAR,
+            score INTEGER,
+            quality_score INTEGER,
+            meta_score INTEGER,
+            score_mapping INTEGER,
+            score_field_type INTEGER,
+            score_search_time INTEGER,
+            score_language INTEGER,
+            score_note INTEGER,
+            score_override INTEGER,
+            score_tactics INTEGER,
+            score_techniques INTEGER,
+            score_author INTEGER,
+            score_highlights INTEGER,
+            last_updated TIMESTAMP,
+            mitre_ids VARCHAR[],
+            raw_data JSON,
+            client_id VARCHAR,
+            PRIMARY KEY (rule_id, siem_id)
+        )
+    """)
+
+
 def _distribute_rules_to_tenants():
     """Copy detection rules from shared DB to each tenant DB,
-    filtered by the client's SIEM space mappings.
-    Called after a global elastic sync."""
+    filtered by the client's (siem_id, space) mappings.
+    Called after a global elastic sync.
+
+    Filter is by (siem_id, LOWER(space)) since 4.0.13 \u2014 a client mapped to
+    SIEM A's 'production' space must NOT receive rules from SIEM B's
+    identically-named 'production' space (they're different Kibana instances
+    with different rules)."""
     from app.services.tenant_manager import is_multi_db_mode
     if not is_multi_db_mode():
         return
@@ -24,20 +81,26 @@ def _distribute_rules_to_tenants():
     data_dir = settings.data_dir
 
     try:
-        shared_conn = duckdb.connect(shared_db_path, read_only=True)
+        # 4.1.0 P3 — see tenant_manager.refresh_tenant_cache for rationale;
+        # pool keeps a writable handle on the shared DB so we cannot open
+        # the same file read-only without DuckDB raising a config-mismatch.
+        shared_conn = duckdb.connect(shared_db_path, read_only=False)
         clients = shared_conn.execute(
             "SELECT id, db_filename FROM clients WHERE db_filename IS NOT NULL"
         ).fetchall()
 
         for client_id, db_filename in clients:
-            spaces = shared_conn.execute(
-                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+            # Pull the (siem_id, space) pairs this client is entitled to see.
+            # space is normalised to lowercase to match the comparison below.
+            scope_rows = shared_conn.execute(
+                "SELECT DISTINCT siem_id, "
+                "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
                 "FROM client_siem_map "
-                "WHERE client_id = ?",
+                "WHERE client_id = ? AND siem_id IS NOT NULL",
                 [client_id],
             ).fetchall()
-            space_list = [s[0] for s in spaces if s[0]]
-            if not space_list:
+            scopes = [(sid, sp) for sid, sp in scope_rows if sid and sp]
+            if not scopes:
                 continue
 
             tenant_path = os.path.join(data_dir, db_filename)
@@ -46,15 +109,23 @@ def _distribute_rules_to_tenants():
 
             try:
                 tenant_conn = duckdb.connect(tenant_path)
+                _ensure_tenant_detection_rules_v37(tenant_conn)
                 tenant_conn.execute(
                     f"ATTACH '{shared_db_path}' AS shared (READ_ONLY)"
                 )
 
-                placeholders = ", ".join("?" for _ in space_list)
+                # Build a (siem_id, space) tuple list filter. DuckDB supports
+                # tuple IN comparisons via row constructors.
+                # We build the predicate dynamically with parameters.
+                pair_predicates = " OR ".join(
+                    "(siem_id = ? AND LOWER(space) = ?)" for _ in scopes
+                )
+                params = [v for pair in scopes for v in pair]
+
                 tenant_conn.execute("DELETE FROM detection_rules")
                 tenant_conn.execute(f"""
                     INSERT INTO detection_rules
-                    SELECT rule_id, name, severity, author, enabled, space,
+                    SELECT rule_id, siem_id, name, severity, author, enabled, space,
                            score, quality_score, meta_score,
                            score_mapping, score_field_type, score_search_time,
                            score_language, score_note, score_override,
@@ -62,8 +133,8 @@ def _distribute_rules_to_tenants():
                            score_highlights, last_updated, mitre_ids, raw_data,
                            '{client_id}' AS client_id
                     FROM shared.detection_rules
-                    WHERE LOWER(space) IN ({placeholders})
-                """, [s.lower() for s in space_list])
+                    WHERE {pair_predicates}
+                """, params)
 
                 tenant_conn.execute("DETACH shared")
                 count = tenant_conn.execute(
@@ -72,7 +143,7 @@ def _distribute_rules_to_tenants():
                 tenant_conn.close()
                 logger.info(
                     f"Distributed {count} rules to tenant {client_id[:8]} "
-                    f"(spaces: {space_list})"
+                    f"(scopes: {scopes})"
                 )
             except Exception as e:
                 logger.error(f"Rule distribution failed for {client_id[:8]}: {e}")
@@ -257,7 +328,12 @@ def run_elastic_sync(force_mapping=False):
             _t_fetch = _time.perf_counter()
             import pandas as _pd
             frames = []
-            all_configured_spaces: set = set()
+            # Track per-SIEM the spaces we attempted to sync, so the
+            # subtractive-delete pass can be scoped per-SIEM (4.0.13). Two
+            # SIEMs can share a space name so a global "this space is empty"
+            # check is unsafe \u2014 it would delete the other SIEM's rules.
+            siem_spaces_attempted: dict = {}
+            siem_spaces_synced: dict = {}
             for siem in siems:
                 # Re-read to get the encrypted/raw token (list_siem_inventory omits it)
                 full = db.get_siem_inventory_item(siem["id"]) or {}
@@ -266,26 +342,49 @@ def run_elastic_sync(force_mapping=False):
                 es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
                 spaces = db.get_siem_spaces(siem["id"])
                 if not spaces:
-                    # SIEM exists but no client mapping yet — fall back to its declared
+                    # SIEM exists but no client mapping yet \u2014 fall back to its declared
                     # production/staging spaces so logging/preview still discover rules.
                     spaces = [sp for sp in [siem.get("production_space"),
                                             siem.get("staging_space")] if sp]
                 if not (kurl and token and spaces):
-                    logger.info(f"Skipping SIEM '{siem.get('label')}' — missing url/token/spaces")
+                    logger.info(f"Skipping SIEM '{siem.get('label')}' \u2014 missing url/token/spaces")
                     continue
-                all_configured_spaces.update(spaces)
-                logger.info(f"Fetching from SIEM '{siem.get('label')}' @ {kurl} spaces={spaces}")
+                siem_id = siem["id"]
+                siem_spaces_attempted[siem_id] = set(spaces)
+                # Per-SIEM lazy-mapping keys: only pass keys that belong to this
+                # SIEM, otherwise the fetcher would think a rule already has
+                # mapping data when really another SIEM owns that row.
+                per_siem_known = {
+                    rid for (rid, sid) in existing_rule_keys if sid == siem_id
+                }
+                logger.info(
+                    f"Fetching from SIEM '{siem.get('label')}' (siem_id={siem_id}) "
+                    f"@ {kurl} spaces={spaces}"
+                )
                 try:
                     siem_df = elastic_helper.fetch_detection_rules(
                         kibana_url=kurl,
                         api_key=token,
                         spaces=spaces,
                         check_mappings=True,
-                        known_rule_keys=existing_rule_keys,
+                        # fetch_detection_rules expects a set of rule_id strings
+                        # OR (rule_id, space) tuples \u2014 it does not know about
+                        # siem_id. Pass plain rule_ids scoped to this SIEM.
+                        known_rule_keys=per_siem_known,
                         elasticsearch_url=es_url,
                     )
                     if siem_df is not None and not siem_df.empty:
+                        # Stamp every row with its originating siem_id BEFORE
+                        # frames get concatenated. save_audit_results requires
+                        # this to satisfy the new (rule_id, siem_id) PK.
+                        siem_df = siem_df.copy()
+                        siem_df['siem_id'] = siem_id
+                        siem_spaces_synced[siem_id] = set(
+                            siem_df['space_id'].dropna().unique()
+                        ) if 'space_id' in siem_df.columns else set()
                         frames.append(siem_df)
+                    else:
+                        siem_spaces_synced[siem_id] = set()
                 except Exception as e:
                     logger.error(f"Fetch failed for SIEM '{siem.get('label')}': {e}")
 
@@ -296,10 +395,12 @@ def run_elastic_sync(force_mapping=False):
                 logger.info(f"[perf] fetch_detection_rules (per-SIEM) completed in {(_t_save - _t_fetch)*1000:.0f}ms")
                 audit_records = df.to_dict('records')
                 
-                # Lazy Mapping: restore scores and mapping data for rules that were skipped
+                # Lazy Mapping: restore scores and mapping data for rules that were skipped.
+                # Key by (rule_id, siem_id) since 4.0.13 \u2014 a single rule_id can exist in
+                # multiple SIEMs and each must restore from its own row.
                 restored_count = 0
                 for rec in audit_records:
-                    key = (rec.get('rule_id'), rec.get('space_id', 'default'))
+                    key = (rec.get('rule_id'), rec.get('siem_id'))
                     if key in existing_rule_data and not rec.get('results'):
                         existing = existing_rule_data[key]
                         # Restore mapping results from existing raw_data
@@ -318,15 +419,21 @@ def run_elastic_sync(force_mapping=False):
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
                 # --- Subtractive sync: remove ghost rules from empty spaces ---
-                synced_spaces = set(df['space_id'].dropna().unique()) if 'space_id' in df.columns else set()
-                empty_spaces = [s for s in all_configured_spaces if s not in synced_spaces]
-                
-                if empty_spaces:
-                    logger.info(f"Subtractive sync: clearing ghost rules from empty spaces: {empty_spaces}")
-                    db.delete_rules_for_spaces(empty_spaces)
-                
+                # Per-SIEM (4.0.13): if SIEM A's space 'production' came back
+                # empty, only delete SIEM A's rules in 'production' \u2014 never
+                # touch SIEM B's rules even if B also has a 'production' space.
+                for siem_id, attempted in siem_spaces_attempted.items():
+                    synced = siem_spaces_synced.get(siem_id, set())
+                    empty_spaces = [s for s in attempted if s not in synced]
+                    if empty_spaces:
+                        logger.info(
+                            f"Subtractive sync: clearing ghost rules from "
+                            f"siem_id={siem_id} empty spaces: {empty_spaces}"
+                        )
+                        db.delete_rules_for_spaces(empty_spaces, siem_id=siem_id)
+
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s)")
-                
+
                 # Distribute rules to per-tenant databases
                 try:
                     _distribute_rules_to_tenants()

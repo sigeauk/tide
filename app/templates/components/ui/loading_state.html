@@ -1,0 +1,14 @@
+{# 4.1.0 P5 — Centered loading state.
+
+    Replaces the ad-hoc text-align:center + inline SVG pattern that
+    left the spinner aligned LEFT of centered text. Uses a flex column
+    so the spinner sits above the label, both axes centered.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro loading_state(label="Loading…", icon_name="loader", size="24") %}
+<div class="loading-state" role="status" aria-live="polite">
+    {{ icon(icon_name, size, class="spin") }}
+    <span class="loading-state__label">{{ label }}</span>
+</div>
+{% endmacro %}

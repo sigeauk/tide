@@ -627,10 +627,10 @@ def validate_sigma_rule(yaml_content: str) -> Tuple[bool, str]:
         return False, f"Invalid Sigma rule: {str(e)}"
 
 
-def get_kibana_spaces() -> List[str]:
-    """Get Kibana spaces from environment."""
-    spaces_str = os.getenv('KIBANA_SPACES', 'staging, production')
-    return [s.strip() for s in spaces_str.split(',') if s.strip()]
+# 4.1.0 P2: removed get_kibana_spaces() — read KIBANA_SPACES env var that was
+# deleted in 4.0.11 when Kibana spaces moved to per-tenant siem_inventory.
+# Its only call site (Settings page) populated UI dropdowns that 4.0.8 had
+# already trimmed away. Resolve via db.get_siem_spaces(siem_id) instead.
 
 
 def get_elastic_indices() -> List[str]:

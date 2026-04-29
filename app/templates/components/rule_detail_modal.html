@@ -167,7 +167,7 @@ Shows full rule information including query, field mappings, and scores.
                     {% endif %}
                 </div>
                 <button class="btn btn-primary btn-sm"
-                        hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}"
+                        hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
                         hx-headers='{"X-Return-Modal": "true"}'>
@@ -181,7 +181,7 @@ Shows full rule information including query, field mappings, and scores.
                     <option value="30d">30d</option>
                 </select>
                 <button class="btn btn-secondary btn-sm"
-                        hx-post="/api/rules/{{ rule.rule_id }}/test?space={{ rule.space | default('default') }}"
+                        hx-post="/api/rules/{{ rule.rule_id }}/test?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
                         hx-include="#test-lookback"

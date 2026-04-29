@@ -79,7 +79,7 @@
     <div class="rule-footer">
         <button 
             class="btn btn-validate btn-sm"
-            hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}"
+            hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
             hx-target="#rule-{{ rule.rule_id }}"
             hx-swap="outerHTML"
             hx-include="unset">
@@ -88,7 +88,7 @@
         </button>
         <button 
             class="btn btn-logic btn-sm"
-            hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
+            hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
             hx-target="#modal-container"
             hx-swap="innerHTML"
             hx-include="unset">

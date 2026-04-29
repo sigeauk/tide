@@ -170,7 +170,9 @@ def external_query(
 
     # ── Execute against tenant DB (read-only) ──
     try:
-        conn = duckdb.connect(tenant_db_path, read_only=True)
+        # 4.1.0 P3 — pool may hold a writable handle to this tenant DB; opening
+        # read-only would trip DuckDB's "different configuration" error.
+        conn = duckdb.connect(tenant_db_path, read_only=False)
         try:
             result = conn.execute(body.sql)
             columns = [desc[0] for desc in result.description]

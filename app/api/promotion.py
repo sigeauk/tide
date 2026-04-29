@@ -96,12 +96,17 @@ def get_promotion_rule_detail(
     client_id: ActiveClient,
 ):
     """Get full rule details for modal display."""
-    staging_spaces = db.get_client_siem_spaces(client_id, environment_role="staging")
+    staging_siems = db.get_client_siems(client_id, environment_role="staging")
 
-    # Try each staging space until the rule is found
+    # Try each staging (siem, space) until the rule is found. Scoped by
+    # siem_id since 4.0.13 \u2014 multiple SIEMs may share a space name and the
+    # rule we want to promote belongs to a specific one.
     rule = None
-    for sp in staging_spaces:
-        rule = db.get_rule_by_id(rule_id, sp)
+    for siem in staging_siems:
+        sp = siem.get("space")
+        if not sp:
+            continue
+        rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
         if rule:
             break
     
@@ -161,7 +166,12 @@ async def promote_rule(
             status_code=400
         )
 
-    # Find the rule in any staging space
+    # Find the rule in any staging space. Each (siem, space) pair is checked
+    # individually so the lookup is unambiguous: the same rule_id can legally
+    # exist in multiple staging SIEMs, and we must promote from the SIEM the
+    # rule was actually fetched from. ``get_rule_by_id`` is called with the
+    # explicit ``siem_id`` since 4.0.13 \u2014 prior versions silently picked
+    # the first row matching (rule_id, space).
     staging_spaces = [s["space"] for s in staging_siems if s.get("space")]
     rule = None
     source_space = None
@@ -170,7 +180,7 @@ async def promote_rule(
         sp = siem.get("space")
         if not sp:
             continue
-        rule = db.get_rule_by_id(rule_id, sp)
+        rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
         if rule:
             source_space = sp
             source_siem = siem
@@ -223,9 +233,18 @@ async def promote_rule(
         if success:
             # Save validation record
             db.save_validation(rule.name, username)
-            
-            # Immediately update DuckDB: move the rule between spaces
-            db.move_rule_space(rule_id, source_space, target_space)
+
+            # Immediately update DuckDB: move the rule between spaces. Scoped
+            # by source_siem.id since 4.0.13 so we don't accidentally rename
+            # an identically-keyed row owned by a different SIEM. If staging
+            # and production live in different SIEMs the next sync will remove
+            # the stale row from source_siem and add the fresh one under
+            # target_siem \u2014 the optimistic local move is still useful for
+            # single-SIEM deployments (source==target) which is the common case.
+            db.move_rule_space(
+                rule_id, source_space, target_space,
+                siem_id=source_siem.get("id"),
+            )
             
             logger.info(f"Promoted rule '{rule.name}' from {source_space} to {target_space} by {username}")
             

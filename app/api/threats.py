@@ -108,9 +108,10 @@ def list_threats(
 ):
     """List threat actors with filtering and pagination."""
     try:
-        # Get all actors
-        actors = db.get_threat_actors()
-        
+        # Get all actors visible to the active tenant (OpenCTI-only actors are
+        # hidden when this client has no OpenCTI link — see DB layer).
+        actors = db.get_threat_actors(client_id=client_id)
+
         # Get covered TTPs and rule counts scoped to active client
         covered_ttps = db.get_all_covered_ttps(client_id=client_id)
         technique_rule_counts = db.get_ttp_rule_counts(client_id=client_id)

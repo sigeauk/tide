@@ -1,0 +1,19 @@
+{# 4.1.0 P5 — Standard page header.
+
+    Pairs the route-driven breadcrumb with a consistent <h1> + optional
+    subtitle and right-aligned actions slot.
+#}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
+
+{% macro page_header(request, title, subtitle="") %}
+    {{ breadcrumb(request) }}
+    <header class="page-header">
+        <div class="page-header__text">
+            <h1 class="page-header__title">{{ title }}</h1>
+            {% if subtitle %}<p class="page-header__subtitle">{{ subtitle }}</p>{% endif %}
+        </div>
+        <div class="page-header__actions">
+            {{ caller() if caller is defined else "" }}
+        </div>
+    </header>
+{% endmacro %}

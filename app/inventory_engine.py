@@ -1600,14 +1600,19 @@ def get_rules_for_cve_techniques(cve_id: str, client_id: str = None) -> Dict[str
 
 
 def get_all_siem_rules(client_id: str = None) -> list:
-    """Return a list of ALL SIEM rules [{rule_id, name, mitre_ids, severity, enabled}] for dropdowns."""
+    """Return a list of ALL SIEM rules [{rule_id, name, mitre_ids, severity, enabled}] for dropdowns.
+
+    NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
+    shared schema no longer carries a `client_id` column. Calling `_cf()` here
+    against a non-multi-DB deployment would produce `WHERE client_id=?` against
+    a column that doesn't exist (BinderException). The table is already tenant-
+    scoped (either by tenant DB routing or by being empty in pre-migration
+    deployments), so we skip the filter unconditionally."""
     from app.services.database import get_database_service
     db = get_database_service()
-    frag, params = _cf("", client_id)
     with db.get_connection() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name, mitre_ids, severity, enabled FROM detection_rules WHERE 1=1" + frag + " ORDER BY name",
-            params,
+            "SELECT rule_id, name, mitre_ids, severity, enabled FROM detection_rules ORDER BY name"
         ).fetchall()
     return [{"rule_id": r[0], "name": r[1], "mitre_ids": r[2] or [], "severity": r[3] or "", "enabled": bool(r[4])} for r in rows]
 
@@ -2529,6 +2534,23 @@ def get_baseline_step_coverage(baseline_id: str, client_id: str = None) -> Dict[
             for hid, did in ad_rows:
                 sid = host_to_sys.get(hid)
                 if sid:
+                    system_applied_det_ids[sid].add(did)
+
+        # Also include system-level applications (host_id IS NULL) — required
+        # for systems that have no hosts yet but have rules attached at the
+        # system level (matches `get_system_baselines` behaviour so the system
+        # page and baseline page agree on coverage status).
+        if all_step_det_ids:
+            sysp = ",".join("?" for _ in system_ids)
+            dp2 = ",".join("?" for _ in all_step_det_ids)
+            sys_ad_rows = conn.execute(
+                f"SELECT system_id, detection_id FROM applied_detections "
+                f"WHERE system_id IN ({sysp}) AND host_id IS NULL "
+                f"AND detection_id IN ({dp2})",
+                list(system_ids) + list(all_step_det_ids),
+            ).fetchall()
+            for sid, did in sys_ad_rows:
+                if sid in system_applied_det_ids:
                     system_applied_det_ids[sid].add(did)
 
     # Build per-step coverage

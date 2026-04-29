@@ -1,17 +1,13 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 
 {% block title %}{{ baseline.name }} | Baselines | TIDE{% endblock %}
 
 {% block content %}
 <div style="padding:1.5rem;">
 
-    <!-- Breadcrumb -->
-    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
-        <a href="/baselines" style="color:inherit;text-decoration:none;">Baselines</a>
-        <span style="margin:0 0.4rem;">›</span>
-        <span>{{ baseline.name }}</span>
-    </nav>
+    {{ breadcrumb(items=[('Home', '/'), ('Baselines', '/baselines'), (baseline.name, none)]) }}
 
     <!-- Header -->
     <div style="margin-bottom:1.5rem;">
@@ -54,6 +50,83 @@
                     </button>
                 </div>
             </div>
+
+            {# 4.1.0 P6 redesign — Coverage Quest launcher.
+               Lives on the right of the header (accent blue, not purple).
+               Always visible when the baseline has at least one MITRE
+               technique; works whether or not systems are pre-applied
+               (auto-applies on launch). When no systems are applied yet,
+               the picker is forced open via ?need_system=1 from the
+               server so the user can't post an empty system_id. #}
+            {% if baseline.tactics %}
+            {% set _need_sys = (request.query_params.get('need_system') == '1') %}
+            {% set _has_sys = (applied_systems | length > 0) %}
+            <div class="quest-launcher" style="position:relative;">
+                <button type="button" class="btn btn-sm"
+                        id="quest-launch-btn"
+                        onclick="document.getElementById('quest-launch-pop').style.display='block';this.style.display='none';"
+                        style="display:{{ 'none' if _need_sys else 'inline-flex' }};align-items:center;gap:0.35rem;
+                               background:rgba(47,129,247,.12);color:var(--color-info,#2f81f7);
+                               border:1px solid rgba(47,129,247,.4);font-weight:600;">
+                    {{ icon('target','14') }} Start coverage quest
+                </button>
+                <div id="quest-launch-pop"
+                     style="display:{{ 'block' if _need_sys else 'none' }};position:absolute;top:calc(100% + 0.4rem);right:0;
+                            background:var(--color-bg-surface);border:1px solid rgba(47,129,247,.4);
+                            border-radius:var(--radius-lg);padding:0.85rem;box-shadow:var(--shadow);
+                            z-index:60;min-width:300px;">
+                    <div style="font-size:0.78rem;font-weight:600;margin-bottom:0.5rem;color:var(--color-text);">
+                        {% if _need_sys %}Pick a system to defend{% else %}Pick a system to harden{% endif %}
+                    </div>
+                    {% if _need_sys %}
+                    <div style="font-size:0.72rem;color:var(--color-warning);margin-bottom:0.5rem;">
+                        A system is required to start the quest.
+                    </div>
+                    {% endif %}
+                    <form hx-post="/api/quest/start"
+                          hx-swap="none"
+                          style="display:flex;flex-direction:column;gap:0.5rem;">
+                        <input type="hidden" name="baseline_id" value="{{ baseline.id }}">
+                        <select name="system_id" required class="form-input"
+                                style="font-size:0.82rem;">
+                            <option value="">— select a system —</option>
+                            {% if _has_sys %}
+                                <optgroup label="Already applied">
+                                    {% for sys in applied_systems %}
+                                        <option value="{{ sys.system_id }}">{{ sys.system_name }}</option>
+                                    {% endfor %}
+                                </optgroup>
+                                {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
+                                {% if all_systems and (all_systems | length > applied_systems | length) %}
+                                <optgroup label="Other systems (will be applied)">
+                                    {% for sys in all_systems %}
+                                        {% if sys.id not in applied_ids %}
+                                            <option value="{{ sys.id }}">{{ sys.name }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </optgroup>
+                                {% endif %}
+                            {% else %}
+                                {% for sys in all_systems %}
+                                    <option value="{{ sys.id }}">{{ sys.name }}</option>
+                                {% endfor %}
+                            {% endif %}
+                        </select>
+                        <div style="display:flex;gap:0.4rem;">
+                            <button type="submit" class="btn btn-sm" style="flex:1;
+                                    background:var(--color-info,#2f81f7);color:#fff;border:none;font-weight:600;
+                                    display:inline-flex;align-items:center;justify-content:center;gap:0.3rem;">
+                                {{ icon('target','12') }} Start
+                            </button>
+                            <button type="button" class="btn btn-secondary btn-sm"
+                                    onclick="document.getElementById('quest-launch-pop').style.display='none';document.getElementById('quest-launch-btn').style.display='inline-flex';">
+                                Cancel
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            {% endif %}
         </div>
         <div class="md-content" style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">
             {% if baseline.description %}{{ baseline.description | md }}{% else %}<p style="font-style:italic;">No description.</p>{% endif %}

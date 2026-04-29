@@ -811,12 +811,43 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
     
     try:
         response = session.post(endpoint, json=payload, timeout=30)
-        
+
         if response.status_code != 200:
             error_text = response.text[:500]
             log_error(f"Preview API error ({response.status_code}): {error_text}")
+            if response.status_code in (401, 403):
+                # Diagnostic dump (4.0.13): log endpoint, request-id, response
+                # headers and the auth header prefix actually sent so we can
+                # confirm the on-the-wire request matches what worked in 4.0.7.
+                _sent_auth = session.headers.get("Authorization", "<missing>")
+                _auth_prefix = (_sent_auth[:14] + "...") if _sent_auth else "<empty>"
+                _resp_headers = {
+                    k: v for k, v in response.headers.items()
+                    if k.lower() in (
+                        "www-authenticate", "x-elastic-product",
+                        "x-found-handling-cluster", "x-found-handling-instance",
+                        "kbn-name", "kbn-license-sig", "x-kibana-request-id",
+                    )
+                }
+                log_error(
+                    f"Preview API {response.status_code} diagnostics: "
+                    f"endpoint={endpoint} space={space} "
+                    f"auth_header_prefix={_auth_prefix} resp_headers={_resp_headers}"
+                )
+                return 0, [], (
+                    f"Kibana rejected the API key for the Detection Engine preview "
+                    f"endpoint (HTTP {response.status_code}). Note: Management \u2192 "
+                    f"Test Connection only proves /api/status — the preview endpoint "
+                    f"requires Security \u2192 Detection rules privileges on space "
+                    f"'{space}'. Likely causes: API key rotated/revoked in Kibana, "
+                    f"the role behind the key lost Detection-rule privileges, the "
+                    f"space '{space}' was renamed/removed, or the active client's "
+                    f"SIEM mapping no longer covers this space. Check tide-app logs "
+                    f"for the matching 'test_rule resolved SIEM ...' line to see what "
+                    f"was sent. Raw response: {error_text}"
+                )
             return 0, [], f"Preview API returned {response.status_code}: {error_text}"
-        
+
         data = response.json()
         
         # The preview API returns logs with alerts

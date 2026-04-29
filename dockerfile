@@ -79,6 +79,12 @@ COPY VERSION /app/VERSION
 
 ENV PYTHONPATH="/app"
 
+# 4.1.0 P4 — Build content-hashed CSS/JS bundles into app/static/{css,js}/dist/
+# and emit app/static/manifest.json. Done at image-build time so production
+# images ship with the manifest pre-populated; dev (override compose mounts
+# the source tree) re-runs `python -m app.scripts.build_assets` on demand.
+RUN python -m app.scripts.build_assets
+
 # Point Python requests / httpx / urllib at the system CA bundle
 # (entrypoint.sh re-exports these after installing any custom CAs)
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt

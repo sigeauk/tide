@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
+{# 4.1.0 P6 (redesign v2) — Coverage Quest walker.
+
+   Sequential walker scoped to (baseline, system). Coverage state is
+   data-driven (reads `step_detections` for the baseline) so anything
+   marked covered here also shows covered on the baseline page, and
+   vice-versa. The "Add a detection" panel posts to the same step
+   endpoint the baseline-detail editor uses, so attaching a rule from
+   the quest persists on the baseline. #}
+
+{% block title %}Quest · {{ current.technique_id }} · TIDE{% endblock %}
+
+{% block content %}
+<section style="padding:1.5rem;max-width:1200px;margin:0 auto;">
+
+  {{ breadcrumb(items=[
+       ('Home', '/'),
+       ('Baselines', '/baselines'),
+       (quest.baseline_name or 'Baseline', '/baselines/' ~ quest.baseline_id),
+       ('Coverage Quest', none)
+  ]) }}
+
+  {# ── Header: baseline + system + progress ──────────────────── #}
+  <div style="display:flex;align-items:flex-end;gap:1.5rem;flex-wrap:wrap;margin-bottom:1rem;">
+    <div style="flex:1;min-width:260px;">
+      <div style="font-size:0.7rem;text-transform:uppercase;letter-spacing:.6px;color:var(--color-info,#2f81f7);font-weight:700;">
+        {{ icon('target','12') }} Coverage Quest
+      </div>
+      <h1 style="margin:0.15rem 0 0.25rem;font-size:1.5rem;font-weight:700;color:var(--color-primary);">
+        {{ quest.baseline_name or 'Baseline' }}
+      </h1>
+      <div style="font-size:0.85rem;color:var(--color-text-muted);">
+        Hardening <strong style="color:var(--color-text);">{{ quest.system_name or 'system' }}</strong> ·
+        {{ completed_count }} of {{ techniques | length }} techniques covered
+      </div>
+    </div>
+    <div style="min-width:200px;">
+      {% set pct = (completed_count / techniques | length * 100) | round(0) if techniques else 0 %}
+      <div style="height:6px;background:var(--color-bg-elevated,#1c2128);border-radius:3px;overflow:hidden;">
+        <div style="height:100%;width:{{ pct }}%;background:var(--color-success);transition:width .25s ease;"></div>
+      </div>
+      <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:0.3rem;text-align:right;">{{ pct }}% complete</div>
+    </div>
+  </div>
+
+  {# ── Mini-heatmap: tactic columns in MITRE order ────────────── #}
+  <div style="display:flex;gap:0.4rem;overflow-x:auto;padding:0.6rem;background:var(--color-bg-elevated,#1c2128);border:1px solid var(--color-border,#30363d);border-radius:0.5rem;margin-bottom:1.25rem;">
+    {% for tac, items in grouped_columns %}
+    <div style="display:flex;flex-direction:column;gap:0.25rem;min-width:130px;flex-shrink:0;">
+      <div title="{{ tac }}"
+           style="font-size:0.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.4px;
+                  color:var(--color-text-muted);padding-bottom:0.3rem;border-bottom:1px solid var(--color-border,#30363d);
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        {{ tac }}
+      </div>
+      {% for t in items %}
+        {% set is_current = t.technique_id == current.technique_id %}
+        <a href="/quest/{{ quest.id }}/technique/{{ t.technique_id }}"
+           title="{{ t.technique_id }} · {{ t.technique_name }}{% if t.detection_count %} ({{ t.detection_count }} rule{{ 's' if t.detection_count != 1 }}){% endif %}"
+           style="text-decoration:none;font-size:0.7rem;font-family:monospace;padding:0.25rem 0.4rem;border-radius:0.25rem;
+                  display:flex;align-items:center;gap:0.3rem;justify-content:space-between;
+                  {% if is_current %}background:var(--color-info,#2f81f7);color:#fff;font-weight:700;
+                  {% elif t.covered %}background:rgba(34,197,94,.15);color:var(--color-success);border:1px solid rgba(34,197,94,.3);
+                  {% else %}background:transparent;color:var(--color-text-muted);border:1px solid var(--color-border,#30363d);{% endif %}">
+          <span>{{ t.technique_id }}</span>
+          {% if t.covered and not is_current %}<span style="font-size:0.6rem;">●</span>{% endif %}
+        </a>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {# ── Current TTP body — Tactic › Technique › Procedure ────── #}
+  <div class="card card-padded" style="margin-bottom:1rem;
+       {% if current_covered %}border-left:4px solid var(--color-success);{% else %}border-left:4px solid var(--color-info,#2f81f7);{% endif %}">
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;">
+      <span style="font-size:0.78rem;text-transform:uppercase;letter-spacing:.5px;color:var(--color-info,#2f81f7);font-weight:700;">
+        {{ current.tactic }}
+      </span>
+      {% if current_covered %}
+      <span class="badge" style="font-size:0.65rem;background:rgba(34,197,94,.15);color:var(--color-success);border:1px solid rgba(34,197,94,.3);">
+        {{ icon('check','10') }} already covered
+      </span>
+      {% endif %}
+    </div>
+    <h2 style="margin:0 0 0.25rem;font-size:1.35rem;font-weight:700;color:var(--color-primary);">
+      <span style="font-family:monospace;color:var(--color-text-muted);">{{ current.technique_id }}</span>
+      &nbsp;{{ current.technique_name }}
+    </h2>
+    <div style="font-size:0.8rem;color:var(--color-text-muted);margin-bottom:0.85rem;">
+      Step {{ current.step_number }} of {{ techniques | length }} on this baseline
+    </div>
+    {% if current.description %}
+      <div style="font-size:0.92rem;line-height:1.55;color:var(--color-text);white-space:pre-wrap;">{{ current.description }}</div>
+    {% else %}
+      <div style="font-size:0.88rem;font-style:italic;color:var(--color-text-muted);">
+        No procedure description recorded for this step.
+      </div>
+    {% endif %}
+  </div>
+
+  {# ── Existing coverage panel (reads step_detections live) ──── #}
+  <div id="quest-coverage" class="card card-padded" style="margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">
+      <h3 style="margin:0;font-size:1rem;font-weight:600;">Existing coverage</h3>
+      <span class="badge badge-neutral" style="font-size:0.7rem;">{{ coverage | length }}</span>
+    </div>
+    {% if coverage %}
+      <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0.35rem;">
+        {% for det in coverage %}
+        <li style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.4rem 0.5rem;background:var(--color-bg-elevated,#1c2128);border-radius:0.3rem;">
+          {{ icon('check-circle','12') }}
+          <span style="flex:1;">{{ det.rule_ref }}</span>
+          <span class="badge" style="font-size:0.6rem;text-transform:uppercase;
+                {% if det.source == 'siem' %}background:rgba(34,197,94,.12);color:var(--color-success);
+                {% elif det.source == 'sigma' %}background:rgba(234,179,8,.12);color:var(--color-warning);
+                {% else %}background:rgba(59,130,246,.12);color:var(--color-info);{% endif %}">
+            {{ det.source }}
+          </span>
+          {% if det.note %}<span style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;">{{ det.note }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div style="font-size:0.85rem;color:var(--color-text-muted);font-style:italic;">
+        No detections recorded for this technique on this baseline yet.
+      </div>
+    {% endif %}
+  </div>
+
+  {# ── Inline rule attach (replaces "Open editor") ────────────── 
+       Three search panels (SIEM / Manual / Sigma) hitting the same
+       baseline-step endpoints the editor uses, so anything attached
+       here lands on the baseline immediately and the next page render
+       picks it up via the coverage_map / existing_coverage queries.
+       After a successful POST we trigger a walker reload via
+       hx-on::after-request so the new detection appears in the panel
+       above without a full navigation. #}
+  <div class="card card-padded" style="margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.65rem;">
+      <h3 style="margin:0;font-size:1rem;font-weight:600;">Add a detection</h3>
+      <span style="font-size:0.72rem;color:var(--color-text-muted);">
+        applied to <strong>{{ quest.baseline_name }}</strong>
+      </span>
+    </div>
+
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem;">
+      <button class="btn btn-sm" id="qst-siem-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
+              onclick="this.style.display='none';var p=document.getElementById('qst-siem-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-siem-search'),'load');">
+        {{ icon('shield-check','14') }} + SIEM rule
+      </button>
+      <button class="btn btn-sm" id="qst-manual-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
+              onclick="this.style.display='none';document.getElementById('qst-manual-panel').style.display='flex';">
+        {{ icon('edit-3','14') }} + Manual rule
+      </button>
+      <button class="btn btn-sm" id="qst-sigma-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
+              onclick="this.style.display='none';var p=document.getElementById('qst-sigma-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-sigma-search'),'load');">
+        {{ icon('zap','14') }} + Sigma rule
+      </button>
+    </div>
+
+    {# SIEM rule search panel #}
+    <div id="qst-siem-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(34,197,94,.04);">
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="text" id="qst-siem-search" class="form-input" placeholder="Search SIEM rules…"
+               style="font-size:0.82rem;flex:1;"
+               hx-get="/api/baselines/tactics/{{ current.step_id }}/siem-rules"
+               hx-trigger="input changed delay:300ms, load"
+               hx-target="#qst-siem-results" hx-swap="innerHTML" name="q">
+        <button type="button" class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('qst-siem-panel').style.display='none';document.getElementById('qst-siem-btn').style.display='inline-flex';">Cancel</button>
+      </div>
+      <div id="qst-siem-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+        <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
+      </div>
+      <form id="qst-siem-form"
+            hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}">
+        <input type="hidden" name="rule_ref" id="qst-siem-rule-ref" value="">
+        <input type="hidden" name="note" value="">
+        <input type="hidden" name="source" value="siem">
+      </form>
+    </div>
+
+    {# Manual rule input panel #}
+    <div id="qst-manual-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
+      <form hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}"
+            style="display:flex;flex-direction:column;gap:0.5rem;">
+        <input class="form-input" name="rule_ref" placeholder="Detection name (e.g. Dashboard, KQL query…)" required style="font-size:0.85rem;">
+        <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
+        <input type="hidden" name="source" value="manual">
+        <div style="display:flex;gap:0.5rem;">
+          <button type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+          <button type="button" class="btn btn-secondary btn-sm"
+                  onclick="document.getElementById('qst-manual-panel').style.display='none';document.getElementById('qst-manual-btn').style.display='inline-flex';">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    {# Sigma rule search panel #}
+    <div id="qst-sigma-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(234,179,8,.04);">
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="text" id="qst-sigma-search" class="form-input" placeholder="Search Sigma rules…"
+               style="font-size:0.82rem;flex:1;"
+               hx-get="/api/baselines/tactics/{{ current.step_id }}/sigma-rules"
+               hx-trigger="input changed delay:300ms, load"
+               hx-target="#qst-sigma-results" hx-swap="innerHTML" name="q">
+        <button type="button" class="btn btn-secondary btn-sm"
+                onclick="document.getElementById('qst-sigma-panel').style.display='none';document.getElementById('qst-sigma-btn').style.display='inline-flex';">Cancel</button>
+      </div>
+      <div id="qst-sigma-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+        <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
+      </div>
+      <form id="qst-sigma-form"
+            hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
+            hx-swap="none"
+            hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}">
+        <input type="hidden" name="rule_ref" id="qst-sigma-rule-ref" value="">
+        <input type="hidden" name="note" value="">
+        <input type="hidden" name="source" value="sigma">
+      </form>
+    </div>
+
+    {# The siem_rule_options.html / sigma_rule_options.html partials call
+       window.selectSiemRule / selectSigmaRule. Re-bind them here so the
+       quest form ids (qst-*) get the rule_ref. #}
+    <script>
+      function selectSiemRule(btn, title) {
+        document.getElementById('qst-siem-rule-ref').value = title;
+        htmx.trigger(document.getElementById('qst-siem-form'), 'submit');
+      }
+      function selectSigmaRule(btn, title) {
+        document.getElementById('qst-sigma-rule-ref').value = title;
+        htmx.trigger(document.getElementById('qst-sigma-form'), 'submit');
+      }
+    </script>
+  </div>
+
+  {# ── Navigation footer ────────────────────────────────────── #}
+  <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.75rem 1rem;background:var(--color-bg-elevated,#1c2128);border:1px solid var(--color-border,#30363d);border-radius:0.5rem;">
+    {% if prev_tech %}
+      <a href="/quest/{{ quest.id }}/technique/{{ prev_tech }}" class="btn btn-secondary btn-sm">← Previous</a>
+    {% else %}
+      <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    {% endif %}
+
+    {% if current_covered %}
+      {# Already covered — primary action is Next, not Mark covered. #}
+      {% if next_tech %}
+        <a href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-sm"
+           style="background:var(--color-info,#2f81f7);color:#fff;display:inline-flex;align-items:center;gap:0.3rem;">
+          Next → {{ next_tech }}
+        </a>
+      {% else %}
+        <button class="btn btn-success btn-sm"
+                hx-post="/api/quest/{{ quest.id }}/complete/{{ current.technique_id }}"
+                hx-swap="none"
+                style="display:inline-flex;align-items:center;gap:0.3rem;">
+          {{ icon('check','12') }} Finish quest
+        </button>
+      {% endif %}
+    {% else %}
+      <button class="btn btn-success btn-sm"
+              hx-post="/api/quest/{{ quest.id }}/complete/{{ current.technique_id }}"
+              hx-swap="none"
+              title="Mark this technique covered (e.g. risk accepted) and advance"
+              style="display:inline-flex;align-items:center;gap:0.3rem;">
+        {{ icon('check','12') }} Mark covered &amp; next
+      </button>
+      {% if next_tech %}
+        <a href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-secondary btn-sm">
+          Skip →
+        </a>
+      {% endif %}
+    {% endif %}
+
+    <span style="flex:1;"></span>
+
+    <a href="/baselines/{{ quest.baseline_id }}" class="btn btn-link btn-sm">
+      View baseline
+    </a>
+    <button class="btn btn-link btn-sm"
+            hx-post="/api/quest/{{ quest.id }}/end"
+            hx-swap="none"
+            hx-confirm="End this coverage quest? Updates you've made persist on the baseline.">
+      End quest
+    </button>
+  </div>
+
+</section>
+{% endblock %}

@@ -4,15 +4,12 @@
 
 {% block title %}{{ cve.cve_id }} — TIDE{% endblock %}
 
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
+
 {% block content %}
 <div style="padding:1.5rem;">
 
-    <!-- Breadcrumb -->
-    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
-        <a href="/cve-overview" style="color:inherit;text-decoration:none;">CVE Overview</a>
-        <span style="margin:0 0.4rem;">›</span>
-        <span>{{ cve.cve_id }}</span>
-    </nav>
+    {{ breadcrumb(items=[('Home', '/'), ('CVE Catalogue', '/cve-overview'), (cve.cve_id, none)]) }}
 
     <!-- Header -->
     <div style="margin-bottom:1.5rem;">

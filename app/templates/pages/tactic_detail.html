@@ -15,17 +15,17 @@
 {% endif %}
 {% endblock %}
 
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
+
 {% block content %}
 <div style="padding:1.5rem;">
 
-    <!-- Breadcrumb -->
-    <nav style="font-size:0.82rem;color:var(--color-text-muted);margin-bottom:1rem;">
-        <a href="/baselines" style="color:inherit;text-decoration:none;">Baselines</a>
-        <span style="margin:0 0.4rem;">›</span>
-        <a href="/baselines/{{ baseline.id }}" style="color:inherit;text-decoration:none;">{{ baseline.name }}</a>
-        <span style="margin:0 0.4rem;">›</span>
-        <span>{{ tactic.title }}</span>
-    </nav>
+    {{ breadcrumb(items=[
+        ('Home', '/'),
+        ('Baselines', '/baselines'),
+        (baseline.name, '/baselines/' ~ baseline.id),
+        (tactic.title, none),
+    ]) }}
 
     <!-- Header -->
     <div style="margin-bottom:1.5rem;">
