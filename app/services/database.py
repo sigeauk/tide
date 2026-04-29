@@ -3532,25 +3532,56 @@ class DatabaseService:
                         updated_at = EXCLUDED.updated_at
                 """, [key, value, cid])
     
-    def get_all_rules_for_export(self) -> List[Dict[str, Any]]:
-        """Get all detection rules as dicts for JSON log export."""
+    def get_all_rules_for_export(
+        self,
+        siem_id: Optional[str] = None,
+        space: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """Get detection rules as dicts for JSON log export.
+
+        Args:
+            siem_id: When provided, restrict to rows whose
+                ``detection_rules.siem_id`` equals this value (4.0.13+ scoping).
+            space: When provided, restrict to rows whose ``space`` matches.
+                Accepts a single string OR a list/tuple of strings (so a SIEM
+                can be configured to log multiple Kibana spaces in one file).
+                Empty / falsy entries are dropped; an empty list after
+                filtering is treated as 'no space filter'.
+        """
+        clauses: List[str] = []
+        params: List[Any] = []
+        if siem_id:
+            clauses.append("siem_id = ?")
+            params.append(siem_id)
+        if space:
+            spaces = [space] if isinstance(space, str) else list(space)
+            spaces = [s.strip() for s in spaces if s and str(s).strip()]
+            if len(spaces) == 1:
+                clauses.append("space = ?")
+                params.append(spaces[0])
+            elif len(spaces) > 1:
+                placeholders = ",".join(["?"] * len(spaces))
+                clauses.append(f"space IN ({placeholders})")
+                params.extend(spaces)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
         with self.get_connection() as conn:
-            rows = conn.execute("""
+            rows = conn.execute(f"""
                 SELECT rule_id, name, severity, author, enabled, space,
                        score, quality_score, meta_score,
                        score_mapping, score_field_type, score_search_time, score_language,
                        score_note, score_override, score_tactics, score_techniques,
                        score_author, score_highlights, mitre_ids
-                FROM detection_rules
+                FROM detection_rules{where}
                 ORDER BY name
-            """).fetchall()
-            
+            """, params).fetchall()
+
             columns = ['rule_id', 'name', 'severity', 'author', 'enabled', 'space',
                        'score', 'quality_score', 'meta_score',
                        'score_mapping', 'score_field_type', 'score_search_time', 'score_language',
                        'score_note', 'score_override', 'score_tactics', 'score_techniques',
                        'score_author', 'score_highlights', 'mitre_ids']
-            
+
             return [dict(zip(columns, row)) for row in rows]
     
     # --- EXISTING DATA MANAGEMENT ---
@@ -4685,6 +4716,80 @@ class DatabaseService:
                     "api_token_enc", "log_target_space", "log_schedule",
                     "log_retention_days", "log_destination_path"]
             return [dict(zip(cols, r)) for r in rows]
+
+    def get_all_kibana_spaces(self) -> List[str]:
+        """Return every distinct Kibana space known to TIDE.
+
+        Used by the per-SIEM Rule Logging picker so every SIEM card offers
+        the same option set regardless of which `siem_inventory` row received
+        the last rule sync (two aliases of the same backend would otherwise
+        show different lists).
+
+        Discovery union (in order, deduped):
+        1. Every `space` value present in `detection_rules` (any SIEM, any
+           tenant — the query runs against the shared connection so it sees
+           the global table when not in multi-DB mode; in multi-DB mode the
+           per-tenant tables are inspected).
+        2. Every `production_space` / `staging_space` configured on any
+           `siem_inventory` row, so freshly-registered SIEMs without a sync
+           yet still surface their intended spaces.
+        """
+        spaces: list[str] = []
+        seen: set[str] = set()
+        with self.get_shared_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                    "FROM detection_rules ORDER BY 1"
+                ).fetchall()
+                for r in rows:
+                    v = r[0]
+                    if v and v not in seen:
+                        spaces.append(v); seen.add(v)
+            except Exception as exc:
+                logger.debug(f"get_all_kibana_spaces: detection_rules scan failed: {exc}")
+            try:
+                extra = conn.execute(
+                    "SELECT DISTINCT TRIM(production_space) FROM siem_inventory "
+                    "WHERE production_space IS NOT NULL AND TRIM(production_space) <> '' "
+                    "UNION "
+                    "SELECT DISTINCT TRIM(staging_space) FROM siem_inventory "
+                    "WHERE staging_space IS NOT NULL AND TRIM(staging_space) <> ''"
+                ).fetchall()
+                for r in extra:
+                    v = r[0]
+                    if v and v not in seen:
+                        spaces.append(v); seen.add(v)
+            except Exception as exc:
+                logger.debug(f"get_all_kibana_spaces: siem_inventory scan failed: {exc}")
+        # Also union spaces from every tenant DB so multi-tenant deployments
+        # see the full list. Ignored when not in multi-DB mode.
+        try:
+            from app.services.tenant_manager import is_multi_db_mode, _tenant_db_cache
+            if is_multi_db_mode():
+                from app.services.connection_pool import get_pool
+                pool = get_pool()
+                for client_id, _fname in list(_tenant_db_cache.items()):
+                    from app.services.tenant_manager import resolve_tenant_db_path
+                    import os as _os
+                    tdb = resolve_tenant_db_path(client_id, _os.path.dirname(self.db_path))
+                    if not tdb:
+                        continue
+                    try:
+                        with pool.acquire(tdb) as tconn:
+                            rows = tconn.execute(
+                                "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                                "FROM detection_rules"
+                            ).fetchall()
+                        for r in rows:
+                            v = r[0]
+                            if v and v not in seen:
+                                spaces.append(v); seen.add(v)
+                    except Exception as exc:
+                        logger.debug(f"get_all_kibana_spaces: tenant {client_id} scan failed: {exc}")
+        except Exception as exc:
+            logger.debug(f"get_all_kibana_spaces: tenant fan-out failed: {exc}")
+        return sorted(spaces)
 
     # --- Sigma asset (pipeline / template) tenant assignments (Migration 33) ---
 

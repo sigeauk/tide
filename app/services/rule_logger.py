@@ -48,15 +48,28 @@ def _get_write_paths() -> List[str]:
     return paths
 
 
-def export_rule_logs(db, log_path: str, validation_data: dict = None) -> int:
+def export_rule_logs(
+    db,
+    log_path: str,
+    validation_data: dict = None,
+    siem_id: Optional[str] = None,
+    space: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> int:
     """
     Export all detection rules as JSON lines to a daily log file.
-    
+
     Args:
         db: DatabaseService instance
         log_path: Directory to write log files
         validation_data: Optional dict of {rule_name: {last_checked_on, checked_by}}
-    
+        siem_id: When set, restrict the export to rules belonging to this SIEM
+            (matches ``detection_rules.siem_id``). Required for per-SIEM
+            scoping; omitted callers get the legacy global behaviour.
+        space: When set, additionally restrict to rules in this Kibana space
+            (matches ``detection_rules.space``). Drives the per-SIEM
+            "Target space" field on the Rule Logging accordion.
+
     Returns:
         Number of rules exported
     """
@@ -64,12 +77,17 @@ def export_rule_logs(db, log_path: str, validation_data: dict = None) -> int:
         os.makedirs(log_path, exist_ok=True)
         
         today = datetime.now().strftime("%Y-%m-%d")
-        log_file = os.path.join(log_path, f"{today}-rules.log")
+        # Caller can override the filename so multiple per-space files can
+        # coexist in the same SIEM directory (e.g. 2026-04-29-default-rules.log).
+        log_file = os.path.join(log_path, filename or f"{today}-rules.log")
         
-        # Get all rules from DB
-        rules = db.get_all_rules_for_export()
+        # Get rules from DB scoped to this SIEM / space when caller asked.
+        rules = db.get_all_rules_for_export(siem_id=siem_id, space=space)
         if not rules:
-            logger.warning("No detection rules to export")
+            logger.warning(
+                f"No detection rules to export (siem_id={siem_id or '<any>'}, "
+                f"space={space or '<any>'})"
+            )
             return 0
         
         # Load validation data if not provided
@@ -148,9 +166,10 @@ def cleanup_old_logs(log_path: str, retention_days: int = 7) -> int:
     for filepath in glob.glob(os.path.join(log_path, "*-rules.log")):
         try:
             filename = os.path.basename(filepath)
-            # Parse date from filename: YYYY-MM-DD-rules.log
-            date_str = filename.replace("-rules.log", "")
-            file_date = datetime.strptime(date_str, "%Y-%m-%d")
+            # Filename may be either YYYY-MM-DD-rules.log (legacy) or
+            # YYYY-MM-DD-<space>-rules.log (per-space). Date is always the
+            # first 10 characters.
+            file_date = datetime.strptime(filename[:10], "%Y-%m-%d")
             
             if file_date < cutoff:
                 os.remove(filepath)
@@ -165,7 +184,7 @@ def cleanup_old_logs(log_path: str, retention_days: int = 7) -> int:
     return removed
 
 
-def run_rule_log_export(db) -> int:
+def run_rule_log_export(db, siem_id: Optional[str] = None) -> int:
     """Main entry point for scheduled rule log export.
 
     v4.0.8+: Iterates ``db.list_logging_enabled_siems()`` and writes a per-SIEM
@@ -176,6 +195,9 @@ def run_rule_log_export(db) -> int:
 
     Args:
         db: DatabaseService instance
+        siem_id: Optional SIEM id. When provided, restrict the per-SIEM export
+            to that single SIEM (used by the per-SIEM scheduler so each cron
+            fires only its owning SIEM). Has no effect on the legacy fallback.
 
     Returns:
         Total number of rules exported across all targets (0 if disabled).
@@ -187,38 +209,75 @@ def run_rule_log_export(db) -> int:
         except Exception as exc:
             logger.warning(f"list_logging_enabled_siems failed, falling back to legacy: {exc}")
 
+        if siem_id and per_siem:
+            per_siem = [s for s in per_siem if str(s.get("id")) == str(siem_id)]
+            if not per_siem:
+                logger.debug(
+                    f"run_rule_log_export: siem_id={siem_id} not in logging-enabled set, skipping"
+                )
+                return 0
+
         # ---- Per-SIEM export path (preferred) ----
         if per_siem:
             base_paths = _get_write_paths()
             total = 0
             for siem in per_siem:
-                label = (siem.get("label") or siem.get("id") or "siem").strip()
+                sid = siem.get("id")
+                label = (siem.get("label") or sid or "siem").strip()
                 # Sanitise the label for use as a directory name.
                 safe_label = "".join(
                     c if c.isalnum() or c in ("-", "_", ".") else "_"
                     for c in label
                 ) or "siem"
                 retention = int(siem.get("log_retention_days") or 7)
-                # Per-SIEM destination override (added in 4.0.12). When set,
-                # write ONLY there and skip the default app/host fan-out so the
-                # operator gets a single, predictable output location per SIEM.
-                custom_dest = (siem.get("log_destination_path") or "").strip()
-                if custom_dest:
-                    targets = [custom_dest]
-                else:
-                    targets = [os.path.join(base, safe_label) for base in base_paths]
+                # Per-SIEM target space(s) — stored as comma-separated string.
+                # Empty / missing => discover every space this SIEM owns and
+                # log each one into its own file.
+                raw_space = (siem.get("log_target_space") or "").strip()
+                target_spaces = [s.strip() for s in raw_space.split(",") if s.strip()]
+                if not target_spaces:
+                    try:
+                        target_spaces = db.get_all_kibana_spaces() or []
+                    except Exception as exc:
+                        logger.warning(f"get_all_kibana_spaces failed: {exc}")
+                        target_spaces = []
+                # Belt-and-braces: if we still have nothing, drop a single
+                # "_all" file holding every rule for the SIEM so the operator
+                # at least sees output.
+                fanout = target_spaces or [None]
 
+                today = datetime.now().strftime("%Y-%m-%d")
                 count_for_siem = 0
-                for target_dir in targets:
-                    n = export_rule_logs(db, target_dir)
-                    if n > count_for_siem:
-                        count_for_siem = n
-                    cleanup_old_logs(target_dir, retention)
-                logger.info(
-                    f"Rule log export for SIEM '{label}' "
-                    f"(retention={retention}d, dest={custom_dest or '<default>'}): "
-                    f"{count_for_siem} rules"
-                )
+                for space in fanout:
+                    if space is None:
+                        safe_space = "all"
+                    else:
+                        safe_space = "".join(
+                            c if c.isalnum() or c in ("-", "_", ".") else "_"
+                            for c in space
+                        ) or "unknown"
+                    # All space files for a SIEM live in the SAME directory,
+                    # named <date>-<space>-rules.log, so an operator browsing
+                    # the SIEM folder sees every space side by side.
+                    fname = f"{today}-{safe_space}-rules.log"
+                    targets = [
+                        os.path.join(base, safe_label) for base in base_paths
+                    ]
+                    space_count = 0
+                    for target_dir in targets:
+                        n = export_rule_logs(
+                            db, target_dir, siem_id=sid,
+                            space=space, filename=fname,
+                        )
+                        if n > space_count:
+                            space_count = n
+                        cleanup_old_logs(target_dir, retention)
+                    logger.info(
+                        f"Rule log export for SIEM '{label}' space "
+                        f"'{space or '<all>'}' (siem_id={sid}, "
+                        f"retention={retention}d): {space_count} rules -> {fname}"
+                    )
+                    count_for_siem += space_count
                 total += count_for_siem
             return total
 

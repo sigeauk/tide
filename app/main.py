@@ -224,27 +224,82 @@ async def lifespan(app: FastAPI):
 
 
 def _schedule_rule_log_job(db=None):
-    """Schedule or reschedule the daily rule log export based on app_settings."""
+    """Schedule (or reschedule) the daily rule-log export jobs.
+
+    v4.0.8+ model: configuration lives on ``siem_inventory`` rows. We register
+    one cron job per logging-enabled SIEM, each firing at its own ``log_schedule``
+    HH:MM with its ``id`` bound so the export only writes that SIEM's directory.
+    Falls back to the legacy global (``app_settings.rule_log_enabled`` /
+    ``rule_log_schedule``) only when no SIEM has logging turned on, so existing
+    pre-migration deployments keep working.
+    """
     try:
         if db is None:
             from app.services.database import get_database_service
             db = get_database_service()
-        
+
+        # Tear down every previously-registered rule-log job (per-SIEM and
+        # legacy) so a stale schedule can't survive a config change.
+        for job in list(scheduler.get_jobs()):
+            if job.id == "rule_log_export" or job.id.startswith("rule_log_export_"):
+                try:
+                    scheduler.remove_job(job.id)
+                except Exception:
+                    pass
+
+        # ---- Per-SIEM scheduling (preferred) ----
+        per_siem = []
+        try:
+            per_siem = db.list_logging_enabled_siems() or []
+        except Exception as exc:
+            logger.warning(f"list_logging_enabled_siems failed, scheduler falling back to legacy: {exc}")
+
+        if per_siem:
+            scheduled = 0
+            for siem in per_siem:
+                sid = siem.get("id")
+                label = siem.get("label") or sid or "siem"
+                schedule_time = (siem.get("log_schedule") or "00:00").strip() or "00:00"
+                parts = schedule_time.split(":")
+                try:
+                    hour = int(parts[0]) if len(parts) > 0 else 0
+                    minute = int(parts[1]) if len(parts) > 1 else 0
+                except ValueError:
+                    logger.warning(
+                        f"SIEM '{label}' has invalid log_schedule '{schedule_time}', defaulting to 00:00"
+                    )
+                    hour, minute = 0, 0
+
+                job_id = f"rule_log_export_{sid}"
+                scheduler.add_job(
+                    _run_rule_log_export,
+                    "cron",
+                    hour=hour,
+                    minute=minute,
+                    id=job_id,
+                    replace_existing=True,
+                    kwargs={"siem_id": sid},
+                )
+                scheduled += 1
+                logger.info(
+                    f"Rule log export scheduled for SIEM '{label}' at {hour:02d}:{minute:02d}"
+                )
+            logger.info(f"Rule log scheduler installed {scheduled} per-SIEM job(s)")
+            return
+
+        # ---- Legacy global path (back-compat) ----
         app_settings = db.get_all_settings()
         enabled = app_settings.get("rule_log_enabled", "false").lower() == "true"
         schedule_time = app_settings.get("rule_log_schedule", "00:00")
-        
-        # Remove existing job if present
-        try:
-            scheduler.remove_job("rule_log_export")
-        except Exception:
-            pass
-        
+
         if enabled:
             parts = schedule_time.split(":")
-            hour = int(parts[0]) if len(parts) > 0 else 0
-            minute = int(parts[1]) if len(parts) > 1 else 0
-            
+            try:
+                hour = int(parts[0]) if len(parts) > 0 else 0
+                minute = int(parts[1]) if len(parts) > 1 else 0
+            except ValueError:
+                hour, minute = 0, 0
+
             scheduler.add_job(
                 _run_rule_log_export,
                 "cron",
@@ -253,20 +308,25 @@ def _schedule_rule_log_job(db=None):
                 id="rule_log_export",
                 replace_existing=True,
             )
-            logger.info(f"Rule log export scheduled at {schedule_time}")
+            logger.info(f"Rule log export scheduled at {schedule_time} (legacy global mode)")
         else:
-            logger.info("Rule log export disabled")
+            logger.info("Rule log export disabled (no per-SIEM config and global flag is off)")
     except Exception as e:
         logger.warning(f"Could not schedule rule log job: {e}")
 
 
-def _run_rule_log_export():
-    """Synchronous wrapper for rule log export (called by scheduler)."""
+def _run_rule_log_export(siem_id=None):
+    """Synchronous wrapper for rule log export (called by scheduler).
+
+    ``siem_id`` is bound by ``_schedule_rule_log_job`` for per-SIEM jobs so the
+    export only writes that SIEM's directory; left ``None`` for the legacy
+    global job.
+    """
     try:
         from app.services.database import get_database_service
         from app.services.rule_logger import run_rule_log_export
         db = get_database_service()
-        run_rule_log_export(db)
+        run_rule_log_export(db, siem_id=siem_id)
     except Exception as e:
         logger.error(f"Rule log export failed: {e}")
 

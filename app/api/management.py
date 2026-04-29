@@ -969,9 +969,11 @@ async def update_siem_logging(
     """
     form = await request.form()
     enabled = (form.get("enabled") or "").lower() in ("on", "true", "1")
-    target_space = (form.get("target_space") or "").strip() or None
+    # Multi-select: a SIEM may log rules from one or more Kibana spaces. Stored
+    # as a CSV in `siem_inventory.log_target_space` (no schema migration).
+    selected_spaces = [s.strip() for s in form.getlist("target_space") if s and s.strip()]
+    target_space = ",".join(selected_spaces) if selected_spaces else None
     schedule = (form.get("schedule") or "00:00").strip() or "00:00"
-    destination_path = (form.get("destination_path") or "").strip() or None
     try:
         retention_days = max(1, min(365, int(form.get("retention_days") or 7)))
     except (TypeError, ValueError):
@@ -983,12 +985,12 @@ async def update_siem_logging(
         target_space=target_space,
         schedule=schedule,
         retention_days=retention_days,
-        destination_path=destination_path,
+        destination_path=None,
     )
     logger.info(
         f"siem logging updated for {siem_id} by {user.username}: "
-        f"enabled={enabled} space={target_space} schedule={schedule} "
-        f"retention={retention_days} dest={destination_path or '<default>'}"
+        f"enabled={enabled} spaces={selected_spaces or '<any>'} "
+        f"schedule={schedule} retention={retention_days}"
     )
 
     # Reschedule the daily job so a new HH:MM is honoured without a restart.
@@ -1745,38 +1747,102 @@ def _siem_logging_block_html(s: dict) -> str:
     from html import escape
     sid = s["id"]
     enabled = bool(s.get("log_enabled"))
-    target_space = s.get("log_target_space") or ""
+    raw_target = s.get("log_target_space") or ""
+    selected_spaces = {p.strip() for p in raw_target.split(",") if p.strip()}
     schedule = s.get("log_schedule") or "00:00"
     retention = s.get("log_retention_days") or 7
-    destination = s.get("log_destination_path") or ""
     prod = s.get("production_space") or ""
     stage = s.get("staging_space") or ""
 
-    space_options = []
-    if prod:
-        sel = " selected" if target_space == prod else ""
-        space_options.append(
-            f'<option value="{escape(prod)}"{sel}>Production ({escape(prod)})</option>'
+    # Pull the *actual* set of spaces this SIEM has rules in. The
+    # production/staging fields on `siem_inventory` only ever name two of
+    # them, but a SIEM can host arbitrarily many Kibana spaces — and the
+    # operator wants to be able to log any of them. Fall back to the
+    # prod/stage pair if the rule table is empty (fresh SIEM).
+    discovered_spaces: list[str] = []
+    try:
+        from app.services.database import get_database_service
+        discovered_spaces = get_database_service().get_all_kibana_spaces() or []
+    except Exception as exc:
+        logger.warning(
+            f"_siem_logging_block_html({sid}): get_all_kibana_spaces failed: {exc!r}"
         )
-    if stage:
-        sel = " selected" if target_space == stage else ""
-        space_options.append(
-            f'<option value="{escape(stage)}"{sel}>Staging ({escape(stage)})</option>'
-        )
-    if not space_options:
+        discovered_spaces = []
+    logger.info(
+        f"_siem_logging_block_html({sid}) discovered_spaces={discovered_spaces} "
+        f"prod={prod!r} stage={stage!r} saved={sorted(selected_spaces)}"
+    )
+    # Build the union: discovered ∪ prod ∪ stage ∪ already-saved selections,
+    # preserving discovery order then adding anything missing alphabetically.
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for sp in discovered_spaces:
+        if sp and sp not in seen:
+            ordered.append(sp); seen.add(sp)
+    for sp in (prod, stage):
+        if sp and sp not in seen:
+            ordered.append(sp); seen.add(sp)
+    for sp in sorted(selected_spaces):
+        if sp not in seen:
+            ordered.append(sp); seen.add(sp)
+
+    # Build a compact single-line picker that opens a checkbox panel on click.
+    # Native <select multiple> takes too much vertical space and forces
+    # operators to know the Ctrl/Cmd-click trick. <details>/<summary> gives
+    # us a zero-JS dropdown with proper checkbox semantics; the form picks
+    # them up via form.getlist("target_space").
+    if not ordered:
         space_picker = (
             '<input type="text" name="target_space" class="form-input" '
-            f'value="{escape(target_space)}" placeholder="space-name" '
-            'style="font-size:0.8rem;padding:0.25rem 0.4rem;">'
+            f'value="{escape(raw_target)}" placeholder="space-a, space-b" '
+            'style="font-size:0.8rem;padding:0.25rem 0.4rem;" '
+            'title="Comma-separated Kibana space names. Leave blank to log every space.">'
         )
     else:
-        none_sel = " selected" if not target_space else ""
+        if not selected_spaces:
+            summary_text = "All spaces"
+        elif len(selected_spaces) == 1:
+            summary_text = next(iter(selected_spaces))
+        else:
+            summary_text = f"{len(selected_spaces)} spaces selected"
+
+        checkbox_rows = []
+        for sp in ordered:
+            checked = " checked" if sp in selected_spaces else ""
+            if sp == prod and sp == stage:
+                tag = ' <span style="opacity:0.6;">(prod / stage)</span>'
+            elif sp == prod:
+                tag = ' <span style="opacity:0.6;">(prod)</span>'
+            elif sp == stage:
+                tag = ' <span style="opacity:0.6;">(stage)</span>'
+            else:
+                tag = ""
+            checkbox_rows.append(
+                '<label style="display:flex;align-items:center;gap:0.4rem;'
+                'padding:0.2rem 0.5rem;cursor:pointer;font-size:0.8rem;">'
+                f'<input type="checkbox" name="target_space" value="{escape(sp)}"{checked}>'
+                f'<span>{escape(sp)}{tag}</span>'
+                '</label>'
+            )
         space_picker = (
-            '<select name="target_space" class="form-input" '
-            'style="font-size:0.8rem;padding:0.25rem 0.4rem;">'
-            f'<option value=""{none_sel}>-- pick a space --</option>'
-            + "".join(space_options)
-            + '</select>'
+            '<details class="space-picker" style="position:relative;">'
+            '<summary style="list-style:none;cursor:pointer;'
+            'background:var(--color-bg-input, #0d1117);'
+            'border:1px solid var(--color-border, #30363d);'
+            'border-radius:4px;padding:0.25rem 0.5rem;font-size:0.8rem;'
+            'display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" '
+            f'title="Click to pick one or more spaces. Empty selection = log every space.">'
+            f'<span>{escape(summary_text)}</span>'
+            '<span style="opacity:0.6;font-size:0.7rem;">&#9662;</span>'
+            '</summary>'
+            '<div style="position:absolute;z-index:50;margin-top:0.2rem;'
+            'min-width:100%;max-height:220px;overflow:auto;'
+            'background:var(--color-bg-elevated, #161b22);'
+            'border:1px solid var(--color-border, #30363d);'
+            'border-radius:4px;padding:0.25rem 0;'
+            'box-shadow:0 4px 12px rgba(0,0,0,0.4);">'
+            + "".join(checkbox_rows)
+            + '</div></details>'
         )
 
     summary_pill = (
@@ -1786,6 +1852,11 @@ def _siem_logging_block_html(s: dict) -> str:
         '<span class="status-pill status-pill--unknown" title="Logging disabled">'
         '<span class="status-dot"></span>Logging Off</span>'
     )
+
+    safe_label = "".join(
+        c if c.isalnum() or c in ("-", "_", ".") else "_" for c in (s.get("label") or "siem")
+    ) or "siem"
+    dest_hint = f"/app/data/log/rules/{escape(safe_label)}/&lt;YYYY-MM-DD&gt;-&lt;space&gt;-rules.log"
 
     return f'''
             <details class="mgmt-subsection" style="margin:0.5rem 0 0;">
@@ -1802,7 +1873,7 @@ def _siem_logging_block_html(s: dict) -> str:
                             <span>Enabled</span>
                         </label>
                         <span class="text-secondary" style="font-size:0.75rem;">Toggle daily rule-score export for this SIEM.</span>
-                        <span class="text-secondary">Target space</span>
+                        <span class="text-secondary">Target space(s)</span>
                         {space_picker}
                         <span class="text-secondary">Schedule (HH:MM)</span>
                         <input type="time" name="schedule" class="form-input" value="{escape(schedule)}"
@@ -1810,12 +1881,11 @@ def _siem_logging_block_html(s: dict) -> str:
                         <span class="text-secondary">Retention (days)</span>
                         <input type="number" name="retention_days" min="1" max="365" value="{int(retention)}"
                                class="form-input" style="font-size:0.8rem;padding:0.25rem 0.4rem;width:80px;">
-                        <span class="text-secondary">Destination path</span>
-                        <input type="text" name="destination_path" class="form-input"
-                               value="{escape(destination)}"
-                               placeholder="/app/data/log/rules (default)"
-                               style="font-size:0.8rem;padding:0.25rem 0.4rem;"
-                               title="Container path where this SIEM's rule-score logs are written. Leave blank to use the default (/app/data/log/rules/&lt;label&gt;/). Mounted via RULE_LOG_PATH in docker-compose.">
+                        <span class="text-secondary">Logs</span>
+                        <div style="font-size:0.75rem;line-height:1.3;">
+                            <span style="opacity:0.75;">written to</span>
+                            <code style="background:transparent;padding:0;font-size:0.75rem;color:var(--color-accent, #58a6ff);">{dest_hint}</code>
+                        </div>
                         <div style="grid-column:1 / -1;display:flex;gap:0.4rem;justify-content:flex-end;margin-top:0.3rem;">
                             <button type="submit" class="btn btn-primary btn-sm">Save</button>
                         </div>

@@ -73,21 +73,37 @@ async def save_settings(request: Request, db: DbDep, user: CurrentUser, client_i
 
 @router.post("/rule-log/export", response_class=HTMLResponse)
 def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient):
-    """Manually trigger a rule log export to all active paths."""
-    from app.services.rule_logger import export_rule_logs, cleanup_old_logs, _get_write_paths
-    
-    settings = db.get_all_settings(client_id=client_id)
-    retention_days = int(settings.get("rule_log_retention_days", "7"))
-    write_paths = _get_write_paths()
-    
-    count = 0
-    for path in write_paths:
-        n = export_rule_logs(db, path)
-        if n > count:
-            count = n
-        cleanup_old_logs(path, retention_days)
-    
-    path_list = ", ".join(write_paths)
+    """Manually trigger a rule log export.
+
+    Honours the per-SIEM model (``siem_inventory.log_enabled`` /
+    ``log_destination_path`` / ``log_retention_days``) by delegating to
+    ``run_rule_log_export``, which falls back to the legacy global path when no
+    SIEM has logging turned on.
+    """
+    from app.services.rule_logger import run_rule_log_export, _get_write_paths
+
+    count = run_rule_log_export(db)
+
+    # Build a human-readable destination string for the toast: per-SIEM
+    # destinations when configured, otherwise the legacy fan-out paths.
+    try:
+        per_siem = db.list_logging_enabled_siems() or []
+    except Exception:
+        per_siem = []
+    if per_siem:
+        dests = []
+        base_paths = _get_write_paths()
+        for s in per_siem:
+            label = (s.get("label") or s.get("id") or "siem").strip()
+            safe_label = "".join(
+                c if c.isalnum() or c in ("-", "_", ".") else "_" for c in label
+            ) or "siem"
+            for base in base_paths:
+                dests.append(f"{base}/{safe_label}/")
+        path_list = ", ".join(dests) if dests else "(no destinations)"
+    else:
+        path_list = ", ".join(_get_write_paths())
+
     if count > 0:
         return HTMLResponse(f"""
         <div id="export-toast" hx-swap-oob="afterbegin:#toast-container">
@@ -97,7 +113,7 @@ def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser, clie
     else:
         return HTMLResponse("""
         <div id="export-toast" hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">No rules to export. Run a sync first.</div>
+            <div class="toast toast-warning">No rules exported. Check that at least one SIEM has logging enabled, then run a sync first.</div>
         </div>
         """)
 
