@@ -70,85 +70,96 @@ def _distribute_rules_to_tenants():
     Filter is by (siem_id, LOWER(space)) since 4.0.13 \u2014 a client mapped to
     SIEM A's 'production' space must NOT receive rules from SIEM B's
     identically-named 'production' space (they're different Kibana instances
-    with different rules)."""
+    with different rules).
+
+    Implementation note: this used to open the tenant DB and ATTACH the
+    shared DB read-only into it. That fails inside the running tide-app
+    process because DuckDB will not let the same physical file be attached
+    twice in one process \u2014 the connection pool already holds a writable
+    handle on the shared DB and the auto-aliased name (file stem) collides.
+    We therefore drive everything from the shared connection pool and
+    ATTACH the tenant DB onto it instead.
+    """
     from app.services.tenant_manager import is_multi_db_mode
     if not is_multi_db_mode():
         return
 
     from app.config import get_settings
+    from app.services.database import get_database_service
     settings = get_settings()
-    shared_db_path = settings.db_path
     data_dir = settings.data_dir
 
     try:
-        # 4.1.0 P3 — see tenant_manager.refresh_tenant_cache for rationale;
-        # pool keeps a writable handle on the shared DB so we cannot open
-        # the same file read-only without DuckDB raising a config-mismatch.
-        shared_conn = duckdb.connect(shared_db_path, read_only=False)
-        clients = shared_conn.execute(
-            "SELECT id, db_filename FROM clients WHERE db_filename IS NOT NULL"
-        ).fetchall()
-
-        for client_id, db_filename in clients:
-            # Pull the (siem_id, space) pairs this client is entitled to see.
-            # space is normalised to lowercase to match the comparison below.
-            scope_rows = shared_conn.execute(
-                "SELECT DISTINCT siem_id, "
-                "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
-                "FROM client_siem_map "
-                "WHERE client_id = ? AND siem_id IS NOT NULL",
-                [client_id],
+        with get_database_service().get_shared_connection() as shared_conn:
+            clients = shared_conn.execute(
+                "SELECT id, db_filename FROM clients WHERE db_filename IS NOT NULL"
             ).fetchall()
-            scopes = [(sid, sp) for sid, sp in scope_rows if sid and sp]
-            if not scopes:
-                continue
 
-            tenant_path = os.path.join(data_dir, db_filename)
-            if not os.path.exists(tenant_path):
-                continue
+            for client_id, db_filename in clients:
+                scope_rows = shared_conn.execute(
+                    "SELECT DISTINCT siem_id, "
+                    "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
+                    "FROM client_siem_map "
+                    "WHERE client_id = ? AND siem_id IS NOT NULL",
+                    [client_id],
+                ).fetchall()
+                scopes = [(sid, sp) for sid, sp in scope_rows if sid and sp]
+                if not scopes:
+                    continue
 
-            try:
-                tenant_conn = duckdb.connect(tenant_path)
-                _ensure_tenant_detection_rules_v37(tenant_conn)
-                tenant_conn.execute(
-                    f"ATTACH '{shared_db_path}' AS shared (READ_ONLY)"
-                )
+                tenant_path = os.path.join(data_dir, db_filename)
+                if not os.path.exists(tenant_path):
+                    continue
 
-                # Build a (siem_id, space) tuple list filter. DuckDB supports
-                # tuple IN comparisons via row constructors.
-                # We build the predicate dynamically with parameters.
-                pair_predicates = " OR ".join(
-                    "(siem_id = ? AND LOWER(space) = ?)" for _ in scopes
-                )
-                params = [v for pair in scopes for v in pair]
+                tenant_alias = f"t_{client_id.replace('-', '_')}"
+                # Evict the tenant from the per-path connection pool first.
+                # If a request previously routed to this tenant, the pool
+                # already holds an open handle to the file as MAIN database
+                # (auto-aliased to its file basename), and DuckDB rejects a
+                # second cross-connection ATTACH on the same file with
+                # ``Unique file handle conflict``. Eviction closes those
+                # cached connections so the file is free for ATTACH; the
+                # pool will lazily reopen on the next request.
+                try:
+                    from app.services.connection_pool import get_pool
+                    get_pool().evict(tenant_path)
+                except Exception:  # pragma: no cover - eviction best effort
+                    pass
+                try:
+                    shared_conn.execute(f"ATTACH '{tenant_path}' AS {tenant_alias}")
+                    try:
+                        pair_predicates = " OR ".join(
+                            "(siem_id = ? AND LOWER(space) = ?)" for _ in scopes
+                        )
+                        params = [v for pair in scopes for v in pair]
 
-                tenant_conn.execute("DELETE FROM detection_rules")
-                tenant_conn.execute(f"""
-                    INSERT INTO detection_rules
-                    SELECT rule_id, siem_id, name, severity, author, enabled, space,
-                           score, quality_score, meta_score,
-                           score_mapping, score_field_type, score_search_time,
-                           score_language, score_note, score_override,
-                           score_tactics, score_techniques, score_author,
-                           score_highlights, last_updated, mitre_ids, raw_data,
-                           '{client_id}' AS client_id
-                    FROM shared.detection_rules
-                    WHERE {pair_predicates}
-                """, params)
+                        shared_conn.execute(
+                            f"DELETE FROM {tenant_alias}.detection_rules"
+                        )
+                        shared_conn.execute(f"""
+                            INSERT INTO {tenant_alias}.detection_rules
+                            SELECT rule_id, siem_id, name, severity, author, enabled, space,
+                                   score, quality_score, meta_score,
+                                   score_mapping, score_field_type, score_search_time,
+                                   score_language, score_note, score_override,
+                                   score_tactics, score_techniques, score_author,
+                                   score_highlights, last_updated, mitre_ids, raw_data,
+                                   '{client_id}' AS client_id
+                            FROM detection_rules
+                            WHERE {pair_predicates}
+                        """, params)
 
-                tenant_conn.execute("DETACH shared")
-                count = tenant_conn.execute(
-                    "SELECT COUNT(*) FROM detection_rules"
-                ).fetchone()[0]
-                tenant_conn.close()
-                logger.info(
-                    f"Distributed {count} rules to tenant {client_id[:8]} "
-                    f"(scopes: {scopes})"
-                )
-            except Exception as e:
-                logger.error(f"Rule distribution failed for {client_id[:8]}: {e}")
-
-        shared_conn.close()
+                        count = shared_conn.execute(
+                            f"SELECT COUNT(*) FROM {tenant_alias}.detection_rules"
+                        ).fetchone()[0]
+                        logger.info(
+                            f"Distributed {count} rules to tenant {client_id[:8]} "
+                            f"(scopes: {scopes})"
+                        )
+                    finally:
+                        shared_conn.execute(f"DETACH {tenant_alias}")
+                except Exception as e:
+                    logger.error(f"Rule distribution failed for {client_id[:8]}: {e}")
     except Exception as e:
         logger.error(f"Rule distribution failed: {e}")
 
@@ -334,6 +345,13 @@ def run_elastic_sync(force_mapping=False):
             # check is unsafe \u2014 it would delete the other SIEM's rules.
             siem_spaces_attempted: dict = {}
             siem_spaces_synced: dict = {}
+            # Per-SIEM per-space diagnostics from elastic_helper. Used by the
+            # mirror-sync passes below to skip rule deletion in any
+            # (siem, space) where the fetch was incomplete (Kibana outage,
+            # transient 5xx, network drop). This is the safety half of the
+            # mirror-Kibana behaviour: clean fetch == authoritative source of
+            # truth; partial fetch == preserve existing rows.
+            siem_diagnostics: dict = {}
             for siem in siems:
                 # Re-read to get the encrypted/raw token (list_siem_inventory omits it)
                 full = db.get_siem_inventory_item(siem["id"]) or {}
@@ -362,6 +380,13 @@ def run_elastic_sync(force_mapping=False):
                     f"@ {kurl} spaces={spaces}"
                 )
                 try:
+                    # When force_mapping is on, drop the per-pattern mapping
+                    # cache so the re-check actually re-hits Elastic.
+                    if force_mapping:
+                        try:
+                            elastic_helper.invalidate_mapping_cache()
+                        except AttributeError:
+                            pass
                     siem_df = elastic_helper.fetch_detection_rules(
                         kibana_url=kurl,
                         api_key=token,
@@ -373,6 +398,19 @@ def run_elastic_sync(force_mapping=False):
                         known_rule_keys=per_siem_known,
                         elasticsearch_url=es_url,
                     )
+                    # Pull per-space drift diagnostics so the subtractive
+                    # passes below can be skipped for any (siem, space) where
+                    # the fetch was incomplete (e.g. Kibana outage mid-sync).
+                    diag = {}
+                    try:
+                        diag = elastic_helper.last_sync_diagnostics.get(
+                            id(siem_df), {}
+                        ) or elastic_helper.last_sync_diagnostics.get(
+                            (kurl.rstrip('/'), tuple(sorted(spaces))), {}
+                        )
+                    except Exception:
+                        diag = {}
+                    siem_diagnostics[siem_id] = diag
                     if siem_df is not None and not siem_df.empty:
                         # Stamp every row with its originating siem_id BEFORE
                         # frames get concatenated. save_audit_results requires
@@ -387,6 +425,7 @@ def run_elastic_sync(force_mapping=False):
                         siem_spaces_synced[siem_id] = set()
                 except Exception as e:
                     logger.error(f"Fetch failed for SIEM '{siem.get('label')}': {e}")
+                    siem_diagnostics[siem_id] = {}
 
             df = _pd.concat(frames, ignore_index=True) if frames else _pd.DataFrame()
 
@@ -418,19 +457,68 @@ def run_elastic_sync(force_mapping=False):
                 logger.info(f"[perf] save_audit_results completed in {(_time.perf_counter() - _t_save)*1000:.0f}ms")
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
-                # --- Subtractive sync: remove ghost rules from empty spaces ---
-                # Per-SIEM (4.0.13): if SIEM A's space 'production' came back
-                # empty, only delete SIEM A's rules in 'production' \u2014 never
-                # touch SIEM B's rules even if B also has a 'production' space.
+                # --- Mirror-Kibana sync (drift-aware) ---
+                # For each (siem_id, space):
+                #   * Clean fetch (advertised total == fetched count):
+                #       - Empty space → delete all rows for that (siem, space)
+                #         via delete_rules_for_spaces (existing helper).
+                #       - Non-empty space → reconcile_rules_for_siem_space()
+                #         removes any DB row whose rule_id was not in the
+                #         fetched set (rule deleted in Kibana since last sync).
+                #   * Incomplete fetch (drift > 0, or page-fetch error):
+                #       - Preserve existing rows, log WARN. Per Consideration 2
+                #         in the plan: a Kibana outage must not cascade into
+                #         row deletions on the TIDE side.
                 for siem_id, attempted in siem_spaces_attempted.items():
+                    diag = siem_diagnostics.get(siem_id, {}) or {}
                     synced = siem_spaces_synced.get(siem_id, set())
-                    empty_spaces = [s for s in attempted if s not in synced]
-                    if empty_spaces:
-                        logger.info(
-                            f"Subtractive sync: clearing ghost rules from "
-                            f"siem_id={siem_id} empty spaces: {empty_spaces}"
-                        )
-                        db.delete_rules_for_spaces(empty_spaces, siem_id=siem_id)
+                    siem_label = next(
+                        (s.get('label', '?') for s in siems if s.get('id') == siem_id),
+                        '?',
+                    )
+                    for space in attempted:
+                        space_diag = diag.get(space)
+                        # Missing diagnostic = the fetch never produced one
+                        # (exception during fetch, network failure before page
+                        # 1, etc.). Treat as incomplete — preserve.
+                        if not space_diag:
+                            logger.warning(
+                                f"WARN sync incomplete for SIEM '{siem_label}' "
+                                f"(siem_id={siem_id}) space '{space}' — no "
+                                f"diagnostics returned; preserving existing rows."
+                            )
+                            continue
+                        if not space_diag.get("complete"):
+                            logger.warning(
+                                f"WARN sync incomplete for SIEM '{siem_label}' "
+                                f"(siem_id={siem_id}) space '{space}' — "
+                                f"{space_diag.get('fetched', 0)}/"
+                                f"{space_diag.get('total', '?')} rules; "
+                                f"preserving existing rows."
+                            )
+                            continue
+                        # Clean fetch — authoritative reconcile.
+                        keep_ids = space_diag.get("rule_ids") or set()
+                        if space in synced and keep_ids:
+                            removed = db.reconcile_rules_for_siem_space(
+                                siem_id=siem_id,
+                                space=space,
+                                keep_rule_ids=keep_ids,
+                            )
+                            if removed:
+                                logger.info(
+                                    f"Mirror sync: SIEM '{siem_label}' space "
+                                    f"'{space}' removed {removed} orphan(s)."
+                                )
+                        else:
+                            # Confirmed empty by Kibana — drop all rows for
+                            # this (siem, space).
+                            logger.info(
+                                f"Mirror sync: SIEM '{siem_label}' space "
+                                f"'{space}' returned 0 rules (clean fetch); "
+                                f"clearing TIDE rows for that (siem, space)."
+                            )
+                            db.delete_rules_for_spaces([space], siem_id=siem_id)
 
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s)")
 

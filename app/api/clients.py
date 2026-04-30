@@ -37,8 +37,23 @@ def list_clients(db: DbDep, user: RequireUser):
 
 @router.post("", response_class=JSONResponse, status_code=201)
 def create_client(data: ClientCreate, db: DbDep, user: RequireSuperadmin):
-    """Create a new client (super-admin only)."""
+    """Create a new client (super-admin only).
+
+    Provisions a physical per-tenant DB file (Migration 29 architecture) so
+    rules, baselines, systems, etc. for this client are physically isolated
+    from every other tenant. If provisioning fails the client row is kept
+    so an admin can retry via the startup backfill.
+    """
     client = db.create_client(data.name, data.slug, data.description)
+    try:
+        from app.config import get_settings
+        from app.services.tenant_manager import create_tenant_db
+        settings = get_settings()
+        create_tenant_db(client["id"], client["slug"], settings.data_dir, settings.db_path)
+    except Exception as exc:  # pragma: no cover - provisioning best effort
+        logger.error(
+            f"Tenant DB provisioning failed for {client['slug']} ({client['id']}): {exc}"
+        )
     logger.info(f"Client created: {client['name']} (slug={client['slug']}) by {user.username}")
     return client
 

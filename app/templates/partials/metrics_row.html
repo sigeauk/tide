@@ -8,7 +8,7 @@
     <p class="metric-sub">
         {% set spaces = metrics.rules_by_space.items() | list %}
         {% if spaces %}
-            {% for name, count in spaces[:3] %}{{ space_labels.get(name, name | capitalize) }}: {{ count }}{% if not loop.last %} · {% endif %}{% endfor %}
+            {% for name, count in spaces[:3] %}<span style="display:block;">{{ space_labels.get(name, name | capitalize) }}: {{ count }}</span>{% endfor %}
         {% else %}
             No spaces
         {% endif %}

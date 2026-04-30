@@ -176,6 +176,20 @@ class ConnectionPool:
         for db_path, slot in paths:
             self._drain_slot(slot, db_path)
 
+    def evict(self, db_path: str) -> None:
+        """Drop and close every cached connection for *db_path*.
+
+        Used by maintenance jobs that need exclusive cross-connection
+        access to a DuckDB file (e.g. the per-tenant rule distributor,
+        which ATTACHes the tenant DB onto the shared connection \u2014
+        DuckDB rejects that ATTACH while another connection in the same
+        process holds the file open). Subsequent ``acquire(db_path)``
+        calls will lazily open a fresh connection."""
+        with self._lock:
+            slot = self._slots.pop(db_path, None)
+        if slot is not None:
+            self._drain_slot(slot, db_path)
+
     def stats(self) -> dict:
         """Snapshot of pool counters and current occupancy. Cheap; safe to
         call from /health."""

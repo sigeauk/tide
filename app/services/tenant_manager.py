@@ -149,30 +149,98 @@ def create_tenant_db(
     db_filename = f"{slug}_{short_id}.duckdb"
     db_path = os.path.join(data_dir, db_filename)
 
-    if os.path.exists(db_path):
-        logger.warning(f"Tenant DB already exists: {db_path}")
-        return db_filename
-
-    logger.info(f"Creating tenant DB: {db_filename}")
-    conn = duckdb.connect(db_path)
-    try:
-        _create_tenant_schema(conn)
-        # Sync shared reference data
-        conn.execute(f"ATTACH '{shared_db_path}' AS shared (READ_ONLY)")
-        _sync_reference_tables(conn)
-        conn.execute("DETACH shared")
-    finally:
-        conn.close()
-
-    # Register in shared DB
-    shared_conn = duckdb.connect(shared_db_path)
-    try:
-        shared_conn.execute(
-            "UPDATE clients SET db_filename = ? WHERE id = ?",
-            [db_filename, client_id],
+    new_file = not os.path.exists(db_path)
+    if new_file:
+        logger.info(f"Creating tenant DB: {db_filename}")
+        # Step 1 \u2014 create the tenant DB file with its full schema. This is
+        # a standalone connection to a brand-new file; no conflict possible.
+        conn = duckdb.connect(db_path)
+        try:
+            _create_tenant_schema(conn)
+        finally:
+            conn.close()
+    else:
+        # Recover a partially-provisioned tenant: file exists but the
+        # ``clients.db_filename`` registration / reference-data sync may
+        # have failed previously. Fall through and re-run the registration
+        # step \u2014 it is idempotent (DELETE + INSERT, UPDATE).
+        logger.info(
+            f"Tenant DB exists, ensuring registration: {db_filename}"
         )
-    finally:
-        shared_conn.close()
+
+    # Step 2 \u2014 sync reference data + register db_filename via the shared
+    # connection pool. We attach the tenant DB FROM the shared connection
+    # (rather than the other way round) because in a single Python process
+    # DuckDB will not let the same physical file be attached twice; the
+    # shared DB is already open as ``main`` (and auto-aliased to its file
+    # stem) inside the pool, so attempting ``ATTACH '/app/data/tide.duckdb'
+    # AS shared`` from a fresh tenant connection raises ``Unique file
+    # handle conflict``. Reversing the direction sidesteps that entirely.
+    from app.services.database import get_database_service
+    tenant_alias = f"t_{client_id.replace('-', '_')}"
+    # See sync._distribute_rules_to_tenants for the full rationale: if the
+    # per-path pool already holds an open handle on this tenant DB, DuckDB
+    # will reject the cross-connection ATTACH below. Evict so the ATTACH
+    # has the only handle in the process; the pool reopens on demand.
+    try:
+        from app.services.connection_pool import get_pool
+        get_pool().evict(db_path)
+    except Exception:  # pragma: no cover
+        pass
+    try:
+        with get_database_service().get_shared_connection() as shared_conn:
+            shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
+            try:
+                for table in (
+                    "mitre_techniques", "threat_actors",
+                    "siem_inventory", "client_siem_map",
+                ):
+                    try:
+                        # CREATE OR REPLACE avoids column-count drift between
+                        # the shared schema and the tenant schema (these are
+                        # reference tables, owned by the shared DB, mirrored
+                        # into the tenant for ATTACH-free reads).
+                        shared_conn.execute(
+                            f"CREATE OR REPLACE TABLE {tenant_alias}.{table} AS "
+                            f"SELECT * FROM {table}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Sync {table} into {db_filename} failed: {e}"
+                        )
+                shared_conn.execute(
+                    "UPDATE clients SET db_filename = ? WHERE id = ?",
+                    [db_filename, client_id],
+                )
+            finally:
+                shared_conn.execute(f"DETACH {tenant_alias}")
+    except Exception:
+        # Fallback for very early bootstrap before the pool exists.
+        shared_conn = duckdb.connect(shared_db_path)
+        try:
+            shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
+            try:
+                for table in (
+                    "mitre_techniques", "threat_actors",
+                    "siem_inventory", "client_siem_map",
+                ):
+                    try:
+                        shared_conn.execute(
+                            f"CREATE OR REPLACE TABLE {tenant_alias}.{table} AS "
+                            f"SELECT * FROM {table}"
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"Sync {table} into {db_filename} failed: {e}"
+                        )
+                shared_conn.execute(
+                    "UPDATE clients SET db_filename = ? WHERE id = ?",
+                    [db_filename, client_id],
+                )
+            finally:
+                shared_conn.execute(f"DETACH {tenant_alias}")
+        finally:
+            shared_conn.close()
 
     # Update cache
     with _cache_lock:
@@ -535,22 +603,297 @@ def sync_shared_data(
     if not targets:
         return
 
+    from app.services.database import get_database_service
     synced = 0
-    for cid, db_filename in targets.items():
-        db_path = os.path.join(data_dir, db_filename)
-        if not os.path.exists(db_path):
-            logger.warning(f"Tenant DB missing during sync: {db_path}")
-            continue
-        try:
-            conn = duckdb.connect(db_path)
-            try:
-                conn.execute(f"ATTACH '{shared_db_path}' AS shared (READ_ONLY)")
-                _sync_reference_tables(conn)
-                conn.execute("DETACH shared")
-                synced += 1
-            finally:
-                conn.close()
-        except Exception as e:
-            logger.error(f"Sync shared data failed for tenant {cid}: {e}")
+    try:
+        with get_database_service().get_shared_connection() as shared_conn:
+            for cid, db_filename in targets.items():
+                db_path = os.path.join(data_dir, db_filename)
+                if not os.path.exists(db_path):
+                    logger.warning(f"Tenant DB missing during sync: {db_path}")
+                    continue
+                tenant_alias = f"t_{cid.replace('-', '_')}"
+                try:
+                    from app.services.connection_pool import get_pool
+                    get_pool().evict(db_path)
+                except Exception:  # pragma: no cover
+                    pass
+                try:
+                    shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
+                    try:
+                        for table in (
+                            "mitre_techniques", "threat_actors",
+                            "siem_inventory", "client_siem_map",
+                        ):
+                            try:
+                                shared_conn.execute(
+                                    f"CREATE OR REPLACE TABLE "
+                                    f"{tenant_alias}.{table} AS "
+                                    f"SELECT * FROM {table}"
+                                )
+                            except Exception as e:
+                                logger.warning(
+                                    f"Sync {table} into {db_filename} failed: {e}"
+                                )
+                        synced += 1
+                    finally:
+                        shared_conn.execute(f"DETACH {tenant_alias}")
+                except Exception as e:
+                    logger.error(f"Sync shared data failed for tenant {cid}: {e}")
+    except Exception as e:
+        logger.error(f"Sync shared data failed: {e}")
 
     logger.info(f"Shared data synced to {synced}/{len(targets)} tenant DB(s)")
+
+
+# ── Legacy data backfill (one-shot recovery) ────────────────────────
+#
+# Pre-4.1.2, ``is_multi_db_mode()`` returned False because no tenant DB
+# files existed (Migration 29 added the column but nothing called
+# ``create_tenant_db``). Every write — systems, hosts, software,
+# baselines, playbook steps, blind spots, snapshots, etc. — therefore
+# landed in the *shared* ``tide.duckdb``. After 4.1.2 routes those
+# reads to the freshly-provisioned (and empty) tenant DB files, the
+# rows are still on disk but invisible to the UI.
+#
+# This pass copies any per-client rows from the shared DB into each
+# tenant's DB. It is **idempotent and conservative**: a table is only
+# backfilled when the tenant copy is empty AND the shared copy has at
+# least one row for that ``client_id`` — so re-running it on a tenant
+# that already added new data after backfill is a no-op.
+
+# Tables that carry a ``client_id`` column on the shared schema and
+# need to be partitioned per tenant. Order matters for FK-style
+# references that rely on a parent row existing first.
+_PARENT_TABLES = (
+    "systems",
+    "playbooks",
+    "threat_actors",
+    "classifications",
+    "system_baselines",
+    "system_baseline_snapshots",
+    "software_inventory",
+    "vuln_detections",
+    "applied_detections",
+    "cve_technique_overrides",
+    "blind_spots",
+    "app_settings",
+)
+
+# Child tables that have no ``client_id`` column — backfilled by
+# joining through their parent. Each entry: (table, parent_table,
+# join_predicate). The predicate references ``main.<parent>`` (shared)
+# and uses the child's own column to filter.
+_CHILD_TABLES = (
+    # hosts.system_id -> systems.id (filter via shared.systems.client_id)
+    ("hosts", "systems", "system_id"),
+    # playbook_steps.playbook_id -> playbooks.id
+    ("playbook_steps", "playbooks", "playbook_id"),
+)
+
+# Step-derived tables (two hops: step -> playbook -> client).
+_STEP_CHILD_TABLES = ("step_techniques", "step_detections")
+
+
+def _common_columns(conn, table: str, tenant_alias: str) -> list:
+    """Return columns present in BOTH the shared ``main.<table>`` and the
+    attached ``<tenant_alias>.<table>``, ordered as they appear in the
+    tenant table. Used by the backfill so we never rely on positional
+    ``SELECT *`` semantics — column order drifted between the original
+    shared schema and the tenant schema in `_create_tenant_schema`."""
+    try:
+        shared_cols = {
+            r[0] for r in conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_catalog = current_database() "
+                "AND table_schema = 'main' AND table_name = ?",
+                [table],
+            ).fetchall()
+        }
+        tenant_rows = conn.execute(
+            "SELECT column_name, ordinal_position "
+            "FROM information_schema.columns "
+            "WHERE table_catalog = ? AND table_name = ? "
+            "ORDER BY ordinal_position",
+            [tenant_alias, table],
+        ).fetchall()
+        return [r[0] for r in tenant_rows if r[0] in shared_cols]
+    except Exception as e:
+        logger.warning(f"_common_columns({table}) failed: {e}")
+        return []
+
+
+def backfill_legacy_tenant_data(data_dir: str) -> dict:
+    """One-shot copy of per-client rows from shared DB into tenant DBs.
+
+    Safe to run on every startup: a table on a tenant is only
+    backfilled when the tenant currently has zero rows in it (so user
+    edits made post-backfill are never duplicated or overwritten).
+
+    Returns a summary dict ``{client_id: {table: rows_copied}}``.
+    """
+    summary: dict = {}
+    with _cache_lock:
+        targets = dict(_tenant_db_cache)
+    if not targets:
+        return summary
+
+    from app.services.database import get_database_service
+    from app.services.connection_pool import get_pool
+
+    try:
+        with get_database_service().get_shared_connection() as shared_conn:
+            for cid, db_filename in targets.items():
+                db_path = os.path.join(data_dir, db_filename)
+                if not os.path.exists(db_path):
+                    continue
+                tenant_alias = f"t_{cid.replace('-', '_')}"
+                client_summary: dict = {}
+                try:
+                    get_pool().evict(db_path)
+                except Exception:  # pragma: no cover
+                    pass
+                try:
+                    shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
+                except Exception as e:
+                    logger.error(f"Backfill ATTACH failed for {cid}: {e}")
+                    continue
+                try:
+                    # Parent tables — direct WHERE client_id = ?.
+                    for table in _PARENT_TABLES:
+                        try:
+                            tenant_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {tenant_alias}.{table}"
+                            ).fetchone()[0]
+                            if tenant_count > 0:
+                                continue
+                            shared_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {table} WHERE client_id = ?",
+                                [cid],
+                            ).fetchone()[0]
+                            if shared_count == 0:
+                                continue
+                            cols = _common_columns(
+                                shared_conn, table, tenant_alias
+                            )
+                            if not cols:
+                                continue
+                            col_list = ", ".join(cols)
+                            shared_conn.execute(
+                                f"INSERT INTO {tenant_alias}.{table} ({col_list}) "
+                                f"SELECT {col_list} FROM {table} WHERE client_id = ?",
+                                [cid],
+                            )
+                            client_summary[table] = shared_count
+                            logger.info(
+                                f"Backfilled {shared_count} row(s) of {table} "
+                                f"into tenant {cid[:8]}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Backfill {table} for {cid}: {e}"
+                            )
+
+                    # Child tables — join through parent's client_id.
+                    for child, parent, fk in _CHILD_TABLES:
+                        try:
+                            tenant_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {tenant_alias}.{child}"
+                            ).fetchone()[0]
+                            if tenant_count > 0:
+                                continue
+                            shared_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {child} c "
+                                f"WHERE EXISTS (SELECT 1 FROM {parent} p "
+                                f"WHERE p.id = c.{fk} AND p.client_id = ?)",
+                                [cid],
+                            ).fetchone()[0]
+                            if shared_count == 0:
+                                continue
+                            cols = _common_columns(
+                                shared_conn, child, tenant_alias
+                            )
+                            if not cols:
+                                continue
+                            col_list = ", ".join(f"c.{c}" for c in cols)
+                            insert_cols = ", ".join(cols)
+                            shared_conn.execute(
+                                f"INSERT INTO {tenant_alias}.{child} ({insert_cols}) "
+                                f"SELECT {col_list} FROM {child} c "
+                                f"WHERE EXISTS (SELECT 1 FROM {parent} p "
+                                f"WHERE p.id = c.{fk} AND p.client_id = ?)",
+                                [cid],
+                            )
+                            client_summary[child] = shared_count
+                            logger.info(
+                                f"Backfilled {shared_count} row(s) of {child} "
+                                f"into tenant {cid[:8]}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Backfill {child} for {cid}: {e}"
+                            )
+
+                    # Step-derived (two-hop: step -> playbook -> client).
+                    for child in _STEP_CHILD_TABLES:
+                        try:
+                            tenant_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {tenant_alias}.{child}"
+                            ).fetchone()[0]
+                            if tenant_count > 0:
+                                continue
+                            shared_count = shared_conn.execute(
+                                f"SELECT COUNT(*) FROM {child} c "
+                                f"WHERE EXISTS ("
+                                f"  SELECT 1 FROM playbook_steps s "
+                                f"  JOIN playbooks p ON p.id = s.playbook_id "
+                                f"  WHERE s.id = c.step_id AND p.client_id = ?"
+                                f")",
+                                [cid],
+                            ).fetchone()[0]
+                            if shared_count == 0:
+                                continue
+                            cols = _common_columns(
+                                shared_conn, child, tenant_alias
+                            )
+                            if not cols:
+                                continue
+                            col_list = ", ".join(f"c.{c}" for c in cols)
+                            insert_cols = ", ".join(cols)
+                            shared_conn.execute(
+                                f"INSERT INTO {tenant_alias}.{child} ({insert_cols}) "
+                                f"SELECT {col_list} FROM {child} c "
+                                f"WHERE EXISTS ("
+                                f"  SELECT 1 FROM playbook_steps s "
+                                f"  JOIN playbooks p ON p.id = s.playbook_id "
+                                f"  WHERE s.id = c.step_id AND p.client_id = ?"
+                                f")",
+                                [cid],
+                            )
+                            client_summary[child] = shared_count
+                            logger.info(
+                                f"Backfilled {shared_count} row(s) of {child} "
+                                f"into tenant {cid[:8]}"
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"Backfill {child} for {cid}: {e}"
+                            )
+                finally:
+                    try:
+                        shared_conn.execute(f"DETACH {tenant_alias}")
+                    except Exception:
+                        pass
+                if client_summary:
+                    summary[cid] = client_summary
+    except Exception as e:
+        logger.error(f"Legacy backfill failed: {e}")
+
+    if summary:
+        total_clients = len(summary)
+        total_rows = sum(sum(v.values()) for v in summary.values())
+        logger.info(
+            f"Legacy data backfilled: {total_rows} row(s) restored "
+            f"to {total_clients} tenant DB(s)"
+        )
+    return summary

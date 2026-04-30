@@ -154,11 +154,56 @@ async def lifespan(app: FastAPI):
     db = get_database_service()
     logger.info("Database initialized")
 
-    # Initialize multi-tenant DB routing
+    # Initialize multi-tenant DB routing.
+    # Per design (Migration 29), every client owns a physical DB file so that
+    # tenant data (rules, baselines, systems, ...) is physically isolated
+    # from every other tenant. ``clients.db_filename`` records the file name.
+    # Backfill any client with NULL ``db_filename`` so existing installs that
+    # predate auto-provisioning catch up on startup, then distribute rules
+    # from the shared DB into each tenant DB so the views are populated.
     try:
-        from app.services.tenant_manager import refresh_tenant_cache, sync_shared_data
+        from app.services.tenant_manager import (
+            refresh_tenant_cache, sync_shared_data, create_tenant_db,
+        )
+        # Backfill missing tenant DBs (run BEFORE refresh_tenant_cache so the
+        # cache picks up the freshly-registered db_filename rows).
+        try:
+            with db.get_shared_connection() as _conn:
+                _missing = _conn.execute(
+                    "SELECT id, slug FROM clients WHERE db_filename IS NULL"
+                ).fetchall()
+            for _cid, _slug in _missing:
+                try:
+                    create_tenant_db(_cid, _slug, settings.data_dir, settings.db_path)
+                except Exception as _e:
+                    logger.error(f"Failed to provision tenant DB for {_slug} ({_cid}): {_e}")
+            if _missing:
+                logger.info(f"Provisioned {len(_missing)} missing tenant DB(s) on startup")
+        except Exception as _e:
+            logger.warning(f"Tenant DB backfill skipped: {_e}")
+
         refresh_tenant_cache(settings.data_dir, settings.db_path)
         sync_shared_data(settings.data_dir, settings.db_path)
+
+        # 4.1.2 — recover per-client rows that were written into the
+        # *shared* DB before per-tenant routing was wired up. Idempotent:
+        # only copies rows for tables that are currently empty in the
+        # tenant DB, so subsequent edits made post-backfill are never
+        # duplicated. See tenant_manager.backfill_legacy_tenant_data.
+        try:
+            from app.services.tenant_manager import backfill_legacy_tenant_data
+            backfill_legacy_tenant_data(settings.data_dir)
+        except Exception as _e:
+            logger.warning(f"Legacy data backfill skipped: {_e}")
+
+        # Distribute rules from shared DB into each tenant DB. Without this
+        # step a fresh-provisioned tenant has empty detection_rules until the
+        # next elastic sync runs.
+        try:
+            from app.services.sync import _distribute_rules_to_tenants
+            _distribute_rules_to_tenants()
+        except Exception as _e:
+            logger.warning(f"Initial rule distribution skipped: {_e}")
     except Exception as e:
         logger.warning(f"Tenant cache init failed (legacy single-DB mode): {e}")
 

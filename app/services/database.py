@@ -2172,11 +2172,15 @@ class DatabaseService:
             # Base query
             query = "SELECT * FROM detection_rules WHERE 1=1"
             params = []
-            
-            # Tenant isolation: restrict to spaces linked to the active client
+
+            # Tenant isolation: restrict to spaces linked to the active
+            # client. With per-tenant DB routing (Migration 29) this query
+            # already runs against the tenant's own DB file, so the space
+            # allow-list is sufficient \u2014 no SIEM cross-contamination is
+            # possible because the other tenant's rows aren't in this file.
             if filters.allowed_spaces is not None:
                 if not filters.allowed_spaces:
-                    # Client has no SIEMs → zero rules visible
+                    # Client has no SIEMs \u2192 zero rules visible
                     return [], 0, "Never"
                 placeholders = ", ".join("?" for _ in filters.allowed_spaces)
                 query += f" AND LOWER(space) IN ({placeholders})"
@@ -2509,9 +2513,14 @@ class DatabaseService:
             validation_status=validation_status,
         )
     
-    def get_rule_health_metrics(self, allowed_spaces: List[str] = None) -> RuleHealthMetrics:
+    def get_rule_health_metrics(
+        self,
+        allowed_spaces: List[str] = None,
+    ) -> RuleHealthMetrics:
         """Calculate comprehensive rule health metrics.
-        If allowed_spaces is provided, only include rules in those spaces (tenant isolation)."""
+        With per-tenant DB routing the connection is already tenant-scoped,
+        so ``allowed_spaces`` (the spaces this client is mapped to) is a
+        sufficient filter."""
         with self.get_connection() as conn:
             if allowed_spaces is not None:
                 if not allowed_spaces:
@@ -3806,6 +3815,82 @@ class DatabaseService:
         return total_deleted
 
 
+    def reconcile_rules_for_siem_space(
+        self,
+        siem_id: str,
+        space: str,
+        keep_rule_ids: set,
+    ) -> int:
+        """Delete every detection_rules row for ``(siem_id, space)`` whose
+        ``rule_id`` is NOT in ``keep_rule_ids``.
+
+        Used as the second half of mirror-Kibana sync: after a *complete*
+        per-space fetch (advertised total == fetched count), any DB row in
+        that (siem, space) that did not appear in the fetched set must have
+        been deleted in Kibana since the last sync, so we delete it here too.
+
+        The caller MUST only invoke this for spaces with a clean fetch — a
+        partial fetch would produce false orphans and silently delete
+        healthy rules.
+        """
+        if not siem_id or not space:
+            return 0
+        with self.get_connection() as conn:
+            try:
+                if not keep_rule_ids:
+                    # Empty space confirmed by Kibana — drop everything for
+                    # this (siem, space).
+                    before = conn.execute(
+                        "SELECT COUNT(*) FROM detection_rules "
+                        "WHERE siem_id = ? AND space = ?",
+                        [siem_id, space],
+                    ).fetchone()[0]
+                    if before:
+                        conn.execute(
+                            "DELETE FROM detection_rules "
+                            "WHERE siem_id = ? AND space = ?",
+                            [siem_id, space],
+                        )
+                        logger.info(
+                            f"Mirror sync: deleted {before} rules from "
+                            f"siem_id={siem_id} space='{space}' (Kibana returned 0)"
+                        )
+                        conn.execute("CHECKPOINT")
+                    return before
+
+                # DuckDB parameterised IN list.
+                placeholders = ",".join(["?"] * len(keep_rule_ids))
+                params = [siem_id, space, *keep_rule_ids]
+                orphans = conn.execute(
+                    f"SELECT rule_id FROM detection_rules "
+                    f"WHERE siem_id = ? AND space = ? "
+                    f"AND rule_id NOT IN ({placeholders})",
+                    params,
+                ).fetchall()
+                if not orphans:
+                    return 0
+                conn.execute(
+                    f"DELETE FROM detection_rules "
+                    f"WHERE siem_id = ? AND space = ? "
+                    f"AND rule_id NOT IN ({placeholders})",
+                    params,
+                )
+                logger.info(
+                    f"Mirror sync: deleted {len(orphans)} orphan rule(s) from "
+                    f"siem_id={siem_id} space='{space}' "
+                    f"(no longer in Kibana): {[o[0] for o in orphans][:5]}"
+                    f"{'...' if len(orphans) > 5 else ''}"
+                )
+                conn.execute("CHECKPOINT")
+                return len(orphans)
+            except Exception as e:
+                logger.error(
+                    f"reconcile_rules_for_siem_space failed for "
+                    f"siem_id={siem_id} space='{space}': {e}"
+                )
+                return 0
+
+
     # ── External API Key management ──────────────────────────────────────
 
     def create_api_key(self, label: str, created_by_user_id: Optional[str] = None) -> str:
@@ -4891,7 +4976,18 @@ class DatabaseService:
     def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
         """Get the list of Kibana space names visible to a client.
         If environment_role is specified, filter to just production or staging.
-        NULL/empty spaces are normalised to 'default' (Kibana's built-in space)."""
+        NULL/empty spaces are normalised to 'default' (Kibana's built-in space).
+
+        .. warning::
+           This method returns space names ONLY \u2014 it is NOT safe for filtering
+           ``detection_rules`` rows when two SIEMs (different tenants) share a
+           Kibana space name (e.g. both expose ``two``). Use
+           :py:meth:`get_client_siem_scopes` for any query that selects from
+           ``detection_rules``; that method returns ``(siem_id, space)`` tuples
+           so the per-row ``siem_id`` can be matched too. The legacy
+           space-only callers retained here are for display lookups
+           (e.g. building the space dropdown).
+        """
         with self.get_shared_connection() as conn:
             query = (
                 "SELECT DISTINCT COALESCE(NULLIF(TRIM(m.space), ''), 'default') "
@@ -4904,6 +5000,36 @@ class DatabaseService:
                 params.append(environment_role)
             rows = conn.execute(query, params).fetchall()
             return [r[0] for r in rows if r[0]]
+
+    def get_client_siem_scopes(self, client_id: str, environment_role: str = None) -> List[Tuple[str, str]]:
+        """Get the list of ``(siem_id, space)`` tuples a client is entitled to see.
+
+        This is the tenant-isolation primitive for any query that pulls from
+        ``detection_rules`` (whose PK is ``(rule_id, siem_id)`` since
+        Migration 37). Filtering by space-name alone is insufficient when two
+        SIEMs share a Kibana space name \u2014 every detection_rules row scoped to
+        that space would surface for every client mapped to either SIEM,
+        leaking rules across tenants. This method preserves the (siem_id,
+        space) pairing so callers can build a ``(siem_id = ? AND
+        LOWER(space) = ?)`` predicate with no cross-tenant bleed.
+
+        Spaces are returned lower-cased for case-insensitive matching against
+        DuckDB ``LOWER(space)``. NULL/empty spaces are normalised to
+        ``'default'`` to match the Kibana built-in space.
+        """
+        with self.get_shared_connection() as conn:
+            query = (
+                "SELECT DISTINCT m.siem_id, "
+                "LOWER(COALESCE(NULLIF(TRIM(m.space), ''), 'default')) "
+                "FROM client_siem_map m "
+                "WHERE m.client_id = ? AND m.siem_id IS NOT NULL"
+            )
+            params = [client_id]
+            if environment_role:
+                query += " AND m.environment_role = ?"
+                params.append(environment_role)
+            rows = conn.execute(query, params).fetchall()
+            return [(sid, sp) for sid, sp in rows if sid and sp]
 
     def get_covered_ttps_for_client(self, client_id: str, environment_role: str = "production") -> Set[str]:
         """Get TTPs covered by enabled detection rules in spaces linked to client for a given role."""
