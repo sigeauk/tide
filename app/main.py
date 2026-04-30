@@ -40,20 +40,37 @@ scheduler = AsyncIOScheduler()
 # header (X-TIDE-Resync-Required) so JSON / external API consumers see the
 # same notice. The check is one COUNT query, cached for one minute to avoid
 # hammering DuckDB on every htmx fragment render.
-_migration37_cache = {"ts": 0.0, "needed": False}
+#
+# Cache is keyed by the active tenant DB path (or ``__shared__``) so each
+# tenant gets an independent verdict \u2014 since 4.1.2 every tenant has its
+# own ``detection_rules`` table and the answer differs per-tenant.
+_migration37_cache: dict = {}
 
 
 def migration37_resync_required() -> bool:
     """Return True if Migration 37 left the rule cache empty and a sync hasn't
     repopulated it yet. False on any error (fail-closed for the banner so a
     transient DB hiccup doesn't spam every page with a warning)."""
+    from app.services.tenant_manager import get_tenant_db_path
+    cache_key = get_tenant_db_path() or "__shared__"
     now = time.time()
-    if now - _migration37_cache["ts"] < 60:
-        return _migration37_cache["needed"]
+    cached = _migration37_cache.get(cache_key)
+    if cached and now - cached["ts"] < 60:
+        return cached["needed"]
     needed = False
     try:
         from app.services.database import get_database_service
         _db = get_database_service()
+        # The advisory must reflect the user's *active* DB. Per-tenant
+        # routing means an authenticated request reads from the tenant
+        # DB; ``siem_inventory`` is replicated into every tenant via the
+        # reference-data sync, so the legacy "rules == 0 AND active SIEMs
+        # exist" heuristic raises a false positive for any tenant that
+        # has no ``client_siem_map`` rows yet (the distributor skips
+        # them, leaving ``detection_rules`` empty even after a global
+        # sync). Scope the SIEM count to the active tenant via
+        # ``client_siem_map`` so the banner only fires when the tenant
+        # has at least one SIEM mapped AND its rule cache is empty.
         with _db.get_connection() as _conn:
             ver_row = _conn.execute(
                 "SELECT MAX(version) FROM schema_version"
@@ -63,18 +80,28 @@ def migration37_resync_required() -> bool:
                 rules = int(_conn.execute(
                     "SELECT COUNT(*) FROM detection_rules"
                 ).fetchone()[0])
-                siems = int(_conn.execute(
-                    "SELECT COUNT(*) FROM siem_inventory WHERE is_active"
-                ).fetchone()[0])
+                if cache_key != "__shared__":
+                    # Tenant DB context: count only SIEMs mapped to *this*
+                    # tenant. ``client_siem_map`` is replicated into the
+                    # tenant DB by ``sync_shared_data`` and already
+                    # filtered to this client by Migration 29, so a
+                    # COUNT(*) here is the per-tenant scope.
+                    siems = int(_conn.execute(
+                        "SELECT COUNT(DISTINCT siem_id) FROM client_siem_map"
+                    ).fetchone()[0])
+                else:
+                    siems = int(_conn.execute(
+                        "SELECT COUNT(*) FROM siem_inventory WHERE is_active"
+                    ).fetchone()[0])
                 # Banner only fires when the table is empty AND at least one
-                # active SIEM exists \u2014 the wipe only matters if there were
-                # rules to repopulate. Fresh installs with zero SIEMs would
-                # otherwise see a misleading "resync required" warning.
+                # mapped SIEM exists \u2014 the wipe only matters if there were
+                # rules to repopulate. Fresh installs / unmapped tenants
+                # would otherwise see a misleading "resync required"
+                # warning when the real action is "map a SIEM first".
                 needed = rules == 0 and siems > 0
     except Exception:
         needed = False
-    _migration37_cache["ts"] = now
-    _migration37_cache["needed"] = needed
+    _migration37_cache[cache_key] = {"ts": now, "needed": needed}
     return needed
 
 
@@ -204,6 +231,62 @@ async def lifespan(app: FastAPI):
             _distribute_rules_to_tenants()
         except Exception as _e:
             logger.warning(f"Initial rule distribution skipped: {_e}")
+
+        # 4.1.3 \u2014 startup auth-source banner. Logs (in plain English) what
+        # TIDE will use to talk to Kibana on the next sync. Saves operators
+        # hours of "is it the env var, the DB record, or the per-tenant
+        # mapping?" debugging when a sync 401s in production.
+        try:
+            from app.services.database import get_database_service as _gdb
+            _db_b = _gdb()
+            with _db_b.get_shared_connection() as _cb:
+                try:
+                    _siems = _cb.execute(
+                        "SELECT label, kibana_url, "
+                        "CASE WHEN api_token_enc IS NULL OR api_token_enc='' "
+                        "THEN 0 ELSE 1 END, is_active "
+                        "FROM siem_inventory"
+                    ).fetchall()
+                except Exception:
+                    _siems = []
+                try:
+                    _maps = _cb.execute(
+                        "SELECT siem_id, COUNT(DISTINCT client_id) "
+                        "FROM client_siem_map GROUP BY siem_id"
+                    ).fetchall()
+                except Exception:
+                    _maps = []
+                try:
+                    _rules = _cb.execute(
+                        "SELECT COUNT(*) FROM detection_rules"
+                    ).fetchone()[0]
+                except Exception:
+                    _rules = 0
+            _env_url = bool(os.environ.get("ELASTIC_URL"))
+            _env_key = bool(os.environ.get("ELASTIC_API_KEY"))
+            logger.info(
+                "[auth-banner] sync auth source: siem_inventory rows=%d "
+                "(active+token+url=%d), env ELASTIC_URL=%s ELASTIC_API_KEY=%s, "
+                "shared detection_rules=%d, client_siem_map siems=%d",
+                len(_siems),
+                sum(1 for _l, _u, _t, _a in _siems if _u and _t and _a),
+                _env_url, _env_key, _rules, len(_maps),
+            )
+            for _l, _u, _t, _a in _siems:
+                logger.info(
+                    "[auth-banner]   SIEM '%s' active=%s url=%s token_present=%s",
+                    _l, bool(_a), _u, bool(_t),
+                )
+            if not _siems and not (_env_url and _env_key):
+                logger.warning(
+                    "[auth-banner] NO sync credentials configured. Add a SIEM "
+                    "via Management UI, or set ELASTIC_URL+ELASTIC_API_KEY env "
+                    "vars (legacy <=4.0.9 only). Run "
+                    "`docker exec tide-app python /app/test/diag_sync.py` for "
+                    "a full diagnostic."
+                )
+        except Exception as _e:
+            logger.warning(f"Auth-source banner skipped: {_e}")
     except Exception as e:
         logger.warning(f"Tenant cache init failed (legacy single-DB mode): {e}")
 

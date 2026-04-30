@@ -1023,6 +1023,18 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
         environment_role = "production"
     db.link_client_siem(client_id, siem_id, environment_role=environment_role, space=space)
     logger.info(f"SIEM {siem_id} linked to client {client_id} as {environment_role} by {user.username}")
+    # Push existing rules from the shared cache into this tenant's DB.
+    # Without this the tenant's ``detection_rules`` table stays empty until
+    # the next scheduled global Elastic sync runs \u2014 which made the common
+    # "remove + re-add a SIEM mapping to fix sync" workflow look broken.
+    # The distributor is idempotent (DELETE+INSERT scoped per tenant) and
+    # only touches tenants whose ``client_siem_map`` is non-empty, so calling
+    # it here is safe and cheap.
+    try:
+        from app.services.sync import _distribute_rules_to_tenants
+        _distribute_rules_to_tenants()
+    except Exception as exc:
+        logger.warning(f"rule redistribution after SIEM link failed: {exc}")
     return _render_client_siems_partial(client_id, db, toast="SIEM linked successfully.")
 
 
@@ -1033,6 +1045,14 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
     env_role = request.query_params.get("environment_role")
     db.unlink_client_siem(client_id, siem_id, environment_role=env_role)
     logger.info(f"SIEM {siem_id} ({env_role or 'all'}) unlinked from client {client_id} by {user.username}")
+    # Re-run the distributor so the tenant DB reflects the removed scope
+    # immediately (the distributor wipes ``detection_rules`` per tenant
+    # before re-inserting only currently-mapped scopes).
+    try:
+        from app.services.sync import _distribute_rules_to_tenants
+        _distribute_rules_to_tenants()
+    except Exception as exc:
+        logger.warning(f"rule redistribution after SIEM unlink failed: {exc}")
     return _render_client_siems_partial(client_id, db, toast="SIEM unlinked.")
 
 
