@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 37
+SCHEMA_VERSION = 38
 
 
 class DatabaseService:
@@ -1531,6 +1531,94 @@ class DatabaseService:
                 "assigned per SIEM. The next scheduled sync will also do this "
                 "automatically. See CHANGELOG [4.0.13].",
                 row_count,
+            )
+
+        # ── Migration 38: Move space ownership to client_siem_map only ──
+        # The 4.1.x data model: ``siem_inventory`` is a credentials holder
+        # only (URL + API key). The ONLY place that decides which Kibana space
+        # a tenant uses for which environment role is ``client_siem_map``
+        # (one row per client × siem × role × space).
+        #
+        # Migration 27 added ``production_space`` and ``staging_space`` to
+        # ``siem_inventory`` as a property of the SIEM itself. That broke the
+        # model: a SIEM with ``production_space='one'`` and
+        # ``staging_space='two'`` was synced from BOTH spaces even when no
+        # tenant had linked it (sync.py fell back to those columns when
+        # ``client_siem_map`` had no row), and operators couldn't have two
+        # tenants use the same SIEM with different role↔space mappings.
+        #
+        # This migration: (1) for every existing ``siem_inventory`` row that
+        # has a ``production_space`` and at least one client linked to that
+        # SIEM, ensure a ``client_siem_map`` row exists for
+        # ``(client, siem, 'production', production_space)`` \u2014 INSERT-only
+        # with ``ON CONFLICT DO NOTHING`` so any operator-set row wins.
+        # Same for staging. (2) Drop the two columns from ``siem_inventory``.
+        if current_version < 38:
+            try:
+                # Discover every (client_id, siem_id) pair currently linked.
+                pairs = conn.execute(
+                    "SELECT DISTINCT client_id, siem_id FROM client_siem_map"
+                ).fetchall()
+                # Build {siem_id: (production_space, staging_space)}
+                rows = conn.execute(
+                    "SELECT id, "
+                    "       NULLIF(TRIM(production_space), ''), "
+                    "       NULLIF(TRIM(staging_space), '') "
+                    "FROM siem_inventory"
+                ).fetchall()
+                siem_spaces = {r[0]: (r[1], r[2]) for r in rows}
+                inserted = 0
+                for client_id, siem_id in pairs:
+                    prod, stage = siem_spaces.get(siem_id, (None, None))
+                    if prod:
+                        cur = conn.execute(
+                            "INSERT INTO client_siem_map "
+                            "(client_id, siem_id, environment_role, space) "
+                            "VALUES (?, ?, 'production', ?) "
+                            "ON CONFLICT DO NOTHING",
+                            [client_id, siem_id, prod],
+                        )
+                        try:
+                            inserted += cur.rowcount or 0
+                        except Exception:
+                            pass
+                    if stage:
+                        cur = conn.execute(
+                            "INSERT INTO client_siem_map "
+                            "(client_id, siem_id, environment_role, space) "
+                            "VALUES (?, ?, 'staging', ?) "
+                            "ON CONFLICT DO NOTHING",
+                            [client_id, siem_id, stage],
+                        )
+                        try:
+                            inserted += cur.rowcount or 0
+                        except Exception:
+                            pass
+
+                # Drop the now-redundant columns. DuckDB supports
+                # ``ALTER TABLE ... DROP COLUMN`` since 0.7; wrap in try so
+                # an older engine doesn't brick the upgrade.
+                for col in ("production_space", "staging_space"):
+                    try:
+                        conn.execute(
+                            f"ALTER TABLE siem_inventory DROP COLUMN IF EXISTS {col}"
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            f"Migration 38: could not drop "
+                            f"siem_inventory.{col}: {exc!r}. The column "
+                            f"will be ignored by application code regardless."
+                        )
+            except Exception as exc:
+                logger.error(f"Migration 38 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 38)
+            logger.info(
+                "Migration 38: client_siem_map is now the sole source of "
+                "(siem, role, space). Inserted %d backfilled rows from "
+                "legacy siem_inventory.production_space/staging_space; "
+                "those columns dropped.",
+                inserted,
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -4273,7 +4361,6 @@ class DatabaseService:
                 "last_test_status, last_test_at, last_test_message, "
                 "log_enabled, log_target_space, log_schedule, log_retention_days, "
                 "log_destination_path, "
-                "production_space, staging_space, "
                 "created_at, updated_at "
                 "FROM siem_inventory ORDER BY label"
             ).fetchall()
@@ -4282,7 +4369,6 @@ class DatabaseService:
                     "last_test_status", "last_test_at", "last_test_message",
                     "log_enabled", "log_target_space", "log_schedule", "log_retention_days",
                     "log_destination_path",
-                    "production_space", "staging_space",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -4815,9 +4901,8 @@ class DatabaseService:
            tenant — the query runs against the shared connection so it sees
            the global table when not in multi-DB mode; in multi-DB mode the
            per-tenant tables are inspected).
-        2. Every `production_space` / `staging_space` configured on any
-           `siem_inventory` row, so freshly-registered SIEMs without a sync
-           yet still surface their intended spaces.
+        2. Every distinct ``client_siem_map.space`` value, so freshly-mapped
+           SIEMs without a sync yet still surface their intended spaces.
         """
         spaces: list[str] = []
         seen: set[str] = set()
@@ -4835,18 +4920,16 @@ class DatabaseService:
                 logger.debug(f"get_all_kibana_spaces: detection_rules scan failed: {exc}")
             try:
                 extra = conn.execute(
-                    "SELECT DISTINCT TRIM(production_space) FROM siem_inventory "
-                    "WHERE production_space IS NOT NULL AND TRIM(production_space) <> '' "
-                    "UNION "
-                    "SELECT DISTINCT TRIM(staging_space) FROM siem_inventory "
-                    "WHERE staging_space IS NOT NULL AND TRIM(staging_space) <> ''"
+                    "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
+                    "FROM client_siem_map "
+                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
                 ).fetchall()
                 for r in extra:
                     v = r[0]
                     if v and v not in seen:
                         spaces.append(v); seen.add(v)
             except Exception as exc:
-                logger.debug(f"get_all_kibana_spaces: siem_inventory scan failed: {exc}")
+                logger.debug(f"get_all_kibana_spaces: client_siem_map scan failed: {exc}")
         # Also union spaces from every tenant DB so multi-tenant deployments
         # see the full list. Ignored when not in multi-DB mode.
         try:

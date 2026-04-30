@@ -360,10 +360,20 @@ def run_elastic_sync(force_mapping=False):
                 es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
                 spaces = db.get_siem_spaces(siem["id"])
                 if not spaces:
-                    # SIEM exists but no client mapping yet \u2014 fall back to its declared
-                    # production/staging spaces so logging/preview still discover rules.
-                    spaces = [sp for sp in [siem.get("production_space"),
-                                            siem.get("staging_space")] if sp]
+                    # No client has mapped this SIEM yet. Skip \u2014 syncing rules
+                    # we have nowhere to attribute them to just clutters the
+                    # shared cache and (worse) used to invent spaces by
+                    # falling back to siem_inventory.production_space /
+                    # staging_space, which double-synced SIEMs that were
+                    # configured for "production only". client_siem_map is
+                    # the sole source of truth for (siem, role, space) since
+                    # Migration 38.
+                    logger.info(
+                        f"Skipping SIEM '{siem.get('label')}' \u2014 no client_siem_map "
+                        f"rows. Link it to a client in the Management UI to "
+                        f"enable sync."
+                    )
+                    continue
                 if not (kurl and token and spaces):
                     logger.info(f"Skipping SIEM '{siem.get('label')}' \u2014 missing url/token/spaces")
                     continue

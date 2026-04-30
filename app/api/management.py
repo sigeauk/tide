@@ -27,6 +27,71 @@ router = APIRouter(prefix="/api/management", tags=["management"])
 
 
 # ---------------------------------------------------------------------------
+# Live Kibana space lookup, cached. Used to validate operator input on the
+# Add-SIEM-to-tenant form so a typo'd space name (e.g. "production" vs the
+# actual "default" or "one") is rejected before it lands in client_siem_map
+# and silently breaks every subsequent sync. 60-second TTL is plenty short
+# for operator workflows and stops a flapping Kibana from slowing the UI.
+# ---------------------------------------------------------------------------
+_KIBANA_SPACES_CACHE: dict = {}  # siem_id -> (expiry_epoch, set[str] | None)
+_KIBANA_SPACES_TTL = 60.0
+
+
+def _list_kibana_spaces(db, siem_id: str) -> Optional[set]:
+    """Return the set of space ids on this SIEM's Kibana, or ``None`` when
+    the SIEM record is missing/unreachable (in which case the caller should
+    NOT block the operator \u2014 fail open, log a warning).
+    """
+    import time as _time
+    now = _time.time()
+    cached = _KIBANA_SPACES_CACHE.get(siem_id)
+    if cached and cached[0] > now:
+        return cached[1]
+    try:
+        siem = db.get_siem_inventory_item(siem_id) or {}
+    except Exception as exc:
+        logger.warning(f"_list_kibana_spaces({siem_id}): db lookup failed: {exc!r}")
+        return None
+    url = (siem.get("kibana_url") or "").rstrip("/")
+    token = siem.get("api_token_enc")
+    if not url or not token:
+        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
+        return None
+    try:
+        r = http_requests.get(
+            f"{url}/api/spaces/space",
+            headers={
+                "kbn-xsrf": "true",
+                "Authorization": f"ApiKey {token}",
+                "Content-Type": "application/json",
+            },
+            verify=False,
+            timeout=10,
+        )
+        if r.status_code != 200:
+            logger.warning(
+                f"_list_kibana_spaces({siem_id}): /api/spaces/space "
+                f"returned HTTP {r.status_code}; failing open."
+            )
+            _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
+            return None
+        try:
+            data = r.json()
+        except Exception:
+            return None
+        spaces = {s.get("id") for s in data if isinstance(s, dict) and s.get("id")}
+        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, spaces)
+        return spaces
+    except Exception as exc:
+        logger.warning(
+            f"_list_kibana_spaces({siem_id}): live lookup failed: {exc!r}; "
+            f"failing open."
+        )
+        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Tab partials -- HTMX tab switching
 # ---------------------------------------------------------------------------
 
@@ -1021,6 +1086,27 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
         return HTMLResponse("")
     if environment_role not in ("production", "staging"):
         environment_role = "production"
+
+    # Validate the space exists on the SIEM's Kibana before storing the row.
+    # The most common 4.1.x sync failure was an operator typing the role name
+    # into the space field ("production" / "staging") instead of an actual
+    # Kibana space id. Without this guard the bad row sat in
+    # ``client_siem_map`` and every sync logged "Sync drift 0/0" against
+    # ``/s/production/api/...`` until someone read the diag script output.
+    real_spaces = _list_kibana_spaces(db, siem_id)
+    if real_spaces is not None and space not in real_spaces:
+        from html import escape
+        avail = ", ".join(escape(s) for s in sorted(real_spaces)) or "(none)"
+        msg = (
+            f"Kibana space '{escape(space)}' does not exist on this SIEM. "
+            f"Available: {avail}. The role label (Production/Staging) is "
+            f"separate from the Kibana space id \u2014 they're rarely the same value."
+        )
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            f'<div class="toast toast-warning">{msg}</div></div>'
+        )
+
     db.link_client_siem(client_id, siem_id, environment_role=environment_role, space=space)
     logger.info(f"SIEM {siem_id} linked to client {client_id} as {environment_role} by {user.username}")
     # Push existing rules from the shared cache into this tenant's DB.
@@ -1771,14 +1857,11 @@ def _siem_logging_block_html(s: dict) -> str:
     selected_spaces = {p.strip() for p in raw_target.split(",") if p.strip()}
     schedule = s.get("log_schedule") or "00:00"
     retention = s.get("log_retention_days") or 7
-    prod = s.get("production_space") or ""
-    stage = s.get("staging_space") or ""
 
-    # Pull the *actual* set of spaces this SIEM has rules in. The
-    # production/staging fields on `siem_inventory` only ever name two of
-    # them, but a SIEM can host arbitrarily many Kibana spaces — and the
-    # operator wants to be able to log any of them. Fall back to the
-    # prod/stage pair if the rule table is empty (fresh SIEM).
+    # Pull the *actual* set of spaces this SIEM has rules in (from
+    # detection_rules + client_siem_map). Since Migration 38 the SIEM no
+    # longer carries production_space/staging_space fields \u2014 client_siem_map
+    # is the sole source of (siem, role, space).
     discovered_spaces: list[str] = []
     try:
         from app.services.database import get_database_service
@@ -1790,16 +1873,13 @@ def _siem_logging_block_html(s: dict) -> str:
         discovered_spaces = []
     logger.info(
         f"_siem_logging_block_html({sid}) discovered_spaces={discovered_spaces} "
-        f"prod={prod!r} stage={stage!r} saved={sorted(selected_spaces)}"
+        f"saved={sorted(selected_spaces)}"
     )
-    # Build the union: discovered ∪ prod ∪ stage ∪ already-saved selections,
-    # preserving discovery order then adding anything missing alphabetically.
+    # Build the union: discovered \u222a already-saved selections, preserving
+    # discovery order then adding anything missing alphabetically.
     ordered: list[str] = []
     seen: set[str] = set()
     for sp in discovered_spaces:
-        if sp and sp not in seen:
-            ordered.append(sp); seen.add(sp)
-    for sp in (prod, stage):
         if sp and sp not in seen:
             ordered.append(sp); seen.add(sp)
     for sp in sorted(selected_spaces):
@@ -2493,9 +2573,19 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
     env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
     template = env.get_template("partials/client_siems.html")
+    # Build a list of Kibana spaces actually present in the rule cache so the
+    # Add SIEM form can offer them as a datalist. Stops operators having to
+    # guess the space name (and stops them from typing the role name by
+    # mistake).
+    known_kibana_spaces: list[str] = []
+    try:
+        known_kibana_spaces = db.get_all_kibana_spaces() or []
+    except Exception:
+        known_kibana_spaces = []
     html = template.render(
         client=client, client_siems=client_siems,
         available_siems=available_siems, siem_rule_counts=siem_rule_counts,
+        known_kibana_spaces=known_kibana_spaces,
     )
 
     toast_html = ""

@@ -282,9 +282,49 @@ async def lifespan(app: FastAPI):
                     "[auth-banner] NO sync credentials configured. Add a SIEM "
                     "via Management UI, or set ELASTIC_URL+ELASTIC_API_KEY env "
                     "vars (legacy <=4.0.9 only). Run "
-                    "`docker exec tide-app python /app/test/diag_sync.py` for "
-                    "a full diagnostic."
+                    "`docker exec tide-app python -m app.scripts.diag_sync` "
+                    "for a full diagnostic."
                 )
+
+            # 4.1.4 \u2014 walk every client_siem_map row and verify the configured
+            # ``space`` actually exists on the SIEM's Kibana. The single most
+            # common 4.1.x outage cause was an operator typing the role
+            # ('production'/'staging') into the space field, producing
+            # ``/s/production/api/...`` URLs that 404'd silently. Caught here
+            # at startup the operator sees the bad row before they ever click
+            # Sync. Cached per-SIEM so a 50-mapping deployment makes one HTTP
+            # call per unique Kibana, not one per mapping.
+            try:
+                from app.api.management import _list_kibana_spaces as _lks
+                with _db_b.get_shared_connection() as _cb2:
+                    _all_maps = _cb2.execute(
+                        "SELECT m.client_id, m.siem_id, m.environment_role, "
+                        "m.space, c.name "
+                        "FROM client_siem_map m "
+                        "LEFT JOIN clients c ON c.id = m.client_id"
+                    ).fetchall()
+                _bad = 0
+                for _cid, _sid, _role, _sp, _cname in _all_maps:
+                    _real = _lks(_db_b, _sid)
+                    if _real is None:
+                        continue  # unreachable Kibana \u2014 don't double-warn
+                    if (_sp or "default") not in _real:
+                        _bad += 1
+                        logger.warning(
+                            "[auth-banner] BAD MAPPING client='%s' (%s) "
+                            "siem=%s role=%r space=%r is NOT a Kibana space "
+                            "on this instance. Real spaces: %s. Sync will "
+                            "404 against /s/%s/api/...",
+                            _cname or "?", str(_cid)[:8], str(_sid)[:8],
+                            _role, _sp, sorted(_real), _sp,
+                        )
+                if _all_maps and _bad == 0:
+                    logger.info(
+                        "[auth-banner] all %d client_siem_map rows reference "
+                        "real Kibana spaces.", len(_all_maps),
+                    )
+            except Exception as _e:
+                logger.warning(f"[auth-banner] space-validity check skipped: {_e}")
         except Exception as _e:
             logger.warning(f"Auth-source banner skipped: {_e}")
     except Exception as e:
@@ -1834,6 +1874,7 @@ def create_app() -> FastAPI:
                 "available_siems": available_siems,
                 "available_users": available_users,
                 "all_roles": all_roles,
+                "known_kibana_spaces": (db.get_all_kibana_spaces() or []),
                 "client_opencti": client_opencti,
                 "available_opencti": available_opencti,
                 "client_systems": client_systems,

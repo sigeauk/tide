@@ -46,23 +46,6 @@
                 {% from "components/ui/breadcrumb.html" import breadcrumb %}
                 {{ breadcrumb(request) }}
             {% endif %}
-            {# 4.0.13 / Migration 37: detection_rules schema changed and the
-               table was wiped on upgrade. Show a persistent banner until a
-               sync repopulates it so operators don't see empty rule grids
-               and assume the upgrade broke things. #}
-            {% if user and migration37_resync_required and migration37_resync_required() %}
-            <div class="alert alert-warning" style="margin: 0 0 1rem 0;">
-                <strong>Action required after upgrade:</strong>
-                The detection-rules cache was rebuilt with per-SIEM scoping
-                (Migration 37, 4.0.13) and is currently empty. Click
-                <strong>Sync Elastic</strong> on the
-                <a href="/dashboard">Dashboard</a> (or
-                <strong>Sync from Elastic</strong> on the
-                <a href="/rules">Rules</a> page) to repopulate. Until then,
-                rule lists, dashboard counts, and the Test Rule popup will be
-                empty for this tenant.
-            </div>
-            {% endif %}
             {% block content %}{% endblock %}
         </main>
     </div>

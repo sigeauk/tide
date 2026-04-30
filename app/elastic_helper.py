@@ -973,6 +973,16 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
             page = 1
             space_rules: list = []
             advertised_total: int = -1  # -1 = unknown until first response
+            page_fetch_failed = False  # True only if an HTTP/network error
+                                       # actually broke pagination. Distinct
+                                       # from "Kibana said total=N but only N-k
+                                       # rules came back across successful
+                                       # pages" — the latter is a benign
+                                       # count drift (rules deleted between
+                                       # pages, RBAC filtering, stale total)
+                                       # and must not block reconciliation.
+            failure_reason: str = ""   # populated when page_fetch_failed/-1
+            failure_endpoint: str = ""
 
             while True:
                 # Construct URL with space prefix if not 'default'
@@ -1003,10 +1013,21 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                                 _time.sleep(BACKOFF_S[attempt - 1])
                                 continue
                         # Non-retryable
+                        body_snip = ""
+                        try:
+                            body_snip = (res.text or "")[:200].replace("\n", " ")
+                        except Exception:
+                            body_snip = ""
+                        failure_reason = (
+                            f"HTTP {res.status_code} (non-retryable)"
+                            + (f" body=\"{body_snip}\"" if body_snip else "")
+                        )
+                        failure_endpoint = endpoint
                         log_error(
                             f"Failed to fetch from space '{space}' page {page}: "
-                            f"{res.status_code} (non-retryable)"
+                            f"{failure_reason} url={endpoint}"
                         )
+                        page_fetch_failed = True
                         break
                     except (requests.exceptions.ConnectionError,
                             requests.exceptions.Timeout) as e:
@@ -1017,9 +1038,12 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                             continue
                         log_error(
                             f"Network error fetching space '{space}' page {page} "
-                            f"after {MAX_PAGE_RETRIES} attempts: {last_err}"
+                            f"after {MAX_PAGE_RETRIES} attempts: {last_err} url={endpoint}"
                         )
+                        failure_reason = f"network: {last_err}"
+                        failure_endpoint = endpoint
                         res = None
+                        page_fetch_failed = True
                         break
 
                 if res is None or res.status_code != 200:
@@ -1055,21 +1079,37 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                 page += 1
 
             fetched = len(space_rules)
-            # If no page ever succeeded ``advertised_total`` is still -1 — flag
-            # this as incomplete so the orchestrator preserves existing rows.
-            if advertised_total < 0:
-                total = fetched
+            # Three outcomes:
+            #  1. page_fetch_failed       — real drift, preserve existing rows.
+            #  2. advertised_total < 0    — no successful page at all, treat as failure.
+            #  3. fetched < advertised_total but every page returned 200 —
+            #     Kibana's total was stale or filtered. Reconcile is safe;
+            #     the rules we got back are the authoritative current set.
+            if page_fetch_failed or advertised_total < 0:
+                total = advertised_total if advertised_total >= 0 else fetched
                 complete = False
-            else:
-                total = advertised_total
-                complete = fetched >= total
-            if not complete:
+                # If we exited the retry loop without ever recording a reason
+                # (defensive — shouldn't happen) at least say so.
+                reason = failure_reason or "unknown (no successful page)"
+                ep = failure_endpoint or endpoint
                 log_error(
-                    f"Sync drift: space '{space}' fetched {fetched}/{total} rules — "
-                    f"subtractive delete will be skipped for this space."
+                    f"Sync drift: space '{space}' fetched {fetched}/{total} rules "
+                    f"— {reason} — endpoint={ep}. Subtractive delete skipped "
+                    f"for this space. Run `docker exec tide-app python -m "
+                    f"app.scripts.diag_sync` for a full credential/connectivity "
+                    f"breakdown."
                 )
             else:
-                log_info(f"Space '{space}': fetched {fetched}/{total} rules")
+                total = advertised_total
+                complete = True  # all pages OK — treat result set as authoritative
+                if fetched < advertised_total:
+                    log_info(
+                        f"Space '{space}': fetched {fetched}/{total} rules "
+                        f"(Kibana over-reported total; reconciling against "
+                        f"actual returned set)."
+                    )
+                else:
+                    log_info(f"Space '{space}': fetched {fetched}/{total} rules")
 
             diagnostics[space] = {
                 "total": total,

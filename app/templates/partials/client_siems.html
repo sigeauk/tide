@@ -104,7 +104,20 @@
                     <option value="staging">Staging</option>
                 </select>
                 <div id="siem-space-field" style="display:none;">
-                    <input type="text" name="space" class="form-input" placeholder="Kibana space (e.g. production)">
+                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                        Kibana space name (NOT the environment role above).
+                        Leave blank for Kibana's built-in <code>default</code> space.
+                    </label>
+                    <input type="text" name="space" class="form-input"
+                           placeholder="default"
+                           list="known-kibana-spaces">
+                    {% if known_kibana_spaces is defined and known_kibana_spaces %}
+                    <datalist id="known-kibana-spaces">
+                        {% for ks in known_kibana_spaces %}
+                        <option value="{{ ks }}">{{ ks }}</option>
+                        {% endfor %}
+                    </datalist>
+                    {% endif %}
                 </div>
                 <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
             </form>
