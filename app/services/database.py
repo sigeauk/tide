@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 38
+SCHEMA_VERSION = 40
 
 
 class DatabaseService:
@@ -1621,6 +1621,122 @@ class DatabaseService:
                 inserted,
             )
 
+        # ── Migration 39: scrub role names from client_siem_map.space ───
+        # Older releases (and operator confusion through 4.1.4) allowed the
+        # literal strings 'production' or 'staging' to be saved into
+        # ``client_siem_map.space`` even though those are environment ROLE
+        # names, never Kibana space ids. Such rows produce HTTP 404 / 401 on
+        # every sync against ``/s/production/api/...`` because Kibana has no
+        # such space. Rewrite them to ``'default'`` so sync at least targets
+        # Kibana's built-in space; operators can fix to the correct space
+        # via the Management UI (the form-side validator added in 4.1.5
+        # rejects the same value going forward).
+        if current_version < 39:
+            try:
+                # DuckDB's UPDATE doesn't always populate cur.rowcount
+                # reliably (it can return -1 for bulk updates), so count
+                # the affected rows ourselves with a SELECT first.
+                affected = conn.execute(
+                    "SELECT COUNT(*) FROM client_siem_map "
+                    "WHERE LOWER(TRIM(space)) IN ('production','staging')"
+                ).fetchone()[0] or 0
+                if affected:
+                    conn.execute(
+                        "UPDATE client_siem_map SET space = 'default' "
+                        "WHERE LOWER(TRIM(space)) IN ('production','staging')"
+                    )
+                    logger.warning(
+                        "Migration 39: rewrote %d client_siem_map row(s) "
+                        "where space contained a role name "
+                        "('production'/'staging') — set to 'default'. "
+                        "Review these in Settings → Clients and pick the "
+                        "correct Kibana space.",
+                        affected,
+                    )
+                else:
+                    logger.info(
+                        "Migration 39: no role-name pollution found in "
+                        "client_siem_map.space."
+                    )
+            except Exception as exc:
+                logger.error(f"Migration 39 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 39)
+
+        # ── Migration 40: drop stale threat_actors snapshot from tenant DBs ─
+        # Pre-4.1.5 tenant DBs received a full ``threat_actors`` mirror at
+        # provisioning time and on every subsequent shared-data sync. That
+        # mirrored EVERY tenant's OpenCTI feed into EVERY other tenant. From
+        # 4.1.5 onward MITRE actors are read live from the shared DB and
+        # OpenCTI is written per-tenant by the sync service, so the stale
+        # snapshot must go. The next OpenCTI sync re-populates each tenant
+        # with only its own intel; MITRE is unaffected because it is no
+        # longer mirrored.
+        if current_version < 40:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients "
+                    "WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(
+                    f"Migration 40: could not list tenant DBs: {exc}"
+                )
+                rows = []
+            wiped_total = 0
+            tenant_count = 0
+            import os as _os
+            data_dir = _os.path.dirname(self.db_path)
+            for cid, cname, fname in rows:
+                tdb_path = _os.path.join(data_dir, fname)
+                if not _os.path.exists(tdb_path):
+                    logger.warning(
+                        f"Migration 40: tenant DB missing for client "
+                        f"{cname} ({cid[:8]}): {tdb_path} — skipping"
+                    )
+                    continue
+                try:
+                    # Use a fresh standalone connection per tenant DB so we
+                    # don't fight the connection pool during boot.
+                    import duckdb as _duckdb
+                    tconn = _duckdb.connect(tdb_path)
+                    try:
+                        try:
+                            cnt = tconn.execute(
+                                "SELECT COUNT(*) FROM threat_actors"
+                            ).fetchone()[0] or 0
+                        except Exception:
+                            cnt = 0
+                        if cnt:
+                            tconn.execute("DELETE FROM threat_actors")
+                            wiped_total += cnt
+                            logger.info(
+                                f"Migration 40: wiped {cnt} stale "
+                                f"threat_actors row(s) from tenant DB "
+                                f"{fname} ({cname})"
+                            )
+                        tenant_count += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(
+                        f"Migration 40: failed to wipe {fname} ({cname}): "
+                        f"{exc}"
+                    )
+            if tenant_count:
+                logger.warning(
+                    "Migration 40: cleared %d stale threat_actors row(s) "
+                    "across %d tenant DB(s). Re-run OpenCTI sync from "
+                    "Management to re-populate per-tenant intel.",
+                    wiped_total, tenant_count,
+                )
+            else:
+                logger.info(
+                    "Migration 40: no tenant DBs registered — nothing to "
+                    "clean up."
+                )
+            self._set_schema_version(conn, 40)
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -2887,22 +3003,157 @@ class DatabaseService:
             logger.warning(f"_client_has_opencti({client_id}) failed: {exc}")
             return False
 
+    # ─── MITRE-source detection (used by threat-actor isolation) ─────
+    # 4.1.5 — A threat_actors row is considered "MITRE baseline" (visible to
+    # every client) if its ``source`` array contains any string that begins
+    # with ``"mitre"`` (case-insensitive). That covers every form
+    # ``cti_helper.process_stix_bundle`` writes — ``"MITRE: enterprise"``,
+    # ``"MITRE: ics"``, ``"MITRE: mobile"``, ``"MITRE: pre"`` — plus historic
+    # variants like ``"mitre-enterprise"`` / ``"mitre:ics"`` and the bare
+    # ``"mitre"`` token. Anything else is treated as OpenCTI-sourced and is
+    # per-tenant.
+    @staticmethod
+    def _row_is_mitre(source_value) -> bool:
+        if not source_value:
+            return False
+        if hasattr(source_value, "tolist"):
+            source_value = source_value.tolist()
+        if not isinstance(source_value, (list, tuple, set)):
+            source_value = [source_value]
+        for s in source_value:
+            if not s:
+                continue
+            tok = str(s).strip().lower()
+            if tok == "mitre" or tok.startswith("mitre:") or tok.startswith("mitre-") or tok.startswith("mitre "):
+                return True
+        return False
+
+    def clear_octi_threat_actors_in_active_db(self) -> int:
+        """Delete OpenCTI-sourced threat_actors rows from the active DB context.
+
+        4.1.5 isolation: keeps any MITRE-sourced rows untouched so the shared
+        DB does not lose its baseline when this is invoked without a tenant
+        context. In a tenant DB the table holds OpenCTI rows only, so this
+        effectively wipes it.
+        """
+        try:
+            with self.get_connection() as conn:
+                # Count first (DuckDB rowcount on bulk DELETE is unreliable).
+                rows = conn.execute("SELECT name, source FROM threat_actors").fetchall()
+                victims = [r[0] for r in rows if not self._row_is_mitre(r[1])]
+                if not victims:
+                    return 0
+                conn.executemany(
+                    "DELETE FROM threat_actors WHERE name = ?",
+                    [[v] for v in victims],
+                )
+                return len(victims)
+        except Exception as exc:
+            logger.error(f"clear_octi_threat_actors_in_active_db failed: {exc}")
+            return 0
+
+    def save_octi_threat_actors_to_active_db(self, df) -> int:
+        """Upsert OpenCTI-sourced threat_actors rows into the active DB context.
+
+        4.1.5 isolation: callers must wrap this in
+        ``tenant_manager.tenant_context_for(client_id)`` so the rows land in
+        the correct tenant DB. Without a tenant context the rows are written
+        to the shared DB (legacy/primary client behaviour).
+
+        Mirrors the input shape of ``app.database.save_threat_data`` but uses
+        the tenant-aware connection pool. Returns the number of rows
+        upserted.
+        """
+        if df is None or df.empty:
+            return 0
+        try:
+            from datetime import datetime as _dt
+            df = df.copy()
+            df.columns = [c.lower().strip() for c in df.columns]
+            renames = {"actor": "name", "type": "origin"}
+            df.rename(columns=renames, inplace=True)
+            if "ttp_count" not in df.columns and "ttps" in df.columns:
+                df["ttp_count"] = df["ttps"].apply(
+                    lambda x: len(x) if isinstance(x, list) else 0
+                )
+            if "last_updated" not in df.columns:
+                df["last_updated"] = _dt.now()
+            for col in ("description", "aliases", "origin"):
+                if col not in df.columns:
+                    df[col] = None
+            if "source" not in df.columns:
+                df["source"] = [["OCTI"]] * len(df)
+            df["source"] = df["source"].apply(
+                lambda x: x if isinstance(x, list) else (
+                    [x] if x else ["OCTI"]
+                )
+            )
+            df["ttps"] = df["ttps"].apply(
+                lambda x: x if isinstance(x, list) else []
+            )
+            saved = 0
+            with self.get_connection() as conn:
+                for _, row in df.iterrows():
+                    name = row.get("name")
+                    if not name:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO threat_actors
+                            (name, description, ttps, ttp_count, aliases,
+                             origin, source, last_updated)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT (name) DO UPDATE SET
+                            ttps = EXCLUDED.ttps,
+                            ttp_count = EXCLUDED.ttp_count,
+                            source = EXCLUDED.source,
+                            aliases = EXCLUDED.aliases,
+                            description = COALESCE(EXCLUDED.description,
+                                                   threat_actors.description),
+                            origin = COALESCE(EXCLUDED.origin,
+                                              threat_actors.origin),
+                            last_updated = EXCLUDED.last_updated
+                        """,
+                        [
+                            name,
+                            row.get("description"),
+                            row["ttps"],
+                            int(row.get("ttp_count") or 0),
+                            row.get("aliases"),
+                            row.get("origin"),
+                            row["source"],
+                            row.get("last_updated"),
+                        ],
+                    )
+                    saved += 1
+            return saved
+        except Exception as exc:
+            logger.error(f"save_octi_threat_actors_to_active_db failed: {exc}")
+            return 0
+
     def get_threat_actors(self, client_id: Optional[str] = None) -> List[ThreatActor]:
         """Get all threat actors ordered by TTP count.
 
-        When ``client_id`` is supplied and the tenant has **no** OpenCTI instance
-        linked (`client_opencti_map`), actors whose ``source`` array does not
-        include any MITRE source are filtered out so OpenCTI-only intel from
-        another tenant does not leak into the Threat Landscape / Heatmap. The
-        legacy ``client_id=None`` behaviour returns every actor unchanged so
-        background sync jobs and report exports keep working.
+        4.1.5 isolation rules:
+        * MITRE-sourced actors live in the **shared** DB and are visible to
+          every client (they were loaded at build / by the MITRE sync phase).
+        * OpenCTI-sourced actors live in the **tenant** DB and are only
+          returned when the request is in that tenant's context.
+        * For backwards compatibility the shared DB may still contain
+          OpenCTI rows for the primary/legacy client (which has no dedicated
+          tenant DB); those rows are filtered out unless ``client_id``
+          actually links to an OpenCTI instance.
+        * ``client_id=None`` returns everything (background jobs, exports).
         """
-        include_opencti_only = client_id is None or self._client_has_opencti(client_id)
-        with self.get_connection() as conn:
+        from app.services.tenant_manager import get_tenant_db_path
+        include_opencti_shared = client_id is None or self._client_has_opencti(client_id)
+        in_tenant_ctx = get_tenant_db_path() is not None
+
+        with self.get_shared_connection() as conn:
             df = conn.execute(
                 "SELECT * FROM threat_actors ORDER BY ttp_count DESC"
             ).df()
-            
+
             actors = []
             for _, row in df.iterrows():
                 ttps = row.get('ttps', [])
@@ -2938,21 +3189,63 @@ class DatabaseService:
                     last_updated=row.get('last_updated'),
                 ))
 
-            if not include_opencti_only:
-                # Tenant has no OpenCTI link — keep only actors that came from
-                # at least one MITRE source. Anything sourced solely from a
-                # different tenant's OpenCTI feed is hidden.
-                _MITRE_SOURCES = {
-                    "mitre", "enterprise", "mobile", "ics",
-                    "mitre:enterprise", "mitre:mobile", "mitre:ics",
-                    "mitre-enterprise", "mitre-mobile", "mitre-ics",
-                }
-                actors = [
-                    a for a in actors
-                    if any((s or "").strip().lower() in _MITRE_SOURCES for s in (a.source or []))
-                ]
+            if not include_opencti_shared:
+                # Tenant has no OpenCTI link — keep only MITRE-baseline rows
+                # from the shared DB. Anything sourced solely from another
+                # tenant's OpenCTI feed (legacy data) is hidden.
+                actors = [a for a in actors if self._row_is_mitre(a.source)]
 
-            return actors
+        # Tenant DB OpenCTI rows (4.1.5 isolation). Only attempt this when a
+        # tenant context is active AND the tenant DB is registered, so the
+        # shared DB read above is not duplicated for legacy/primary clients.
+        if in_tenant_ctx:
+            try:
+                with self.get_connection() as tconn:
+                    tdf = tconn.execute(
+                        "SELECT * FROM threat_actors ORDER BY ttp_count DESC"
+                    ).df()
+                import math as _math
+                seen_names = {a.name for a in actors}
+                for _, row in tdf.iterrows():
+                    name = row.get("name", "")
+                    if not name or name in seen_names:
+                        continue
+                    ttps = row.get("ttps", [])
+                    if hasattr(ttps, "tolist"):
+                        ttps = ttps.tolist()
+                    source = row.get("source", [])
+                    if hasattr(source, "tolist"):
+                        source = source.tolist()
+                    origin_val = row.get("origin")
+                    if origin_val is None or (isinstance(origin_val, float)
+                                              and _math.isnan(origin_val)):
+                        origin_val = None
+                    description_val = row.get("description")
+                    if description_val is None or (isinstance(description_val, float)
+                                                   and _math.isnan(description_val)):
+                        description_val = None
+                    aliases_val = row.get("aliases")
+                    if aliases_val is None or (isinstance(aliases_val, float)
+                                               and _math.isnan(aliases_val)):
+                        aliases_val = None
+                    actors.append(ThreatActor(
+                        name=name,
+                        description=description_val,
+                        ttps=ttps,
+                        ttp_count=row.get("ttp_count", 0),
+                        aliases=aliases_val,
+                        origin=origin_val,
+                        source=source if isinstance(source, list) else [],
+                        last_updated=row.get("last_updated"),
+                    ))
+                actors.sort(key=lambda a: (a.ttp_count or 0), reverse=True)
+            except Exception as exc:
+                logger.warning(
+                    f"get_threat_actors: tenant DB read failed for "
+                    f"client_id={client_id}: {exc}"
+                )
+
+        return actors
     
     def get_covered_ttps_by_space(self, space: str = "production") -> Set[str]:
         """Get TTPs covered by enabled detection rules in a specific space."""
@@ -3011,22 +3304,14 @@ class DatabaseService:
 
             include_opencti_only = client_id is None or self._client_has_opencti(client_id)
             if not include_opencti_only and 'source' in df.columns:
-                _MITRE_SOURCES = {
-                    "mitre", "enterprise", "mobile", "ics",
-                    "mitre:enterprise", "mitre:mobile", "mitre:ics",
-                    "mitre-enterprise", "mitre-mobile", "mitre-ics",
-                }
-
-                def _has_mitre(src) -> bool:
-                    if src is None:
-                        return False
-                    if hasattr(src, 'tolist'):
-                        src = src.tolist()
-                    if not isinstance(src, list):
-                        return False
-                    return any((s or "").strip().lower() in _MITRE_SOURCES for s in src)
-
-                df = df[df['source'].apply(_has_mitre)].reset_index(drop=True)
+                # 4.1.5 — delegate to the central MITRE detector so any source
+                # string starting with ``mitre`` (case-insensitive, any
+                # separator) is preserved. Previously this used a stale
+                # frozenset that didn't match the ``"MITRE: <matrix>"`` strings
+                # written by ``cti_helper.process_stix_bundle``, so for
+                # tenants without an OpenCTI link this filter dropped every
+                # row and the landscape cards rendered as zeros.
+                df = df[df['source'].apply(self._row_is_mitre)].reset_index(drop=True)
                 if df.empty:
                     return ThreatLandscapeMetrics()
             
@@ -4903,7 +5188,16 @@ class DatabaseService:
            per-tenant tables are inspected).
         2. Every distinct ``client_siem_map.space`` value, so freshly-mapped
            SIEMs without a sync yet still surface their intended spaces.
+
+        Role names ('production', 'staging') are filtered out of the union
+        regardless of source. They are environment ROLES, not Kibana space
+        ids; if they appear here they came from operator confusion in an
+        earlier release and would otherwise self-perpetuate via the form's
+        autocomplete datalist (Bug 2 in v4.1.5).
         """
+        # Reserved role names that must never surface as space suggestions.
+        # Match case-insensitive on the trimmed value.
+        _ROLE_NAMES = {"production", "staging"}
         spaces: list[str] = []
         seen: set[str] = set()
         with self.get_shared_connection() as conn:
@@ -4914,7 +5208,7 @@ class DatabaseService:
                 ).fetchall()
                 for r in rows:
                     v = r[0]
-                    if v and v not in seen:
+                    if v and v.lower() not in _ROLE_NAMES and v not in seen:
                         spaces.append(v); seen.add(v)
             except Exception as exc:
                 logger.debug(f"get_all_kibana_spaces: detection_rules scan failed: {exc}")
@@ -4922,7 +5216,8 @@ class DatabaseService:
                 extra = conn.execute(
                     "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
                     "FROM client_siem_map "
-                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
+                    "WHERE space IS NOT NULL AND TRIM(space) <> '' "
+                    "  AND LOWER(TRIM(space)) NOT IN ('production','staging')"
                 ).fetchall()
                 for r in extra:
                     v = r[0]

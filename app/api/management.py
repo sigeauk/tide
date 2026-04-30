@@ -1087,6 +1087,24 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     if environment_role not in ("production", "staging"):
         environment_role = "production"
 
+    # Hard reject role names typed into the space field. This is the single
+    # most common configuration mistake (the dropdown above and this input
+    # sit next to each other) and previously slipped through whenever Kibana
+    # was unreachable, because ``_list_kibana_spaces`` fails open. Reject
+    # unconditionally — 'production' and 'staging' are environment ROLE
+    # values that are NEVER valid Kibana space ids in any sane deployment.
+    if space.strip().lower() in ("production", "staging"):
+        from html import escape
+        msg = (
+            f"'{escape(space)}' is an environment ROLE, not a Kibana space. "
+            f"Use the Kibana space id (e.g. 'default', 'soc-prod', 'eu-west') "
+            f"or leave the field blank for Kibana's built-in 'default' space."
+        )
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            f'<div class="toast toast-warning">{msg}</div></div>'
+        )
+
     # Validate the space exists on the SIEM's Kibana before storing the row.
     # The most common 4.1.x sync failure was an operator typing the role name
     # into the space field ("production" / "staging") instead of an actual
@@ -1863,12 +1881,39 @@ def _siem_logging_block_html(s: dict) -> str:
     # longer carries production_space/staging_space fields \u2014 client_siem_map
     # is the sole source of (siem, role, space).
     discovered_spaces: list[str] = []
+    prod_spaces: set[str] = set()
+    stage_spaces: set[str] = set()
     try:
         from app.services.database import get_database_service
-        discovered_spaces = get_database_service().get_all_kibana_spaces() or []
+        _db = get_database_service()
+        discovered_spaces = _db.get_siem_spaces(sid) or []
+        with _db.get_shared_connection() as _conn:
+            for _sp, _role in _conn.execute(
+                "SELECT COALESCE(NULLIF(TRIM(space), ''), 'default'), environment_role "
+                "FROM client_siem_map WHERE siem_id = ?",
+                [sid],
+            ).fetchall():
+                if _role == "production":
+                    prod_spaces.add(_sp)
+                elif _role == "staging":
+                    stage_spaces.add(_sp)
+        # 4.1.5 — also union live spaces from this SIEM's Kibana so freshly
+        # created spaces appear in the logging picker without waiting for a
+        # client mapping to be saved first.
+        try:
+            _live = _list_kibana_spaces(_db, sid) or set()
+            _seen_lc = {s.lower() for s in discovered_spaces}
+            for _sp in sorted(_live):
+                if _sp and _sp.lower() not in _seen_lc:
+                    discovered_spaces.append(_sp)
+                    _seen_lc.add(_sp.lower())
+        except Exception as exc:
+            logger.warning(
+                f"_siem_logging_block_html({sid}): live Kibana space lookup failed: {exc!r}"
+            )
     except Exception as exc:
         logger.warning(
-            f"_siem_logging_block_html({sid}): get_all_kibana_spaces failed: {exc!r}"
+            f"_siem_logging_block_html({sid}): space discovery failed: {exc!r}"
         )
         discovered_spaces = []
     logger.info(
@@ -1909,11 +1954,13 @@ def _siem_logging_block_html(s: dict) -> str:
         checkbox_rows = []
         for sp in ordered:
             checked = " checked" if sp in selected_spaces else ""
-            if sp == prod and sp == stage:
+            in_prod = sp in prod_spaces
+            in_stage = sp in stage_spaces
+            if in_prod and in_stage:
                 tag = ' <span style="opacity:0.6;">(prod / stage)</span>'
-            elif sp == prod:
+            elif in_prod:
                 tag = ' <span style="opacity:0.6;">(prod)</span>'
-            elif sp == stage:
+            elif in_stage:
                 tag = ' <span style="opacity:0.6;">(stage)</span>'
             else:
                 tag = ""
@@ -2576,12 +2623,29 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     # Build a list of Kibana spaces actually present in the rule cache so the
     # Add SIEM form can offer them as a datalist. Stops operators having to
     # guess the space name (and stops them from typing the role name by
-    # mistake).
+    # mistake). 4.1.5 — also union live spaces queried from each available
+    # SIEM's Kibana so freshly-created spaces show up in the picker without
+    # having to wait for a Sigma/rule sync to back-fill them.
     known_kibana_spaces: list[str] = []
     try:
-        known_kibana_spaces = db.get_all_kibana_spaces() or []
+        known_kibana_spaces = list(db.get_all_kibana_spaces() or [])
     except Exception:
         known_kibana_spaces = []
+    try:
+        _live_seen: set[str] = {s.lower() for s in known_kibana_spaces}
+        for _si in (available_siems or []):
+            _sid = _si.get("id") if isinstance(_si, dict) else getattr(_si, "id", None)
+            if not _sid:
+                continue
+            _live = _list_kibana_spaces(db, _sid)
+            if not _live:
+                continue
+            for _sp in sorted(_live):
+                if _sp and _sp.lower() not in _live_seen:
+                    _live_seen.add(_sp.lower())
+                    known_kibana_spaces.append(_sp)
+    except Exception as exc:
+        logger.warning(f"_render_client_siems_partial: live Kibana space union failed: {exc!r}")
     html = template.render(
         client=client, client_siems=client_siems,
         available_siems=available_siems, siem_rule_counts=siem_rule_counts,

@@ -187,12 +187,18 @@ def create_tenant_db(
         get_pool().evict(db_path)
     except Exception:  # pragma: no cover
         pass
+    # 4.1.5 — ``threat_actors`` is intentionally NOT mirrored. MITRE actors
+    # live exclusively in the shared DB (read by every tenant via
+    # ``get_shared_connection``); per-tenant OpenCTI actors are written
+    # directly into the tenant's own ``threat_actors`` table by the OpenCTI
+    # sync phase. Mirroring here would either leak another tenant's
+    # OpenCTI data or be wiped on the next sync.
     try:
         with get_database_service().get_shared_connection() as shared_conn:
             shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
             try:
                 for table in (
-                    "mitre_techniques", "threat_actors",
+                    "mitre_techniques",
                     "siem_inventory", "client_siem_map",
                 ):
                     try:
@@ -221,7 +227,7 @@ def create_tenant_db(
             shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
             try:
                 for table in (
-                    "mitre_techniques", "threat_actors",
+                    "mitre_techniques",
                     "siem_inventory", "client_siem_map",
                 ):
                     try:
@@ -570,9 +576,14 @@ def _create_tenant_schema(conn):
 
 def _sync_reference_tables(conn):
     """Sync reference tables from an ATTACHed 'shared' DB into the tenant DB.
-    Caller must have already: ATTACH '...' AS shared (READ_ONLY)"""
+    Caller must have already: ATTACH '...' AS shared (READ_ONLY)
 
-    for table in ("mitre_techniques", "threat_actors", "siem_inventory", "client_siem_map"):
+    4.1.5 — ``threat_actors`` is deliberately excluded. MITRE actors are
+    read directly from the shared DB by ``get_threat_actors``; the tenant's
+    own ``threat_actors`` table is reserved for that tenant's OpenCTI
+    instance(s) and must not be overwritten by this generic mirror."""
+
+    for table in ("mitre_techniques", "siem_inventory", "client_siem_map"):
         try:
             conn.execute(f"DELETE FROM {table}")
             conn.execute(f"INSERT INTO {table} SELECT * FROM shared.{table}")
