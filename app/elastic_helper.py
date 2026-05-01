@@ -61,6 +61,177 @@ def test_elastic_connection(kibana_url: str, api_key: str, timeout: int = 10):
         return False, str(exc)[:120]
 
 
+def test_elastic_connection_full(
+    kibana_url: str,
+    api_key: str,
+    timeout: int = 10,
+):
+    """Three-tier connectivity / privilege test against a single Kibana.
+
+    Each check is independent and recorded so the operator sees exactly
+    which capability is missing rather than a single pass/fail. Returns::
+
+        {
+            "ok": bool,                          # all three checks passed
+            "spaces": [...],                     # populated by check 2 on success
+            "checks": [
+                {
+                    "name": "kibana_status" | "spaces" | "detection_rules",
+                    "endpoint": "/api/...",
+                    "ok": bool,
+                    "status_code": int | None,    # None on network error
+                    "detail": str,                # short human message
+                    "body_excerpt": str | None,   # first 200 chars of response on fail
+                },
+                ...
+            ],
+        }
+
+    No retries, no fallbacks — each check is one HTTP request so the result
+    panel reflects exactly what the next sync request would see. Token and
+    URL are NOT logged anywhere; only the redacted ``len/first/last`` shape
+    if logging is enabled by the caller.
+    """
+    base = (kibana_url or "").rstrip("/")
+    headers = {
+        "kbn-xsrf": "true",
+        "Authorization": f"ApiKey {api_key or ''}",
+        "Content-Type": "application/json",
+    }
+    result: dict = {"ok": False, "spaces": [], "checks": []}
+
+    def _record(name, endpoint, ok, status_code, detail, body_excerpt=None):
+        result["checks"].append({
+            "name": name,
+            "endpoint": endpoint,
+            "ok": bool(ok),
+            "status_code": status_code,
+            "detail": detail,
+            "body_excerpt": body_excerpt,
+        })
+
+    def _do(method, path):
+        url = f"{base}{path}"
+        try:
+            r = requests.request(
+                method, url, headers=headers, verify=False, timeout=timeout
+            )
+            return r, None
+        except requests.exceptions.ConnectTimeout:
+            return None, "Connection timed out"
+        except requests.exceptions.ConnectionError as e:
+            return None, f"Connection refused ({type(e).__name__})"
+        except Exception as e:
+            return None, f"{type(e).__name__}: {str(e)[:140]}"
+
+    # ── Check 1: Kibana reachable + token format valid ────────────────
+    r, err = _do("GET", "/api/status")
+    if err:
+        _record("kibana_status", "/api/status", False, None, err)
+        return result
+    if r.status_code == 200:
+        try:
+            data = r.json()
+            version = data.get("version", {}).get("number", "unknown")
+            status = data.get("status", {}).get("overall", {}).get("level", "unknown")
+            _record(
+                "kibana_status", "/api/status", True, 200,
+                f"Kibana {version} ({status})",
+            )
+        except Exception:
+            _record(
+                "kibana_status", "/api/status", True, 200,
+                "Reachable (non-JSON status response)",
+            )
+    else:
+        body = (r.text or "")[:200]
+        if r.status_code in (401, 403):
+            detail = (
+                f"HTTP {r.status_code} — token rejected by Kibana. "
+                f"Common causes: token revoked, wrong tenant, or pasted with "
+                f"'ApiKey ' prefix."
+            )
+        else:
+            detail = f"HTTP {r.status_code}"
+        _record("kibana_status", "/api/status", False, r.status_code, detail, body)
+        return result
+
+    # ── Check 2: spaces privilege ─────────────────────────────────────
+    r, err = _do("GET", "/api/spaces/space")
+    if err:
+        _record("spaces", "/api/spaces/space", False, None, err)
+    elif r.status_code == 200:
+        try:
+            spaces = [s.get("id") for s in r.json() if isinstance(s, dict) and s.get("id")]
+        except Exception:
+            spaces = []
+        result["spaces"] = spaces
+        _record(
+            "spaces", "/api/spaces/space", True, 200,
+            f"Found {len(spaces)} space(s): {', '.join(spaces[:6])}"
+            + ("…" if len(spaces) > 6 else ""),
+        )
+    else:
+        body = (r.text or "")[:200]
+        detail = f"HTTP {r.status_code} — token lacks 'kibana_spaces_all' / 'spaces:read'"
+        _record("spaces", "/api/spaces/space", False, r.status_code, detail, body)
+
+    # ── Check 3: detection-engine read privilege per known space ─────
+    spaces_to_check = result["spaces"] or ["default"]
+    de_failures = []
+    de_successes = []
+    for sp in spaces_to_check[:5]:  # cap to keep panel readable
+        path = f"/s/{sp}/api/detection_engine/rules/_find?per_page=1&page=1"
+        r, err = _do("GET", path)
+        if err:
+            de_failures.append(f"{sp}: {err}")
+            continue
+        if r.status_code == 200:
+            try:
+                total = r.json().get("total", "?")
+            except Exception:
+                total = "?"
+            de_successes.append(f"{sp} ({total} rules)")
+        else:
+            body_hint = ""
+            try:
+                jb = r.json()
+                if isinstance(jb, dict):
+                    body_hint = jb.get("message") or jb.get("error") or ""
+            except Exception:
+                pass
+            de_failures.append(
+                f"{sp}: HTTP {r.status_code}"
+                + (f" — {body_hint[:80]}" if body_hint else "")
+            )
+    if de_failures and not de_successes:
+        _record(
+            "detection_rules",
+            "/s/<space>/api/detection_engine/rules/_find",
+            False, None,
+            "All spaces failed: " + "; ".join(de_failures[:3]),
+            "; ".join(de_failures)[:200],
+        )
+    elif de_failures:
+        _record(
+            "detection_rules",
+            "/s/<space>/api/detection_engine/rules/_find",
+            True, 200,
+            "OK on: " + ", ".join(de_successes)
+            + " | failed on: " + "; ".join(de_failures[:2]),
+        )
+    else:
+        _record(
+            "detection_rules",
+            "/s/<space>/api/detection_engine/rules/_find",
+            True, 200,
+            "OK on: " + ", ".join(de_successes),
+        )
+
+    result["ok"] = all(c["ok"] for c in result["checks"])
+    return result
+
+
 # --- CONFIG ---
 IGNORED_INDICES = {
     "_id", "_index", "_score", "_version", "_source", "alert", "event", 

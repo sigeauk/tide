@@ -185,6 +185,7 @@
         <input type="hidden" name="rule_ref" id="qst-siem-rule-ref" value="">
         <input type="hidden" name="note" value="">
         <input type="hidden" name="source" value="siem">
+        <input type="hidden" name="system_id" value="{{ quest.system_id }}">
       </form>
     </div>
 
@@ -197,6 +198,7 @@
         <input class="form-input" name="rule_ref" placeholder="Detection name (e.g. Dashboard, KQL query…)" required style="font-size:0.85rem;">
         <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
         <input type="hidden" name="source" value="manual">
+        <input type="hidden" name="system_id" value="{{ quest.system_id }}">
         <div style="display:flex;gap:0.5rem;">
           <button type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
           <button type="button" class="btn btn-secondary btn-sm"
@@ -226,6 +228,7 @@
         <input type="hidden" name="rule_ref" id="qst-sigma-rule-ref" value="">
         <input type="hidden" name="note" value="">
         <input type="hidden" name="source" value="sigma">
+        <input type="hidden" name="system_id" value="{{ quest.system_id }}">
       </form>
     </div>
 

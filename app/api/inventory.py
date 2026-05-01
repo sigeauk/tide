@@ -804,6 +804,27 @@ async def api_upload_mitre_mapping(
 # Baselines — Page + API routes
 # ---------------------------------------------------------------------------
 
+
+def _baseline_coverage_with_step_detections(baseline_id: str, covered_ttps, ttp_rule_counts):
+    """4.1.4: covered_ttps / ttp_rule_counts come from detection_rules.mitre_ids
+    (synced SIEM rules) and ignore step_detections rows the user attaches via
+    the baseline UI or the coverage Quest. Merge in the per-baseline
+    step_detections so a rule attached through the Quest immediately lights
+    up the technique pill on the baseline page."""
+    try:
+        from app.services.quest import baseline_coverage_map
+        bcov = baseline_coverage_map(baseline_id)
+    except Exception:
+        return covered_ttps, ttp_rule_counts
+    merged_covered = set(covered_ttps) | {tid.upper() for tid, n in bcov.items() if n > 0}
+    merged_counts = dict(ttp_rule_counts)
+    for tid, n in bcov.items():
+        if n > 0:
+            tid_u = tid.upper()
+            merged_counts[tid_u] = max(merged_counts.get(tid_u, 0), n)
+    return merged_covered, merged_counts
+
+
 @router.get("/baselines", response_class=HTMLResponse)
 def page_baselines(request: Request, user: CurrentUser, client_id: ActiveClient):
     baselines = get_baselines_overview(client_id=client_id)
@@ -836,8 +857,10 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, 
     # Per-technique coverage for pill coloring
     from app.services.database import get_database_service as _get_db
     _db = _get_db()
-    covered_ttps = _db.get_all_covered_ttps(client_id=client_id)
-    ttp_rule_counts = _db.get_ttp_rule_counts(client_id=client_id)
+    covered_ttps, ttp_rule_counts = _baseline_coverage_with_step_detections(
+        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
+        _db.get_ttp_rule_counts(client_id=client_id),
+    )
     return _render("pages/baseline_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "user": user,
         "mitre_tactics": MITRE_TACTICS,
@@ -1373,10 +1396,12 @@ def api_add_tactic(
     pb = get_playbook(baseline_id, client_id=client_id)
     from app.services.database import get_database_service as _get_db
     _db = _get_db()
+    cov, counts = _baseline_coverage_with_step_detections(
+        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
+        _db.get_ttp_rule_counts(client_id=client_id),
+    )
     return _render("partials/baseline_tactics.html", request, {
-        "baseline": pb,
-        "covered_ttps": _db.get_all_covered_ttps(client_id=client_id),
-        "ttp_rule_counts": _db.get_ttp_rule_counts(client_id=client_id),
+        "baseline": pb, "covered_ttps": cov, "ttp_rule_counts": counts,
     })
 
 
@@ -1394,10 +1419,12 @@ def api_delete_tactic(request: Request, tactic_id: str, playbook_id: str = Query
     pb = get_playbook(playbook_id, client_id=client_id)
     from app.services.database import get_database_service as _get_db
     _db = _get_db()
+    cov, counts = _baseline_coverage_with_step_detections(
+        playbook_id, _db.get_all_covered_ttps(client_id=client_id),
+        _db.get_ttp_rule_counts(client_id=client_id),
+    )
     return _render("partials/baseline_tactics.html", request, {
-        "baseline": pb,
-        "covered_ttps": _db.get_all_covered_ttps(client_id=client_id),
-        "ttp_rule_counts": _db.get_ttp_rule_counts(client_id=client_id),
+        "baseline": pb, "covered_ttps": cov, "ttp_rule_counts": counts,
     })
 
 
@@ -1702,8 +1729,23 @@ def _render_detection_section(request, step, client_id=None):
 def api_add_tactic_detection(
     request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
     rule_ref: str = Form(""), note: str = Form(""), source: str = Form("manual"),
+    system_id: str = Form(""),
 ):
-    add_step_detection(tactic_id, rule_ref, note, source, client_id=client_id)
+    det = add_step_detection(tactic_id, rule_ref, note, source, client_id=client_id)
+    # 4.1.4 fix: the Coverage Quest passes the quest's system_id so a
+    # rule attached through the Quest is also applied to that system, not
+    # just registered on the baseline step. Without this the rule lived in
+    # step_detections only, never produced an applied_detections row, and
+    # the system's per-host RAG status stayed red. Sigma rules can't be
+    # applied directly (they need convert+deploy first), matching the
+    # guard in api_apply_step_detection. Baseline detail page POSTs do
+    # not include system_id so their behaviour is unchanged.
+    sid = (system_id or "").strip()
+    if det and sid and (source or "manual") != "sigma":
+        try:
+            apply_detection(det.id, system_id=sid, client_id=client_id)
+        except Exception:
+            logger.exception("quest_apply_detection_failed step=%s det=%s system=%s", tactic_id, det.id, sid)
     step = get_playbook_step(tactic_id, client_id=client_id)
     resp = _render_detection_section(request, step, client_id=client_id)
     resp.headers["HX-Trigger"] = "stepUpdated"

@@ -14,7 +14,7 @@ import requests as http_requests
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import DbDep, RequireAdmin, ActiveClient
+from app.api.deps import DbDep, RequireAdmin, RequireSuperadmin, ActiveClient
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,39 @@ _KIBANA_SPACES_CACHE: dict = {}  # siem_id -> (expiry_epoch, set[str] | None)
 _KIBANA_SPACES_TTL = 60.0
 
 
+# ---------------------------------------------------------------------------
+# API token normalisation. Operator-visible failure mode: pasting the API key
+# from Kibana sometimes brings along the literal ``ApiKey `` prefix, a
+# trailing newline from a wrapped terminal, or whitespace from a copy-paste
+# out of a JSON viewer. Any of those silently 401s every request because the
+# Authorization header becomes ``ApiKey ApiKey <token>`` or ``ApiKey <token>\n``.
+# Normalise on every read of the form so the column always holds the bare
+# base64 string. Returns ``(token, error_message_or_None)``.
+# ---------------------------------------------------------------------------
+def _normalize_api_token(raw: str) -> tuple[Optional[str], Optional[str]]:
+    if raw is None:
+        return None, None
+    t = str(raw).strip()
+    if not t:
+        return None, None
+    # Strip an accidentally-pasted ``ApiKey `` / ``Bearer `` prefix.
+    low = t.lower()
+    for prefix in ("apikey ", "bearer "):
+        if low.startswith(prefix):
+            t = t[len(prefix):].strip()
+            low = t.lower()
+    # Reject if there's any internal whitespace — that means the paste split
+    # mid-token, or the operator pasted a JSON object instead of the encoded
+    # field. Either way Kibana will 401, so fail loudly at save time.
+    if any(ch.isspace() for ch in t):
+        return None, (
+            "API key contains internal whitespace. Paste only the single "
+            "base64 'Encoded' value from Kibana → Stack Management → API keys, "
+            "not the full JSON object or a wrapped multi-line string."
+        )
+    return t, None
+
+
 def _list_kibana_spaces(db, siem_id: str) -> Optional[set]:
     """Return the set of space ids on this SIEM's Kibana, or ``None`` when
     the SIEM record is missing/unreachable (in which case the caller should
@@ -54,9 +87,21 @@ def _list_kibana_spaces(db, siem_id: str) -> Optional[set]:
         return None
     url = (siem.get("kibana_url") or "").rstrip("/")
     token = siem.get("api_token_enc")
-    if not url or not token:
-        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
+    # Persistent fallback (Migration 41): if the live lookup fails or the
+    # SIEM record is incomplete, fall back to the spaces a previous Test
+    # Connection persisted so the link form is not silently empty.
+    def _persisted_fallback() -> Optional[set]:
+        try:
+            cached_db = db.get_siem_spaces_cached(siem_id)
+            if cached_db:
+                return set(cached_db)
+        except Exception as exc:
+            logger.debug(f"_list_kibana_spaces({siem_id}): persistent fallback failed: {exc!r}")
         return None
+    if not url or not token:
+        fb = _persisted_fallback()
+        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
+        return fb
     try:
         r = http_requests.get(
             f"{url}/api/spaces/space",
@@ -71,24 +116,32 @@ def _list_kibana_spaces(db, siem_id: str) -> Optional[set]:
         if r.status_code != 200:
             logger.warning(
                 f"_list_kibana_spaces({siem_id}): /api/spaces/space "
-                f"returned HTTP {r.status_code}; failing open."
+                f"returned HTTP {r.status_code}; falling back to persisted cache."
             )
-            _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
-            return None
+            fb = _persisted_fallback()
+            _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
+            return fb
         try:
             data = r.json()
         except Exception:
-            return None
+            return _persisted_fallback()
         spaces = {s.get("id") for s in data if isinstance(s, dict) and s.get("id")}
         _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, spaces)
+        # Best-effort: persist what we just discovered so a later restart
+        # still has it.
+        try:
+            db.save_siem_spaces(siem_id, sorted(spaces))
+        except Exception as exc:
+            logger.debug(f"_list_kibana_spaces({siem_id}): persist failed: {exc!r}")
         return spaces
     except Exception as exc:
         logger.warning(
             f"_list_kibana_spaces({siem_id}): live lookup failed: {exc!r}; "
-            f"failing open."
+            f"falling back to persisted cache."
         )
-        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, None)
-        return None
+        fb = _persisted_fallback()
+        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
+        return fb
 
 
 # ---------------------------------------------------------------------------
@@ -132,20 +185,18 @@ def tab_clients(request: Request, db: DbDep, user: RequireAdmin, client_id: Acti
 
 
 @router.get("/tab/siems", response_class=HTMLResponse)
-def tab_siems(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
-    """SIEMs tab partial for the management hub. Tenant admins see SIEMs linked to
-    their clients **plus** any unassigned SIEMs (so freshly-created or orphaned
-    inventory items don't vanish on the next refresh — see 4.0.12 fix)."""
+def tab_siems(request: Request, db: DbDep, user: RequireSuperadmin, client_id: ActiveClient):
+    """SIEMs tab partial for the management hub.
+
+    Restricted to platform super-admins (4.1.6). Tenant admins manage which
+    SIEMs are linked to their tenants from the Settings → Clients → tenant
+    detail page; the global inventory (where API tokens live) is no longer
+    visible to them. Closes the cross-tenant credential-leak path where any
+    tenant admin could read every other tenant's stored API keys.
+    """
     siems = db.list_siem_inventory()
     for s in siems:
         s["_clients"] = db.get_siem_clients(s["id"])
-    if not user.is_superadmin:
-        allowed = set(db.get_user_client_ids(user.id))
-        siems = [
-            s for s in siems
-            if not s.get("_clients")  # unassigned — visible to every admin
-            or any(c.get("id") in allowed for c in (s.get("_clients") or []))
-        ]
     return _render_siems_tab(siems)
 
 
@@ -182,7 +233,7 @@ def tab_users(request: Request, db: DbDep, user: RequireAdmin, client_id: Active
     else:
         allowed = set(db.get_user_client_ids(user.id))
         clients = [c for c in db.list_clients() if c["id"] in allowed]
-    return _render_users_tab(users, all_roles, clients)
+    return _render_users_tab(users, all_roles, clients, current_user=user)
 
 
 def _refresh_users_tab(db, user=None, client_id: Optional[str] = None) -> str:
@@ -199,7 +250,7 @@ def _refresh_users_tab(db, user=None, client_id: Optional[str] = None) -> str:
         clients = [c for c in db.list_clients() if c["id"] in allowed]
     else:
         clients = db.list_clients()
-    return _render_users_tab(users, all_roles, clients)
+    return _render_users_tab(users, all_roles, clients, current_user=user)
 
 
 @router.post("/users", response_class=HTMLResponse)
@@ -296,6 +347,50 @@ def mgmt_delete_user(request: Request, user_id: str, db: DbDep, user: RequireAdm
         )
     db.delete_user(user_id)
     return HTMLResponse(_refresh_users_tab(db))
+
+
+@router.post("/users/{user_id}/superadmin", response_class=HTMLResponse)
+def mgmt_toggle_user_superadmin(request: Request, user_id: str, db: DbDep,
+                                 user: RequireSuperadmin, client_id: ActiveClient):
+    """Grant or revoke the platform-admin (superadmin) flag on a user.
+
+    Only an existing super-admin may call this. Self-revoke is blocked so an
+    operator cannot accidentally lock themselves out of the only platform-admin
+    account. The flag is the platform-wide bypass — it grants visibility into
+    every tenant and the SIEMs management tab — so changes are audit-logged.
+    Added in 4.1.6.
+    """
+    from app.services.log_context import audit_log
+    target = db.get_user_by_id(user_id)
+    if not target:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">User not found.</div></div>'
+        )
+    if user_id == user.id:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">You cannot change your own platform-admin flag.</div></div>'
+            + _refresh_users_tab(db, user=user, client_id=client_id)
+        )
+    new_value = not bool(target.get("is_superadmin"))
+    db.set_user_superadmin(user_id, new_value)
+    audit_log(
+        "superadmin_grant" if new_value else "superadmin_revoke",
+        actor_id=user.id, actor_username=user.username,
+        target_id=user_id, target_username=target.get("username"),
+    )
+    logger.warning(
+        f"Platform-admin {'granted to' if new_value else 'revoked from'} "
+        f"{target.get('username')} ({user_id}) by {user.username}"
+    )
+    toast = (
+        '<div hx-swap-oob="afterbegin:#toast-container">'
+        f'<div class="toast toast-success">Platform-admin '
+        f'{"granted to" if new_value else "revoked from"} '
+        f'{_esc(target.get("username") or user_id)}.</div></div>'
+    )
+    return HTMLResponse(toast + _refresh_users_tab(db, user=user, client_id=client_id))
 
 
 @router.get("/tab/permissions", response_class=HTMLResponse)
@@ -730,14 +825,19 @@ def unlink_gitlab_from_client(request: Request, client_id: str, gitlab_id: str,
 # ---------------------------------------------------------------------------
 
 @router.post("/siems", response_class=HTMLResponse)
-async def create_siem(request: Request, db: DbDep, user: RequireAdmin):
+async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     """Create a SIEM in the centralized inventory."""
     form = await request.form()
     siem_type = str(form.get("siem_type", "elastic")).strip()
     label = str(form.get("label", "")).strip()
     elasticsearch_url = str(form.get("elasticsearch_url", "")).strip() or None
     kibana_url = str(form.get("kibana_url", "")).strip() or None
-    api_token = str(form.get("api_token", "")).strip() or None
+    api_token, tok_err = _normalize_api_token(form.get("api_token"))
+    if tok_err:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            f'<div class="toast toast-warning">{_esc(tok_err)}</div></div>'
+        )
 
     if not label:
         return HTMLResponse("""
@@ -770,14 +870,30 @@ async def create_siem(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.put("/siems/{siem_id}", response_class=HTMLResponse)
-async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireAdmin):
+async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireSuperadmin):
     """Update a SIEM in the inventory."""
     form = await request.form()
     updates = {}
-    for field in ("label", "elasticsearch_url", "kibana_url", "api_token_enc"):
+    for field in ("label", "elasticsearch_url", "kibana_url"):
         val = form.get(field)
         if val is not None:
             updates[field] = str(val).strip() or None
+    # Token field: form input is named ``api_token`` (see management.html);
+    # column is ``api_token_enc``. Only update the token when the operator
+    # actually typed something — empty string means "keep existing", per the
+    # form placeholder. Run through the shared normaliser to strip an
+    # accidental ``ApiKey `` prefix and reject embedded whitespace before it
+    # reaches the DB.
+    raw_token = form.get("api_token")
+    if raw_token is not None and str(raw_token).strip():
+        norm, err = _normalize_api_token(raw_token)
+        if err:
+            return HTMLResponse(
+                '<div hx-swap-oob="afterbegin:#toast-container">'
+                f'<div class="toast toast-warning">{_esc(err)}</div></div>'
+            )
+        if norm:
+            updates["api_token_enc"] = norm
     is_active = form.get("is_active")
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
@@ -792,7 +908,7 @@ async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireAd
 
 
 @router.delete("/siems/{siem_id}", response_class=HTMLResponse)
-def delete_siem(request: Request, siem_id: str, db: DbDep, user: RequireAdmin):
+def delete_siem(request: Request, siem_id: str, db: DbDep, user: RequireSuperadmin):
     """Delete a SIEM from the inventory."""
     ok = db.delete_siem_inventory_item(siem_id)
     if not ok:
@@ -816,13 +932,69 @@ def delete_siem(request: Request, siem_id: str, db: DbDep, user: RequireAdmin):
 # Test Connection
 # ---------------------------------------------------------------------------
 
+def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result") -> str:
+    """Render a three-row breakdown of a Kibana test result. Returned as an
+    OOB-swap fragment so the per-card pill stays in place and a separate
+    persistent panel below the form / card shows the full diagnostic.
+    """
+    rows = []
+    for chk in result.get("checks", []):
+        icon = "✓" if chk["ok"] else "✗"
+        cls = "status-pill--ok" if chk["ok"] else "status-pill--fail"
+        sc = chk.get("status_code")
+        sc_str = f" [HTTP {sc}]" if sc is not None else ""
+        body = chk.get("body_excerpt")
+        body_html = (
+            f'<div style="font-family:var(--font-mono,monospace);font-size:0.75rem;'
+            f'color:var(--color-text-secondary);margin-left:1.5rem;'
+            f'word-break:break-all;">{_esc(body)}</div>'
+        ) if body else ""
+        rows.append(
+            f'<div style="padding:0.4rem 0;border-top:1px solid var(--color-border);">'
+            f'<div style="display:flex;gap:0.5rem;align-items:center;">'
+            f'<span class="status-pill {cls}" style="min-width:1.25rem;text-align:center;">{icon}</span>'
+            f'<strong>{_esc(chk["name"])}</strong>'
+            f'<code style="font-size:0.75rem;color:var(--color-text-secondary);">{_esc(chk["endpoint"])}{sc_str}</code>'
+            f'</div>'
+            f'<div style="margin-left:1.5rem;font-size:0.8125rem;">{_esc(chk["detail"])}</div>'
+            f'{body_html}'
+            f'</div>'
+        )
+    overall_cls = "status-pill--ok" if result.get("ok") else "status-pill--fail"
+    overall_label = "All checks passed" if result.get("ok") else "One or more checks failed"
+    spaces = result.get("spaces") or []
+    spaces_hint = (
+        f'<div style="margin-top:0.5rem;font-size:0.8125rem;color:var(--color-text-secondary);">'
+        f'Discovered spaces: <code>{_esc(", ".join(spaces))}</code></div>'
+    ) if spaces else ""
+    return (
+        f'<div id="{panel_id}" hx-swap-oob="true" '
+        f'style="margin-top:0.75rem;padding:0.75rem;border:1px solid var(--color-border);'
+        f'border-radius:0.375rem;background:var(--color-bg-subtle);">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        f'<strong>Test Connection result</strong>'
+        f'<span class="status-pill {overall_cls}">{overall_label}</span>'
+        f'</div>'
+        + "".join(rows)
+        + spaces_hint
+        + '</div>'
+    )
+
+
 @router.post("/siems/test-connection", response_class=HTMLResponse)
-async def test_siem_connection(request: Request, db: DbDep, user: RequireAdmin):
-    """Test connectivity to a SIEM (Elastic only for now)."""
+async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Test connectivity to a SIEM with a three-tier privilege check.
+
+    Runs against /api/status (token format), /api/spaces/space (spaces:read),
+    and /s/<space>/api/detection_engine/rules/_find (sync privilege). Returns
+    a status badge for the inline form indicator AND an OOB-swap result panel
+    keyed on ``#siem-test-result`` so the operator sees the full breakdown.
+    Persists the rolled-up status to ``siem_inventory.last_test_status``.
+    """
     form = await request.form()
     siem_id = str(form.get("siem_id", "")).strip()
     kibana_url = str(form.get("kibana_url", "")).strip()
-    api_token = str(form.get("api_token", "")).strip()
+    api_token, tok_err = _normalize_api_token(form.get("api_token"))
     siem_type = str(form.get("siem_type", "elastic")).strip()
 
     if siem_type != "elastic":
@@ -832,6 +1004,10 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireAdmin):
     if not kibana_url:
         return HTMLResponse(
             '<span class="badge badge-warning">Kibana URL is required</span>'
+        )
+    if tok_err:
+        return HTMLResponse(
+            f'<span class="badge badge-warning">{_esc(tok_err)}</span>'
         )
     # When editing an existing SIEM the token field is left blank ("keep existing").
     # Fall back to the stored token from the inventory.
@@ -845,27 +1021,58 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireAdmin):
         )
 
     try:
-        from app.elastic_helper import test_elastic_connection
-        ok, detail = test_elastic_connection(kibana_url, api_token)
+        from app.elastic_helper import test_elastic_connection_full
+        result = test_elastic_connection_full(kibana_url, api_token)
+        # Persist roll-up + per-check JSON so the SIEMs tab pill stays accurate
+        # and the operator can revisit the result without re-testing.
         if siem_id:
             try:
+                import json as _json
+                msg = _json.dumps({
+                    "summary": ("All checks passed" if result["ok"]
+                                else "One or more checks failed"),
+                    "checks": [
+                        {"name": c["name"], "ok": c["ok"],
+                         "status_code": c.get("status_code"),
+                         "detail": c["detail"]}
+                        for c in result["checks"]
+                    ],
+                })[:500]
                 db.update_inventory_test_status(
-                    "siems", siem_id, "pass" if ok else "fail", str(detail)[:140]
+                    "siems", siem_id, "pass" if result["ok"] else "fail", msg,
                 )
-            except Exception:  # pragma: no cover - best effort
-                pass
-        if ok:
-            return HTMLResponse(
-                f'<span class="badge badge-success">Connected &mdash; {detail}</span>'
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.warning(f"persist test-status failed for {siem_id}: {exc}")
+        # Refresh the cached spaces lookup so the link-form dropdown picks
+        # them up immediately on the next render — no separate "Refresh" click
+        # needed when the operator just proved Kibana is reachable. Also
+        # persist to the DB (Migration 41) so the dropdown survives restarts
+        # and is available before the first sync ever runs.
+        if siem_id and result.get("spaces"):
+            import time as _time
+            _KIBANA_SPACES_CACHE[siem_id] = (
+                _time.time() + _KIBANA_SPACES_TTL,
+                set(result["spaces"]),
             )
-        else:
-            return HTMLResponse(
-                f'<span class="badge badge-danger">Failed &mdash; {detail}</span>'
-            )
+            try:
+                db.save_siem_spaces(siem_id, list(result["spaces"]))
+            except Exception as exc:
+                logger.warning(f"persist spaces failed for {siem_id}: {exc}")
+        badge_cls = "badge-success" if result["ok"] else "badge-danger"
+        badge_text = "Connected" if result["ok"] else "Failed"
+        # Pull the first failing check's detail into the inline badge so the
+        # operator sees the headline without scrolling to the panel.
+        first_fail = next((c for c in result["checks"] if not c["ok"]), None)
+        headline = first_fail["detail"] if first_fail else result["checks"][0]["detail"]
+        badge_html = (
+            f'<span class="badge {badge_cls}">{badge_text} — {_esc(headline)[:120]}</span>'
+        )
+        panel_html = _format_test_result_panel(result)
+        return HTMLResponse(badge_html + panel_html)
     except Exception as exc:
         logger.warning(f"SIEM test-connection error: {exc}")
         return HTMLResponse(
-            f'<span class="badge badge-danger">Error &mdash; {str(exc)[:120]}</span>'
+            f'<span class="badge badge-danger">Error — {_esc(str(exc))[:120]}</span>'
         )
 
 
@@ -877,7 +1084,9 @@ def _run_inventory_test(kind: str, item: dict) -> tuple[bool, str]:
     """Dispatch to the appropriate live test for a stored inventory item.
 
     Returns ``(ok, short_message)``. The message is bounded to ~140 chars so
-    it fits cleanly inside the status-pill tooltip.
+    it fits cleanly inside the status-pill tooltip. For SIEMs the message is
+    a JSON document (per-check breakdown) so the SIEMs tab can render the
+    full diagnostic in the per-card result panel.
     """
     try:
         if kind == "siems":
@@ -888,9 +1097,21 @@ def _run_inventory_test(kind: str, item: dict) -> tuple[bool, str]:
             api_token = (item.get("api_token_enc") or "").strip()
             if not kibana_url or not api_token:
                 return False, "Missing Kibana URL or API token"
-            from app.elastic_helper import test_elastic_connection
-            ok, detail = test_elastic_connection(kibana_url, api_token)
-            return ok, str(detail)[:140]
+            from app.elastic_helper import test_elastic_connection_full
+            result = test_elastic_connection_full(kibana_url, api_token)
+            import json as _json
+            msg = _json.dumps({
+                "summary": ("All checks passed" if result["ok"]
+                            else "One or more checks failed"),
+                "checks": [
+                    {"name": c["name"], "ok": c["ok"],
+                     "status_code": c.get("status_code"),
+                     "detail": c["detail"]}
+                    for c in result["checks"]
+                ],
+                "spaces": result.get("spaces", []),
+            })[:500]
+            return result["ok"], msg
 
         if kind == "opencti":
             url = (item.get("url") or "").strip()
@@ -1016,9 +1237,61 @@ async def test_inventory_card(
         "last_test_message": msg,
     }
     logger.info(
-        f"{kind} test-connection on {item_id} by {user.username}: {status} ({msg})"
+        f"{kind} test-connection on {item_id} by {user.username}: {status} ({msg[:120]})"
     )
-    return HTMLResponse(_status_pill_html(refreshed, target_id=f"{kind}-status-{item_id}"))
+    pill_html = _status_pill_html(refreshed, target_id=f"{kind}-status-{item_id}")
+
+    # SIEM tests carry a structured result; render the breakdown panel as an
+    # OOB swap into the per-card result slot, refresh the spaces cache, and
+    # also fire a toast so the operator sees pass/fail without scrolling.
+    if kind == "siems":
+        try:
+            import json as _json
+            parsed = _json.loads(msg) if msg.startswith("{") else None
+        except Exception:
+            parsed = None
+        if parsed:
+            # Reconstruct the result shape the panel formatter expects.
+            result_for_panel = {
+                "ok": ok,
+                "spaces": parsed.get("spaces", []),
+                "checks": [
+                    {**c, "endpoint": _SIEM_CHECK_ENDPOINT.get(c["name"], ""),
+                     "body_excerpt": None}
+                    for c in parsed.get("checks", [])
+                ],
+            }
+            panel = _format_test_result_panel(
+                result_for_panel, panel_id=f"siem-test-result-{item_id}"
+            )
+            # Refresh cached spaces so the link form sees them next render.
+            spaces = parsed.get("spaces") or []
+            if spaces:
+                import time as _time
+                _KIBANA_SPACES_CACHE[item_id] = (
+                    _time.time() + _KIBANA_SPACES_TTL, set(spaces),
+                )
+                try:
+                    db.save_siem_spaces(item_id, list(spaces))
+                except Exception as exc:
+                    logger.warning(f"persist spaces failed for {item_id}: {exc}")
+            toast_cls = "toast-success" if ok else "toast-error"
+            toast_msg = parsed.get("summary", "Test complete")
+            toast = (
+                '<div hx-swap-oob="afterbegin:#toast-container">'
+                f'<div class="toast {toast_cls}">{_esc(toast_msg)}</div></div>'
+            )
+            return HTMLResponse(pill_html + panel + toast)
+    return HTMLResponse(pill_html)
+
+
+# Endpoint paths for the three SIEM checks; used to reconstruct the result
+# panel from the persisted JSON message without re-running the live calls.
+_SIEM_CHECK_ENDPOINT = {
+    "kibana_status": "/api/status",
+    "spaces": "/api/spaces/space",
+    "detection_rules": "/s/<space>/api/detection_engine/rules/_find",
+}
 
 
 @router.post("/siems/{siem_id}/logging", response_class=HTMLResponse)
@@ -1026,7 +1299,7 @@ async def update_siem_logging(
     request: Request,
     siem_id: str,
     db: DbDep,
-    user: RequireAdmin,
+    user: RequireSuperadmin,
 ):
     """Persist per-SIEM rule-logging configuration. Returns refreshed SIEMs partial.
 
@@ -1668,7 +1941,7 @@ async def update_user_clients(request: Request, user_id: str, db: DbDep, user: R
         u["_roles"] = db.get_user_roles(u["id"])
         u["_client_ids"] = db.get_user_client_ids(u["id"])
     clients = db.list_clients()
-    return HTMLResponse(_render_users_tab(users, all_roles, clients))
+    return HTMLResponse(_render_users_tab(users, all_roles, clients, current_user=user))
 
 
 # ---------------------------------------------------------------------------
@@ -1693,7 +1966,24 @@ def _status_pill_html(item: dict, *, target_id: str | None = None) -> str:
     """
     status = (item.get("last_test_status") or "").lower()
     when = item.get("last_test_at")
-    msg = (item.get("last_test_message") or "").strip()
+    raw_msg = (item.get("last_test_message") or "").strip()
+    # SIEM tests persist a JSON breakdown; render the summary in the tooltip
+    # rather than dumping raw JSON. Other inventory kinds keep plain strings.
+    msg = raw_msg
+    if raw_msg.startswith("{"):
+        try:
+            import json as _json
+            parsed = _json.loads(raw_msg)
+            summary = parsed.get("summary") or ""
+            failed = [c for c in parsed.get("checks", []) if not c.get("ok")]
+            if failed:
+                msg = (summary + " — " + "; ".join(
+                    f"{c.get('name')}: {c.get('detail', '')}" for c in failed
+                ))[:200]
+            else:
+                msg = summary or raw_msg
+        except Exception:
+            msg = raw_msg
     when_str = ""
     try:
         when_str = when.strftime("%Y-%m-%d %H:%M") if when else ""
@@ -1968,7 +2258,7 @@ def _siem_logging_block_html(s: dict) -> str:
                 '<label style="display:flex;align-items:center;gap:0.4rem;'
                 'padding:0.2rem 0.5rem;cursor:pointer;font-size:0.8rem;">'
                 f'<input type="checkbox" name="target_space" value="{escape(sp)}"{checked}>'
-                f'<span>{escape(sp)}{tag}</span>'
+                f'<span>{escape(sp)}</span>'
                 '</label>'
             )
         space_picker = (
@@ -2093,6 +2383,7 @@ def _render_siems_tab(siems: list) -> str:
                 </div>
             </div>
             {logging_block}
+            <div id="siem-test-result-{sid}"></div>
             <div class="system-card__footer" style="margin-top:auto;padding-top:0.75rem;flex-wrap:wrap;">
                 {tenant_chips}
             </div>
@@ -2118,14 +2409,21 @@ def _siem_empty_state() -> str:
     </div>'''
 
 
-def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
+def _render_users_tab(users: list, all_roles: list, clients: list,
+                      current_user=None) -> str:
     """Render the Users tab content with Manage Clients action.
 
     The Roles column has moved to the Client Detail page — this tab is now
     a global directory only (username, source, active, last login, clients).
+    A "Platform Admin" toggle column is rendered only when ``current_user``
+    is a platform super-admin (so tenant admins cannot grant themselves
+    cross-tenant powers). 4.1.6.
     """
     if not users:
         return '<p class="text-muted" style="font-size:0.85rem;">No users found.</p>'
+
+    show_super = bool(current_user and getattr(current_user, "is_superadmin", False))
+    self_id = getattr(current_user, "id", None) if current_user else None
 
     rows = ""
     for u in users:
@@ -2152,6 +2450,29 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
                 f'{cl["name"]}</label>'
             )
 
+        # Platform Admin toggle (super-admin viewers only). Self-revoke is
+        # blocked at the endpoint AND disabled in the UI so the operator
+        # cannot accidentally lock themselves out.
+        super_cell = ""
+        if show_super:
+            sa_checked = "checked" if u.get("is_superadmin") else ""
+            disabled = "disabled" if (self_id and u["id"] == self_id) else ""
+            title = (
+                "You cannot change your own platform-admin flag"
+                if disabled else "Grant or revoke platform-admin (cross-tenant)"
+            )
+            super_cell = f'''<td title="{title}">
+                <label class="toggle-switch toggle-sm">
+                    <input type="checkbox" {sa_checked} {disabled}
+                           hx-post="/api/management/users/{u['id']}/superadmin"
+                           hx-target="#management-content"
+                           hx-swap="innerHTML"
+                           hx-trigger="change"
+                           hx-confirm="{'Revoke' if u.get('is_superadmin') else 'Grant'} platform-admin for {_esc(u['username'])}?">
+                    <span class="toggle-slider"></span>
+                </label>
+            </td>'''
+
         rows += f'''<tr id="user-row-{u['id']}">
             <td>{u['username']}</td>
             <td>{u.get('email') or '-'}</td>
@@ -2166,6 +2487,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
                     <span class="toggle-slider"></span>
                 </label>
             </td>
+            {super_cell}
             <td>{last_login}</td>
             <td>
                 <details class="mgmt-client-details">
@@ -2221,12 +2543,13 @@ def _render_users_tab(users: list, all_roles: list, clients: list) -> str:
         </form>
     </details>'''
 
+    super_th = "<th>Platform Admin</th>" if show_super else ""
     return f'''
     {add_form}
     <table class="mapping-table">
         <thead><tr>
             <th>Username</th><th>Email</th><th>Source</th>
-            <th>Active</th><th>Last Login</th>
+            <th>Active</th>{super_th}<th>Last Login</th>
             <th>Clients</th><th></th>
         </tr></thead>
         <tbody>{rows}</tbody>

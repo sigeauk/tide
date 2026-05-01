@@ -66,6 +66,7 @@
         <span class="mgmt-section__hint">SIEMs, threat intel, source control, identity</span>
     </summary>
     <div class="mgmt-section__body">
+        {% if user and user.is_superadmin %}
         <details class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">
                 {{ icon('shield-check', '16') }}
@@ -77,6 +78,23 @@
                 <div class="text-secondary" style="padding:1rem;">Loading SIEMs…</div>
             </div>
         </details>
+        {% else %}
+        <details class="mgmt-subsection">
+            <summary class="mgmt-subsection__summary">
+                {{ icon('shield-check', '16') }}
+                <span class="mgmt-subsection__title">SIEMs</span>
+                <span class="mgmt-subsection__hint">Platform-admin only</span>
+            </summary>
+            <div class="mgmt-subsection__body">
+                <p class="text-secondary" style="font-size:0.85rem;margin:0;">
+                    The global SIEM inventory (and stored API tokens) is restricted to
+                    platform admins. To link or unlink a SIEM for a tenant you administer,
+                    open <strong>Settings → Clients</strong>, pick the tenant, and use the
+                    SIEMs section on the client detail page.
+                </p>
+            </div>
+        </details>
+        {% endif %}
 
         <details class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">

@@ -67,42 +67,83 @@ def _check_env() -> dict:
             print(f"  {k:24s} = {_redact(v)}")
         else:
             print(f"  {k:24s} = {v!r}")
-    if not found.get("ELASTIC_URL") and not found.get("ELASTIC_API_KEY"):
-        print("  (legacy env-var auth: none set — relies on DB-driven SIEM "
-              "inventory, OK on 4.0.13+)")
+    if found.get("ELASTIC_URL") or found.get("ELASTIC_API_KEY"):
+        print("  ! ELASTIC_URL / ELASTIC_API_KEY env vars are set. On 4.1.x")
+        print("    these are IGNORED — sync uses siem_inventory + client_siem_map.")
+        print("    The env vars only do anything on 4.0.x. Delete them to")
+        print("    avoid future confusion (they are not the source of any")
+        print("    sync behaviour you are seeing on this build).")
+    else:
+        print("  (no legacy env-var auth set — normal for 4.0.13+ / 4.1.x)")
     return found
 
 
 def _check_db() -> dict:
     _line("2. Database state")
-    info: dict = {}
+    info: dict = {"db_read_ok": False}
     db_path = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
     if not os.path.exists(db_path):
         print(f"  shared DB file not found at {db_path}")
+        info["db_read_error"] = f"missing file {db_path}"
         return info
     # DuckDB refuses concurrent open even for read-only when another process
-    # holds the file. The running tide-app holds a writable handle, so we
-    # snapshot the file to /tmp and read from the copy. Safe: filesystem
-    # copy of an open DuckDB file is consistent for read because DuckDB
-    # uses MVCC + WAL; worst case we miss writes that are mid-flight.
+    # holds the file. Try snapshot to /tmp first, fall back to a snapshot in
+    # the DB's own directory (handles /tmp out-of-space — [Errno 28]), then
+    # finally fall back to opening the live file read-only (works on newer
+    # DuckDB builds when the writer has checkpointed).
     import shutil
     import tempfile
-    snap_dir = tempfile.mkdtemp(prefix="diag_db_")
-    snap_path = os.path.join(snap_dir, "snap.duckdb")
-    try:
-        shutil.copy2(db_path, snap_path)
-        wal = db_path + ".wal"
-        if os.path.exists(wal):
-            shutil.copy2(wal, snap_path + ".wal")
-    except Exception as exc:
-        print(f"  could not snapshot DB: {exc}")
-        return info
-    try:
-        import duckdb
-        c = duckdb.connect(snap_path, read_only=True)
-    except Exception as exc:
-        print(f"  cannot open DB snapshot: {exc}")
-        return info
+    snap_dir = None
+    snap_path = None
+    snapshot_err = None
+    for tmp_root in (None, os.path.dirname(db_path)):
+        try:
+            snap_dir = tempfile.mkdtemp(prefix="diag_db_", dir=tmp_root)
+            snap_path = os.path.join(snap_dir, "snap.duckdb")
+            shutil.copy2(db_path, snap_path)
+            wal = db_path + ".wal"
+            if os.path.exists(wal):
+                shutil.copy2(wal, snap_path + ".wal")
+            snapshot_err = None
+            break
+        except OSError as exc:
+            snapshot_err = exc
+            if snap_dir:
+                shutil.rmtree(snap_dir, ignore_errors=True)
+                snap_dir = None
+            # errno 28 (ENOSPC) on /tmp is the common failure mode in
+            # constrained containers; the loop's second pass uses the data
+            # dir which usually has room.
+            continue
+        except Exception as exc:
+            snapshot_err = exc
+            break
+    if snapshot_err is not None and snap_path is None:
+        errno_part = f" [Errno {snapshot_err.errno}]" if hasattr(snapshot_err, "errno") and snapshot_err.errno else ""
+        print(f"  could not snapshot DB{errno_part}: {snapshot_err}")
+        if hasattr(snapshot_err, "errno") and snapshot_err.errno == 28:
+            print("  -> ENOSPC: /tmp and the DB directory are both out of")
+            print("     disk. Free space (df -h /tmp /app/data) or set TMPDIR")
+            print("     to a partition that has room, then re-run.")
+        info["db_read_error"] = f"snapshot failed: {snapshot_err}"
+    import duckdb
+    c = None
+    if snap_path is not None:
+        try:
+            c = duckdb.connect(snap_path, read_only=True)
+        except Exception as exc:
+            print(f"  cannot open DB snapshot: {exc}; trying live file...")
+            info["db_read_error"] = f"snapshot open failed: {exc}"
+    if c is None:
+        try:
+            c = duckdb.connect(db_path, read_only=True)
+            print("  (read live DB file directly — snapshot was unavailable)")
+        except Exception as exc:
+            print(f"  cannot open live DB either: {exc}")
+            print("  -> downstream sections (4, 5, 7) will say 'skipped:")
+            print("     section 2 could not read the shared DB'.")
+            info["db_read_error"] = f"live open failed: {exc}"
+            return info
     try:
         tables = [r[0] for r in c.execute(
             "SELECT table_name FROM information_schema.tables "
@@ -192,18 +233,21 @@ def _check_db() -> dict:
             for cid, sid, role, space in maps:
                 print(f"     client={cid[:8]} siem={sid[:8]} "
                       f"role={role!r} space={space!r}")
+        info["db_read_ok"] = True
     except Exception as exc:
         print(f"  ERROR reading shared DB: {exc}")
+        info["db_read_error"] = str(exc)
     finally:
         try:
             c.close()
         except Exception:
             pass
-        try:
-            import shutil as _sh
-            _sh.rmtree(snap_dir, ignore_errors=True)
-        except Exception:
-            pass
+        if snap_dir:
+            try:
+                import shutil as _sh
+                _sh.rmtree(snap_dir, ignore_errors=True)
+            except Exception:
+                pass
     return info
 
 
@@ -276,16 +320,44 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                 except Exception:
                     print("     OK -- but response wasn't JSON.")
             elif r.status_code == 401:
-                print("     401 -- Kibana rejected the API key. "
-                      "Possible causes:")
-                print("        a) Key revoked/expired in Kibana "
-                      "(Stack Mgmt -> API Keys)")
-                print("        b) Key has trailing whitespace / quotes "
-                      "(check value above)")
-                print("        c) URL points to Elasticsearch (port 9200) "
-                      "instead of Kibana (5601)")
-                print("        d) Kibana behind reverse proxy stripping "
-                      "Authorization header")
+                print("     401 -- Kibana rejected the API key.")
+                # Active probe: if the stored token has surrounding whitespace
+                # or quotes, retry stripped — if THAT works the cause is
+                # definitively a bad value in siem_inventory.api_token_enc.
+                stripped = (token or "").strip().strip('"').strip("'")
+                if stripped and stripped != token:
+                    try:
+                        r2 = requests.get(
+                            endpoint,
+                            headers={
+                                "kbn-xsrf": "true",
+                                "Authorization": f"ApiKey {stripped}",
+                            },
+                            verify=False, timeout=15,
+                        )
+                        if r2.status_code == 200:
+                            print("     >>> RETRY WITH STRIPPED TOKEN -> HTTP 200.")
+                            print("         CAUSE: stored token has whitespace/quotes.")
+                            print("         FIX: edit the SIEM in Management UI and")
+                            print("              re-paste the API key (no quotes,")
+                            print("              no surrounding spaces).")
+                        else:
+                            print(f"     (retry with stripped token also got HTTP {r2.status_code})")
+                    except Exception:
+                        pass
+                else:
+                    print("     (token has no surrounding whitespace/quotes")
+                    print("      — not a copy/paste artefact.)")
+                print("     If the same key works via curl from the SAME container")
+                print("     (`docker exec tide-app curl -kv -H 'Authorization:")
+                print("     ApiKey <key>' <url>`), the most likely remaining causes are:")
+                print("        a) Key revoked/rotated in Kibana since it was stored")
+                print("           (the curl test you ran was with a DIFFERENT key).")
+                print("        b) URL points to Elasticsearch (port 9200) instead of")
+                print("           Kibana (5601). Check the kibana_url printed above.")
+                print("        c) Kibana behind a reverse proxy that strips the")
+                print("           Authorization header on this code path but not on")
+                print("           the curl path (different vhost / location block).")
             elif r.status_code in (403,):
                 print("     403 -- Key valid but lacks required Kibana "
                       "privileges. Need 'detections:read' (Detection Engine).")
@@ -389,6 +461,10 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
 
 def _check_tenant_dbs(info: dict) -> None:
     _line("4. Per-tenant DB state (4.1.x only)")
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read the shared DB")
+        print(f"  ({info.get('db_read_error', 'unknown error')})")
+        return
     data_dir = os.environ.get("TIDE_DATA_DIR", "/app/data")
     if not os.path.isdir(data_dir):
         print(f"  data_dir {data_dir} not found.")
@@ -464,7 +540,14 @@ def _verdict(env: dict, info: dict) -> None:
 
 def _check_migrations(info: dict) -> None:
     _line("5. Schema / migration state")
-    expected = 38  # bump when SCHEMA_VERSION changes (see app/services/database.py)
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read the shared DB")
+        print(f"  ({info.get('db_read_error', 'unknown error')})")
+        return
+    try:
+        from app.services.database import SCHEMA_VERSION as expected
+    except Exception:
+        expected = 40  # fallback; bump when SCHEMA_VERSION changes (see app/services/database.py)
     sv = info.get("schema_version")
     print(f"  expected schema_version: {expected}")
     print(f"  actual schema_version:   {sv}")
@@ -539,7 +622,8 @@ def _check_elasticsearch(siems: list) -> None:
     _line("7. Elasticsearch reachability check (port 9200, info-only)")
     import requests
     if not siems:
-        print("  no SIEMs to test.")
+        print("  no SIEMs to test (either none configured, or section 2")
+        print("  could not read the shared DB — see section 2).")
         return
     for s in siems:
         url = (s.get("elasticsearch_url") or "").rstrip("/")

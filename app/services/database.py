@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 40
+SCHEMA_VERSION = 41
 
 
 class DatabaseService:
@@ -1736,6 +1736,24 @@ class DatabaseService:
                     "clean up."
                 )
             self._set_schema_version(conn, 40)
+
+        # ── Migration 41: persistent Kibana spaces cache ───────────────────
+        # Pre-4.1.6 the spaces dropdown on the tenant link form relied on a
+        # 60-second in-memory cache populated only by Test Connection. After
+        # an app restart the dropdown silently went empty until either an
+        # operator hit Test, or a successful sync back-filled detection_rules.
+        # Persist the spaces a Test Connection discovers so the dropdown
+        # survives restarts and works without a sync-first chicken-and-egg.
+        if current_version < 41:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_kibana_spaces (
+                    siem_id VARCHAR NOT NULL,
+                    space VARCHAR NOT NULL,
+                    discovered_at TIMESTAMP DEFAULT now(),
+                    PRIMARY KEY (siem_id, space)
+                )
+            """)
+            self._set_schema_version(conn, 41)
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
@@ -5225,6 +5243,21 @@ class DatabaseService:
                         spaces.append(v); seen.add(v)
             except Exception as exc:
                 logger.debug(f"get_all_kibana_spaces: client_siem_map scan failed: {exc}")
+            # Migration 41: union from the persistent test-connection cache so
+            # freshly-discovered spaces appear in the picker even before any
+            # rules have synced.
+            try:
+                rows = conn.execute(
+                    "SELECT DISTINCT space FROM siem_kibana_spaces "
+                    "WHERE space IS NOT NULL AND TRIM(space) <> '' "
+                    "  AND LOWER(TRIM(space)) NOT IN ('production','staging')"
+                ).fetchall()
+                for r in rows:
+                    v = r[0]
+                    if v and v not in seen:
+                        spaces.append(v); seen.add(v)
+            except Exception as exc:
+                logger.debug(f"get_all_kibana_spaces: siem_kibana_spaces scan failed: {exc}")
         # Also union spaces from every tenant DB so multi-tenant deployments
         # see the full list. Ignored when not in multi-DB mode.
         try:
@@ -5349,6 +5382,40 @@ class DatabaseService:
                 "FROM client_siem_map WHERE siem_id = ?",
                 [siem_id],
             ).fetchall()
+            return [r[0] for r in rows if r[0]]
+
+    def save_siem_spaces(self, siem_id: str, spaces: List[str]) -> int:
+        """Replace the cached Kibana space set for a SIEM (Migration 41).
+
+        Called by Management → SIEMs → Test Connection on success so the
+        link-form spaces dropdown is populated immediately and survives an
+        app restart. Returns the number of rows after the update.
+        """
+        clean = sorted({(s or "").strip() for s in (spaces or []) if s and s.strip()})
+        with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM siem_kibana_spaces WHERE siem_id = ?", [siem_id])
+            for sp in clean:
+                conn.execute(
+                    "INSERT INTO siem_kibana_spaces (siem_id, space) VALUES (?, ?) "
+                    "ON CONFLICT DO NOTHING",
+                    [siem_id, sp],
+                )
+        return len(clean)
+
+    def get_siem_spaces_cached(self, siem_id: str) -> List[str]:
+        """Return persisted Kibana spaces for a SIEM (Migration 41).
+
+        Used as a fallback when the live ``/api/spaces/space`` call fails so
+        the link form is not silently empty after a Kibana hiccup.
+        """
+        with self.get_shared_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT space FROM siem_kibana_spaces WHERE siem_id = ? ORDER BY space",
+                    [siem_id],
+                ).fetchall()
+            except Exception:
+                return []
             return [r[0] for r in rows if r[0]]
 
     def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
