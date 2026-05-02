@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 41
+SCHEMA_VERSION = 42
 
 
 class DatabaseService:
@@ -1755,6 +1755,51 @@ class DatabaseService:
             """)
             self._set_schema_version(conn, 41)
 
+        # ── Migration 42: structured sync history (4.1.7 Phase D) ──────────
+        # Both run_mitre_sync (Phase C) and run_elastic_sync now produce
+        # structured per-run results that are useful for support triage and
+        # for the new read-only Query tab's predefined searches. Persist a
+        # bounded history so an operator can answer "did MITRE sync the last
+        # time it ran, and how long did it take?" without scraping logs.
+        # Idempotent: CREATE TABLE IF NOT EXISTS, no destructive operations.
+        if current_version < 42:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_history (
+                    id           VARCHAR PRIMARY KEY,
+                    sync_kind    VARCHAR NOT NULL,
+                    status       VARCHAR NOT NULL,
+                    started_at   TIMESTAMP NOT NULL DEFAULT now(),
+                    duration_ms  INTEGER,
+                    total_count  INTEGER,
+                    detail_json  VARCHAR,
+                    error        VARCHAR
+                )
+            """)
+            # Lookup index for the lookup pattern used by the Query tab
+            # ("recent sync runs by kind"). DuckDB silently ignores this if
+            # already present.
+            try:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_sync_history_kind_started "
+                    "ON sync_history (sync_kind, started_at DESC)"
+                )
+            except Exception as exc:  # noqa: BLE001 — non-fatal optimisation
+                logger.warning(f"Migration 42: index create skipped: {exc!r}")
+            # Also add an index on siem_kibana_spaces.siem_id for the
+            # persistent fallback lookup, which is now hit on every render
+            # of the link-to-tenant dropdown thanks to the Phase B refactor.
+            # DuckDB's primary-key index covers (siem_id, space), but a
+            # standalone (siem_id) index is cheaper for the COUNT(*)/SELECT
+            # pattern. Best-effort.
+            try:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_siem_kibana_spaces_siem "
+                    "ON siem_kibana_spaces (siem_id)"
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"Migration 42: spaces index skipped: {exc!r}")
+            self._set_schema_version(conn, 42)
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
     def _validate_legacy_tables(self, conn):
@@ -3032,12 +3077,14 @@ class DatabaseService:
     # per-tenant.
     @staticmethod
     def _row_is_mitre(source_value) -> bool:
-        if not source_value:
-            return False
         if hasattr(source_value, "tolist"):
             source_value = source_value.tolist()
+        if source_value is None:
+            return False
         if not isinstance(source_value, (list, tuple, set)):
             source_value = [source_value]
+        if not source_value:
+            return False
         for s in source_value:
             if not s:
                 continue
@@ -5417,6 +5464,71 @@ class DatabaseService:
             except Exception:
                 return []
             return [r[0] for r in rows if r[0]]
+
+    def record_sync_run(
+        self,
+        sync_kind: str,
+        status: str,
+        *,
+        total_count: int = 0,
+        duration_ms: int = 0,
+        detail: dict = None,
+        error: str = None,
+    ) -> str:
+        """Persist a single sync run into ``sync_history`` (Migration 42).
+
+        Best-effort: on any DB failure the call swallows the exception and
+        returns ``""`` so it can never break the sync that just happened.
+        Returns the row id (uuid4 hex) on success.
+        """
+        import uuid as _uuid
+        import json as _json
+        run_id = _uuid.uuid4().hex
+        try:
+            payload = _json.dumps(detail or {}, default=str)[:8000]
+        except Exception:
+            payload = "{}"
+        try:
+            with self.get_shared_connection() as conn:
+                conn.execute(
+                    "INSERT INTO sync_history "
+                    "(id, sync_kind, status, duration_ms, total_count, "
+                    " detail_json, error) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [run_id, sync_kind, status, int(duration_ms),
+                     int(total_count or 0), payload,
+                     (str(error)[:2000] if error else None)],
+                )
+            return run_id
+        except Exception as exc:
+            logger.warning(f"record_sync_run({sync_kind}) failed: {exc!r}")
+            return ""
+
+    def list_sync_history(self, sync_kind: str = None, limit: int = 50) -> List[dict]:
+        """Return recent ``sync_history`` rows, newest first. Used by the
+        Query tab predefined searches and by ``diag_sync``."""
+        sql = (
+            "SELECT id, sync_kind, status, started_at, duration_ms, "
+            "total_count, error FROM sync_history "
+        )
+        params: list = []
+        if sync_kind:
+            sql += "WHERE sync_kind = ? "
+            params.append(sync_kind)
+        sql += "ORDER BY started_at DESC LIMIT ?"
+        params.append(int(limit))
+        with self.get_shared_connection() as conn:
+            try:
+                rows = conn.execute(sql, params).fetchall()
+            except Exception:
+                return []
+        return [
+            {
+                "id": r[0], "sync_kind": r[1], "status": r[2],
+                "started_at": r[3], "duration_ms": r[4],
+                "total_count": r[5], "error": r[6],
+            }
+            for r in rows
+        ]
 
     def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
         """Get the list of Kibana space names visible to a client.

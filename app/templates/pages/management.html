@@ -309,6 +309,27 @@
     </div>
 </details>
 
+{# ------------------------------------------------------------------ #}
+{# Query — read-only DuckDB console (super-admin only).               #}
+{# Loaded lazily so the SQL textarea / preset list isn't built when   #}
+{# tenant admins open the page.                                       #}
+{# ------------------------------------------------------------------ #}
+{% if user and user.is_superadmin %}
+<details class="mgmt-section" id="mgmt-query-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('database', '18') }}
+        <span class="mgmt-section__title">Query</span>
+        <span class="mgmt-section__hint">Read-only DuckDB diagnostics (super-admin)</span>
+    </summary>
+    <div class="mgmt-section__body"
+         hx-get="/api/management/tab/query"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        <div class="text-secondary" style="padding:1rem;">Loading query console...</div>
+    </div>
+</details>
+{% endif %}
+
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
 <div class="modal-overlay" id="client-modal" style="display:none;"
      onclick="if(event.target===this) closeClientModal()">

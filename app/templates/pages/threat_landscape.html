@@ -14,6 +14,11 @@
 </div>
 
 <!-- Metrics Row -->
+{% if metrics_error %}
+<div class="alert alert-warning" style="margin-bottom: 1rem;">
+    {{ metrics_error }}
+</div>
+{% endif %}
 <div class="metrics-grid" id="metrics-container">
     {% include "partials/threat_metrics.html" %}
 </div>

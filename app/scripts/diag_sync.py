@@ -582,36 +582,85 @@ def _check_migrations(info: dict) -> None:
 
 def _check_logs() -> None:
     _line("6. Recent ERROR / WARN log tail")
-    log_paths = [
+    # Honour the same env override the app uses (see configure_logging in
+    # app/services/log_context.py). Fall through to the historical defaults
+    # so older deployments that ship a custom path keep working.
+    env_path = os.environ.get("TIDE_LOG_FILE")
+    log_paths: list[str] = []
+    if env_path:
+        log_paths.append(env_path)
+    log_paths.extend([
         "/app/data/log/tide.log",
         "/app/data/log/app.log",
         "/var/log/tide-app.log",
-    ]
-    found_any = False
+    ])
+    # Include rotated siblings (tide.log.1, tide.log.2…) so we still have
+    # something to show right after a rotation.
+    expanded: list[str] = []
+    seen: set[str] = set()
+    import glob
     for p in log_paths:
+        for match in [p] + sorted(glob.glob(p + ".*")):
+            if match in seen:
+                continue
+            seen.add(match)
+            expanded.append(match)
+
+    needles = ("ERROR", "WARN", "Traceback", "Sync drift",
+               "auth-banner", "isolation_violation")
+    found_any = False
+    matched_any = False
+    import collections
+    import datetime as _dt
+    for p in expanded:
         if not os.path.exists(p):
             continue
         found_any = True
-        print(f"  -- {p} (last 40 ERROR/WARN lines) --")
         try:
-            import collections
+            st = os.stat(p)
+            size_kb = st.st_size / 1024.0
+            mtime = _dt.datetime.fromtimestamp(st.st_mtime).isoformat(
+                timespec="seconds"
+            )
+            print(f"  -- {p} (size={size_kb:.1f} KB, mtime={mtime}) --")
+        except Exception:
+            print(f"  -- {p} --")
+        try:
             tail = collections.deque(maxlen=40)
+            recent = collections.deque(maxlen=10)
             with open(p, "r", errors="replace") as f:
                 for line in f:
-                    if any(t in line for t in ("ERROR", "WARN", "Traceback",
-                                               "Sync drift", "auth-banner",
-                                               "isolation_violation")):
+                    recent.append(line.rstrip())
+                    if any(t in line for t in needles):
                         tail.append(line.rstrip())
-            for line in tail:
-                print(f"     {line}")
-            if not tail:
-                print("     (no ERROR/WARN lines in this file)")
+            if tail:
+                matched_any = True
+                print(f"     [last {len(tail)} ERROR/WARN lines]")
+                for line in tail:
+                    print(f"     {line}")
+            else:
+                print("     (no ERROR/WARN lines in this file — last 5 lines:)")
+                for line in list(recent)[-5:]:
+                    print(f"     {line}")
         except Exception as exc:
             print(f"     could not read: {exc}")
+
     if not found_any:
-        print("  no log files found at the usual paths. App logs to stdout "
-              "and is captured by docker; see them with:")
-        print("     docker logs --tail 200 tide-app | grep -E 'ERROR|WARN|drift|auth-banner'")
+        print("  no log files found.")
+        print("  Looked at:")
+        for p in expanded:
+            print(f"     - {p}")
+        print("  Enable on-disk logs by leaving TIDE_LOG_FILE at its default")
+        print("  ('/app/data/log/tide.log'). The app writes a rotating file")
+        print("  there as of 4.1.7; older builds only logged to stdout, in")
+        print("  which case use:")
+        print("     docker logs --tail 200 tide-app | "
+              "grep -E 'ERROR|WARN|drift|auth-banner'")
+    elif not matched_any:
+        print("  (no ERROR/WARN matches across the files above — last lines")
+        print("  shown per-file. If you expect errors, check the live stream:")
+        print("     docker logs --tail 200 tide-app | "
+              "grep -E 'ERROR|WARN|drift|auth-banner')")
 
 
 def _check_elasticsearch(siems: list) -> None:

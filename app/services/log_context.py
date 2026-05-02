@@ -177,16 +177,50 @@ def configure_logging(level: int = logging.INFO, fmt: Optional[str] = None) -> N
     for handler in list(root.handlers):
         root.removeHandler(handler)
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.addFilter(ContextFilter())
     if fmt == "json":
-        handler.setFormatter(JsonFormatter())
+        formatter: logging.Formatter = JsonFormatter()
     else:
-        handler.setFormatter(logging.Formatter(
+        formatter = logging.Formatter(
             _HUMAN_FORMAT, datefmt="%Y-%m-%d %H:%M:%S"
-        ))
-    root.addHandler(handler)
+        )
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.addFilter(ContextFilter())
+    stream_handler.setFormatter(formatter)
+    root.addHandler(stream_handler)
     root.setLevel(level)
+
+    # ── Rotating file handler ──────────────────────────────────────────────
+    # Container stdout is captured by docker as a pipe (see /proc/1/fd/1) so
+    # in-container tools (notably ``app.scripts.diag_sync`` §6) cannot tail
+    # historical logs. Mirror the stream to a rotating file under the data
+    # volume so support snapshots are reproducible without ``docker logs``
+    # access. Set ``TIDE_LOG_FILE=`` (empty) to disable; set a custom path
+    # to override. Failures here MUST NOT break boot — logging falls back to
+    # stdout-only and emits a single warning.
+    log_file = os.getenv("TIDE_LOG_FILE", "/app/data/log/tide.log")
+    if log_file:
+        try:
+            from logging.handlers import RotatingFileHandler
+            log_dir = os.path.dirname(log_file)
+            if log_dir:
+                os.makedirs(log_dir, exist_ok=True)
+            max_bytes = int(os.getenv("TIDE_LOG_FILE_MAX_BYTES", str(10 * 1024 * 1024)))
+            backup_count = int(os.getenv("TIDE_LOG_FILE_BACKUPS", "5"))
+            file_handler = RotatingFileHandler(
+                log_file,
+                maxBytes=max_bytes,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+            file_handler.addFilter(ContextFilter())
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+        except Exception as exc:  # noqa: BLE001 — never let logging kill boot
+            root.warning(
+                "configure_logging: file handler disabled (%s=%r): %r",
+                "TIDE_LOG_FILE", log_file, exc,
+            )
 
     # Quiet down noisy third-party libraries that would otherwise drown out
     # tide.* events at INFO. They stay reachable at DEBUG.

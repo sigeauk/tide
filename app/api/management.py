@@ -72,76 +72,63 @@ def _normalize_api_token(raw: str) -> tuple[Optional[str], Optional[str]]:
 
 def _list_kibana_spaces(db, siem_id: str) -> Optional[set]:
     """Return the set of space ids on this SIEM's Kibana, or ``None`` when
-    the SIEM record is missing/unreachable (in which case the caller should
-    NOT block the operator \u2014 fail open, log a warning).
+    discovery has nothing to offer (no creds, no persisted cache, and live
+    lookup failed) -- caller should fail open and not block the operator.
+
+    Thin wrapper around
+    :func:`app.services.space_resolver.resolve_discoverable_spaces`
+    that adds an in-memory TTL cache so chatty UI calls (the link-to-tenant
+    form re-renders on every keystroke via HTMX) don't hit Kibana on every
+    request. The resolver itself owns the persistent cache and the live
+    lookup, keeping this code path in lock-step with what the sync
+    orchestrator does (4.1.7 Phase B -- see
+    ``app/services/space_resolver.py``).
     """
     import time as _time
+    from app.services.space_resolver import (
+        resolve_discoverable_spaces,
+        REASON_NO_CREDS,
+        REASON_LIVE_FAILED,
+        REASON_NO_SPACES,
+    )
     now = _time.time()
     cached = _KIBANA_SPACES_CACHE.get(siem_id)
     if cached and cached[0] > now:
         return cached[1]
     try:
-        siem = db.get_siem_inventory_item(siem_id) or {}
-    except Exception as exc:
-        logger.warning(f"_list_kibana_spaces({siem_id}): db lookup failed: {exc!r}")
-        return None
-    url = (siem.get("kibana_url") or "").rstrip("/")
-    token = siem.get("api_token_enc")
-    # Persistent fallback (Migration 41): if the live lookup fails or the
-    # SIEM record is incomplete, fall back to the spaces a previous Test
-    # Connection persisted so the link form is not silently empty.
-    def _persisted_fallback() -> Optional[set]:
-        try:
-            cached_db = db.get_siem_spaces_cached(siem_id)
-            if cached_db:
-                return set(cached_db)
-        except Exception as exc:
-            logger.debug(f"_list_kibana_spaces({siem_id}): persistent fallback failed: {exc!r}")
-        return None
-    if not url or not token:
-        fb = _persisted_fallback()
-        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
-        return fb
-    try:
-        r = http_requests.get(
-            f"{url}/api/spaces/space",
-            headers={
-                "kbn-xsrf": "true",
-                "Authorization": f"ApiKey {token}",
-                "Content-Type": "application/json",
-            },
-            verify=False,
-            timeout=10,
-        )
-        if r.status_code != 200:
-            logger.warning(
-                f"_list_kibana_spaces({siem_id}): /api/spaces/space "
-                f"returned HTTP {r.status_code}; falling back to persisted cache."
-            )
-            fb = _persisted_fallback()
-            _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
-            return fb
-        try:
-            data = r.json()
-        except Exception:
-            return _persisted_fallback()
-        spaces = {s.get("id") for s in data if isinstance(s, dict) and s.get("id")}
-        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, spaces)
-        # Best-effort: persist what we just discovered so a later restart
-        # still has it.
-        try:
-            db.save_siem_spaces(siem_id, sorted(spaces))
-        except Exception as exc:
-            logger.debug(f"_list_kibana_spaces({siem_id}): persist failed: {exc!r}")
-        return spaces
+        spaces, reason = resolve_discoverable_spaces(db, siem_id, allow_live=True)
     except Exception as exc:
         logger.warning(
-            f"_list_kibana_spaces({siem_id}): live lookup failed: {exc!r}; "
-            f"falling back to persisted cache."
+            f"_list_kibana_spaces({siem_id}): resolver raised: {exc!r}"
         )
-        fb = _persisted_fallback()
-        _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, fb)
-        return fb
+        spaces, reason = set(), "resolver_error"
+    if not spaces and reason in (REASON_NO_CREDS, REASON_LIVE_FAILED, REASON_NO_SPACES):
+        # Distinguish "we tried and Kibana said nothing" from "we never
+        # tried" -- surfaces in logs only; callers see None either way.
+        logger.info(
+            f"_list_kibana_spaces({siem_id}): no spaces resolved (reason={reason})"
+        )
+    result: Optional[set] = spaces if spaces else None
+    _KIBANA_SPACES_CACHE[siem_id] = (now + _KIBANA_SPACES_TTL, result)
+    return result
+
+
+def _match_space_id(candidate: str, available: set) -> Optional[str]:
+    """Return canonical space id from ``available`` matching ``candidate``.
+
+    Accept exact matches first. If none, accept a single case-insensitive
+    match so operators aren't blocked by accidental capitalization.
+    """
+    c = (candidate or "").strip()
+    if not c:
+        return None
+    if c in available:
+        return c
+    c_l = c.lower()
+    folded = [s for s in available if str(s).strip().lower() == c_l]
+    if len(folded) == 1:
+        return folded[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1385,18 +1372,22 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     # ``client_siem_map`` and every sync logged "Sync drift 0/0" against
     # ``/s/production/api/...`` until someone read the diag script output.
     real_spaces = _list_kibana_spaces(db, siem_id)
-    if real_spaces is not None and space not in real_spaces:
-        from html import escape
-        avail = ", ".join(escape(s) for s in sorted(real_spaces)) or "(none)"
-        msg = (
-            f"Kibana space '{escape(space)}' does not exist on this SIEM. "
-            f"Available: {avail}. The role label (Production/Staging) is "
-            f"separate from the Kibana space id \u2014 they're rarely the same value."
-        )
-        return HTMLResponse(
-            '<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-warning">{msg}</div></div>'
-        )
+    if real_spaces is not None:
+        matched = _match_space_id(space, real_spaces)
+        if not matched:
+            from html import escape
+            avail = ", ".join(escape(s) for s in sorted(real_spaces)) or "(none)"
+            msg = (
+                f"Kibana space '{escape(space)}' does not exist on this SIEM. "
+                f"Available: {avail}. The role label (Production/Staging) is "
+                f"separate from the Kibana space id \u2014 they're rarely the same value."
+            )
+            return HTMLResponse(
+                '<div hx-swap-oob="afterbegin:#toast-container">'
+                f'<div class="toast toast-warning">{msg}</div></div>'
+            )
+        # Persist the canonical id to keep client_siem_map normalized.
+        space = matched
 
     db.link_client_siem(client_id, siem_id, environment_role=environment_role, space=space)
     logger.info(f"SIEM {siem_id} linked to client {client_id} as {environment_role} by {user.username}")
@@ -3242,3 +3233,331 @@ def _render_client_baselines_partial(client_id: str, db, toast: str = None) -> H
         )
 
     return HTMLResponse(f"{html}{edit_modal_oob}{toast_html}")
+
+
+
+# ===========================================================================
+# Phase E (4.1.7): Read-only Query tab
+# ---------------------------------------------------------------------------
+# Super-admin diagnostic surface for inspecting the shared TIDE catalog and
+# any per-tenant DuckDB file. All execution paths are read-only:
+#   - DuckDB is opened with read_only=True on a snapshot copy (live writer
+#     holds an exclusive file lock, so we never contend with it)
+#   - SQL is single-statement and the leading keyword must be allow-listed
+#   - Results are capped at MAX_ROWS to keep the UI responsive
+#   - Target databases are resolved against the on-disk data dir; arbitrary
+#     filesystem paths are rejected
+# ===========================================================================
+
+import os as _os_q
+import re as _re_q
+import time as _time_q
+
+try:
+    import duckdb as _duckdb_q
+except Exception:  # pragma: no cover - duckdb is a hard dep at runtime
+    _duckdb_q = None
+
+_QUERY_MAX_ROWS = 500
+_QUERY_ALLOWED_KEYWORDS = {
+    "SELECT", "WITH", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "SUMMARIZE",
+}
+_QUERY_FORBIDDEN_TOKENS = (
+    "ATTACH", "COPY", "EXPORT", "IMPORT", "INSTALL", "LOAD",
+    "PRAGMA", "CALL", "CREATE", "DROP", "INSERT", "UPDATE",
+    "DELETE", "ALTER", "TRUNCATE", "VACUUM", "CHECKPOINT",
+)
+
+_QUERY_PRESETS = [
+    {"id": "schema_version", "label": "Schema version (current)", "target": "shared",
+     "sql": "SELECT MAX(version) AS schema_version FROM schema_version"},
+    {"id": "schema_history", "label": "Schema migration history", "target": "shared",
+     "sql": "SELECT version, applied_at FROM schema_version ORDER BY version DESC LIMIT 50"},
+    {"id": "tenants", "label": "Tenants and their DuckDB files", "target": "shared",
+     "sql": ("SELECT id, name, slug, db_filename, is_default, created_at "
+             "FROM clients ORDER BY is_default DESC, name")},
+    {"id": "siem_inventory", "label": "SIEM inventory", "target": "shared",
+     "sql": ("SELECT id, name, type, base_url, kibana_url, "
+             "(api_token IS NOT NULL) AS has_token, created_at "
+             "FROM siem_inventory ORDER BY name")},
+    {"id": "client_siem_map", "label": "Tenant - SIEM - space mappings", "target": "shared",
+     "sql": ("SELECT csm.client_id, c.name AS client_name, csm.siem_id, "
+             "s.name AS siem_name, csm.environment_role, csm.space "
+             "FROM client_siem_map csm "
+             "LEFT JOIN clients c ON c.id = csm.client_id "
+             "LEFT JOIN siem_inventory s ON s.id = csm.siem_id "
+             "ORDER BY c.name, s.name, csm.environment_role")},
+    {"id": "siem_kibana_spaces", "label": "Persisted Kibana space cache (Migration 41)",
+     "target": "shared",
+     "sql": ("SELECT siem_id, space, discovered_at "
+             "FROM siem_kibana_spaces ORDER BY siem_id, space")},
+    {"id": "sync_history_recent", "label": "Recent sync runs (Migration 42)",
+     "target": "shared",
+     "sql": ("SELECT started_at, sync_kind, status, total_count, duration_ms, "
+             "substr(coalesce(error,''), 1, 200) AS error_preview "
+             "FROM sync_history ORDER BY started_at DESC LIMIT 50")},
+    {"id": "sync_history_failures", "label": "Sync failures and partials (last 50)",
+     "target": "shared",
+     "sql": ("SELECT started_at, sync_kind, status, total_count, duration_ms, "
+             "substr(coalesce(error,''), 1, 500) AS error_preview "
+             "FROM sync_history WHERE status IN ('failed','partial') "
+             "ORDER BY started_at DESC LIMIT 50")},
+    {"id": "users_overview", "label": "Users and superadmin flag", "target": "shared",
+     "sql": ("SELECT id, username, email, is_superadmin, created_at "
+             "FROM users ORDER BY username")},
+    {"id": "tenant_tables", "label": "Tables in selected tenant DB", "target": "tenant",
+     "sql": ("SELECT table_name FROM information_schema.tables "
+             "WHERE table_schema = 'main' ORDER BY table_name")},
+    {"id": "tenant_systems", "label": "Systems in selected tenant DB", "target": "tenant",
+     "sql": "SELECT id, name, classification_id, created_at FROM systems ORDER BY name"},
+    {"id": "tenant_threat_actors", "label": "Threat actors in selected tenant DB",
+     "target": "tenant",
+     "sql": ("SELECT id, name, source, updated_at FROM threat_actors "
+             "ORDER BY updated_at DESC NULLS LAST LIMIT 100")},
+]
+
+
+def _resolve_query_targets(db) -> list:
+    """Enumerate the DuckDB files we are willing to query."""
+    targets: list = []
+    shared_path = db.db_path
+    targets.append({
+        "key": "shared",
+        "label": f"Shared catalog ({_os_q.path.basename(shared_path)})",
+        "path": shared_path,
+        "kind": "shared",
+    })
+    data_dir = _os_q.path.dirname(shared_path)
+    try:
+        clients = db.list_clients()
+    except Exception:
+        clients = []
+    for c in clients:
+        fname = c.get("db_filename")
+        if not fname:
+            continue
+        if "/" in fname or "\\" in fname or fname.startswith("."):
+            continue
+        path = _os_q.path.join(data_dir, fname)
+        if not _os_q.path.exists(path):
+            continue
+        targets.append({
+            "key": f"tenant:{c['id']}",
+            "label": f"{c['name']} ({fname})",
+            "path": path,
+            "kind": "tenant",
+            "client_id": c["id"],
+            "client_name": c["name"],
+        })
+    return targets
+
+
+def _target_path(db, key: str):
+    for t in _resolve_query_targets(db):
+        if t["key"] == key:
+            return t["path"]
+    return None
+
+
+def _validate_sql(sql: str):
+    """Return (cleaned_sql, error). Read-only, single-statement only."""
+    if not sql or not sql.strip():
+        return None, "SQL is empty."
+    s = sql.strip()
+    if s.endswith(";"):
+        s = s[:-1].rstrip()
+    if ";" in s:
+        return None, "Only a single statement is allowed (no ';' in body)."
+    head = s
+    while head.startswith("--"):
+        nl = head.find("\n")
+        if nl < 0:
+            return None, "SQL is empty after comments."
+        head = head[nl + 1:].lstrip()
+    m = _re_q.match(r"\s*([A-Za-z]+)", head)
+    if not m:
+        return None, "Could not parse a leading keyword."
+    kw = m.group(1).upper()
+    if kw not in _QUERY_ALLOWED_KEYWORDS:
+        return None, f"Statement type '{kw}' is not allowed (read-only mode)."
+    upper = s.upper()
+    for tok in _QUERY_FORBIDDEN_TOKENS:
+        if _re_q.search(r"(^|[^A-Z_])" + _re_q.escape(tok) + r"([^A-Z_]|$)", upper):
+            return None, f"Forbidden token '{tok}' present."
+    return s, None
+
+
+def _render_query_results(rows, cols, elapsed_ms, truncated):
+    if not rows:
+        return (
+            f'<div class="text-secondary" style="padding:0.75rem;">'
+            f'No rows. ({elapsed_ms} ms)</div>'
+        )
+    head = "".join(f"<th>{_esc(c)}</th>" for c in cols)
+    body_rows = []
+    for r in rows:
+        cells = []
+        for v in r:
+            if v is None:
+                cells.append('<td class="text-secondary"><em>null</em></td>')
+            else:
+                txt = str(v)
+                if len(txt) > 500:
+                    txt = txt[:500] + "..."
+                cells.append(f"<td>{_esc(txt)}</td>")
+        body_rows.append("<tr>" + "".join(cells) + "</tr>")
+    note = ""
+    if truncated:
+        note = (
+            f'<div class="text-secondary" style="padding:0.5rem 0;font-size:0.8rem;">'
+            f'Truncated to {_QUERY_MAX_ROWS} rows.</div>'
+        )
+    return (
+        f'<div class="text-secondary" style="font-size:0.8rem;margin:0 0 0.5rem;">'
+        f'{len(rows)} row(s) - {elapsed_ms} ms</div>'
+        f'<div style="overflow:auto;max-height:60vh;border:var(--border-card);'
+        f'border-radius:var(--radius-sm);">'
+        f'<table class="data-table" style="width:100%;font-size:0.8rem;">'
+        f'<thead><tr>{head}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
+        f'</div>{note}'
+    )
+
+
+def _render_query_tab(targets):
+    target_options = "".join(
+        f'<option value="{_esc(t["key"])}">{_esc(t["label"])}</option>'
+        for t in targets
+    )
+    preset_options = '<option value="">-- pick a preset --</option>' + "".join(
+        f'<option value="{_esc(p["id"])}">{_esc(p["label"])}</option>'
+        for p in _QUERY_PRESETS
+    )
+    import json as _json_q
+    presets_json = _json_q.dumps({p["id"]: p for p in _QUERY_PRESETS})
+    return f"""
+<div class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
+  Read-only DuckDB query console. Only <code>SELECT / WITH / SHOW / DESCRIBE /
+  EXPLAIN / SUMMARIZE</code> statements are allowed and results are capped at
+  {_QUERY_MAX_ROWS} rows. Targets are resolved from the on-disk data directory;
+  arbitrary file paths are rejected. Queries run against a point-in-time
+  snapshot copy so the live writer is never blocked.
+</div>
+<form id="mgmt-query-form"
+      hx-post="/api/management/query/exec"
+      hx-target="#mgmt-query-results"
+      hx-swap="innerHTML"
+      style="display:flex;flex-direction:column;gap:0.5rem;">
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
+    <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
+      <span class="form-label" style="margin:0;">Database</span>
+      <select name="target" class="form-input" required>{target_options}</select>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
+      <span class="form-label" style="margin:0;">Predefined query</span>
+      <select id="mgmt-query-preset" class="form-input"
+              onchange="mgmtQueryApplyPreset(this.value)">{preset_options}</select>
+    </label>
+  </div>
+  <label style="display:flex;flex-direction:column;gap:0.25rem;">
+    <span class="form-label" style="margin:0;">SQL</span>
+    <textarea id="mgmt-query-sql" name="sql" class="form-input" rows="6" required
+              placeholder="SELECT * FROM clients LIMIT 10"
+              style="font-family:var(--font-mono,monospace);font-size:0.8rem;"></textarea>
+  </label>
+  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+    <button type="submit" class="btn btn-primary btn-sm">Run query</button>
+    <button type="button" class="btn btn-secondary btn-sm"
+            onclick="document.getElementById('mgmt-query-sql').value='';
+                     document.getElementById('mgmt-query-results').innerHTML='';
+                     document.getElementById('mgmt-query-preset').value='';">
+      Clear
+    </button>
+    <span class="text-secondary" style="font-size:0.75rem;">
+      Read-only - {_QUERY_MAX_ROWS}-row cap
+    </span>
+  </div>
+</form>
+<div id="mgmt-query-results" style="margin-top:1rem;"></div>
+<script>
+(function(){{
+  window.__MGMT_QUERY_PRESETS = {presets_json};
+  window.mgmtQueryApplyPreset = function(id){{
+    if(!id){{ return; }}
+    var p = window.__MGMT_QUERY_PRESETS[id];
+    if(!p){{ return; }}
+    var sqlEl = document.getElementById('mgmt-query-sql');
+    if(sqlEl){{ sqlEl.value = p.sql; }}
+  }};
+}})();
+</script>
+"""
+
+
+@router.get("/tab/query", response_class=HTMLResponse)
+def tab_query(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Read-only Query tab partial. Super-admin only."""
+    targets = _resolve_query_targets(db)
+    return HTMLResponse(_render_query_tab(targets))
+
+
+@router.post("/query/exec", response_class=HTMLResponse)
+async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Execute a single read-only SQL statement against a known DuckDB file."""
+    if _duckdb_q is None:
+        return HTMLResponse(
+            '<div class="alert alert-error">DuckDB driver not available.</div>'
+        )
+    form = await request.form()
+    target_key = str(form.get("target", "")).strip()
+    sql_raw = str(form.get("sql", ""))
+    path = _target_path(db, target_key)
+    if not path:
+        return HTMLResponse(
+            '<div class="alert alert-error">Unknown or unavailable database target.</div>'
+        )
+    cleaned, err = _validate_sql(sql_raw)
+    if err:
+        return HTMLResponse(f'<div class="alert alert-error">{_esc(err)}</div>')
+    upper = cleaned.upper()
+    if "LIMIT" not in upper and (upper.startswith("SELECT") or upper.startswith("WITH")):
+        wrapped = f"SELECT * FROM ({cleaned}) AS _q LIMIT {_QUERY_MAX_ROWS + 1}"
+    else:
+        wrapped = cleaned
+    started = _time_q.monotonic()
+    conn = None
+    try:
+        # Snapshot-copy the DB so we never contend with the live writer.
+        # DuckDB enforces a single-process file lock, so a direct read_only
+        # open against the live file fails with a Conflicting lock error.
+        import shutil as _shutil_q
+        import tempfile as _tempfile_q
+        with _tempfile_q.TemporaryDirectory(prefix="tide_q_") as tmpd:
+            snap = _os_q.path.join(tmpd, _os_q.path.basename(path))
+            _shutil_q.copy2(path, snap)
+            wal = path + ".wal"
+            if _os_q.path.exists(wal):
+                try:
+                    _shutil_q.copy2(wal, snap + ".wal")
+                except Exception:
+                    pass
+            conn = _duckdb_q.connect(snap, read_only=True)
+            cur = conn.execute(wrapped)
+            cols = [d[0] for d in (cur.description or [])]
+            rows = cur.fetchall()
+        elapsed_ms = int((_time_q.monotonic() - started) * 1000)
+        truncated = False
+        if (upper.startswith("SELECT") or upper.startswith("WITH")) and len(rows) > _QUERY_MAX_ROWS:
+            rows = rows[:_QUERY_MAX_ROWS]
+            truncated = True
+        return HTMLResponse(_render_query_results(rows, cols, elapsed_ms, truncated))
+    except Exception as exc:
+        logger.warning("query_exec failed on %s: %s", target_key, exc)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+        )
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

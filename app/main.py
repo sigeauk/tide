@@ -1575,13 +1575,35 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
-        
-        metrics = db.get_threat_landscape_metrics(client_id=_cid)
-        
+
+        # Resilience guard (4.1.7 Phase C): a concurrent threat sync can
+        # leave ``threat_actors`` in a transiently inconsistent shape (the
+        # MITRE phase calls ``clear_threat_actors`` mid-run) which made
+        # ``get_threat_landscape_metrics`` raise and the page 500. Render an
+        # empty landscape with a banner instead so the user can come back in
+        # a moment without seeing a stack trace.
+        from app.models.threats import ThreatLandscapeMetrics
+        metrics_error = None
+        try:
+            metrics = db.get_threat_landscape_metrics(client_id=_cid)
+        except Exception as exc:
+            logger.exception(
+                "threats_page: get_threat_landscape_metrics failed for "
+                "client=%s: %r", _cid, exc,
+            )
+            metrics = ThreatLandscapeMetrics()
+            metrics_error = (
+                "Threat landscape metrics are temporarily unavailable. "
+                "Reload in a few seconds. "
+                "If this persists, run `docker exec tide-app python -m "
+                "app.scripts.diag_sync` and check section 6 for the "
+                "underlying error."
+            )
+
         # Derive filter options from metrics (avoids a second DB connection)
         origins = sorted(metrics.origin_breakdown.keys()) if metrics.origin_breakdown else []
         sources = sorted(metrics.source_breakdown.keys()) if metrics.source_breakdown else []
-        
+
         return render_template(
             "pages/threat_landscape.html",
             request,
@@ -1589,6 +1611,7 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "threats",
                 "metrics": metrics,
+                "metrics_error": metrics_error,
                 "origins": origins,
                 "sources": sources,
                 "last_sync_time": get_last_sync_time(),

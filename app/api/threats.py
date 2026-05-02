@@ -223,9 +223,23 @@ def get_threat_metrics(
     user: CurrentUser,
     client_id: ActiveClient,
 ):
-    """Get threat landscape metrics scoped to active client."""
+    """Get threat landscape metrics scoped to active client.
+
+    4.1.7 Phase C: wrap the metrics fetch so a transient failure during a
+    concurrent sync degrades to an empty render instead of 500-ing the
+    HTMX swap (which would leave the dashboard tile broken until reload).
+    """
     from app.main import get_last_sync_time
-    metrics = db.get_threat_landscape_metrics(client_id=client_id)
+    from app.models.threats import ThreatLandscapeMetrics
+    try:
+        metrics = db.get_threat_landscape_metrics(client_id=client_id)
+    except Exception:
+        import logging as _lg
+        _lg.getLogger(__name__).exception(
+            "get_threat_metrics: metrics fetch failed (client=%s); "
+            "rendering empty.", client_id,
+        )
+        metrics = ThreatLandscapeMetrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/threat_metrics.html",
@@ -241,35 +255,73 @@ async def sync_threats(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
 ):
-    """Trigger a sync of threat intel from MITRE ATT&CK files and OpenCTI."""
+    """Trigger a sync of threat intel from MITRE ATT&CK files and OpenCTI.
+
+    Consumes the structured result dict from ``run_mitre_sync`` (4.1.7
+    Phase C) so the toast distinguishes full success, partial success
+    (some sources failed but others loaded), and total failure. Errors and
+    warnings are summarised inline and the full list is in the app log.
+    """
     import asyncio
+    import html as _html
     from app.services.sync import run_mitre_sync
-    
+
     try:
         loop = asyncio.get_event_loop()
-        count = await loop.run_in_executor(None, run_mitre_sync)
-        
-        if count > 0:
-            return HTMLResponse(
-                f'<div class="toast toast-success" onclick="this.remove()">'
-                f'Synced {count} threat actors from MITRE ATT&CK and OpenCTI.'
-                f'</div>'
-            )
-        elif count == 0:
-            return HTMLResponse(
-                '<div class="toast toast-warning" onclick="this.remove()">'
-                'No threat data found. Check /opt/repos/mitre directory and OpenCTI connection.'
-                '</div>'
-            )
-        else:
-            return HTMLResponse(
-                '<div class="toast toast-error" onclick="this.remove()">'
-                'MITRE sync failed. Check logs for details.'
-                '</div>'
-            )
+        result = await loop.run_in_executor(None, run_mitre_sync)
     except Exception as e:
         return HTMLResponse(
             f'<div class="toast toast-error" onclick="this.remove()">'
-            f'Sync error: {str(e)}'
+            f'Sync error: {_html.escape(str(e))}'
             f'</div>'
         )
+
+    # Backward-compat: legacy code paths that called run_mitre_sync and
+    # got an int still work; only the toast renderer needs the dict.
+    if isinstance(result, int):
+        result = {
+            "status": "success" if result > 0 else ("failed" if result < 0 else "partial"),
+            "total": max(result, 0), "mitre_count": 0, "octi_count": 0,
+            "warnings": [], "errors": [], "error": None,
+        }
+
+    status = result.get("status", "failed")
+    total = result.get("total", 0)
+    mitre = result.get("mitre_count", 0)
+    octi = result.get("octi_count", 0)
+    errs = result.get("errors", []) or []
+    warns = result.get("warnings", []) or []
+
+    if status == "success":
+        toast_class = "toast-success"
+        msg = (f"Synced {total} threat actors "
+               f"({mitre} MITRE + {octi} OpenCTI).")
+        if warns:
+            msg += f" {len(warns)} warning(s) \u2014 see logs."
+    elif status == "partial":
+        toast_class = "toast-warning"
+        first = errs[0] if errs else "see logs"
+        more = f" (+{len(errs) - 1} more)" if len(errs) > 1 else ""
+        msg = (
+            f"Partial sync: {total} actors loaded ({mitre} MITRE + {octi} "
+            f"OpenCTI) but {len(errs)} source(s) failed. First error: "
+            f"{first}{more}"
+        )
+    else:
+        toast_class = "toast-error"
+        top = result.get("error")
+        if top:
+            msg = f"MITRE sync failed: {top}"
+        elif errs:
+            msg = f"MITRE sync failed: {errs[0]}"
+        else:
+            msg = (
+                "No threat data found. Check /opt/repos/mitre and any "
+                "linked OpenCTI instances in Management."
+            )
+
+    return HTMLResponse(
+        f'<div class="toast {toast_class}" onclick="this.remove()">'
+        f'{_html.escape(msg)}'
+        f'</div>'
+    )

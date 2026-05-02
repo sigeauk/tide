@@ -165,16 +165,47 @@ def _distribute_rules_to_tenants():
 
 
 def run_mitre_sync():
+    """Run the MITRE + OpenCTI threat-actor sync.
+
+    Returns a structured dict (4.1.7 Phase C) with stable keys so the API
+    layer can render success / partial-success / failure toasts without
+    string-parsing log lines:
+
+    ``{ "status": "success"|"partial"|"failed",
+        "total": int,                 # mitre_count + octi_count
+        "mitre_count": int,           # actors loaded from local STIX files
+        "octi_count": int,            # actors loaded from OpenCTI instances
+        "mitre_files": int,           # *-attack.json files processed (>=0)
+        "warnings": [str, ...],       # non-fatal: missing dir, empty source, etc
+        "errors":   [str, ...],       # fatal-per-instance OpenCTI / STIX failures
+        "duration_ms": int,
+        "error": str | None }         # top-level fatal (status=='failed' only)
+
+    ``status`` is computed last:
+      * ``failed``  → top-level exception OR (errors and total == 0)
+      * ``partial`` → errors present but at least one source produced rows
+      * ``success`` → no errors
     """
-    Synchronous function to load MITRE ATT&CK data from local files AND OpenCTI.
-    Returns a dict with 'mitre_count' and 'octi_count' keys, or an int for backward compat.
-    """
+    import time as _time
+    _t0 = _time.perf_counter()
+    result: dict = {
+        "status": "failed",
+        "total": 0,
+        "mitre_count": 0,
+        "octi_count": 0,
+        "mitre_files": 0,
+        "warnings": [],
+        "errors": [],
+        "duration_ms": 0,
+        "error": None,
+    }
+
     services_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.dirname(services_dir)
-    
+
     if app_dir not in sys.path:
         sys.path.insert(0, app_dir)
-    
+
     try:
         original_cwd = os.getcwd()
         os.chdir(app_dir)
@@ -194,32 +225,53 @@ def run_mitre_sync():
             
             # --- Phase 1: Sync from local MITRE JSON files ---
             mitre_actors = 0
+            mitre_files = 0
             logger.info("Starting MITRE file sync...")
             mitre_dir = "/opt/repos/mitre"
-            
+
             if os.path.exists(mitre_dir):
                 for file in os.listdir(mitre_dir):
-                    if file.endswith('-attack.json'):
-                        source_path = os.path.join(mitre_dir, file)
-                        short_name = file.replace('-attack.json', '')
-                        
+                    if not file.endswith('-attack.json'):
+                        continue
+                    source_path = os.path.join(mitre_dir, file)
+                    short_name = file.replace('-attack.json', '')
+                    # Per-file isolation: a malformed STIX bundle in one
+                    # source must not poison the others. The previous loop
+                    # would bubble any parse / save exception out to the
+                    # top-level handler and abort the entire sync, taking
+                    # the OpenCTI phase down with it.
+                    try:
                         json_data = cti_helper.fetch_stix_data(source_path)
-                        if json_data:
-                            df_actors = cti_helper.process_stix_bundle(json_data, source_name=short_name)
-                            if not df_actors.empty:
-                                from app.database import save_threat_data
-                                count = save_threat_data(df_actors)
-                                mitre_actors += count
-                                logger.info(f"   Loaded {count} actors from {short_name}")
-                            
-                            df_defs = cti_helper.process_mitre_definitions(json_data)
-                            if not df_defs.empty:
-                                from app.database import save_mitre_definitions
-                                save_mitre_definitions(df_defs)
+                        if not json_data:
+                            result["warnings"].append(
+                                f"MITRE source '{short_name}' returned no data."
+                            )
+                            continue
+                        df_actors = cti_helper.process_stix_bundle(
+                            json_data, source_name=short_name
+                        )
+                        if not df_actors.empty:
+                            from app.database import save_threat_data
+                            count = save_threat_data(df_actors)
+                            mitre_actors += count
+                            logger.info(f"   Loaded {count} actors from {short_name}")
+                        df_defs = cti_helper.process_mitre_definitions(json_data)
+                        if not df_defs.empty:
+                            from app.database import save_mitre_definitions
+                            save_mitre_definitions(df_defs)
+                        mitre_files += 1
+                    except Exception as exc:
+                        msg = f"MITRE source '{short_name}' failed: {exc}"
+                        logger.error(msg, exc_info=True)
+                        result["errors"].append(msg)
             else:
-                logger.warning(f"MITRE directory not found: {mitre_dir}")
-            
-            logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors.")
+                msg = f"MITRE directory not found: {mitre_dir}"
+                logger.warning(msg)
+                result["warnings"].append(msg)
+
+            result["mitre_count"] = mitre_actors
+            result["mitre_files"] = mitre_files
+            logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors across {mitre_files} file(s).")
             
             # --- Phase 2: Sync from OpenCTI (per-tenant, isolated) ---
             # 4.1.5: OpenCTI is per-tenant intel. Iterate the
@@ -327,19 +379,23 @@ def run_mitre_sync():
                                     f"{count} actors."
                                 )
                             except Exception as e:
-                                logger.error(
+                                msg = (
                                     f"OpenCTI sync failed for "
                                     f"{client_name} / {octi_label}: {e}"
                                 )
-                                import traceback
-                                logger.error(traceback.format_exc())
+                                logger.error(msg, exc_info=True)
+                                result["errors"].append(msg)
                 except Exception as e:
-                    logger.error(
+                    msg = (
                         f"OpenCTI tenant context failed for "
                         f"{client_name}: {e}"
                     )
-            
+                    logger.error(msg, exc_info=True)
+                    result["errors"].append(msg)
+
+            result["octi_count"] = octi_actors
             total = mitre_actors + octi_actors
+            result["total"] = total
             logger.info(f"Total threat sync complete. {mitre_actors} MITRE + {octi_actors} OCTI = {total} actors.")
             
             # Sync shared reference data (threat actors, MITRE) to tenant DBs
@@ -349,17 +405,50 @@ def run_mitre_sync():
                     sync_shared_data(settings.data_dir if hasattr(settings, 'data_dir') else '/app/data',
                                      settings.db_path)
             except Exception as e:
-                logger.warning(f"Shared data sync to tenants failed: {e}")
-            
-            return total
+                msg = f"Shared data sync to tenants failed: {e}"
+                logger.warning(msg)
+                result["warnings"].append(msg)
+
+            # Status classification (4.1.7 Phase C):
+            #   * any errors AND nothing loaded -> failed
+            #   * any errors AND something loaded -> partial
+            #   * no errors -> success
+            if result["errors"] and total == 0:
+                result["status"] = "failed"
+            elif result["errors"]:
+                result["status"] = "partial"
+            else:
+                result["status"] = "success"
+            return result
         finally:
             os.chdir(original_cwd)
-            
+
     except Exception as e:
-        logger.error(f"MITRE sync failed: {e}")
-        import traceback
-        logger.error(traceback.format_exc())
-        return -1
+        logger.error(f"MITRE sync failed: {e}", exc_info=True)
+        result["status"] = "failed"
+        result["error"] = str(e)
+        return result
+    finally:
+        result["duration_ms"] = int((_time.perf_counter() - _t0) * 1000)
+        # Best-effort persistence to sync_history (Migration 42 / Phase D).
+        try:
+            from app.services.database import get_database_service
+            get_database_service().record_sync_run(
+                "mitre",
+                result.get("status", "failed"),
+                total_count=result.get("total", 0),
+                duration_ms=result.get("duration_ms", 0),
+                detail={
+                    "mitre_count": result.get("mitre_count", 0),
+                    "octi_count": result.get("octi_count", 0),
+                    "mitre_files": result.get("mitre_files", 0),
+                    "warnings": result.get("warnings", []),
+                    "errors": result.get("errors", []),
+                },
+                error=result.get("error"),
+            )
+        except Exception as _exc:  # noqa: BLE001
+            logger.debug(f"sync_history insert (mitre) failed: {_exc!r}")
 
 
 def run_elastic_sync(force_mapping=False):
@@ -443,19 +532,53 @@ def run_elastic_sync(force_mapping=False):
                 es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
                 spaces = db.get_siem_spaces(siem["id"])
                 if not spaces:
-                    # No client has mapped this SIEM yet. Skip \u2014 syncing rules
-                    # we have nowhere to attribute them to just clutters the
-                    # shared cache and (worse) used to invent spaces by
-                    # falling back to siem_inventory.production_space /
-                    # staging_space, which double-synced SIEMs that were
-                    # configured for "production only". client_siem_map is
-                    # the sole source of truth for (siem, role, space) since
-                    # Migration 38.
-                    logger.info(
-                        f"Skipping SIEM '{siem.get('label')}' \u2014 no client_siem_map "
-                        f"rows. Link it to a client in the Management UI to "
-                        f"enable sync."
-                    )
+                    # No client_siem_map row yet. Two reasons this can
+                    # happen: (a) brand-new standalone deployment where the
+                    # operator hasn't linked the SIEM to a tenant yet; (b)
+                    # an existing SIEM that lost its mapping. In either case
+                    # we still want the link-to-tenant dropdown to be
+                    # populated, which means the persistent
+                    # ``siem_kibana_spaces`` cache (Migration 41) needs
+                    # spaces in it. Pre-4.1.7 the cache was only seeded by a
+                    # successful Test Connection click; sync silently did
+                    # nothing, which is exactly how a standalone client
+                    # ended up with an empty dropdown despite a working
+                    # SIEM. Now: bootstrap the cache via the shared
+                    # space_resolver, then skip the rule fetch (still no
+                    # attribution target). Rule attribution stays gated on
+                    # client_siem_map — we are NOT broadening tenant
+                    # visibility, only seeding the picker.
+                    try:
+                        from app.services.space_resolver import (
+                            resolve_discoverable_spaces, REASON_LIVE, REASON_PERSISTED,
+                        )
+                        discovered, reason = resolve_discoverable_spaces(
+                            db, siem["id"],
+                            kibana_url=kurl, api_token=token,
+                            allow_live=True,
+                        )
+                    except Exception as _exc:  # noqa: BLE001
+                        discovered, reason = set(), f"resolver_error:{_exc!r}"
+                    if discovered:
+                        logger.info(
+                            "Skipping rule fetch for SIEM '%s' — no "
+                            "client_siem_map rows. Bootstrapped %d Kibana "
+                            "space(s) into the persistent cache via %s so "
+                            "the link-to-tenant dropdown will populate. "
+                            "Link this SIEM to a tenant in the Management "
+                            "UI to enable sync.",
+                            siem.get("label"), len(discovered), reason,
+                        )
+                    else:
+                        logger.info(
+                            "Skipping SIEM '%s' — no client_siem_map rows "
+                            "and space discovery returned nothing "
+                            "(reason=%s). Link it to a client in the "
+                            "Management UI; if the dropdown is still "
+                            "empty, run Test Connection on the SIEM card "
+                            "to surface the underlying error.",
+                            siem.get("label"), reason,
+                        )
                     continue
                 if not (kurl and token and spaces):
                     logger.info(f"Skipping SIEM '{siem.get('label')}' \u2014 missing url/token/spaces")
