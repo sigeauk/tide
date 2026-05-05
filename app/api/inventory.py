@@ -96,7 +96,7 @@ def _render(name: str, request: Request, ctx: dict):
 
             _cid = request.cookies.get("active_client_id")
             if not _cid and _user:
-                with _db.get_connection() as conn:
+                with _db.get_shared_connection() as conn:
                     row = conn.execute(
                         "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                         [_user.id],
@@ -104,7 +104,7 @@ def _render(name: str, request: Request, ctx: dict):
                     if row:
                         _cid = row[0]
             if not _cid:
-                with _db.get_connection() as conn:
+                with _db.get_shared_connection() as conn:
                     row = conn.execute(
                         "SELECT id FROM clients WHERE is_default = true LIMIT 1",
                     ).fetchone()

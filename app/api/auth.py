@@ -98,7 +98,7 @@ async def local_login(
     # Priority: user's is_default client → first assigned client → system default.
     _cid = None
     try:
-        with db.get_connection() as conn:
+        with db.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                 [user.id],

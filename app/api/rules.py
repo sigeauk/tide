@@ -17,12 +17,48 @@ router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 
 def _build_space_labels(db, client_id: str) -> dict:
-    """Build space → environment-role label mapping for the active client."""
+    """Build space → environment-role label mapping for the active client.
+
+    AGENTS.md §8.2 guarantee 4: two SIEMs can share a Kibana space-name.
+    Keying this dict by ``space`` alone silently overwrites the first SIEM's
+    label with the second SIEM's label, so the rule grid badge then shows
+    rules from SIEM A under SIEM B's name. We therefore concatenate every
+    SIEM/role label that maps to the same space-name into one display string
+    (`"SIEM A (Production) / SIEM B (Staging)"`) so no SIEM is hidden. For
+    callers that have a rule's ``siem_id`` available (e.g. ``rule_card``),
+    the unambiguous lookup is exposed as ``space_labels_by_pair`` keyed by
+    ``"<siem_id>|<space>"``.
+    """
     try:
         siems = db.get_client_siems(client_id)
-        return {s["space"]: f'{s["label"]} ({s["environment_role"].title()})' for s in siems if s.get("space")}
     except Exception:
         return {}
+    out: dict = {}
+    for s in siems or []:
+        space = s.get("space")
+        if not space:
+            continue
+        label = f'{s["label"]} ({s["environment_role"].title()})'
+        existing = out.get(space)
+        if existing and label not in existing.split(" / "):
+            out[space] = f"{existing} / {label}"
+        elif not existing:
+            out[space] = label
+    return out
+
+
+def _build_space_labels_by_pair(db, client_id: str) -> dict:
+    """Unambiguous ``"<siem_id>|<space>"`` → label lookup. Templates that
+    have a per-rule ``siem_id`` should prefer this over ``space_labels``."""
+    try:
+        siems = db.get_client_siems(client_id)
+    except Exception:
+        return {}
+    return {
+        f'{s["id"]}|{s["space"]}': f'{s["label"]} ({s["environment_role"].title()})'
+        for s in (siems or [])
+        if s.get("id") and s.get("space")
+    }
 
 
 @router.get("", response_class=HTMLResponse)
@@ -70,6 +106,7 @@ def list_rules(
             "enabled": enabled or "",
             "sort_by": sort_by,
             "space_labels": _build_space_labels(db, client_id),
+            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
         }
         return templates.TemplateResponse(request, "partials/rules_grid.html", context)
     except Exception as e:
@@ -96,7 +133,12 @@ def get_metrics(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",
-        {"metrics": metrics, "last_sync_time": get_last_sync_time(), "space_labels": _build_space_labels(db, client_id)}
+        {
+            "metrics": metrics,
+            "last_sync_time": get_last_sync_time(),
+            "space_labels": _build_space_labels(db, client_id),
+            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
+        },
     )
 
 

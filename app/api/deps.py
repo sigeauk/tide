@@ -204,7 +204,7 @@ async def get_active_client(
 
     # 3. Default client for user (when authenticated)
     if not client_id and user:
-        with db.get_connection() as conn:
+        with db.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                 [user.id],
@@ -214,7 +214,7 @@ async def get_active_client(
 
     # 4. System default client (dev mode / auth disabled)
     if not client_id:
-        with db.get_connection() as conn:
+        with db.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT id FROM clients WHERE is_default = true LIMIT 1",
             ).fetchone()
@@ -232,7 +232,7 @@ async def get_active_client(
     # - Otherwise the user must be a member of the resolved client. Per-tenant
     #   ADMIN no longer implies access to other tenants.
     if user and not user.is_superadmin:
-        with db.get_connection() as conn:
+        with db.get_shared_connection() as conn:
             allowed = conn.execute(
                 "SELECT 1 FROM user_clients WHERE user_id = ? AND client_id = ?",
                 [user.id, client_id],
@@ -244,7 +244,7 @@ async def get_active_client(
                 )
 
     # Verify client exists
-    with db.get_connection() as conn:
+    with db.get_shared_connection() as conn:
         exists = conn.execute("SELECT 1 FROM clients WHERE id = ?", [client_id]).fetchone()
     if not exists:
         raise HTTPException(
@@ -254,6 +254,13 @@ async def get_active_client(
 
     # Stash on request state for downstream use
     request.state.client_id = client_id
+
+    # Set tenant DB context as early as possible so any DB calls made during
+    # roles/permissions refresh below use the correct tenant connection.
+    settings = get_settings()
+    tenant_path = resolve_tenant_db_path(client_id, settings.data_dir)
+    if tenant_path:
+        set_tenant_context(tenant_path)
 
     # 4.1.0 P1: enrich the structured logging contextvar so every subsequent
     # log line for this request carries the resolved tenant + user. The
@@ -287,12 +294,6 @@ async def get_active_client(
                 user.permissions = db.get_user_permissions(user.id, client_id=client_id)
         except Exception:  # pragma: no cover - permissions optional
             user.permissions = {}
-
-    # Set tenant DB context if multi-DB mode is active
-    settings = get_settings()
-    tenant_path = resolve_tenant_db_path(client_id, settings.data_dir)
-    if tenant_path:
-        set_tenant_context(tenant_path)
 
     return client_id
 

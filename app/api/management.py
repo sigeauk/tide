@@ -1864,7 +1864,7 @@ async def update_client_permission(request: Request, client_id: str,
         return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
 
     # ADMIN role always has full access \u2014 do not let it be edited away.
-    with db.get_connection() as conn:
+    with db.get_shared_connection() as conn:
         admin_check = conn.execute(
             "SELECT name FROM roles WHERE id = ?", [role_id]
         ).fetchone()
@@ -2910,53 +2910,95 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     all_siems = db.list_siem_inventory()
     available_siems = all_siems
 
-    # SIEM rule counts by space
-    siem_rule_counts = {}
+    # SIEM rule counts keyed by (siem_id, space). Keying by space alone
+    # collapses two SIEMs that share a Kibana space-name into one bucket and
+    # mis-labels rules in the grid (AGENTS.md §8.2 guarantee 4). The legacy
+    # space-only ``siem_rule_counts`` dict is kept (last-writer-wins) only
+    # for templates that have not been migrated to the per-SIEM map yet.
+    siem_rule_counts: dict = {}
+    siem_space_counts: dict = {}
     try:
         import duckdb
         conn = duckdb.connect(str(db.db_path), read_only=False)  # 4.1.0 P3: pool conflict
         rows = conn.execute(
-            "SELECT space, COUNT(*) as total, SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) as enabled "
-            "FROM detection_rules WHERE space IS NOT NULL GROUP BY space"
+            "SELECT siem_id, space, COUNT(*) AS total, "
+            "SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) AS enabled "
+            "FROM detection_rules "
+            "WHERE space IS NOT NULL AND siem_id IS NOT NULL "
+            "GROUP BY siem_id, space"
         ).fetchall()
         conn.close()
-        for space, total, enabled in rows:
-            siem_rule_counts[str(space)] = {"total": int(total), "enabled": int(enabled)}
+        for sid, space, total, enabled in rows:
+            entry = {"total": int(total), "enabled": int(enabled or 0)}
+            siem_space_counts.setdefault(str(sid), {})[str(space)] = entry
+            siem_rule_counts[str(space)] = entry  # legacy fallback only
     except Exception:
         pass
 
     templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
     env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
     template = env.get_template("partials/client_siems.html")
-    # Build a list of Kibana spaces actually present in the rule cache so the
-    # Add SIEM form can offer them as a datalist. Stops operators having to
-    # guess the space name (and stops them from typing the role name by
-    # mistake). 4.1.5 — also union live spaces queried from each available
-    # SIEM's Kibana so freshly-created spaces show up in the picker without
-    # having to wait for a Sigma/rule sync to back-fill them.
+    # Build a per-SIEM map of Kibana spaces so the Add-SIEM picker can show
+    # ONLY the spaces that exist on the SIEM the operator selected. AGENTS.md
+    # §8.2 guarantee 1: a flat union across SIEMs leaks SIEM B's spaces into
+    # SIEM A's picker, then the live-Kibana validator 404s the submission.
+    # 4.1.5 → 4.1.9 used a flat ``known_kibana_spaces`` union; that is the
+    # bug. Per-SIEM map below; flat list retained as a defensive fallback for
+    # any partial template that still references it.
+    siem_spaces_by_id: dict = {}
     known_kibana_spaces: list[str] = []
     try:
-        known_kibana_spaces = list(db.get_all_kibana_spaces() or [])
-    except Exception:
-        known_kibana_spaces = []
-    try:
-        _live_seen: set[str] = {s.lower() for s in known_kibana_spaces}
         for _si in (available_siems or []):
             _sid = _si.get("id") if isinstance(_si, dict) else getattr(_si, "id", None)
             if not _sid:
                 continue
-            _live = _list_kibana_spaces(db, _sid)
-            if not _live:
-                continue
-            for _sp in sorted(_live):
-                if _sp and _sp.lower() not in _live_seen:
-                    _live_seen.add(_sp.lower())
-                    known_kibana_spaces.append(_sp)
+            collected: set = set()
+            # 1. Persisted cache (siem_kibana_spaces, populated on Test
+            # Connection success and on sync). Survives Kibana outages.
+            try:
+                for sp in (db.get_persisted_kibana_spaces(_sid) or []):
+                    if sp:
+                        collected.add(str(sp))
+            except AttributeError:
+                # Older db service without the helper — fall back to a
+                # direct SELECT so we don't regress.
+                try:
+                    with db.get_shared_connection() as _c:
+                        for (sp,) in _c.execute(
+                            "SELECT DISTINCT space FROM siem_kibana_spaces "
+                            "WHERE siem_id = ? AND space IS NOT NULL", [_sid]
+                        ).fetchall():
+                            if sp:
+                                collected.add(str(sp))
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            # 2. Live discovery via the cached resolver (60s TTL).
+            try:
+                _live = _list_kibana_spaces(db, _sid)
+                for sp in (_live or set()):
+                    if sp:
+                        collected.add(str(sp))
+            except Exception as exc:
+                logger.debug(
+                    f"_render_client_siems_partial: live spaces for {_sid} failed: {exc!r}"
+                )
+            # 3. Spaces this SIEM has rules in (always trustworthy).
+            for sp in (siem_space_counts.get(str(_sid), {}) or {}):
+                collected.add(str(sp))
+            siem_spaces_by_id[str(_sid)] = sorted(collected, key=str.lower)
+            for sp in siem_spaces_by_id[str(_sid)]:
+                if sp not in known_kibana_spaces:
+                    known_kibana_spaces.append(sp)
     except Exception as exc:
-        logger.warning(f"_render_client_siems_partial: live Kibana space union failed: {exc!r}")
+        logger.warning(f"_render_client_siems_partial: per-SIEM space build failed: {exc!r}")
+
     html = template.render(
         client=client, client_siems=client_siems,
         available_siems=available_siems, siem_rule_counts=siem_rule_counts,
+        siem_space_counts=siem_space_counts,
+        siem_spaces_by_id=siem_spaces_by_id,
         known_kibana_spaces=known_kibana_spaces,
     )
 

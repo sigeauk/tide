@@ -93,7 +93,7 @@
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-siems-modal').style.display='none'">
                 <label class="form-label">Add SIEM</label>
                 <select name="siem_id" class="form-input" required id="add-siem-select"
-                        onchange="toggleSpaceField(this)">
+                        onchange="onAddSiemChange(this)">
                     <option value="" disabled selected>Select a SIEM&hellip;</option>
                     {% for si in available_siems %}
                     <option value="{{ si.id }}" data-siem-type="{{ si.siem_type }}">{{ si.label }} ({{ si.siem_type }})</option>
@@ -108,15 +108,26 @@
                         Kibana space name (NOT the environment role above).
                         Leave blank for Kibana's built-in <code>default</code> space.
                     </label>
-                    <input type="text" name="space" class="form-input"
+                    <input type="text" name="space" id="add-siem-space-input"
+                           class="form-input"
                            placeholder="default"
-                           list="known-kibana-spaces">
-                    {% if known_kibana_spaces is defined and known_kibana_spaces %}
-                    <datalist id="known-kibana-spaces">
-                        {% for ks in known_kibana_spaces %}
-                        <option value="{{ ks }}">{{ ks }}</option>
+                           list="">
+                    <small id="add-siem-space-hint"
+                           style="display:block;margin-top:0.25rem;font-size:0.7rem;color:var(--color-text-muted);"></small>
+                    {# One <datalist> per SIEM so each SIEM only offers its
+                       own spaces (AGENTS.md §8.2 guarantee 1). The input's
+                       ``list`` attribute is rewritten in JS when the SIEM
+                       dropdown changes; the rule-count hint below also
+                       updates from the same per-SIEM map. #}
+                    {% if siem_spaces_by_id is defined and siem_spaces_by_id %}
+                        {% for sid, spaces in siem_spaces_by_id.items() %}
+                        <datalist id="known-spaces-{{ sid }}">
+                            {% for ks in spaces %}
+                            {% set _rc = (siem_space_counts.get(sid, {}) if siem_space_counts is defined else {}).get(ks, {}) %}
+                            <option value="{{ ks }}"{% if _rc %} label="{{ _rc.total }} rule{{ 's' if _rc.total != 1 else '' }}"{% endif %}>{{ ks }}</option>
+                            {% endfor %}
+                        </datalist>
                         {% endfor %}
-                    </datalist>
                     {% endif %}
                 </div>
                 <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
@@ -131,9 +142,43 @@
 </div>
 
 <script>
-function toggleSpaceField(sel) {
+// Per-SIEM rule-count map for the "default — 412 rules" hint shown
+// underneath the space input. Keyed by siem_id → space → total. AGENTS.md
+// §8.2 guarantee 4: never key by space alone.
+window.__siemSpaceCounts = {{ (siem_space_counts | default({})) | tojson }};
+
+function onAddSiemChange(sel) {
     var opt = sel.options[sel.selectedIndex];
     var siemType = opt ? opt.getAttribute('data-siem-type') : '';
-    document.getElementById('siem-space-field').style.display = (siemType === 'elastic') ? '' : 'none';
+    var siemId   = opt ? opt.value : '';
+    var field    = document.getElementById('siem-space-field');
+    var input    = document.getElementById('add-siem-space-input');
+    var hint     = document.getElementById('add-siem-space-hint');
+    field.style.display = (siemType === 'elastic') ? '' : 'none';
+    if (siemType !== 'elastic' || !siemId) {
+        if (input) { input.setAttribute('list', ''); input.value = ''; }
+        if (hint)  { hint.textContent = ''; }
+        return;
+    }
+    // Point the input's autocomplete at THIS SIEM's datalist only.
+    if (input) {
+        input.setAttribute('list', 'known-spaces-' + siemId);
+        input.value = '';
+    }
+    var counts = (window.__siemSpaceCounts || {})[siemId] || {};
+    var spaces = Object.keys(counts);
+    if (hint) {
+        if (spaces.length === 0) {
+            hint.textContent = 'No rules cached for this SIEM yet — type the Kibana space ID.';
+        } else {
+            spaces.sort(function (a, b) { return (counts[b].total || 0) - (counts[a].total || 0); });
+            hint.textContent =
+                'Spaces with rules on this SIEM: ' +
+                spaces.map(function (s) { return s + ' (' + counts[s].total + ')'; }).join(', ');
+        }
+    }
 }
+
+// Back-compat shim — older callers still wire ``onchange="toggleSpaceField(this)"``.
+function toggleSpaceField(sel) { onAddSiemChange(sel); }
 </script>

@@ -431,6 +431,19 @@ def extract_kuery_lucene(query):
     return {f for f in fields if f.lower() not in keywords and not f[0].isdigit()}
 
 
+def normalize_rule_language(language):
+    """Normalize Elastic rule language aliases used across sync/preview paths.
+
+    Kibana Detection Engine query rules use ``language: kuery`` in the rules
+    API, but some upstream/export paths may still present ``kql``. Treat both
+    as the same query language so mapping extraction and scoring remain stable.
+    """
+    lang = str(language or "kuery").strip().lower()
+    if lang == "kql":
+        return "kuery"
+    return lang
+
+
 def extract_esql(query):
     """Extract index-resolvable field names from an ES|QL query.
 
@@ -1034,7 +1047,7 @@ def calculate_score(rule_data):
         "esql": {"detection": 9, "performance": 7},
         "dsl": {"detection": 9, "performance": 8},
     }
-    lang = rule_data.get('language', 'kuery').lower()
+    lang = normalize_rule_language(rule_data.get('language', 'kuery'))
     lang_score = language_scores.get(lang, {"detection": 0, "performance": 0})
     score_language = round(lang_score['detection'] * 0.6 + lang_score['performance'] * 0.4, 4)
     score += score_language
@@ -1321,7 +1334,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
 
         for i, r in enumerate(all_rules):
             query = r.get('query', '')
-            language = r.get('language', 'kuery')
+            language = normalize_rule_language(r.get('language', 'kuery'))
             # Use last execution metrics for dynamic search-time scoring
             search_time = 0
             try:
@@ -1375,6 +1388,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
         processed_rules = []
         for meta in rule_meta_list:
             r = meta["raw"]
+            rule_language = normalize_rule_language(r.get('language', 'kuery'))
             results = []
             if check_mappings:
                 for idx in meta["indices"]:
@@ -1424,7 +1438,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                 "tactics": ",".join(tactics),
                 "techniques": ",".join(techniques),
                 "highlighted_str": highlighted_str,
-                "search_time": meta.get("search_time", 0), "language": r.get('language', 'kuery'),
+                "search_time": meta.get("search_time", 0), "language": rule_language,
                 "indices": meta["indices"],
                 "fields": list(meta["fields"]),
                 "results": results, "query": r.get('query', ''),
@@ -1566,7 +1580,7 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
         endpoint = f"{base_url}/s/{space}/api/detection_engine/rules/preview"
     
     # Build the preview payload based on rule language
-    language = rule_data.get("language", "kuery")
+    language = normalize_rule_language(rule_data.get("language", "kuery"))
     query = rule_data.get("query", "")
     rule_type = rule_data.get("type", "query")
     

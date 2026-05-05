@@ -925,7 +925,8 @@ def create_app() -> FastAPI:
             # state without scraping HTML. The header is omitted entirely
             # when no resync is required so legacy clients don't see noise.
             try:
-                if migration37_resync_required():
+                from app.services.tenant_manager import get_tenant_db_path as _gtp
+                if _gtp() is not None and migration37_resync_required():
                     response.headers["X-TIDE-Resync-Required"] = "1"
                     response.headers["X-TIDE-Resync-Reason"] = (
                         "migration-37: detection_rules wiped on upgrade to "
@@ -1156,6 +1157,30 @@ def create_app() -> FastAPI:
     templates.env.globals["active_quest"] = _active_quest
 
     # --- Helper function to render templates with global context ---
+    # --- Helper function to render templates with global context ---
+
+    def _activate_page_tenant(request: Request, user, db, _cid: str) -> None:
+        """Set tenant DB context and enrich the log context for a page route that
+        resolved *_cid* outside of the ActiveClient FastAPI dependency.
+
+        Must be called AFTER _cid has been fully resolved (cookie → user default →
+        system default) and BEFORE any tenant-scoped DB call.
+        """
+        if not _cid:
+            return
+        try:
+            from app.services.tenant_manager import resolve_tenant_db_path, set_tenant_context
+            from app.services.log_context import set_context_fields
+            tenant_path = resolve_tenant_db_path(_cid, settings.data_dir)
+            if tenant_path:
+                set_tenant_context(tenant_path)
+            set_context_fields(
+                client_id=_cid,
+                user_id=str(user.id) if user is not None else "-",
+            )
+        except Exception:
+            pass
+
     def render_template(name: str, request: Request, context: dict = None):
         """Render template with global context variables (brand_hue, cache_bust, active_client)."""
         ctx = {
@@ -1176,7 +1201,7 @@ def create_app() -> FastAPI:
                 # Resolve active client id (cookie → user default → system default)
                 _cid = request.cookies.get("active_client_id")
                 if not _cid and _user:
-                    with _db.get_connection() as conn:
+                    with _db.get_shared_connection() as conn:
                         row = conn.execute(
                             "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                             [_user.id],
@@ -1184,7 +1209,7 @@ def create_app() -> FastAPI:
                         if row:
                             _cid = row[0]
                 if not _cid:
-                    with _db.get_connection() as conn:
+                    with _db.get_shared_connection() as conn:
                         row = conn.execute(
                             "SELECT id FROM clients WHERE is_default = true LIMIT 1",
                         ).fetchone()
@@ -1383,7 +1408,7 @@ def create_app() -> FastAPI:
         # (mirrors the resolution chain in deps.get_active_client)
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1392,6 +1417,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
         
         allowed_spaces = db.get_client_siem_spaces(_cid) if _cid else None
         
@@ -1433,7 +1459,7 @@ def create_app() -> FastAPI:
         # tenants without an OpenCTI link (mirrors the chain in /threats).
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1442,6 +1468,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
 
         actors = db.get_threat_actors(client_id=_cid)
 
@@ -1509,7 +1536,7 @@ def create_app() -> FastAPI:
         # (mirrors the resolution chain in deps.get_active_client)
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1518,6 +1545,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
         
         # Single combined query for all metrics (1 connection, 1 validation load)
         # 4.1.0 P7 — cache rollup per tenant for ~60s. The dashboard is the
@@ -1582,7 +1610,7 @@ def create_app() -> FastAPI:
         # (mirrors the resolution chain in deps.get_active_client)
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1591,6 +1619,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
 
         # Resilience guard (4.1.7 Phase C): a concurrent threat sync can
         # leave ``threat_actors`` in a transiently inconsistent shape (the
@@ -1643,7 +1672,7 @@ def create_app() -> FastAPI:
         # Resolve active client (same pattern as sigma_page / rule_health_page)
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1652,6 +1681,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
 
         staging_spaces = db.get_client_siem_spaces(_cid, environment_role="staging") if _cid else []
         production_spaces = db.get_client_siem_spaces(_cid, environment_role="production") if _cid else []
@@ -1701,7 +1731,7 @@ def create_app() -> FastAPI:
         # Resolve active client (mirrors deps.get_active_client)
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
-            with db.get_connection() as conn:
+            with db.get_shared_connection() as conn:
                 row = conn.execute(
                     "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
                     [user.id],
@@ -1710,6 +1740,7 @@ def create_app() -> FastAPI:
                     _cid = row[0]
         if not _cid:
             _cid = db.get_default_client_id()
+        _activate_page_tenant(request, user, db, _cid)
 
         # Build deploy targets from client's linked SIEMs
         client_siems = db.get_client_siems(_cid) if _cid else []

@@ -612,7 +612,7 @@ async def update_permission(request: Request, db: DbDep, user: RequireAdmin):
         return HTMLResponse(_render_permissions_table(db))
 
     # Block edits to ADMIN role – admins always have full access
-    with db.get_connection() as conn:
+    with db.get_shared_connection() as conn:
         admin_check = conn.execute(
             "SELECT name FROM roles WHERE id = ?", [role_id]
         ).fetchone()
@@ -622,7 +622,7 @@ async def update_permission(request: Request, db: DbDep, user: RequireAdmin):
     # Get current permission
     current = db.check_permission([], resource)  # need role-specific lookup
     # Direct DB lookup for this specific role+resource
-    with db.get_connection() as conn:
+    with db.get_shared_connection() as conn:
         row = conn.execute(
             "SELECT can_read, can_write FROM role_permissions WHERE role_id = ? AND resource = ?",
             [role_id, resource],

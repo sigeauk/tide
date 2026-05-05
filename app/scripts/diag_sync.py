@@ -14,8 +14,11 @@ Sections:
   1. Container env vars (looking for ELASTIC_URL/ELASTIC_API_KEY legacy auth)
   2. Shared DB state (siem_inventory, clients, client_siem_map, detection_rules)
   3. Live Kibana auth check, plus per-(siem, space) probe vs client_siem_map
-  4. Per-tenant DB row counts (4.1.x only)
+  4. Per-tenant DB state (4.1.x only) + detection_rules column-diff per tenant
   5. Schema / migration state (current vs expected, leftover legacy columns)
+     + shared detection_rules column-diff (identifies the
+       "table detection_rules has N columns but M values were supplied" and
+       isolation_violation user_id='-' errors caused by schema drift)
   6. Recent ERROR / WARN log tail (when log files are mounted)
   7. Elasticsearch reachability (port 9200, info-only)
   8. Verdict block naming the failing link and the next action
@@ -459,6 +462,56 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                       f"space={space!r}  ERROR: {type(e).__name__}: {e}")
 
 
+# Canonical detection_rules columns expected in the TENANT DB (24 columns).
+# Mirrors _TENANT_DETECTION_RULES_COLUMNS in app/services/sync.py — keep in sync.
+_TENANT_DR_COLS = (
+    "rule_id", "siem_id", "name", "severity", "author", "enabled", "space",
+    "score", "quality_score", "meta_score",
+    "score_mapping", "score_field_type", "score_search_time",
+    "score_language", "score_note", "score_override",
+    "score_tactics", "score_techniques", "score_author", "score_highlights",
+    "last_updated", "mitre_ids", "raw_data",
+    "client_id",   # added post-4.0.13 — the column missing in the 23-col failure
+)
+
+# Canonical detection_rules columns expected in the SHARED DB (23 columns —
+# no client_id; that column lives only on tenant copies).
+_SHARED_DR_COLS = tuple(c for c in _TENANT_DR_COLS if c != "client_id")
+
+
+def _check_dr_columns(conn, table_ref: str, canonical: tuple, label: str) -> list[str]:
+    """Compare actual detection_rules columns against canonical.
+    Prints findings, returns list of missing column names."""
+    try:
+        rows = conn.execute(f"DESCRIBE {table_ref}").fetchall()
+        actual = [r[0] for r in rows]
+    except Exception as exc:
+        print(f"  {label}: could not DESCRIBE {table_ref}: {exc}")
+        return []
+
+    actual_set = set(actual)
+    canonical_set = set(canonical)
+    missing = [c for c in canonical if c not in actual_set]
+    extra   = sorted(actual_set - canonical_set)
+
+    status = "OK" if not missing else "X SCHEMA MISMATCH"
+    print(f"  {label}: {table_ref} — {len(actual)} columns  [{status}]")
+    if missing:
+        print(f"     MISSING ({len(missing)}): {missing}")
+        if "client_id" in missing:
+            print("     ^ This is the direct cause of:")
+            print(f"       'table detection_rules has {len(actual)} columns")
+            print(f"        but {len(canonical)} values were supplied'")
+            print("       Fix: docker compose up -d --build  (startup repairs")
+            print("       all tenant DBs automatically in 4.1.8+).")
+        if "siem_id" in missing:
+            print("     ^ siem_id missing = pre-4.0.13 schema. Table will be")
+            print("       rebuilt from scratch on next startup (safe — cache only).")
+    if extra:
+        print(f"     EXTRA columns (harmless): {extra}")
+    return missing
+
+
 def _check_tenant_dbs(info: dict) -> None:
     _line("4. Per-tenant DB state (4.1.x only)")
     if not info.get("db_read_ok"):
@@ -506,6 +559,12 @@ def _check_tenant_dbs(info: dict) -> None:
                 cm = "<table missing>"
             print(f"  client {cid[:8]} '{name}': "
                   f"detection_rules={rc} client_siem_map={cm} ({fn})")
+            # Column-diff check against canonical tenant schema.
+            if rc != "<table missing>":
+                _check_dr_columns(
+                    t, "detection_rules", _TENANT_DR_COLS,
+                    f"    tenant {cid[:8]} '{name}'",
+                )
             t.close()
         except Exception as exc:
             print(f"  client {cid[:8]} '{name}' DB ERROR: {exc}")
@@ -539,7 +598,7 @@ def _verdict(env: dict, info: dict) -> None:
 
 
 def _check_migrations(info: dict) -> None:
-    _line("5. Schema / migration state")
+    _line("5. Schema / migration state + shared detection_rules columns")
     if not info.get("db_read_ok"):
         print("  skipped: section 2 could not read the shared DB")
         print(f"  ({info.get('db_read_error', 'unknown error')})")
@@ -578,6 +637,32 @@ def _check_migrations(info: dict) -> None:
               f"docker exec tide-app python -c \"import duckdb; "
               f"print(duckdb.connect('/app/data/tide.duckdb', read_only=True)"
               f".execute('PRAGMA table_info(siem_inventory)').fetchall())\"")
+
+    # ── Shared DB: detection_rules column-diff ──────────────────────────────
+    # The shared detection_rules table uses a 23-column schema (no client_id).
+    # If this is wrong it indicates a failed Migration 37 rebuild.
+    db_path = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
+    import shutil, tempfile, duckdb as _ddb
+    snap_dir2 = None
+    try:
+        snap_dir2 = tempfile.mkdtemp(prefix="diag_schema_")
+        snap2 = os.path.join(snap_dir2, "s.duckdb")
+        shutil.copy2(db_path, snap2)
+        wal2 = db_path + ".wal"
+        if os.path.exists(wal2):
+            shutil.copy2(wal2, snap2 + ".wal")
+        conn2 = _ddb.connect(snap2, read_only=True)
+        try:
+            _check_dr_columns(
+                conn2, "detection_rules", _SHARED_DR_COLS, "  shared DB"
+            )
+        finally:
+            conn2.close()
+    except Exception as exc:
+        print(f"  shared DB column-diff skipped: {exc}")
+    finally:
+        if snap_dir2:
+            shutil.rmtree(snap_dir2, ignore_errors=True)
 
 
 def _check_logs() -> None:
