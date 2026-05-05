@@ -1347,23 +1347,17 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     if environment_role not in ("production", "staging"):
         environment_role = "production"
 
-    # Hard reject role names typed into the space field. This is the single
-    # most common configuration mistake (the dropdown above and this input
-    # sit next to each other) and previously slipped through whenever Kibana
-    # was unreachable, because ``_list_kibana_spaces`` fails open. Reject
-    # unconditionally — 'production' and 'staging' are environment ROLE
-    # values that are NEVER valid Kibana space ids in any sane deployment.
-    if space.strip().lower() in ("production", "staging"):
-        from html import escape
-        msg = (
-            f"'{escape(space)}' is an environment ROLE, not a Kibana space. "
-            f"Use the Kibana space id (e.g. 'default', 'soc-prod', 'eu-west') "
-            f"or leave the field blank for Kibana's built-in 'default' space."
-        )
-        return HTMLResponse(
-            '<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-warning">{msg}</div></div>'
-        )
+    # NOTE: prior releases (4.1.5–4.1.7) hard-rejected the literal values
+    # ``'production'`` / ``'staging'`` here on the assumption they were
+    # always operator confusion between the *environment role* dropdown and
+    # the *Kibana space* input. That assumption is wrong — Kibana permits
+    # space ids named ``production`` or ``staging``, and at least one
+    # standalone deployment uses exactly those names. The blanket block
+    # made those legitimate spaces unselectable. The live-Kibana validator
+    # immediately below is the correct gate: it rejects only when the
+    # SIEM's actual ``GET /api/spaces/space`` response proves the space
+    # does not exist, which catches the original footgun without false
+    # positives.
 
     # Validate the space exists on the SIEM's Kibana before storing the row.
     # The most common 4.1.x sync failure was an operator typing the role name

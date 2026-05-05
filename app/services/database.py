@@ -1621,46 +1621,28 @@ class DatabaseService:
                 inserted,
             )
 
-        # ── Migration 39: scrub role names from client_siem_map.space ───
-        # Older releases (and operator confusion through 4.1.4) allowed the
-        # literal strings 'production' or 'staging' to be saved into
-        # ``client_siem_map.space`` even though those are environment ROLE
-        # names, never Kibana space ids. Such rows produce HTTP 404 / 401 on
-        # every sync against ``/s/production/api/...`` because Kibana has no
-        # such space. Rewrite them to ``'default'`` so sync at least targets
-        # Kibana's built-in space; operators can fix to the correct space
-        # via the Management UI (the form-side validator added in 4.1.5
-        # rejects the same value going forward).
+        # ── Migration 39: NEUTERED in 4.1.8 ─────────────────────────────
+        # Original 4.1.5 intent: rewrite ``client_siem_map.space`` rows
+        # whose value was literally ``'production'`` / ``'staging'`` to
+        # ``'default'``, on the theory that those values were always
+        # operator confusion between the environment-role dropdown and the
+        # Kibana-space input. That theory was wrong — Kibana permits space
+        # ids with those names, and at least one standalone deployment
+        # legitimately uses them. Migration 39 was destroying valid
+        # mappings on every container restart, then the form-side reject
+        # made it impossible to recreate them. Now a no-op: we only bump
+        # ``schema_version`` so existing DBs that already ran the original
+        # migration still advance to ``39`` cleanly. Any rows the original
+        # migration rewrote to ``'default'`` cannot be recovered
+        # automatically — operators must re-pick the correct space via the
+        # link-to-tenant form (which now accepts ``production`` / ``staging``
+        # iff Kibana confirms they exist).
         if current_version < 39:
-            try:
-                # DuckDB's UPDATE doesn't always populate cur.rowcount
-                # reliably (it can return -1 for bulk updates), so count
-                # the affected rows ourselves with a SELECT first.
-                affected = conn.execute(
-                    "SELECT COUNT(*) FROM client_siem_map "
-                    "WHERE LOWER(TRIM(space)) IN ('production','staging')"
-                ).fetchone()[0] or 0
-                if affected:
-                    conn.execute(
-                        "UPDATE client_siem_map SET space = 'default' "
-                        "WHERE LOWER(TRIM(space)) IN ('production','staging')"
-                    )
-                    logger.warning(
-                        "Migration 39: rewrote %d client_siem_map row(s) "
-                        "where space contained a role name "
-                        "('production'/'staging') — set to 'default'. "
-                        "Review these in Settings → Clients and pick the "
-                        "correct Kibana space.",
-                        affected,
-                    )
-                else:
-                    logger.info(
-                        "Migration 39: no role-name pollution found in "
-                        "client_siem_map.space."
-                    )
-            except Exception as exc:
-                logger.error(f"Migration 39 failed: {exc}")
-                raise
+            logger.info(
+                "Migration 39: skipped (neutered in 4.1.8). 'production' / "
+                "'staging' are now allowed as Kibana space ids when the "
+                "live Kibana validator confirms they exist on the SIEM."
+            )
             self._set_schema_version(conn, 39)
 
         # ── Migration 40: drop stale threat_actors snapshot from tenant DBs ─
@@ -5287,16 +5269,18 @@ class DatabaseService:
            per-tenant tables are inspected).
         2. Every distinct ``client_siem_map.space`` value, so freshly-mapped
            SIEMs without a sync yet still surface their intended spaces.
+        3. Every distinct ``siem_kibana_spaces.space`` value (Migration 41
+           persistent test-connection cache).
 
-        Role names ('production', 'staging') are filtered out of the union
-        regardless of source. They are environment ROLES, not Kibana space
-        ids; if they appear here they came from operator confusion in an
-        earlier release and would otherwise self-perpetuate via the form's
-        autocomplete datalist (Bug 2 in v4.1.5).
+        No name-based filtering is applied. Releases 4.1.5–4.1.7 stripped
+        the literal strings ``'production'`` / ``'staging'`` from every
+        source on the theory that they were always role-name confusion;
+        that theory turned out to be wrong (Kibana permits space ids with
+        those names and at least one standalone deployment uses them), and
+        the filter was the cause of those legitimate spaces being invisible
+        in the link-to-tenant picker on the airgapped box whenever the live
+        Kibana lookup fell back to the persisted cache.
         """
-        # Reserved role names that must never surface as space suggestions.
-        # Match case-insensitive on the trimmed value.
-        _ROLE_NAMES = {"production", "staging"}
         spaces: list[str] = []
         seen: set[str] = set()
         with self.get_shared_connection() as conn:
@@ -5307,7 +5291,7 @@ class DatabaseService:
                 ).fetchall()
                 for r in rows:
                     v = r[0]
-                    if v and v.lower() not in _ROLE_NAMES and v not in seen:
+                    if v and v not in seen:
                         spaces.append(v); seen.add(v)
             except Exception as exc:
                 logger.debug(f"get_all_kibana_spaces: detection_rules scan failed: {exc}")
@@ -5315,8 +5299,7 @@ class DatabaseService:
                 extra = conn.execute(
                     "SELECT DISTINCT COALESCE(NULLIF(TRIM(space), ''), 'default') "
                     "FROM client_siem_map "
-                    "WHERE space IS NOT NULL AND TRIM(space) <> '' "
-                    "  AND LOWER(TRIM(space)) NOT IN ('production','staging')"
+                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
                 ).fetchall()
                 for r in extra:
                     v = r[0]
@@ -5330,8 +5313,7 @@ class DatabaseService:
             try:
                 rows = conn.execute(
                     "SELECT DISTINCT space FROM siem_kibana_spaces "
-                    "WHERE space IS NOT NULL AND TRIM(space) <> '' "
-                    "  AND LOWER(TRIM(space)) NOT IN ('production','staging')"
+                    "WHERE space IS NOT NULL AND TRIM(space) <> ''"
                 ).fetchall()
                 for r in rows:
                     v = r[0]
