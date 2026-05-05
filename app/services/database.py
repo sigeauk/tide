@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 42
+SCHEMA_VERSION = 43
 
 
 class DatabaseService:
@@ -1799,6 +1799,37 @@ class DatabaseService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"Migration 42: spaces index skipped: {exc!r}")
             self._set_schema_version(conn, 42)
+
+        # ── Migration 43: Query templates + SIEM URL compatibility ──────────
+        # Adds persistent templates for the Management Query tab so operators
+        # can save/delete named SQL snippets. Also backfills legacy
+        # siem_inventory.base_url from kibana_url so older diagnostics that
+        # still project base_url do not show misleading NULL values.
+        if current_version < 43:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS query_templates (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    name VARCHAR NOT NULL UNIQUE,
+                    sql_text VARCHAR NOT NULL,
+                    target_key VARCHAR NOT NULL DEFAULT 'shared',
+                    created_by_user_id VARCHAR,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+            try:
+                conn.execute(
+                    "UPDATE siem_inventory SET base_url = kibana_url "
+                    "WHERE (base_url IS NULL OR TRIM(base_url) = '') "
+                    "AND kibana_url IS NOT NULL"
+                )
+            except Exception as exc:
+                logger.warning(f"Migration 43: base_url backfill skipped: {exc!r}")
+            self._set_schema_version(conn, 43)
+            logger.info(
+                "Migration 43: added query_templates and backfilled "
+                "siem_inventory.base_url from kibana_url"
+            )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
     
@@ -4749,11 +4780,11 @@ class DatabaseService:
         with self.get_shared_connection() as conn:
             conn.execute(
                 "INSERT INTO siem_inventory "
-                "(siem_type, label, elasticsearch_url, kibana_url, api_token_enc, "
-                "extra_config) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                [siem_type, label, elasticsearch_url, kibana_url, api_token_enc,
-                 extra_json],
+                 "(siem_type, label, elasticsearch_url, kibana_url, base_url, "
+                 "api_token_enc, extra_config) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                [siem_type, label, elasticsearch_url, kibana_url, kibana_url,
+                                 api_token_enc, extra_json],
             )
             row = conn.execute(
                 "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
@@ -4773,6 +4804,9 @@ class DatabaseService:
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
+        if "kibana_url" in updates:
+            # Keep legacy base_url aligned for old diagnostics / exports.
+            updates["base_url"] = updates["kibana_url"]
         if "extra_config" in updates and isinstance(updates["extra_config"], dict):
             import json as _json
             updates["extra_config"] = _json.dumps(updates["extra_config"])
@@ -5529,6 +5563,101 @@ class DatabaseService:
             }
             for r in rows
         ]
+
+    def list_query_templates(self) -> List[dict]:
+        """Return saved Management Query tab templates (shared DB)."""
+        with self.get_shared_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, sql_text, target_key, created_by_user_id, "
+                    "created_at, updated_at "
+                    "FROM query_templates ORDER BY lower(name), created_at"
+                ).fetchall()
+            except Exception:
+                return []
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "sql_text": r[2],
+                "target_key": r[3],
+                "created_by_user_id": r[4],
+                "created_at": r[5],
+                "updated_at": r[6],
+            }
+            for r in rows
+        ]
+
+    def save_query_template(
+        self,
+        name: str,
+        sql_text: str,
+        target_key: str = "shared",
+        created_by_user_id: str = None,
+    ) -> tuple[dict, bool]:
+        """Create or update a saved query template by name.
+
+        Returns ``(row, created)``.
+        """
+        n = (name or "").strip()
+        s = (sql_text or "").strip()
+        t = (target_key or "shared").strip() or "shared"
+        if not n:
+            raise ValueError("Template name is required.")
+        if not s:
+            raise ValueError("SQL is required.")
+
+        with self.get_shared_connection() as conn:
+            existing = conn.execute(
+                "SELECT id FROM query_templates WHERE lower(name) = lower(?) "
+                "ORDER BY created_at DESC LIMIT 1",
+                [n],
+            ).fetchone()
+            created = existing is None
+            if created:
+                conn.execute(
+                    "INSERT INTO query_templates "
+                    "(name, sql_text, target_key, created_by_user_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    [n, s, t, created_by_user_id],
+                )
+            else:
+                conn.execute(
+                    "UPDATE query_templates "
+                    "SET name = ?, sql_text = ?, target_key = ?, "
+                    "created_by_user_id = ?, updated_at = now() "
+                    "WHERE id = ?",
+                    [n, s, t, created_by_user_id, existing[0]],
+                )
+
+            row = conn.execute(
+                "SELECT id, name, sql_text, target_key, created_by_user_id, "
+                "created_at, updated_at "
+                "FROM query_templates WHERE lower(name) = lower(?) "
+                "ORDER BY created_at DESC LIMIT 1",
+                [n],
+            ).fetchone()
+        return ({
+            "id": row[0],
+            "name": row[1],
+            "sql_text": row[2],
+            "target_key": row[3],
+            "created_by_user_id": row[4],
+            "created_at": row[5],
+            "updated_at": row[6],
+        }, created)
+
+    def delete_query_template(self, template_id: str) -> bool:
+        """Delete a saved query template by id."""
+        tid = (template_id or "").strip()
+        if not tid:
+            return False
+        with self.get_shared_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM query_templates WHERE id = ? RETURNING id",
+                [tid],
+            ).fetchone()
+        return deleted is not None
 
     def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
         """Get the list of Kibana space names visible to a client.

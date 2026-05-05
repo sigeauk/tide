@@ -10,56 +10,211 @@ import sys
 logger = logging.getLogger(__name__)
 
 
-def _ensure_tenant_detection_rules_v37(tenant_conn) -> None:
-    """Ensure the tenant DB's ``detection_rules`` table has the v37 schema
-    (composite PK on (rule_id, siem_id) with NOT NULL ``siem_id`` column).
+# Canonical column list for the tenant ``detection_rules`` table. Order
+# matches the SELECT in ``_distribute_rules_to_tenants``. Anything in this
+# list that's missing from a given tenant DB will be added by
+# ``_ensure_tenant_detection_rules_schema`` below as a nullable column.
+_TENANT_DETECTION_RULES_COLUMNS: tuple = (
+    ("rule_id",            "VARCHAR"),
+    ("siem_id",            "VARCHAR"),
+    ("name",               "VARCHAR"),
+    ("severity",           "VARCHAR"),
+    ("author",             "VARCHAR"),
+    ("enabled",            "INTEGER"),
+    ("space",              "VARCHAR"),
+    ("score",              "INTEGER"),
+    ("quality_score",      "INTEGER"),
+    ("meta_score",         "INTEGER"),
+    ("score_mapping",      "INTEGER"),
+    ("score_field_type",   "INTEGER"),
+    ("score_search_time",  "INTEGER"),
+    ("score_language",     "INTEGER"),
+    ("score_note",         "INTEGER"),
+    ("score_override",     "INTEGER"),
+    ("score_tactics",      "INTEGER"),
+    ("score_techniques",   "INTEGER"),
+    ("score_author",       "INTEGER"),
+    ("score_highlights",   "INTEGER"),
+    ("last_updated",       "TIMESTAMP"),
+    ("mitre_ids",          "VARCHAR[]"),
+    ("raw_data",           "JSON"),
+    ("client_id",          "VARCHAR"),
+)
 
-    Older tenant DBs created before 4.0.13 have the legacy schema and lack
-    ``siem_id``. We rebuild the table from scratch \u2014 there is no operator
-    state to preserve since the table is purely a cache of upstream rules
-    that ``_distribute_rules_to_tenants`` repopulates on every sync.
+
+def _ensure_tenant_detection_rules_schema(
+    conn,
+    table_ref: str = "detection_rules",
+    label: str = "tenant",
+) -> None:
+    """Ensure ``table_ref`` (``detection_rules`` on the tenant DB, or an
+    ``<alias>.detection_rules`` reference when called via an ATTACHed
+    shared connection) has every column listed in
+    ``_TENANT_DETECTION_RULES_COLUMNS``.
+
+    Two distinct legacy states this repairs:
+
+    * **Pre-4.0.13 tenant DB** \u2014 missing ``siem_id`` entirely. We can't
+      ``ADD COLUMN siem_id NOT NULL`` non-destructively, and the table is
+      pure cache (no operator state), so when ``siem_id`` is absent we
+      drop and recreate the whole table from the canonical column list.
+      ``_distribute_rules_to_tenants`` repopulates it on the same call.
+
+    * **Post-4.0.13 tenant DB created before ``client_id`` was added**
+      (the production failure mode behind "table detection_rules has 23
+      columns but 24 values were supplied"). The table already has
+      ``siem_id`` and the operator state we'd lose by recreating it is
+      still purely cached rule rows, but additive ALTERs are cheaper and
+      preserve any in-flight rows so we prefer ``ADD COLUMN IF NOT EXISTS``
+      for every missing column other than ``siem_id``.
+
+    Idempotent: a tenant DB already at the canonical schema is a no-op
+    (one DESCRIBE, no DDL).
     """
     try:
-        cols = tenant_conn.execute("DESCRIBE detection_rules").fetchall()
-        col_names = {c[0] for c in cols}
+        cols = conn.execute(f"DESCRIBE {table_ref}").fetchall()
+        existing = {c[0] for c in cols}
     except Exception:
-        col_names = set()
-    if 'siem_id' in col_names:
-        return
-    logger.info(
-        "Tenant DB: rebuilding detection_rules with v37 schema "
-        "(adding siem_id column)"
-    )
-    tenant_conn.execute("DROP TABLE IF EXISTS detection_rules")
-    tenant_conn.execute("""
-        CREATE TABLE detection_rules (
-            rule_id VARCHAR NOT NULL,
-            siem_id VARCHAR NOT NULL,
-            name VARCHAR,
-            severity VARCHAR,
-            author VARCHAR,
-            enabled INTEGER,
-            space VARCHAR,
-            score INTEGER,
-            quality_score INTEGER,
-            meta_score INTEGER,
-            score_mapping INTEGER,
-            score_field_type INTEGER,
-            score_search_time INTEGER,
-            score_language INTEGER,
-            score_note INTEGER,
-            score_override INTEGER,
-            score_tactics INTEGER,
-            score_techniques INTEGER,
-            score_author INTEGER,
-            score_highlights INTEGER,
-            last_updated TIMESTAMP,
-            mitre_ids VARCHAR[],
-            raw_data JSON,
-            client_id VARCHAR,
-            PRIMARY KEY (rule_id, siem_id)
+        # Table doesn't exist on this tenant \u2014 create it from scratch.
+        existing = set()
+
+    canonical_names = {name for name, _ in _TENANT_DETECTION_RULES_COLUMNS}
+
+    if not existing:
+        logger.info(
+            "%s DB: creating detection_rules table from canonical schema "
+            "(%d columns)", label, len(_TENANT_DETECTION_RULES_COLUMNS),
         )
-    """)
+        col_defs = ",\n            ".join(
+            f"{n} {t}" + (" NOT NULL" if n in ("rule_id", "siem_id") else "")
+            for n, t in _TENANT_DETECTION_RULES_COLUMNS
+        )
+        conn.execute(f"""
+            CREATE TABLE {table_ref} (
+                {col_defs},
+                PRIMARY KEY (rule_id, siem_id)
+            )
+        """)
+        return
+
+    # Pre-4.0.13 schema \u2014 no siem_id column at all. Cannot ALTER in a
+    # NOT NULL PK column on a non-empty table; cache-only data, safe to drop.
+    if "siem_id" not in existing:
+        logger.warning(
+            "%s DB: detection_rules missing siem_id (pre-4.0.13 schema) \u2014 "
+            "dropping and recreating from canonical schema. The next sync "
+            "will repopulate.", label,
+        )
+        conn.execute(f"DROP TABLE IF EXISTS {table_ref}")
+        col_defs = ",\n            ".join(
+            f"{n} {t}" + (" NOT NULL" if n in ("rule_id", "siem_id") else "")
+            for n, t in _TENANT_DETECTION_RULES_COLUMNS
+        )
+        conn.execute(f"""
+            CREATE TABLE {table_ref} (
+                {col_defs},
+                PRIMARY KEY (rule_id, siem_id)
+            )
+        """)
+        return
+
+    # Post-4.0.13 schema with one or more newer columns missing
+    # (the production "23 columns but 24 values supplied" failure mode).
+    missing = [
+        (n, t) for n, t in _TENANT_DETECTION_RULES_COLUMNS
+        if n not in existing
+    ]
+    if not missing:
+        return
+    for name, ddl_type in missing:
+        try:
+            conn.execute(
+                f"ALTER TABLE {table_ref} ADD COLUMN IF NOT EXISTS "
+                f"{name} {ddl_type}"
+            )
+        except Exception as exc:
+            logger.error(
+                "%s DB: failed to add detection_rules column %s %s: %s",
+                label, name, ddl_type, exc,
+            )
+            raise
+    # Surface stray columns as a warning \u2014 they're harmless for INSERT
+    # (we name every column explicitly) but indicate schema drift the
+    # operator should know about.
+    stray = sorted(existing - canonical_names)
+    if stray:
+        logger.info(
+            "%s DB: detection_rules has %d extra column(s) not in canonical "
+            "schema: %s (left in place)", label, len(stray), stray,
+        )
+    logger.warning(
+        "%s DB: detection_rules schema repaired \u2014 added %d missing column(s): %s",
+        label, len(missing), [n for n, _ in missing],
+    )
+
+
+def ensure_all_tenant_detection_rules_schemas() -> None:
+    """Walk every registered tenant DB and bring its ``detection_rules``
+    schema in line with the canonical column list. Called from the app
+    lifespan on startup so an operator-triggered Sync from the UI works
+    on the very first click after upgrade \u2014 no separate script needed
+    on the standalone / air-gapped box.
+    """
+    from app.config import get_settings
+    from app.services.database import get_database_service
+    from app.services.connection_pool import get_pool
+
+    settings = get_settings()
+    data_dir = settings.data_dir
+
+    try:
+        with get_database_service().get_shared_connection() as shared_conn:
+            try:
+                clients = shared_conn.execute(
+                    "SELECT id, db_filename FROM clients "
+                    "WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.info(
+                    "Tenant detection_rules schema check skipped: %s "
+                    "(clients table not yet migrated)", exc,
+                )
+                return
+
+            for client_id, db_filename in clients:
+                tenant_path = os.path.join(data_dir, db_filename)
+                if not os.path.exists(tenant_path):
+                    continue
+                tenant_alias = f"t_{client_id.replace('-', '_')}"
+                try:
+                    get_pool().evict(tenant_path)
+                except Exception:  # pragma: no cover - eviction best effort
+                    pass
+                try:
+                    shared_conn.execute(
+                        f"ATTACH '{tenant_path}' AS {tenant_alias}"
+                    )
+                    try:
+                        _ensure_tenant_detection_rules_schema(
+                            shared_conn,
+                            table_ref=f"{tenant_alias}.detection_rules",
+                            label=f"tenant {client_id[:8]}",
+                        )
+                    finally:
+                        shared_conn.execute(f"DETACH {tenant_alias}")
+                except Exception as exc:
+                    logger.error(
+                        "Tenant detection_rules schema check failed for "
+                        "%s (%s): %s", client_id[:8], db_filename, exc,
+                    )
+    except Exception as exc:
+        logger.error(
+            "Tenant detection_rules schema sweep failed: %s", exc,
+        )
+
+
+# Back-compat alias \u2014 some external callers / tests imported the old name.
+_ensure_tenant_detection_rules_v37 = _ensure_tenant_detection_rules_schema
 
 
 def _distribute_rules_to_tenants():
@@ -128,6 +283,20 @@ def _distribute_rules_to_tenants():
                 try:
                     shared_conn.execute(f"ATTACH '{tenant_path}' AS {tenant_alias}")
                     try:
+                        # Defensive schema repair: legacy tenant DBs
+                        # provisioned before ``client_id`` was added to the
+                        # canonical detection_rules schema have a 23-column
+                        # table; the INSERT below supplies 24 values and
+                        # explodes with "table detection_rules has 23
+                        # columns but 24 values were supplied". Idempotent
+                        # \u2014 a tenant already at the canonical schema is a
+                        # one-DESCRIBE no-op.
+                        _ensure_tenant_detection_rules_schema(
+                            shared_conn,
+                            table_ref=f"{tenant_alias}.detection_rules",
+                            label=f"tenant {client_id[:8]}",
+                        )
+
                         pair_predicates = " OR ".join(
                             "(siem_id = ? AND LOWER(space) = ?)" for _ in scopes
                         )
@@ -137,7 +306,15 @@ def _distribute_rules_to_tenants():
                             f"DELETE FROM {tenant_alias}.detection_rules"
                         )
                         shared_conn.execute(f"""
-                            INSERT INTO {tenant_alias}.detection_rules
+                            INSERT INTO {tenant_alias}.detection_rules (
+                                rule_id, siem_id, name, severity, author, enabled, space,
+                                score, quality_score, meta_score,
+                                score_mapping, score_field_type, score_search_time,
+                                score_language, score_note, score_override,
+                                score_tactics, score_techniques, score_author,
+                                score_highlights, last_updated, mitre_ids, raw_data,
+                                client_id
+                            )
                             SELECT rule_id, siem_id, name, severity, author, enabled, space,
                                    score, quality_score, meta_score,
                                    score_mapping, score_field_type, score_search_time,

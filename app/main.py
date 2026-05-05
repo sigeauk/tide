@@ -227,7 +227,23 @@ async def lifespan(app: FastAPI):
         # step a fresh-provisioned tenant has empty detection_rules until the
         # next elastic sync runs.
         try:
-            from app.services.sync import _distribute_rules_to_tenants
+            from app.services.sync import (
+                _distribute_rules_to_tenants,
+                ensure_all_tenant_detection_rules_schemas,
+            )
+            # Repair tenant detection_rules schemas BEFORE the first
+            # distribution. Pre-existing tenant DBs provisioned before the
+            # ``client_id`` column was added to the canonical schema have a
+            # 23-column table that rejects the 24-value INSERT performed by
+            # ``_distribute_rules_to_tenants`` ("table detection_rules has
+            # 23 columns but 24 values were supplied"). Idempotent on
+            # already-canonical tenants.
+            try:
+                ensure_all_tenant_detection_rules_schemas()
+            except Exception as _e:
+                logger.warning(
+                    f"Tenant detection_rules schema sweep skipped: {_e}"
+                )
             _distribute_rules_to_tenants()
         except Exception as _e:
             logger.warning(f"Initial rule distribution skipped: {_e}")

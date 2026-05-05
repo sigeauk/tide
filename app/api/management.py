@@ -3277,16 +3277,17 @@ _QUERY_PRESETS = [
      "sql": ("SELECT id, name, slug, db_filename, is_default, created_at "
              "FROM clients ORDER BY is_default DESC, name")},
     {"id": "siem_inventory", "label": "SIEM inventory", "target": "shared",
-     "sql": ("SELECT id, name, type, base_url, kibana_url, "
-             "(api_token IS NOT NULL) AS has_token, created_at "
-             "FROM siem_inventory ORDER BY name")},
+         "sql": ("SELECT id, label, siem_type, base_url, kibana_url, "
+             "(api_token_enc IS NOT NULL AND LENGTH(TRIM(api_token_enc)) > 0) "
+             "AS has_token, created_at "
+             "FROM siem_inventory ORDER BY label")},
     {"id": "client_siem_map", "label": "Tenant - SIEM - space mappings", "target": "shared",
      "sql": ("SELECT csm.client_id, c.name AS client_name, csm.siem_id, "
-             "s.name AS siem_name, csm.environment_role, csm.space "
+             "s.label AS siem_name, csm.environment_role, csm.space "
              "FROM client_siem_map csm "
              "LEFT JOIN clients c ON c.id = csm.client_id "
              "LEFT JOIN siem_inventory s ON s.id = csm.siem_id "
-             "ORDER BY c.name, s.name, csm.environment_role")},
+             "ORDER BY c.name, s.label, csm.environment_role")},
     {"id": "siem_kibana_spaces", "label": "Persisted Kibana space cache (Migration 41)",
      "target": "shared",
      "sql": ("SELECT siem_id, space, discovered_at "
@@ -3315,6 +3316,35 @@ _QUERY_PRESETS = [
      "sql": ("SELECT id, name, source, updated_at FROM threat_actors "
              "ORDER BY updated_at DESC NULLS LAST LIMIT 100")},
 ]
+
+
+def _query_toast(message: str, level: str = "success") -> str:
+    css = {
+        "success": "toast-success",
+        "warning": "toast-warning",
+        "error": "toast-error",
+    }.get(level, "toast-success")
+    return (
+        '<div hx-swap-oob="afterbegin:#toast-container">'
+        f'<div class="toast {css}">{_esc(message)}</div>'
+        '</div>'
+    )
+
+
+def _all_query_presets(db) -> list:
+    """Built-ins + saved templates as a single preset payload."""
+    presets = [dict(p) for p in _QUERY_PRESETS]
+    for row in db.list_query_templates():
+        presets.append({
+            "id": f"custom:{row['id']}",
+            "label": row.get("name") or "(unnamed)",
+            "target": row.get("target_key") or "shared",
+            "sql": row.get("sql_text") or "",
+            "kind": "custom",
+            "template_id": row.get("id"),
+            "name": row.get("name") or "",
+        })
+    return presets
 
 
 def _resolve_query_targets(db) -> list:
@@ -3423,20 +3453,53 @@ def _render_query_results(rows, cols, elapsed_ms, truncated):
     )
 
 
-def _render_query_tab(targets):
+def _render_query_tab(
+    targets,
+    presets,
+    *,
+    selected_preset: str = "",
+    target_value: str = "shared",
+    sql_value: str = "",
+    query_name: str = "",
+):
+    selected_preset = (selected_preset or "").strip()
+    target_value = (target_value or "shared").strip() or "shared"
+    sql_value = sql_value or ""
+    query_name = query_name or ""
+
     target_options = "".join(
-        f'<option value="{_esc(t["key"])}">{_esc(t["label"])}</option>'
+        f'<option value="{_esc(t["key"])}"'
+        f'{" selected" if t["key"] == target_value else ""}>'
+        f'{_esc(t["label"])}</option>'
         for t in targets
     )
-    preset_options = '<option value="">-- pick a preset --</option>' + "".join(
-        f'<option value="{_esc(p["id"])}">{_esc(p["label"])}</option>'
-        for p in _QUERY_PRESETS
-    )
+
+    builtins = [p for p in presets if p.get("kind") != "custom"]
+    custom = [p for p in presets if p.get("kind") == "custom"]
+
+    def _opts(rows):
+        return "".join(
+            f'<option value="{_esc(p["id"])}"'
+            f'{" selected" if p["id"] == selected_preset else ""}>'
+            f'{_esc(p["label"])}</option>'
+            for p in rows
+        )
+
+    preset_options = '<option value="">-- pick a preset --</option>'
+    if builtins:
+        preset_options += f'<optgroup label="Built-in">{_opts(builtins)}</optgroup>'
+    if custom:
+        preset_options += f'<optgroup label="Saved">{_opts(custom)}</optgroup>'
+
     import json as _json_q
-    presets_json = _json_q.dumps({p["id"]: p for p in _QUERY_PRESETS})
+    presets_json = _json_q.dumps({p["id"]: p for p in presets})
+    is_custom_selected = selected_preset.startswith("custom:")
     return f"""
+<div id="mgmt-query-root">
 <div class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
-  Read-only DuckDB query console. Only <code>SELECT / WITH / SHOW / DESCRIBE /
+  Read-only DuckDB query manager. Save reusable SQL snippets, run them against
+  shared or tenant DuckDB targets, and delete saved templates when obsolete.
+  Only <code>SELECT / WITH / SHOW / DESCRIBE /
   EXPLAIN / SUMMARIZE</code> statements are allowed and results are capped at
   {_QUERY_MAX_ROWS} rows. Targets are resolved from the on-disk data directory;
   arbitrary file paths are rejected. Queries run against a point-in-time
@@ -3450,28 +3513,45 @@ def _render_query_tab(targets):
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
     <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
       <span class="form-label" style="margin:0;">Database</span>
-      <select name="target" class="form-input" required>{target_options}</select>
+            <select id="mgmt-query-target" name="target" class="form-input" required>{target_options}</select>
     </label>
     <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
       <span class="form-label" style="margin:0;">Predefined query</span>
-      <select id="mgmt-query-preset" class="form-input"
+            <select id="mgmt-query-preset" name="preset_id" class="form-input"
               onchange="mgmtQueryApplyPreset(this.value)">{preset_options}</select>
     </label>
   </div>
+    <label style="display:flex;flex-direction:column;gap:0.25rem;max-width:520px;">
+        <span class="form-label" style="margin:0;">Template name</span>
+        <input id="mgmt-query-name" name="query_name" type="text" class="form-input"
+                     maxlength="120" placeholder="e.g. Recent failed syncs"
+                     value="{_esc(query_name)}">
+    </label>
   <label style="display:flex;flex-direction:column;gap:0.25rem;">
     <span class="form-label" style="margin:0;">SQL</span>
     <textarea id="mgmt-query-sql" name="sql" class="form-input" rows="6" required
               placeholder="SELECT * FROM clients LIMIT 10"
-              style="font-family:var(--font-mono,monospace);font-size:0.8rem;"></textarea>
+                            style="font-family:var(--font-mono,monospace);font-size:0.8rem;">{_esc(sql_value)}</textarea>
   </label>
   <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
     <button type="submit" class="btn btn-primary btn-sm">Run query</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                        hx-post="/api/management/query/save"
+                        hx-include="#mgmt-query-form"
+                        hx-target="#mgmt-query-root"
+                        hx-swap="outerHTML">Save</button>
+        <button id="mgmt-query-delete" type="button" class="btn btn-secondary btn-sm"
+                        hx-post="/api/management/query/delete"
+                        hx-include="#mgmt-query-form"
+                        hx-target="#mgmt-query-root"
+                        hx-swap="outerHTML"
+                        {"" if is_custom_selected else "disabled"}>Delete</button>
     <button type="button" class="btn btn-secondary btn-sm"
             onclick="document.getElementById('mgmt-query-sql').value='';
+                                         document.getElementById('mgmt-query-name').value='';
                      document.getElementById('mgmt-query-results').innerHTML='';
-                     document.getElementById('mgmt-query-preset').value='';">
-      Clear
-    </button>
+                                         document.getElementById('mgmt-query-preset').value='';
+                                         if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }};">Add / New</button>
     <span class="text-secondary" style="font-size:0.75rem;">
       Read-only - {_QUERY_MAX_ROWS}-row cap
     </span>
@@ -3481,23 +3561,155 @@ def _render_query_tab(targets):
 <script>
 (function(){{
   window.__MGMT_QUERY_PRESETS = {presets_json};
+    window.mgmtQueryUpdateActions = function(){{
+        var sel = document.getElementById('mgmt-query-preset');
+        var del = document.getElementById('mgmt-query-delete');
+        if(!sel || !del){{ return; }}
+        del.disabled = !(sel.value && sel.value.indexOf('custom:') === 0);
+    }};
   window.mgmtQueryApplyPreset = function(id){{
-    if(!id){{ return; }}
+        var targetEl = document.getElementById('mgmt-query-target');
+        var sqlEl = document.getElementById('mgmt-query-sql');
+        var nameEl = document.getElementById('mgmt-query-name');
+        if(!id){{
+            if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
+            return;
+        }}
     var p = window.__MGMT_QUERY_PRESETS[id];
-    if(!p){{ return; }}
-    var sqlEl = document.getElementById('mgmt-query-sql');
-    if(sqlEl){{ sqlEl.value = p.sql; }}
+        if(!p){{
+            if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
+            return;
+        }}
+        if(sqlEl){{ sqlEl.value = p.sql || ''; }}
+        if(targetEl && p.target){{ targetEl.value = p.target; }}
+        if(nameEl && (p.kind || '') === 'custom'){{
+            nameEl.value = p.name || p.label || '';
+        }}
+        if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
   }};
+    if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
 }})();
 </script>
+</div>
 """
 
 
 @router.get("/tab/query", response_class=HTMLResponse)
 def tab_query(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Read-only Query tab partial. Super-admin only."""
+    """Read-only Query tab partial with template CRUD. Super-admin only."""
     targets = _resolve_query_targets(db)
-    return HTMLResponse(_render_query_tab(targets))
+    presets = _all_query_presets(db)
+    return HTMLResponse(_render_query_tab(targets, presets))
+
+
+@router.post("/query/save", response_class=HTMLResponse)
+async def query_save(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Create/update a saved query template, then re-render the query tab."""
+    form = await request.form()
+    query_name = str(form.get("query_name", "")).strip()
+    target_key = str(form.get("target", "shared")).strip() or "shared"
+    selected_preset = str(form.get("preset_id", "")).strip()
+    sql_raw = str(form.get("sql", ""))
+
+    targets = _resolve_query_targets(db)
+    presets = _all_query_presets(db)
+
+    if not _target_path(db, target_key):
+        body = _render_query_tab(
+            targets,
+            presets,
+            selected_preset=selected_preset,
+            target_value=target_key,
+            sql_value=sql_raw,
+            query_name=query_name,
+        )
+        return HTMLResponse(_query_toast("Unknown or unavailable database target.", "warning") + body)
+
+    cleaned, err = _validate_sql(sql_raw)
+    if err:
+        body = _render_query_tab(
+            targets,
+            presets,
+            selected_preset=selected_preset,
+            target_value=target_key,
+            sql_value=sql_raw,
+            query_name=query_name,
+        )
+        return HTMLResponse(_query_toast(err, "warning") + body)
+
+    if not query_name:
+        body = _render_query_tab(
+            targets,
+            presets,
+            selected_preset=selected_preset,
+            target_value=target_key,
+            sql_value=cleaned,
+            query_name=query_name,
+        )
+        return HTMLResponse(_query_toast("Template name is required to save.", "warning") + body)
+
+    try:
+        row, created = db.save_query_template(
+            query_name,
+            cleaned,
+            target_key=target_key,
+            created_by_user_id=user.id,
+        )
+    except ValueError as exc:
+        body = _render_query_tab(
+            targets,
+            presets,
+            selected_preset=selected_preset,
+            target_value=target_key,
+            sql_value=cleaned,
+            query_name=query_name,
+        )
+        return HTMLResponse(_query_toast(str(exc), "warning") + body)
+
+    presets = _all_query_presets(db)
+    selected = f"custom:{row['id']}"
+    body = _render_query_tab(
+        targets,
+        presets,
+        selected_preset=selected,
+        target_value=row.get("target_key") or target_key,
+        sql_value=row.get("sql_text") or cleaned,
+        query_name=row.get("name") or query_name,
+    )
+    action = "saved" if created else "updated"
+    return HTMLResponse(_query_toast(f"Query template '{row.get('name')}' {action}.") + body)
+
+
+@router.post("/query/delete", response_class=HTMLResponse)
+async def query_delete(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Delete a saved query template, then re-render the query tab."""
+    form = await request.form()
+    selected_preset = str(form.get("preset_id", "")).strip()
+    target_key = str(form.get("target", "shared")).strip() or "shared"
+    sql_raw = str(form.get("sql", ""))
+    query_name = str(form.get("query_name", "")).strip()
+
+    targets = _resolve_query_targets(db)
+    presets = _all_query_presets(db)
+
+    if not selected_preset.startswith("custom:"):
+        body = _render_query_tab(
+            targets,
+            presets,
+            selected_preset=selected_preset,
+            target_value=target_key,
+            sql_value=sql_raw,
+            query_name=query_name,
+        )
+        return HTMLResponse(_query_toast("Pick a saved query in the dropdown before deleting.", "warning") + body)
+
+    template_id = selected_preset.split(":", 1)[1].strip()
+    deleted = db.delete_query_template(template_id)
+    presets = _all_query_presets(db)
+    body = _render_query_tab(targets, presets)
+    if deleted:
+        return HTMLResponse(_query_toast("Saved query deleted.") + body)
+    return HTMLResponse(_query_toast("Saved query not found (it may already be deleted).", "warning") + body)
 
 
 @router.post("/query/exec", response_class=HTMLResponse)
