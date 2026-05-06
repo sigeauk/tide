@@ -204,22 +204,38 @@ def deploy_to_siem(
             status_code=400,
         )
 
+    # ``get_client_siems`` returns one row per ``client_siem_map`` entry, so
+    # the same SIEM mapped to two spaces (e.g. SIEMY → ``staging`` AND
+    # ``production``) appears twice. Match on the composite ``(siem_id,
+    # space)`` so we pick the row whose space the operator actually selected
+    # in the deploy dropdown — the previous siem_id-only match always
+    # returned the first row and then 400'd on
+    # ``SIEM/space mismatch detected`` for every space other than that row's.
     target_siem = None
+    requested_space = (space or "default")
     client_siems = db.get_client_siems(client_id)
     for s in client_siems:
-        if s.get("id") == siem_id:
+        if s.get("id") == siem_id and (s.get("space") or "default") == requested_space:
             target_siem = s
             break
     if not target_siem:
+        # Fallback: SIEM is linked but not for this space. Surface that
+        # specifically so the operator knows whether to fix the mapping or
+        # the dropdown choice.
+        siem_linked = any(s.get("id") == siem_id for s in client_siems)
+        if siem_linked:
+            return HTMLResponse(
+                '<div class="alert alert-danger">Deployment blocked: '
+                f"target SIEM is linked to your client but not for space "
+                f"'{requested_space}'. Link the (SIEM, space) pair in "
+                'Management or pick a different target.</div>',
+                status_code=400,
+            )
         return HTMLResponse(
-            '<div class="alert alert-danger">Deployment blocked: target SIEM is not linked to your client.</div>'
-        )
-    target_space = (target_siem.get("space") or "default")
-    if (space or "default") != target_space:
-        return HTMLResponse(
-            '<div class="alert alert-danger">Deployment blocked: SIEM/space mismatch detected. Re-select target SIEM and retry.</div>',
+            '<div class="alert alert-danger">Deployment blocked: target SIEM is not linked to your client.</div>',
             status_code=400,
         )
+    target_space = requested_space
     if not target_siem.get("kibana_url") or not target_siem.get("api_token_enc"):
         return HTMLResponse(
             '<div class="alert alert-danger">Deployment blocked: '

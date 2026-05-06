@@ -24,7 +24,48 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 43
+SCHEMA_VERSION = 44
+
+
+def _scope_predicate(
+    scopes: Optional[List[Tuple[str, str]]],
+    table_alias: str = "",
+) -> Tuple[str, list]:
+    """Build a (siem_id, space) composite WHERE fragment for tenant scoping.
+
+    Per AGENTS.md §8.2 guarantee 4 / §8.3, ANY query that filters
+    ``detection_rules`` by space alone leaks rules between two SIEMs that
+    share a Kibana space name. This helper is the single source of truth for
+    the correct predicate shape; every reader that takes a tenant scope must
+    route through it.
+
+    Args:
+        scopes: List of ``(siem_id, space)`` tuples (typically from
+            :py:meth:`get_client_siem_scopes`). Spaces are matched
+            case-insensitively to mirror the LOWER() normalisation used at
+            insert time.
+        table_alias: Optional table alias / qualifier (e.g. ``"dr"``) to
+            prefix the column references when used inside a JOIN.
+
+    Returns:
+        Tuple ``(sql_fragment, params)``. ``sql_fragment`` is wrapped in
+        parentheses and is safe to drop straight after ``WHERE`` /
+        ``AND`` / ``OR``. ``params`` is the flat positional bind list.
+        When ``scopes`` is empty/None the helper returns ``("1=0", [])``
+        so the caller's query short-circuits to zero rows rather than
+        unintentionally returning the whole table.
+    """
+    if not scopes:
+        return "1=0", []
+    prefix = f"{table_alias}." if table_alias else ""
+    frag = " OR ".join(
+        f"({prefix}siem_id = ? AND LOWER({prefix}space) = ?)" for _ in scopes
+    )
+    params: list = []
+    for sid, sp in scopes:
+        params.append(sid)
+        params.append((sp or "").lower())
+    return f"({frag})", params
 
 
 class DatabaseService:
@@ -1550,7 +1591,7 @@ class DatabaseService:
         # This migration: (1) for every existing ``siem_inventory`` row that
         # has a ``production_space`` and at least one client linked to that
         # SIEM, ensure a ``client_siem_map`` row exists for
-        # ``(client, siem, 'production', production_space)`` \u2014 INSERT-only
+        # ``(client, siem, 'production', production_space)`` — INSERT-only
         # with ``ON CONFLICT DO NOTHING`` so any operator-set row wins.
         # Same for staging. (2) Drop the two columns from ``siem_inventory``.
         if current_version < 38:
@@ -1813,8 +1854,81 @@ class DatabaseService:
                 "siem_inventory.base_url from kibana_url"
             )
 
+        # ── Migration 44: detection_rules PK adds space ────────────────────
+        # Pre-4.1.12 the PK was (rule_id, siem_id). That collides whenever a
+        # single SIEM exposes the same rule_id in more than one Kibana space
+        # (e.g. an operator clones the base prebuilt rule into both ``one``
+        # and ``two`` so different tenants can map their staging vs production
+        # routes onto the same SIEM). Sync wrote both rows into the shared
+        # cache, then ``_distribute_rules_to_tenants`` blew up with
+        # ``Constraint Error: Duplicate key "rule_id: ..., siem_id: ..."``
+        # the moment a tenant's mapping resolved to two of those spaces.
+        # Tenant DBs ended up with ZERO rows, so Rule Health and Promotion
+        # showed nothing for that client.
+        #
+        # Fix: rebuild the table with PK ``(rule_id, siem_id, space)``. The
+        # composite isolation contract from 4.1.12 is unchanged — readers
+        # still filter on ``(siem_id, space)`` pairs from
+        # ``client_siem_map`` — but a single rule can now legitimately exist
+        # in N rows of the same SIEM (one per Kibana space). Tenant
+        # ``detection_rules`` PK is bumped in lockstep by
+        # ``services/sync._ensure_tenant_detection_rules_schema`` and
+        # ``services/tenant_manager`` (new tenant DBs).
+        #
+        # Cache-only data: WIPE and let the next sync repopulate. No
+        # operator state is lost (no manual notes/overrides live here).
+        if current_version < 44:
+            try:
+                row_count = conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules"
+                ).fetchone()[0]
+            except Exception:
+                row_count = 0
+            try:
+                conn.execute("DROP TABLE IF EXISTS detection_rules")
+                conn.execute("""
+                    CREATE TABLE detection_rules (
+                        rule_id VARCHAR NOT NULL,
+                        siem_id VARCHAR NOT NULL,
+                        name VARCHAR,
+                        severity VARCHAR,
+                        author VARCHAR,
+                        enabled INTEGER,
+                        space VARCHAR NOT NULL,
+                        score INTEGER,
+                        quality_score INTEGER,
+                        meta_score INTEGER,
+                        score_mapping INTEGER,
+                        score_field_type INTEGER,
+                        score_search_time INTEGER,
+                        score_language INTEGER,
+                        score_note INTEGER,
+                        score_override INTEGER,
+                        score_tactics INTEGER,
+                        score_techniques INTEGER,
+                        score_author INTEGER,
+                        score_highlights INTEGER,
+                        last_updated TIMESTAMP,
+                        mitre_ids VARCHAR[],
+                        raw_data JSON,
+                        PRIMARY KEY (rule_id, siem_id, space)
+                    )
+                """)
+            except Exception as exc:
+                logger.error(f"Migration 44 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 44)
+            logger.warning(
+                "Migration 44: detection_rules rebuilt with PK "
+                "(rule_id, siem_id, space) and WIPED (%d rows removed). "
+                "Trigger a sync (Settings → Sync, or POST /api/admin/sync) "
+                "to repopulate. Tenant DBs will be re-distributed on the "
+                "same call. See CHANGELOG [4.1.12].",
+                row_count,
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
-    
+
     def _validate_legacy_tables(self, conn):
         """Validate legacy tables and align schemas non-destructively."""
         # Check for checkedRule table (legacy validation data)
@@ -2453,18 +2567,16 @@ class DatabaseService:
             query = "SELECT * FROM detection_rules WHERE 1=1"
             params = []
 
-            # Tenant isolation: restrict to spaces linked to the active
-            # client. With per-tenant DB routing (Migration 29) this query
-            # already runs against the tenant's own DB file, so the space
-            # allow-list is sufficient \u2014 no SIEM cross-contamination is
-            # possible because the other tenant's rows aren't in this file.
-            if filters.allowed_spaces is not None:
-                if not filters.allowed_spaces:
-                    # Client has no SIEMs \u2192 zero rules visible
+            # Tenant isolation: restrict to the client's mapped
+            # (siem_id, space) pairs. Composite predicate is mandatory —
+            # filtering by space alone leaks rules across SIEMs that share a
+            # Kibana space name (AGENTS.md \u00a78.2 g4 / \u00a78.3).
+            if filters.allowed_scopes is not None:
+                if not filters.allowed_scopes:
                     return [], 0, "Never"
-                placeholders = ", ".join("?" for _ in filters.allowed_spaces)
-                query += f" AND LOWER(space) IN ({placeholders})"
-                params.extend([s.lower() for s in filters.allowed_spaces])
+                frag, scope_params = _scope_predicate(filters.allowed_scopes)
+                query += f" AND {frag}"
+                params.extend(scope_params)
             
             # Apply filters
             if filters.space:
@@ -2559,18 +2671,23 @@ class DatabaseService:
         return rules, total, last_sync
     
     def get_existing_rule_keys(self) -> set:
-        """Get set of (rule_id, siem_id) tuples for all rules in the database.
+        """Get set of (rule_id, siem_id, space) tuples for all rules in the database.
         Used for lazy mapping: skip Elasticsearch mapping checks for known rules.
-        Keyed by ``siem_id`` since 4.0.13 — the same Elastic prebuilt rule_id can
-        legitimately exist in multiple SIEMs and must not collide."""
+        Keyed by ``(siem_id, space)`` since 4.1.12 (Migration 44) — the same Elastic
+        prebuilt rule_id can legitimately exist in multiple spaces of the SAME
+        SIEM (e.g. a base rule cloned to ``one`` and ``two`` for different
+        promotion routes), and these now have distinct rows under the
+        ``(rule_id, siem_id, space)`` PK."""
         with self.get_connection() as conn:
-            rows = conn.execute("SELECT rule_id, siem_id FROM detection_rules").fetchall()
-            return {(row[0], row[1]) for row in rows}
+            rows = conn.execute(
+                "SELECT rule_id, siem_id, space FROM detection_rules"
+            ).fetchall()
+            return {(r[0], r[1], r[2]) for r in rows}
 
     def get_existing_rule_data(self) -> dict:
-        """Get existing rule scores and raw_data keyed by (rule_id, siem_id).
+        """Get existing rule scores and raw_data keyed by (rule_id, siem_id, space).
         Used to preserve mapping data for rules that skip mapping during lazy sync.
-        Keyed by ``siem_id`` since 4.0.13 (see ``get_existing_rule_keys``)."""
+        Keyed by ``(siem_id, space)`` since 4.1.12 (Migration 44)."""
         with self.get_connection() as conn:
             rows = conn.execute(
                 "SELECT rule_id, siem_id, space, score, quality_score, meta_score, "
@@ -2583,7 +2700,7 @@ class DatabaseService:
             result = {}
             for row in rows:
                 d = dict(zip(columns, row))
-                key = (d['rule_id'], d['siem_id'])
+                key = (d['rule_id'], d['siem_id'], d['space'])
                 # Parse raw_data JSON to get results
                 raw = d.get('raw_data')
                 if isinstance(raw, str):
@@ -2795,21 +2912,23 @@ class DatabaseService:
     
     def get_rule_health_metrics(
         self,
-        allowed_spaces: List[str] = None,
+        allowed_scopes: Optional[List[Tuple[str, str]]] = None,
     ) -> RuleHealthMetrics:
         """Calculate comprehensive rule health metrics.
-        With per-tenant DB routing the connection is already tenant-scoped,
-        so ``allowed_spaces`` (the spaces this client is mapped to) is a
-        sufficient filter."""
+
+        Tenant scoping is by composite ``(siem_id, space)`` pairs from
+        :py:meth:`get_client_siem_scopes`. Space-name-only filtering would
+        leak rules between two SIEMs that share a Kibana space name
+        (AGENTS.md §8.2 g4)."""
         with self.get_connection() as conn:
-            if allowed_spaces is not None:
-                if not allowed_spaces:
+            if allowed_scopes is not None:
+                if not allowed_scopes:
                     return RuleHealthMetrics()
-                placeholders = ", ".join("?" for _ in allowed_spaces)
+                frag, params = _scope_predicate(allowed_scopes)
                 df = conn.execute(
-                    f"SELECT enabled, score, space, severity, name, raw_data FROM detection_rules "
-                    f"WHERE LOWER(space) IN ({placeholders})",
-                    [s.lower() for s in allowed_spaces],
+                    f"SELECT enabled, score, space, severity, name, raw_data "
+                    f"FROM detection_rules WHERE {frag}",
+                    params,
                 ).df()
             else:
                 df = conn.execute(
@@ -2943,36 +3062,57 @@ class DatabaseService:
                 pass
             return origins, sources
     
-    def get_promotion_metrics(self, staging_spaces: List[str] = None,
-                              production_spaces: List[str] = None) -> Dict[str, Any]:
+    def get_promotion_metrics(
+        self,
+        staging_scopes: Optional[List[Tuple[str, str]]] = None,
+        production_scopes: Optional[List[Tuple[str, str]]] = None,
+    ) -> Dict[str, Any]:
         """Get metrics specifically for staging rules ready for promotion.
 
         Args:
-            staging_spaces:  Kibana space names mapped as 'staging' environment_role.
-            production_spaces: Kibana space names mapped as 'production' environment_role.
-        If not provided, falls back to literal 'staging'/'production' space names.
+            staging_scopes:    ``(siem_id, space)`` pairs tagged
+                ``environment_role='staging'`` for the active client.
+            production_scopes: ``(siem_id, space)`` pairs tagged
+                ``environment_role='production'`` for the active client.
+
+        If neither is provided, falls back to filtering by the literal
+        ``staging`` / ``production`` space-name strings — used only by the
+        stand-alone (no-client) admin views.
+
+        Composite ``(siem_id, space)`` predicates are mandatory whenever a
+        client scope is in play. Filtering by space-name alone leaks rules
+        across SIEMs that share a Kibana space name (AGENTS.md §8.2 g4).
         """
         with self.get_connection() as conn:
             # ── Build staging filter ──
-            if staging_spaces:
-                ph = ", ".join("?" for _ in staging_spaces)
-                staging_df = conn.execute(
-                    f"SELECT enabled, score, severity, name FROM detection_rules "
-                    f"WHERE LOWER(space) IN ({ph})",
-                    [s.lower() for s in staging_spaces],
-                ).df()
+            if staging_scopes is not None:
+                if not staging_scopes:
+                    import pandas as _pd
+                    staging_df = _pd.DataFrame(
+                        columns=['enabled', 'score', 'severity', 'name']
+                    )
+                else:
+                    frag, params = _scope_predicate(staging_scopes)
+                    staging_df = conn.execute(
+                        f"SELECT enabled, score, severity, name "
+                        f"FROM detection_rules WHERE {frag}",
+                        params,
+                    ).df()
             else:
                 staging_df = conn.execute(
                     "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
                 ).df()
 
             # ── Build production count ──
-            if production_spaces:
-                ph = ", ".join("?" for _ in production_spaces)
-                prod_result = conn.execute(
-                    f"SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) IN ({ph})",
-                    [s.lower() for s in production_spaces],
-                ).fetchone()
+            if production_scopes is not None:
+                if not production_scopes:
+                    prod_result = (0,)
+                else:
+                    frag, params = _scope_predicate(production_scopes)
+                    prod_result = conn.execute(
+                        f"SELECT COUNT(*) FROM detection_rules WHERE {frag}",
+                        params,
+                    ).fetchone()
             else:
                 prod_result = conn.execute(
                     "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
@@ -3358,13 +3498,16 @@ class DatabaseService:
     
     def get_threat_landscape_metrics(self, client_id: str = None) -> "ThreatLandscapeMetrics":
         """Calculate comprehensive threat landscape metrics.
-        If client_id provided, coverage is scoped to that client's production SIEM spaces."""
+        If client_id provided, coverage is scoped to that client's production
+        ``(siem_id, space)`` pairs. Composite scope is mandatory — a
+        space-only filter would leak TTP coverage from any other SIEM that
+        shares a Kibana space name (AGENTS.md §8.2 g4)."""
         from app.models.threats import ThreatLandscapeMetrics
-        
-        # Pre-fetch client production spaces outside the main connection
-        prod_spaces = None
+
+        # Pre-fetch composite scopes outside the main connection.
+        prod_scopes = None
         if client_id:
-            prod_spaces = self.get_client_siem_spaces(client_id, "production")
+            prod_scopes = self.get_client_siem_scopes(client_id, "production")
         
         with self.get_connection() as conn:
             # Threat actors are intentionally global (MITRE ATT&CK / OpenCTI
@@ -3394,16 +3537,16 @@ class DatabaseService:
                     return ThreatLandscapeMetrics()
             
             # Get covered TTPs inline (avoid nested connection)
-            if prod_spaces is not None:
-                if prod_spaces:
-                    placeholders = ", ".join("?" for _ in prod_spaces)
+            if prod_scopes is not None:
+                if prod_scopes:
+                    frag, params = _scope_predicate(prod_scopes)
                     covered_result = conn.execute(f"""
-                        SELECT DISTINCT unnest(mitre_ids) 
-                        FROM detection_rules 
-                        WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
-                    """, [s.lower() for s in prod_spaces]).fetchall()
+                        SELECT DISTINCT unnest(mitre_ids)
+                        FROM detection_rules
+                        WHERE enabled = 1 AND {frag}
+                    """, params).fetchall()
                 else:
-                    # Client has 0 SIEMs — no covered TTPs
+                    # Client has 0 mapped (siem,space) pairs — no covered TTPs
                     covered_result = []
             else:
                 covered_result = conn.execute("""
@@ -3500,19 +3643,22 @@ class DatabaseService:
         validation_data = self._load_validation_data()
         now = datetime.now()
         
-        # Resolve allowed spaces for tenant scoping
-        allowed_spaces = None
+        # Resolve composite (siem_id, space) scopes for tenant scoping.
+        # Composite key is mandatory — a space-only allow-list bleeds rules
+        # between SIEMs that share a Kibana space name (AGENTS.md §8.2 g4).
+        allowed_scopes: Optional[List[Tuple[str, str]]] = None
         if client_id:
-            allowed_spaces = self.get_client_siem_spaces(client_id)
-        
+            allowed_scopes = self.get_client_siem_scopes(client_id)
+
         with self.get_connection() as conn:
             # ── Rule Health Metrics ──
-            if allowed_spaces is not None:
-                if allowed_spaces:
-                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+            if allowed_scopes is not None:
+                if allowed_scopes:
+                    frag, scope_params = _scope_predicate(allowed_scopes)
                     rules_df = conn.execute(
-                        f"SELECT enabled, score, space, severity, name FROM detection_rules WHERE space IN ({placeholders})",
-                        list(allowed_spaces),
+                        f"SELECT enabled, score, space, severity, name "
+                        f"FROM detection_rules WHERE {frag}",
+                        scope_params,
                     ).df()
                 else:
                     # Client has 0 SIEMs — empty result
@@ -3587,16 +3733,18 @@ class DatabaseService:
                 )
             
             # ── Promotion Metrics ──
-            if allowed_spaces is not None:
-                if allowed_spaces:
-                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+            if allowed_scopes is not None:
+                if allowed_scopes:
+                    frag, scope_params = _scope_predicate(allowed_scopes)
                     staging_df = conn.execute(
-                        f"SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging' AND space IN ({placeholders})",
-                        list(allowed_spaces),
+                        f"SELECT enabled, score, severity, name FROM detection_rules "
+                        f"WHERE LOWER(space) = 'staging' AND {frag}",
+                        scope_params,
                     ).df()
                     prod_result = conn.execute(
-                        f"SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production' AND space IN ({placeholders})",
-                        list(allowed_spaces),
+                        f"SELECT COUNT(*) FROM detection_rules "
+                        f"WHERE LOWER(space) = 'production' AND {frag}",
+                        scope_params,
                     ).fetchone()
                 else:
                     # Client has 0 SIEMs — empty staging/production
@@ -3680,15 +3828,15 @@ class DatabaseService:
                 "SELECT ttp_count, ttps, origin, source FROM threat_actors"
             ).df()
             
-            # Covered TTPs (reuse same connection, scoped to client's spaces)
-            if allowed_spaces is not None:
-                if allowed_spaces:
-                    placeholders = ", ".join(["?"] * len(allowed_spaces))
+            # Covered TTPs (reuse same connection, scoped to client's pairs)
+            if allowed_scopes is not None:
+                if allowed_scopes:
+                    frag, scope_params = _scope_predicate(allowed_scopes)
                     covered_result = conn.execute(f"""
                         SELECT DISTINCT unnest(mitre_ids) 
                         FROM detection_rules 
-                        WHERE enabled = 1 AND space IN ({placeholders})
-                    """, list(allowed_spaces)).fetchall()
+                        WHERE enabled = 1 AND {frag}
+                    """, scope_params).fetchall()
                 else:
                     # Client has 0 SIEMs — no covered TTPs
                     covered_result = []
@@ -5647,7 +5795,7 @@ class DatabaseService:
         NULL/empty spaces are normalised to 'default' (Kibana's built-in space).
 
         .. warning::
-           This method returns space names ONLY \u2014 it is NOT safe for filtering
+           This method returns space names ONLY — it is NOT safe for filtering
            ``detection_rules`` rows when two SIEMs (different tenants) share a
            Kibana space name (e.g. both expose ``two``). Use
            :py:meth:`get_client_siem_scopes` for any query that selects from
@@ -5675,7 +5823,7 @@ class DatabaseService:
         This is the tenant-isolation primitive for any query that pulls from
         ``detection_rules`` (whose PK is ``(rule_id, siem_id)`` since
         Migration 37). Filtering by space-name alone is insufficient when two
-        SIEMs share a Kibana space name \u2014 every detection_rules row scoped to
+        SIEMs share a Kibana space name — every detection_rules row scoped to
         that space would surface for every client mapped to either SIEM,
         leaking rules across tenants. This method preserves the (siem_id,
         space) pairing so callers can build a ``(siem_id = ? AND
@@ -5700,52 +5848,59 @@ class DatabaseService:
             return [(sid, sp) for sid, sp in rows if sid and sp]
 
     def get_covered_ttps_for_client(self, client_id: str, environment_role: str = "production") -> Set[str]:
-        """Get TTPs covered by enabled detection rules in spaces linked to client for a given role."""
-        spaces = self.get_client_siem_spaces(client_id, environment_role)
-        if not spaces:
+        """Get TTPs covered by enabled detection rules for a client's role-tagged
+        ``(siem_id, space)`` pairs. Composite key is mandatory — a space-only
+        filter would leak TTP coverage from a SIEM the tenant does not map
+        (AGENTS.md §8.2 g4)."""
+        scopes = self.get_client_siem_scopes(client_id, environment_role)
+        if not scopes:
             return set()
+        frag, params = _scope_predicate(scopes)
         with self.get_connection() as conn:
-            placeholders = ", ".join("?" for _ in spaces)
             result = conn.execute(f"""
                 SELECT DISTINCT unnest(mitre_ids)
                 FROM detection_rules
-                WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
-            """, [s.lower() for s in spaces]).fetchall()
+                WHERE enabled = 1 AND {frag}
+            """, params).fetchall()
             return {row[0].upper() for row in result if row[0]}
 
     def get_technique_rule_counts_for_client(self, client_id: str, environment_role: str = "production") -> Dict[str, int]:
-        """Get count of enabled rules per MITRE technique for client's spaces by role."""
-        spaces = self.get_client_siem_spaces(client_id, environment_role)
-        if not spaces:
+        """Get count of enabled rules per MITRE technique for the client's
+        role-tagged ``(siem_id, space)`` pairs. Composite key is mandatory
+        (AGENTS.md §8.2 g4)."""
+        scopes = self.get_client_siem_scopes(client_id, environment_role)
+        if not scopes:
             return {}
+        frag, params = _scope_predicate(scopes)
         with self.get_connection() as conn:
-            placeholders = ", ".join("?" for _ in spaces)
             result = conn.execute(f"""
                 WITH unnested AS (
                     SELECT UPPER(unnest(mitre_ids)) as technique
                     FROM detection_rules
-                    WHERE enabled = 1 AND LOWER(space) IN ({placeholders})
+                    WHERE enabled = 1 AND {frag}
                 )
                 SELECT technique, COUNT(*) as rule_count
                 FROM unnested
                 WHERE technique IS NOT NULL
                 GROUP BY technique
-            """, [s.lower() for s in spaces]).fetchall()
+            """, params).fetchall()
             return {row[0]: row[1] for row in result if row[0]}
 
     def get_rules_for_client(self, client_id: str, environment_role: str = None) -> List[Dict]:
         """Get all detection rules visible to a client via linked SIEMs.
-        If environment_role is specified, restrict to that role's spaces only."""
-        spaces = self.get_client_siem_spaces(client_id, environment_role)
-        if not spaces:
+        Filtered by composite ``(siem_id, space)`` so two SIEMs sharing a
+        Kibana space name never bleed into each other (AGENTS.md §8.2 g4).
+        If ``environment_role`` is specified, restrict to that role's pairs only."""
+        scopes = self.get_client_siem_scopes(client_id, environment_role)
+        if not scopes:
             return []
+        frag, params = _scope_predicate(scopes)
         with self.get_connection() as conn:
-            placeholders = ", ".join("?" for _ in spaces)
             rows = conn.execute(f"""
                 SELECT * FROM detection_rules
-                WHERE LOWER(space) IN ({placeholders})
+                WHERE {frag}
                 ORDER BY name
-            """, [s.lower() for s in spaces]).fetchall()
+            """, params).fetchall()
             if not rows:
                 return []
             columns = [desc[0] for desc in conn.description]

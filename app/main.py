@@ -16,7 +16,7 @@ import os
 import time
 
 from app.config import get_settings
-from app.api.deps import CurrentUser, DbDep
+from app.api.deps import CurrentUser, DbDep, ActiveClient
 from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
@@ -136,10 +136,19 @@ def get_last_sync_time() -> str:
     return dt.strftime("%d %b %H:%M")
 
 
-async def scheduled_sync(force_mapping=False):
-    """Background task: Sync detection rules from Elastic every 60 minutes."""
+async def scheduled_sync(force_mapping=False, client_id: str | None = None):
+    """Background task: Sync detection rules from Elastic every 60 minutes.
+
+    client_id: optional tenant scope. When provided, only the (siem_id, space)
+    pairs in that client's ``client_siem_map`` rows are fetched. The unattended
+    interval timer always calls this with ``client_id=None`` so global drift
+    still gets reconciled.
+    """
     settings = get_settings()
-    logger.info(f"Scheduled sync triggered (interval: {settings.sync_interval_minutes}m)")
+    scope = f" (client_id={client_id})" if client_id else ""
+    logger.info(
+        f"Scheduled sync triggered{scope} (interval: {settings.sync_interval_minutes}m)"
+    )
     
     _update_sync_status("running", "Connecting to Elastic...")
     
@@ -157,7 +166,7 @@ async def scheduled_sync(force_mapping=False):
         _update_sync_status("running", "Fetching detection rules...")
         
         # Run the actual sync
-        result = await trigger_sync(force_mapping=force_mapping)
+        result = await trigger_sync(force_mapping=force_mapping, client_id=client_id)
         
         count = result if isinstance(result, int) else 0
         _update_sync_status("complete", f"Synced {count} rules from Elastic", rule_count=count)
@@ -1419,9 +1428,9 @@ def create_app() -> FastAPI:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
         
-        allowed_spaces = db.get_client_siem_spaces(_cid) if _cid else None
+        allowed_scopes = db.get_client_siem_scopes(_cid) if _cid else None
         
-        metrics = db.get_rule_health_metrics(allowed_spaces=allowed_spaces)
+        metrics = db.get_rule_health_metrics(allowed_scopes=allowed_scopes)
         # Derive spaces from metrics (avoids a second DB connection)
         spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
 
@@ -1683,13 +1692,20 @@ def create_app() -> FastAPI:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
 
-        staging_spaces = db.get_client_siem_spaces(_cid, environment_role="staging") if _cid else []
-        production_spaces = db.get_client_siem_spaces(_cid, environment_role="production") if _cid else []
+        staging_scopes = db.get_client_siem_scopes(_cid, environment_role="staging") if _cid else []
+        production_scopes = db.get_client_siem_scopes(_cid, environment_role="production") if _cid else []
         
         metrics = db.get_promotion_metrics(
-            staging_spaces=staging_spaces or None,
-            production_spaces=production_spaces or None,
+            staging_scopes=staging_scopes or None,
+            production_scopes=production_scopes or None,
         )
+
+        # Template historically received flat space-name lists for
+        # display/filter dropdowns. Derive them from the composite scopes
+        # so the contract is preserved without re-introducing space-only
+        # tenant filtering (AGENTS.md §8.2 g4).
+        staging_spaces = sorted({sp for _, sp in staging_scopes})
+        production_spaces = sorted({sp for _, sp in production_scopes})
         
         return render_template(
             "pages/promotion.html",
@@ -1984,8 +2000,19 @@ def create_app() -> FastAPI:
     # --- SYNC API ---
     
     @app.post("/api/sync/elastic", response_class=HTMLResponse)
-    async def trigger_elastic_sync(request: Request, user: CurrentUser, background_tasks: BackgroundTasks):
-        """Trigger manual Elastic sync."""
+    async def trigger_elastic_sync(
+        request: Request,
+        user: CurrentUser,
+        client_id: ActiveClient,
+        background_tasks: BackgroundTasks,
+        scope: str = "client",
+    ):
+        """Trigger manual Elastic sync.
+
+        scope: ``client`` (default) restricts the sync to the active tenant's
+        mapped (siem_id, space) pairs only. ``all`` falls back to a global
+        sync that iterates every active SIEM × every mapped space.
+        """
         import asyncio
         
         # Reset status and start sync
@@ -1994,7 +2021,8 @@ def create_app() -> FastAPI:
         _sync_status["rule_count"] = 0
         _update_sync_status("running", "Initialising sync...")
         
-        asyncio.create_task(scheduled_sync())
+        sync_client_id = client_id if scope == "client" else None
+        asyncio.create_task(scheduled_sync(client_id=sync_client_id))
         
         # Return a live sync tracker that polls for status
         return HTMLResponse("""

@@ -3,7 +3,7 @@ Pydantic models for Detection Rules and Rule Health metrics.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from enum import Enum
 
@@ -171,7 +171,11 @@ class RuleFilters(BaseModel):
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc
     page: int = 1
     page_size: int = 24
-    allowed_spaces: Optional[List[str]] = None  # tenant-scoped space allow-list
+    # Composite (siem_id, space) allow-list — the ONLY safe tenant-scoping
+    # primitive when two SIEMs share a Kibana space name. Use
+    # DatabaseService.get_client_siem_scopes() to populate. See AGENTS.md
+    # §8.2 guarantee 4 / §8.3 anti-patterns.
+    allowed_scopes: Optional[List[Tuple[str, str]]] = None
 
 
 class RuleListResponse(BaseModel):

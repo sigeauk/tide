@@ -389,10 +389,15 @@ def _move_system_check_inner(system_id, source_client_id, target_client_id, db):
         applied_count = conn.execute(
             "SELECT COUNT(*) FROM applied_detections WHERE system_id = ?", [system_id]).fetchone()[0]
 
-    # SIEM comparison via shared DB
-    source_spaces = set(db.get_client_siem_spaces(source_client_id, "production"))
-    target_spaces = set(db.get_client_siem_spaces(target_client_id, "production"))
-    siem_compatible = bool(source_spaces & target_spaces)
+    # SIEM compatibility check: are the source and target clients mapped to
+    # any of the SAME (siem_id, space) production pair? Composite key is
+    # mandatory — two clients pointing at SIEM_A 'default' and SIEM_B
+    # 'default' are NOT compatible even though their space names match
+    # (AGENTS.md §8.2 g4).
+    source_scopes = set(db.get_client_siem_scopes(source_client_id, "production"))
+    target_scopes = set(db.get_client_siem_scopes(target_client_id, "production"))
+    shared_scopes = source_scopes & target_scopes
+    siem_compatible = bool(shared_scopes)
 
     return {
         "system_id": system_id,
@@ -402,9 +407,9 @@ def _move_system_check_inner(system_id, source_client_id, target_client_id, db):
         "software_count": software_count,
         "applied_detections_count": applied_count,
         "siem_compatible": siem_compatible,
-        "source_spaces": sorted(source_spaces),
-        "target_spaces": sorted(target_spaces),
-        "shared_spaces": sorted(source_spaces & target_spaces),
+        "source_spaces": sorted({sp for _, sp in source_scopes}),
+        "target_spaces": sorted({sp for _, sp in target_scopes}),
+        "shared_spaces": sorted({sp for _, sp in shared_scopes}),
     }
 
 

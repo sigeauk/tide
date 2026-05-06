@@ -250,12 +250,23 @@ level: medium"></textarea>
                 
                 <div class="filter-group">
                     <label>SIEM</label>
+                    {# Pick a sensible default: first production target,
+                       else first staging, else first available. Falls back
+                       to the placeholder when no targets exist so the
+                       operator always sees explanatory text instead of a
+                       blank box. #}
+                    {% set _prod = deploy_targets | selectattr('environment_role', 'equalto', 'production') | list %}
+                    {% set _stg  = deploy_targets | selectattr('environment_role', 'equalto', 'staging')    | list %}
+                    {% set _default_target = (_prod[0] if _prod else (_stg[0] if _stg else (deploy_targets[0] if deploy_targets else None))) %}
                     <select id="deploy-space-select" name="space">
-                        {% for target in deploy_targets %}
-                        <option value="{{ target.space }}" data-siem-id="{{ target.siem_id }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
-                        {% endfor %}
                         {% if not deploy_targets %}
-                        <option value="" disabled selected>No SIEMs linked</option>
+                        <option value="" disabled selected>No SIEMs linked — link one in Management</option>
+                        {% else %}
+                        <option value="" disabled {% if not _default_target %}selected{% endif %}>Select target SIEM / space…</option>
+                        {% for target in deploy_targets %}
+                        <option value="{{ target.space }}" data-siem-id="{{ target.siem_id }}"
+                                {% if _default_target and target.siem_id == _default_target.siem_id and target.space == _default_target.space %}selected{% endif %}>{{ target.label }}</option>
+                        {% endfor %}
                         {% endif %}
                     </select>
                 </div>
@@ -412,10 +423,22 @@ window.initSigmaPage = function(retryCount = 0) {
         }
     } catch (_e) {}
     try {
+        // Only restore the saved space if it actually corresponds to one of
+        // the rendered options. Without this guard a stale localStorage value
+        // (e.g. the literal "staging" left over from a tenant whose spaces
+        // are now ['one','two','production']) silently blanks the SIEM
+        // dropdown on every page load and the operator can't deploy.
         var _savedSpace = localStorage.getItem('pref-sigma-default-space');
         var _spaceSelect = document.getElementById('deploy-space-select');
-        if (_spaceSelect) {
-            _spaceSelect.value = _savedSpace || 'staging';
+        if (_spaceSelect && _savedSpace) {
+            var _hasOpt = false;
+            for (var _i = 0; _i < _spaceSelect.options.length; _i++) {
+                if (_spaceSelect.options[_i].value === _savedSpace) { _hasOpt = true; break; }
+            }
+            if (_hasOpt) {
+                _spaceSelect.value = _savedSpace;
+            }
+            // else: keep the server-rendered default (production > staging > first)
         }
     } catch (_e) {}
     window._syncDeploySiemId = function() {

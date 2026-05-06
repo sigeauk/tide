@@ -79,6 +79,7 @@ def _ensure_tenant_detection_rules_schema(
         existing = set()
 
     canonical_names = {name for name, _ in _TENANT_DETECTION_RULES_COLUMNS}
+    pk_not_null = ("rule_id", "siem_id", "space")
 
     if not existing:
         logger.info(
@@ -86,34 +87,61 @@ def _ensure_tenant_detection_rules_schema(
             "(%d columns)", label, len(_TENANT_DETECTION_RULES_COLUMNS),
         )
         col_defs = ",\n            ".join(
-            f"{n} {t}" + (" NOT NULL" if n in ("rule_id", "siem_id") else "")
+            f"{n} {t}" + (" NOT NULL" if n in pk_not_null else "")
             for n, t in _TENANT_DETECTION_RULES_COLUMNS
         )
         conn.execute(f"""
             CREATE TABLE {table_ref} (
                 {col_defs},
-                PRIMARY KEY (rule_id, siem_id)
+                PRIMARY KEY (rule_id, siem_id, space)
             )
         """)
         return
 
     # Pre-4.0.13 schema \u2014 no siem_id column at all. Cannot ALTER in a
     # NOT NULL PK column on a non-empty table; cache-only data, safe to drop.
+    # Pre-4.1.12 PK was (rule_id, siem_id) which collides when the same
+    # SIEM exposes the same rule in two spaces. If we detect the legacy
+    # 2-column PK (or no siem_id at all), drop and recreate — cache only,
+    # next sync repopulates.
+    needs_pk_rebuild = False
     if "siem_id" not in existing:
+        needs_pk_rebuild = True
+        legacy_reason = "missing siem_id (pre-4.0.13 schema)"
+    else:
+        try:
+            # DuckDB PRAGMA table_info columns:
+            #   row[0]=cid (int), row[1]=name, row[2]=type,
+            #   row[3]=notnull, row[4]=dflt_value, row[5]=pk
+            # row[5] is the 1-based PK ordinal position (0 = not in PK).
+            pk_cols = [
+                row[1] for row in conn.execute(
+                    f"PRAGMA table_info({table_ref})"
+                ).fetchall() if row[5]
+            ]
+        except Exception:
+            pk_cols = []
+        if pk_cols and "space" not in pk_cols:
+            needs_pk_rebuild = True
+            legacy_reason = (
+                f"PK {pk_cols} predates 4.1.12 (Migration 44 needs space in PK)"
+            )
+
+    if needs_pk_rebuild:
         logger.warning(
-            "%s DB: detection_rules missing siem_id (pre-4.0.13 schema) \u2014 "
-            "dropping and recreating from canonical schema. The next sync "
-            "will repopulate.", label,
+            "%s DB: detection_rules %s — dropping and recreating from "
+            "canonical schema. The next sync will repopulate.",
+            label, legacy_reason,
         )
         conn.execute(f"DROP TABLE IF EXISTS {table_ref}")
         col_defs = ",\n            ".join(
-            f"{n} {t}" + (" NOT NULL" if n in ("rule_id", "siem_id") else "")
+            f"{n} {t}" + (" NOT NULL" if n in pk_not_null else "")
             for n, t in _TENANT_DETECTION_RULES_COLUMNS
         )
         conn.execute(f"""
             CREATE TABLE {table_ref} (
                 {col_defs},
-                PRIMARY KEY (rule_id, siem_id)
+                PRIMARY KEY (rule_id, siem_id, space)
             )
         """)
         return
@@ -628,11 +656,21 @@ def run_mitre_sync():
             logger.debug(f"sync_history insert (mitre) failed: {_exc!r}")
 
 
-def run_elastic_sync(force_mapping=False):
+def run_elastic_sync(force_mapping=False, client_id: str | None = None):
     """
     Synchronous function to fetch rules from Elastic and save to database.
     This runs in a thread pool to avoid blocking the async event loop.
     force_mapping: if True, skip lazy mapping and re-check all field mappings from Elastic.
+    client_id: if provided, restrict the sync to ONLY the (siem_id, space) pairs
+               in ``client_siem_map WHERE client_id = ?`` for that tenant. SIEMs
+               not mapped to this client are skipped entirely; mapped SIEMs are
+               fetched only for the spaces this client has linked. The global
+               scheduled sync (no client_id) preserves the previous behaviour
+               of iterating every active SIEM × every mapped space, so any
+               (siem, space) pair that no longer belongs to a client still
+               gets reconciled on the next interval.
+               Per AGENTS.md §8.2 g4 / §8.3 the scope axis is the composite
+               ``(siem_id, space)`` pair — NEVER ``space`` alone.
     """
     # Determine the app directory (where elastic_helper.py lives)
     # sync.py is at: app/services/sync.py
@@ -685,6 +723,33 @@ def run_elastic_sync(force_mapping=False):
                                "Add a SIEM via the Management page.")
                 return 0
 
+            # Per-client scope (optional). When client_id is set we collapse
+            # this client's client_siem_map rows into {siem_id: {space, ...}}
+            # and use it to (a) drop SIEMs the client isn't mapped to and
+            # (b) override db.get_siem_spaces(siem_id) (which is global)
+            # with just the spaces this client has linked.
+            client_scope: dict[str, set[str]] | None = None
+            if client_id:
+                pairs = db.get_client_siem_scopes(client_id) or []
+                client_scope = {}
+                for sid, sp in pairs:
+                    client_scope.setdefault(sid, set()).add(sp)
+                if not client_scope:
+                    logger.warning(
+                        f"Per-client sync requested for client_id={client_id} "
+                        f"but client_siem_map has no rows for this client — "
+                        f"nothing to sync."
+                    )
+                    return 0
+                before = len(siems)
+                siems = [s for s in siems if s.get("id") in client_scope]
+                logger.info(
+                    f"Per-client sync: client_id={client_id} restricted to "
+                    f"{len(siems)}/{before} SIEM(s), "
+                    f"{sum(len(v) for v in client_scope.values())} "
+                    f"(siem,space) pair(s)."
+                )
+
             _t_fetch = _time.perf_counter()
             import pandas as _pd
             frames = []
@@ -707,7 +772,12 @@ def run_elastic_sync(force_mapping=False):
                 kurl = full.get("kibana_url") or siem.get("kibana_url")
                 token = full.get("api_token_enc")
                 es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
-                spaces = db.get_siem_spaces(siem["id"])
+                if client_scope is not None:
+                    # Per-client mode: only the spaces this client has linked
+                    # for this SIEM. Sorted for stable log output.
+                    spaces = sorted(client_scope.get(siem["id"], set()))
+                else:
+                    spaces = db.get_siem_spaces(siem["id"])
                 if not spaces:
                     # No client_siem_map row yet. Two reasons this can
                     # happen: (a) brand-new standalone deployment where the
@@ -766,7 +836,7 @@ def run_elastic_sync(force_mapping=False):
                 # SIEM, otherwise the fetcher would think a rule already has
                 # mapping data when really another SIEM owns that row.
                 per_siem_known = {
-                    rid for (rid, sid) in existing_rule_keys if sid == siem_id
+                    rid for (rid, sid, _sp) in existing_rule_keys if sid == siem_id
                 }
                 logger.info(
                     f"Fetching from SIEM '{siem.get('label')}' (siem_id={siem_id}) "
@@ -828,11 +898,16 @@ def run_elastic_sync(force_mapping=False):
                 audit_records = df.to_dict('records')
                 
                 # Lazy Mapping: restore scores and mapping data for rules that were skipped.
-                # Key by (rule_id, siem_id) since 4.0.13 \u2014 a single rule_id can exist in
-                # multiple SIEMs and each must restore from its own row.
+                # Key by (rule_id, siem_id, space) since 4.1.12 (Migration 44) — a single
+                # rule_id can exist in multiple SIEMs and the same rule can be exposed in
+                # multiple spaces of one SIEM, each requiring its own restored row.
                 restored_count = 0
                 for rec in audit_records:
-                    key = (rec.get('rule_id'), rec.get('siem_id'))
+                    key = (
+                        rec.get('rule_id'),
+                        rec.get('siem_id'),
+                        rec.get('space') or rec.get('space_id') or 'default',
+                    )
                     if key in existing_rule_data and not rec.get('results'):
                         existing = existing_rule_data[key]
                         # Restore mapping results from existing raw_data
@@ -939,11 +1014,16 @@ def run_elastic_sync(force_mapping=False):
         return -1
 
 
-async def trigger_sync(force_mapping=False):
+async def trigger_sync(force_mapping=False, client_id: str | None = None):
     """
     Async wrapper to run the sync in a thread pool.
     Use this from async endpoints.
+
+    client_id: optional tenant scope. See ``run_elastic_sync`` for semantics.
     """
     import asyncio
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: run_elastic_sync(force_mapping=force_mapping))
+    return await loop.run_in_executor(
+        None,
+        lambda: run_elastic_sync(force_mapping=force_mapping, client_id=client_id),
+    )

@@ -32,7 +32,7 @@ def list_staging_rules(
     page_size: int = Query(10, ge=1, le=50),
 ):
     """List detection rules from the client's staging environment-role spaces."""
-    staging_spaces = db.get_client_siem_spaces(client_id, environment_role="staging")
+    staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
 
     filters = RuleFilters(
         search=search if search else None,
@@ -41,7 +41,10 @@ def list_staging_rules(
         sort_by=sort_by,
         page=page,
         page_size=page_size,
-        allowed_spaces=staging_spaces if staging_spaces else ["__none__"],
+        # Composite (siem_id, space) pairs — a space-only allow-list would
+        # leak production-tagged rules into the staging view when two SIEMs
+        # share a Kibana space name (AGENTS.md §8.2 g4).
+        allowed_scopes=staging_scopes if staging_scopes else [],
     )
     
     rules, total, last_sync = db.get_rules(filters=filters)
@@ -72,11 +75,11 @@ def get_promotion_metrics(
 ):
     """Get metrics for staging rules only."""
     from app.main import get_last_sync_time
-    staging_spaces = db.get_client_siem_spaces(client_id, environment_role="staging")
-    production_spaces = db.get_client_siem_spaces(client_id, environment_role="production")
+    staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
+    production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
     metrics = db.get_promotion_metrics(
-        staging_spaces=staging_spaces,
-        production_spaces=production_spaces,
+        staging_scopes=staging_scopes,
+        production_scopes=production_scopes,
     )
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -323,11 +326,17 @@ async def sync_rules(
     request: Request,
     db: DbDep,
     user: RequireUser,
+    client_id: ActiveClient,
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
     force_mapping: bool = Query(False),
+    scope: str = Query("client", regex="^(client|all)$"),
 ):
-    """Trigger an immediate sync of rules from Elastic."""
+    """Trigger an immediate sync of rules from Elastic.
+
+    scope: ``client`` (default) restricts to the active tenant's mapped
+    (siem_id, space) pairs. ``all`` falls back to a global sync.
+    """
     import asyncio
     from app.main import scheduled_sync, _sync_status, _update_sync_status
     
@@ -338,7 +347,8 @@ async def sync_rules(
     label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
     _update_sync_status("running", label)
     
-    asyncio.create_task(scheduled_sync(force_mapping=force_mapping))
+    sync_client_id = client_id if scope == "client" else None
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=sync_client_id))
     
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(

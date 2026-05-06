@@ -314,10 +314,13 @@ def _create_tenant_schema(conn):
     """)
 
     # ── Detection rules ──
-    # PK is (rule_id, siem_id) since 4.0.13 (Migration 37 in shared schema):
-    # the same Elastic prebuilt rule can exist in multiple SIEMs and the old
-    # (rule_id, space) PK collided. ``space`` is retained as a data column
-    # because the Kibana preview/Test Rule URL still needs it.
+    # PK is (rule_id, siem_id, space) since 4.1.12 (Migration 44 in shared
+    # schema). The earlier (rule_id, siem_id) PK from 4.0.13 collided
+    # whenever an operator exposed the same Elastic prebuilt rule in more
+    # than one Kibana space inside a single SIEM (e.g. ``one`` and ``two``
+    # for staging vs production routing). Bumping the PK to include
+    # ``space`` lets those legitimately co-exist while preserving the
+    # cross-SIEM uniqueness fix from 4.0.13.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS detection_rules (
             rule_id VARCHAR NOT NULL,
@@ -326,7 +329,7 @@ def _create_tenant_schema(conn):
             severity VARCHAR,
             author VARCHAR,
             enabled INTEGER,
-            space VARCHAR,
+            space VARCHAR NOT NULL,
             score INTEGER,
             quality_score INTEGER,
             meta_score INTEGER,
@@ -344,7 +347,7 @@ def _create_tenant_schema(conn):
             mitre_ids VARCHAR[],
             raw_data JSON,
             client_id VARCHAR,
-            PRIMARY KEY (rule_id, siem_id)
+            PRIMARY KEY (rule_id, siem_id, space)
         )
     """)
 
