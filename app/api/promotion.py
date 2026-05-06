@@ -94,6 +94,7 @@ def get_promotion_rule_detail(
     user: CurrentUser,
     settings: SettingsDep,
     client_id: ActiveClient,
+    siem_id: Optional[str] = Query(None),
 ):
     """Get full rule details for modal display."""
     staging_siems = db.get_client_siems(client_id, environment_role="staging")
@@ -101,14 +102,30 @@ def get_promotion_rule_detail(
     # Try each staging (siem, space) until the rule is found. Scoped by
     # siem_id since 4.0.13 \u2014 multiple SIEMs may share a space name and the
     # rule we want to promote belongs to a specific one.
+    candidate_siems = staging_siems
+    if siem_id:
+        candidate_siems = [s for s in staging_siems if s.get("id") == siem_id]
     rule = None
-    for siem in staging_siems:
+    matches = []
+    for siem in candidate_siems:
         sp = siem.get("space")
         if not sp:
             continue
-        rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
-        if rule:
-            break
+        _rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
+        if _rule:
+            matches.append((siem, _rule))
+
+    if len(matches) == 1:
+        rule = matches[0][1]
+    elif len(matches) > 1:
+        return HTMLResponse(
+            '<div class="modal-overlay" onclick="this.remove()">'
+            '<div class="modal-content" onclick="event.stopPropagation()">'
+            '<p style="color: var(--color-danger);">Rule exists in multiple staging SIEMs. Re-open details from the specific SIEM card.</p>'
+            '<button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button>'
+            '</div></div>',
+            status_code=409,
+        )
     
     if not rule:
         return HTMLResponse(
@@ -140,6 +157,7 @@ async def promote_rule(
     db: DbDep,
     user: RequireUser,
     client_id: ActiveClient,
+    siem_id: Optional[str] = Query(None),
 ):
     """
     Promote a rule from the client's staging space to their production space.
@@ -172,19 +190,37 @@ async def promote_rule(
     # rule was actually fetched from. ``get_rule_by_id`` is called with the
     # explicit ``siem_id`` since 4.0.13 \u2014 prior versions silently picked
     # the first row matching (rule_id, space).
-    staging_spaces = [s["space"] for s in staging_siems if s.get("space")]
     rule = None
     source_space = None
     source_siem = None
-    for siem in staging_siems:
+    matches = []
+    candidate_siems = staging_siems
+    if siem_id:
+        candidate_siems = [s for s in staging_siems if s.get("id") == siem_id]
+        if not candidate_siems:
+            return HTMLResponse(
+                '<div class="toast toast-danger" onclick="this.remove()">'
+                'Selected source SIEM is not linked as staging for this client.'
+                '</div>',
+                status_code=400,
+            )
+    for siem in candidate_siems:
         sp = siem.get("space")
         if not sp:
             continue
-        rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
-        if rule:
-            source_space = sp
-            source_siem = siem
-            break
+        _rule = db.get_rule_by_id(rule_id, sp, siem_id=siem.get("id"))
+        if _rule:
+            matches.append((siem, sp, _rule))
+
+    if len(matches) == 1:
+        source_siem, source_space, rule = matches[0]
+    elif len(matches) > 1:
+        return HTMLResponse(
+            '<div class="toast toast-danger" onclick="this.remove()">'
+            'Promotion blocked: rule is present in multiple staging SIEMs. Retry from the specific SIEM context.'
+            '</div>',
+            status_code=409,
+        )
     
     if not rule:
         return HTMLResponse(
@@ -192,6 +228,14 @@ async def promote_rule(
             'Rule not found in staging environment.'
             '</div>',
             status_code=404
+        )
+
+    if len(production_siems) > 1:
+        return HTMLResponse(
+            '<div class="toast toast-danger" onclick="this.remove()">'
+            'Promotion blocked: multiple production SIEMs are linked. Keep one production target per client to avoid ambiguous routing.'
+            '</div>',
+            status_code=409,
         )
 
     target_siem = production_siems[0]

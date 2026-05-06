@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.1.10] - 2026-05-05
+## [4.1.11] - 2026-05-05
 
 ### Fixed
 
@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Strict-mode verification completed and passed.** Smoke runs hit authenticated tenant routes (`/rules`, `/api/rules`, `/api/rules/metrics`, `/promotion`, `/heatmap`, `/dashboard`) with `TIDE_ISOLATION_STRICT=1` enabled: all returned 200, no `RuntimeError`, and no `isolation_violation` log entries. Runtime was then returned to non-strict mode.
 
 - **KQL alias rules no longer fall into the "Field Mapping Issues: Index fields missing or not checked" false-negative path (`app/elastic_helper.py`, `test/test_esql_eval_extraction.py`).** Mapping extraction/validation previously branched only on `language in ["kuery", "lucene", "eql", "esql"]`. Rules arriving with `language="kql"` (alias seen in some import/export/upstream paths) skipped all extractors, produced an empty `results` set, and therefore rendered `score_mapping=0` with the generic red warning even for valid queries like `host.hostname: ("dev5t0012" OR "DEV5T0012" OR "dev5t0012.corp.uk")` that run cleanly in Kibana. Added `normalize_rule_language()` (`kql` -> `kuery`, case-insensitive) and applied it in the sync mapping path, score calculation path, and preview payload builder so KQL aliases are treated identically to Kuery while preserving ES|QL-specific index handling. Added regression coverage to assert alias normalization behavior.
+
+- **Outbound SIEM requests now fail closed unless SIEM identity is explicit and unambiguous (`app/api/rules.py`, `app/api/sigma.py`, `app/api/promotion.py`, `app/templates/pages/sigma.html`, `app/templates/pages/tactic_detail.html`, `app/templates/pages/promotion.html`, `app/templates/components/promotion_card.html`, `app/main.py`, `app/api/inventory.py`).** Removed deprecated "first SIEM matching this space" fallbacks in rule-test and sigma-deploy routes, and added hard checks that block requests when `siem_id` is missing or mismatched with the selected space. Promotion detail/promote flows now accept and pass `siem_id` from the card context, detect multiple staging matches, and block ambiguous promotions instead of selecting an arbitrary source/target SIEM. Sigma deploy forms now submit `siem_id` via hidden fields synchronized from the selected deploy target option.
+
+- **Linked-client SIEM cards no longer show another SIEM's rule count when the two instances share the same Kibana space name (`app/api/management.py:_render_client_siems_partial`, `app/templates/partials/client_siems.html`).** The partial already built the correct per-SIEM count map `siem_space_counts[siem_id][space]`, but the current-linked-SIEM rows still rendered from the legacy `siem_rule_counts[space]` fallback. In real deployments this produced the exact false signal that drove repeated relink/resync attempts: SIEM A's mapping could have 412 rules in `default`, while SIEM B had 3 rules in its own `default`, and the card for SIEM A showed `3 rules` because the final write to the flat `space -> count` dict won. The visible mismatch with Rule Health was expected because tenant rule reads were still scoped correctly; only the Management display was wrong. The partial now resolves counts from a new `siem_rule_counts_by_pair["<siem_id>|<space>"]` lookup, with the space-only dict left as a back-compat fallback for any unmigrated template.
 
 ## [4.1.9] - 2026-05-05
 

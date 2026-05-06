@@ -2916,6 +2916,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     # space-only ``siem_rule_counts`` dict is kept (last-writer-wins) only
     # for templates that have not been migrated to the per-SIEM map yet.
     siem_rule_counts: dict = {}
+    siem_rule_counts_by_pair: dict = {}
     siem_space_counts: dict = {}
     try:
         import duckdb
@@ -2931,6 +2932,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
         for sid, space, total, enabled in rows:
             entry = {"total": int(total), "enabled": int(enabled or 0)}
             siem_space_counts.setdefault(str(sid), {})[str(space)] = entry
+            siem_rule_counts_by_pair[f'{sid}|{str(space).lower()}'] = entry
             siem_rule_counts[str(space)] = entry  # legacy fallback only
     except Exception:
         pass
@@ -2997,6 +2999,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     html = template.render(
         client=client, client_siems=client_siems,
         available_siems=available_siems, siem_rule_counts=siem_rule_counts,
+        siem_rule_counts_by_pair=siem_rule_counts_by_pair,
         siem_space_counts=siem_space_counts,
         siem_spaces_by_id=siem_spaces_by_id,
         known_kibana_spaces=known_kibana_spaces,

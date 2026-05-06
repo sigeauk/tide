@@ -163,7 +163,7 @@
     });
     
     // Handle promotion confirmation modals
-    function showPromoteConfirm(ruleId, ruleName) {
+    function showPromoteConfirm(ruleId, ruleName, siemId) {
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
         modal.onclick = function(e) {
@@ -186,7 +186,7 @@
                     </button>
                     <button 
                         class="btn btn-primary"
-                        onclick="promoteRule('${ruleId}', this)">
+                        onclick="promoteRule('${ruleId}', '${siemId || ''}', this)">
                         Promote
                     </button>
                 </div>
@@ -196,11 +196,12 @@
     }
     
     // Actually perform the promotion via fetch
-    function promoteRule(ruleId, btn) {
+    function promoteRule(ruleId, siemId, btn) {
         btn.disabled = true;
         btn.innerHTML = 'Promoting...';
-        
-        fetch('/api/promotion/' + ruleId + '/promote', {
+
+        const promoteUrl = '/api/promotion/' + ruleId + '/promote' + (siemId ? ('?siem_id=' + encodeURIComponent(siemId)) : '');
+        fetch(promoteUrl, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'

@@ -1586,6 +1586,7 @@ def page_tactic_detail(request: Request, baseline_id: str, tactic_id: str, user:
         for s in client_siems:
             if s.get("space"):
                 deploy_targets.append({
+                    "siem_id": s["id"],
                     "space": s["space"],
                     "label": f'{s["label"]} ({s["environment_role"].title()})',
                     "environment_role": s["environment_role"],

@@ -229,10 +229,11 @@
                         <input type="hidden" name="raw_query" id="tc-deploy-query">
                         <input type="hidden" name="pipeline_file" id="tc-deploy-pipeline-file">
                         <input type="hidden" name="template_file" id="tc-deploy-template-file">
+                        <input type="hidden" name="siem_id" id="tc-deploy-siem-id">
                         {% if deploy_targets is defined and deploy_targets %}
-                        <select name="space" class="form-input" style="font-size:0.75rem;padding:0.2rem 0.4rem;">
+                        <select name="space" id="tc-deploy-space-select" class="form-input" style="font-size:0.75rem;padding:0.2rem 0.4rem;">
                             {% for target in deploy_targets %}
-                            <option value="{{ target.space }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
+                            <option value="{{ target.space }}" data-siem-id="{{ target.siem_id }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
                             {% endfor %}
                         </select>
                         <label style="font-size:0.72rem;display:flex;align-items:center;gap:0.25rem;">
@@ -370,6 +371,12 @@
             if (pf) document.getElementById('tc-deploy-pipeline-file').value = pf.value;
             var tf = document.getElementById('tc-template-file-select');
             if (tf) document.getElementById('tc-deploy-template-file').value = tf.value;
+            var ss = document.getElementById('tc-deploy-space-select');
+            var sid = document.getElementById('tc-deploy-siem-id');
+            if (ss && sid) {
+                var opt = ss.options[ss.selectedIndex];
+                sid.value = (opt && opt.dataset) ? (opt.dataset.siemId || '') : '';
+            }
         };
 
         // Deferred init — called when the section is first expanded

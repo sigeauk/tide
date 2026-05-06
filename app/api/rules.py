@@ -294,18 +294,17 @@ async def test_rule(
                 status_code=400,
             )
     else:
-        # Legacy fallback: first SIEM whose space matches. Logged at WARN so
-        # operators can see the deprecated path being exercised.
-        logger.warning(
-            "test_rule: siem_id missing for rule_id=%s space=%s client=%s — "
-            "falling back to first space-match (DEPRECATED, ambiguous when "
-            "multiple SIEMs share a space name; callers must pass siem_id)",
-            rule_id, space, client_id,
+        # Fail closed: selecting by space-name is ambiguous when two SIEMs
+        # share the same space id. The caller must provide siem_id (or the
+        # rule row must carry one) so request routing is deterministic.
+        return HTMLResponse(
+            '<div class="test-result test-error">'
+            "Cannot test rule: SIEM identifier missing for this rule. "
+            "Refresh rules and retry, or re-run sync so the rule carries "
+            "its source SIEM identity."
+            '</div>',
+            status_code=400,
         )
-        for s in client_siems:
-            if (s.get("space") or "default") == space:
-                siem = s
-                break
 
     if not siem or not siem.get("kibana_url") or not siem.get("api_token_enc"):
         return HTMLResponse(

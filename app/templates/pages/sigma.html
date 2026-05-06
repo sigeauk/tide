@@ -242,6 +242,7 @@ level: medium"></textarea>
             <form id="deploy-form" hx-post="/api/sigma/deploy" hx-target="#deploy-result" hx-swap="innerHTML" class="sigma-deploy-form">
                 <input type="hidden" name="yaml_content" id="deploy-yaml">
                 <input type="hidden" name="raw_query" id="deploy-query">
+                <input type="hidden" name="siem_id" id="deploy-siem-id">
                 
                 <button type="button" class="btn btn-secondary btn-sm" onclick="downloadQuery()">
                     {{ icon_text('download', 'Download', '14') }}
@@ -251,7 +252,7 @@ level: medium"></textarea>
                     <label>SIEM</label>
                     <select id="deploy-space-select" name="space">
                         {% for target in deploy_targets %}
-                        <option value="{{ target.space }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
+                        <option value="{{ target.space }}" data-siem-id="{{ target.siem_id }}" {% if target.environment_role == 'production' %}selected{% endif %}>{{ target.label }}</option>
                         {% endfor %}
                         {% if not deploy_targets %}
                         <option value="" disabled selected>No SIEMs linked</option>
@@ -417,6 +418,20 @@ window.initSigmaPage = function(retryCount = 0) {
             _spaceSelect.value = _savedSpace || 'staging';
         }
     } catch (_e) {}
+    window._syncDeploySiemId = function() {
+        var _spaceSelect = document.getElementById('deploy-space-select');
+        var _siemInput = document.getElementById('deploy-siem-id');
+        if (!_spaceSelect || !_siemInput) return;
+        var _opt = _spaceSelect.options[_spaceSelect.selectedIndex];
+        _siemInput.value = (_opt && _opt.dataset) ? (_opt.dataset.siemId || '') : '';
+    };
+    var _deploySelect = document.getElementById('deploy-space-select');
+    if (_deploySelect) {
+        _deploySelect.addEventListener('change', function() {
+            if (window._syncDeploySiemId) window._syncDeploySiemId();
+        });
+    }
+    if (window._syncDeploySiemId) window._syncDeploySiemId();
 
     // Auto-open if there's a technique filter
     {% if technique_filter %}
@@ -659,6 +674,7 @@ window.initSigmaPage = function(retryCount = 0) {
             const rqs = document.getElementById('raw-query-store');
             const dq = document.getElementById('deploy-query');
             if (rqs && dq) dq.value = rqs.value;
+            if (window._syncDeploySiemId) window._syncDeploySiemId();
         });
     }
     
@@ -814,6 +830,7 @@ window.prepareDeployForm = function() {
     if (rawQueryStore && deployQuery) {
         deployQuery.value = rawQueryStore.value;
     }
+    if (window._syncDeploySiemId) window._syncDeploySiemId();
     // 3. Pipeline file selections (field + index)
     var _combined = window._syncPipelineFiles ? window._syncPipelineFiles() : '';
     var dpf = document.getElementById('deploy-pipeline-file');

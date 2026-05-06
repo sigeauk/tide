@@ -19,7 +19,8 @@
 {% if client_siems %}
 <div class="client-list">
     {% for s in client_siems | sort(attribute='environment_role') %}
-    {% set rc = siem_rule_counts.get(s.space, {}) if siem_rule_counts is defined and siem_rule_counts else {} %}
+    {% set pair_key = s.id ~ '|' ~ ((s.space or 'default') | lower) %}
+    {% set rc = siem_rule_counts_by_pair.get(pair_key, {}) if siem_rule_counts_by_pair is defined and siem_rule_counts_by_pair else (siem_rule_counts.get(s.space, {}) if siem_rule_counts is defined and siem_rule_counts else {}) %}
     <div class="client-list-item client-list-item--{% if s.is_active %}active{% else %}inactive{% endif %}">
         <div class="client-list-item__body">
             <span class="client-list-item__title" style="cursor:default;">{{ s.label }}</span>
