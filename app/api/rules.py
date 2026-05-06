@@ -76,12 +76,9 @@ def list_rules(
 ):
     """List detection rules with filtering and pagination."""
     try:
-        # Tenant isolation: restrict to (siem_id, space) pairs the active
-        # client is mapped to. Composite key is mandatory — a space-only
-        # filter would leak rules across SIEMs that share a Kibana space
-        # name (AGENTS.md §8.2 g4).
-        allowed_scopes = db.get_client_siem_scopes(client_id)
-        
+        # Tenant isolation is handled by the ActiveClient dep, which pins
+        # the request to the tenant's DuckDB file. Detection rules are
+        # per-tenant since 4.1.13 — no allowed_scopes filter needed.
         filters = RuleFilters(
             search=search if search else None,
             space=space if space else None,
@@ -89,7 +86,6 @@ def list_rules(
             sort_by=sort_by,
             page=page,
             page_size=page_size,
-            allowed_scopes=allowed_scopes,
         )
         
         rules, total, last_sync = db.get_rules(filters=filters)
@@ -131,8 +127,8 @@ def get_metrics(
 ):
     """Get rule health metrics."""
     from app.main import get_last_sync_time
-    allowed_scopes = db.get_client_siem_scopes(client_id)
-    metrics = db.get_rule_health_metrics(allowed_scopes=allowed_scopes)
+    # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
+    metrics = db.get_rule_health_metrics()
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",
@@ -375,14 +371,12 @@ async def sync_rules(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
     force_mapping: bool = Query(False),
-    scope: str = Query("client", regex="^(client|all)$"),
 ):
-    """Trigger an immediate sync of rules from Elastic.
+    """Trigger an immediate per-tenant sync of rules from Elastic.
 
-    scope: ``client`` (default) restricts the fetch to the active tenant's
-    mapped (siem_id, space) pairs only. ``all`` falls back to the legacy
-    behaviour of iterating every active SIEM and every mapped space across
-    all tenants. Per AGENTS.md §8.2 g4 / §8.3.
+    Always scoped to the active tenant. The cross-tenant ``scope=all``
+    fallback was removed in 4.1.13 — detection rules are per-tenant, so a
+    sync MUST be scoped to one client.
     """
     import asyncio
     from app.main import scheduled_sync, _sync_status, _update_sync_status
@@ -394,8 +388,7 @@ async def sync_rules(
     label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
     _update_sync_status("running", label)
     
-    sync_client_id = client_id if scope == "client" else None
-    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=sync_client_id))
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=client_id))
     
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(

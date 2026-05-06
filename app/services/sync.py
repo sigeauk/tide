@@ -246,127 +246,19 @@ _ensure_tenant_detection_rules_v37 = _ensure_tenant_detection_rules_schema
 
 
 def _distribute_rules_to_tenants():
-    """Copy detection rules from shared DB to each tenant DB,
-    filtered by the client's (siem_id, space) mappings.
-    Called after a global elastic sync.
+    """REMOVED in 4.1.13.
 
-    Filter is by (siem_id, LOWER(space)) since 4.0.13 \u2014 a client mapped to
-    SIEM A's 'production' space must NOT receive rules from SIEM B's
-    identically-named 'production' space (they're different Kibana instances
-    with different rules).
-
-    Implementation note: this used to open the tenant DB and ATTACH the
-    shared DB read-only into it. That fails inside the running tide-app
-    process because DuckDB will not let the same physical file be attached
-    twice in one process \u2014 the connection pool already holds a writable
-    handle on the shared DB and the auto-aliased name (file stem) collides.
-    We therefore drive everything from the shared connection pool and
-    ATTACH the tenant DB onto it instead.
-    """
-    from app.services.tenant_manager import is_multi_db_mode
-    if not is_multi_db_mode():
-        return
-
-    from app.config import get_settings
-    from app.services.database import get_database_service
-    settings = get_settings()
-    data_dir = settings.data_dir
-
-    try:
-        with get_database_service().get_shared_connection() as shared_conn:
-            clients = shared_conn.execute(
-                "SELECT id, db_filename FROM clients WHERE db_filename IS NOT NULL"
-            ).fetchall()
-
-            for client_id, db_filename in clients:
-                scope_rows = shared_conn.execute(
-                    "SELECT DISTINCT siem_id, "
-                    "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
-                    "FROM client_siem_map "
-                    "WHERE client_id = ? AND siem_id IS NOT NULL",
-                    [client_id],
-                ).fetchall()
-                scopes = [(sid, sp) for sid, sp in scope_rows if sid and sp]
-                if not scopes:
-                    continue
-
-                tenant_path = os.path.join(data_dir, db_filename)
-                if not os.path.exists(tenant_path):
-                    continue
-
-                tenant_alias = f"t_{client_id.replace('-', '_')}"
-                # Evict the tenant from the per-path connection pool first.
-                # If a request previously routed to this tenant, the pool
-                # already holds an open handle to the file as MAIN database
-                # (auto-aliased to its file basename), and DuckDB rejects a
-                # second cross-connection ATTACH on the same file with
-                # ``Unique file handle conflict``. Eviction closes those
-                # cached connections so the file is free for ATTACH; the
-                # pool will lazily reopen on the next request.
-                try:
-                    from app.services.connection_pool import get_pool
-                    get_pool().evict(tenant_path)
-                except Exception:  # pragma: no cover - eviction best effort
-                    pass
-                try:
-                    shared_conn.execute(f"ATTACH '{tenant_path}' AS {tenant_alias}")
-                    try:
-                        # Defensive schema repair: legacy tenant DBs
-                        # provisioned before ``client_id`` was added to the
-                        # canonical detection_rules schema have a 23-column
-                        # table; the INSERT below supplies 24 values and
-                        # explodes with "table detection_rules has 23
-                        # columns but 24 values were supplied". Idempotent
-                        # \u2014 a tenant already at the canonical schema is a
-                        # one-DESCRIBE no-op.
-                        _ensure_tenant_detection_rules_schema(
-                            shared_conn,
-                            table_ref=f"{tenant_alias}.detection_rules",
-                            label=f"tenant {client_id[:8]}",
-                        )
-
-                        pair_predicates = " OR ".join(
-                            "(siem_id = ? AND LOWER(space) = ?)" for _ in scopes
-                        )
-                        params = [v for pair in scopes for v in pair]
-
-                        shared_conn.execute(
-                            f"DELETE FROM {tenant_alias}.detection_rules"
-                        )
-                        shared_conn.execute(f"""
-                            INSERT INTO {tenant_alias}.detection_rules (
-                                rule_id, siem_id, name, severity, author, enabled, space,
-                                score, quality_score, meta_score,
-                                score_mapping, score_field_type, score_search_time,
-                                score_language, score_note, score_override,
-                                score_tactics, score_techniques, score_author,
-                                score_highlights, last_updated, mitre_ids, raw_data,
-                                client_id
-                            )
-                            SELECT rule_id, siem_id, name, severity, author, enabled, space,
-                                   score, quality_score, meta_score,
-                                   score_mapping, score_field_type, score_search_time,
-                                   score_language, score_note, score_override,
-                                   score_tactics, score_techniques, score_author,
-                                   score_highlights, last_updated, mitre_ids, raw_data,
-                                   '{client_id}' AS client_id
-                            FROM detection_rules
-                            WHERE {pair_predicates}
-                        """, params)
-
-                        count = shared_conn.execute(
-                            f"SELECT COUNT(*) FROM {tenant_alias}.detection_rules"
-                        ).fetchone()[0]
-                        logger.info(
-                            f"Distributed {count} rules to tenant {client_id[:8]} "
-                            f"(scopes: {scopes})"
-                        )
-                    finally:
-                        shared_conn.execute(f"DETACH {tenant_alias}")
-                except Exception as e:
-                    logger.error(f"Rule distribution failed for {client_id[:8]}: {e}")
-    except Exception as e:
-        logger.error(f"Rule distribution failed: {e}")
+    Detection rules now live ONLY in per-tenant DuckDB files. Sync writes
+    directly to the tenant's DB via ``tenant_context_for(client_id)``, so
+    there is no shared → tenant copy step any more. Stub kept for backward
+    import compatibility; logs a one-line deprecation warning if anything
+    still calls it."""
+    logger.warning(
+        "_distribute_rules_to_tenants() called but is a no-op since 4.1.13 — "
+        "sync now writes directly to the tenant DB. Update the caller to "
+        "stop invoking this helper."
+    )
+    return
 
 
 def run_mitre_sync():
@@ -656,22 +548,34 @@ def run_mitre_sync():
             logger.debug(f"sync_history insert (mitre) failed: {_exc!r}")
 
 
-def run_elastic_sync(force_mapping=False, client_id: str | None = None):
+def run_elastic_sync(client_id: str, force_mapping: bool = False):
+    """Per-tenant Elastic detection-rule sync.
+
+    ``client_id`` is **required**. Detection rules live in the tenant's own
+    DuckDB file (one per client) since 4.1.13 — there is no shared
+    ``detection_rules`` table any more, so a sync MUST be scoped to a single
+    tenant. Triggers: manual ``Sync`` button, ``promote-rule`` post-action
+    refresh, ``deploy-sigma`` post-action refresh. There is no scheduled /
+    background sync.
+
+    Flow:
+      1. Resolve ``client_siem_map`` rows for this client → ``{siem_id: {spaces}}``.
+      2. Enter ``tenant_context_for(client_id)`` so every ``db.get_connection()``
+         call routes to that client's DuckDB file.
+      3. For each mapped SIEM, hit ``{base_url}/s/{space}`` (one call per
+         space — ``elastic_helper.fetch_detection_rules`` already does this).
+      4. ``save_audit_results`` / ``reconcile_rules_for_siem_space`` /
+         ``delete_rules_for_spaces`` all write to the tenant DB because the
+         context is active.
+
+    ``force_mapping=True`` clears the per-pattern mapping cache so a
+    re-check actually re-hits Elastic.
     """
-    Synchronous function to fetch rules from Elastic and save to database.
-    This runs in a thread pool to avoid blocking the async event loop.
-    force_mapping: if True, skip lazy mapping and re-check all field mappings from Elastic.
-    client_id: if provided, restrict the sync to ONLY the (siem_id, space) pairs
-               in ``client_siem_map WHERE client_id = ?`` for that tenant. SIEMs
-               not mapped to this client are skipped entirely; mapped SIEMs are
-               fetched only for the spaces this client has linked. The global
-               scheduled sync (no client_id) preserves the previous behaviour
-               of iterating every active SIEM × every mapped space, so any
-               (siem, space) pair that no longer belongs to a client still
-               gets reconciled on the next interval.
-               Per AGENTS.md §8.2 g4 / §8.3 the scope axis is the composite
-               ``(siem_id, space)`` pair — NEVER ``space`` alone.
-    """
+    if not client_id:
+        raise ValueError(
+            "run_elastic_sync requires client_id — detection rules are "
+            "per-tenant since 4.1.13. Pass the active tenant's client_id."
+        )
     # Determine the app directory (where elastic_helper.py lives)
     # sync.py is at: app/services/sync.py
     # So: dirname(sync.py) -> app/services, dirname again -> app
@@ -692,13 +596,50 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
             import time as _time
             import elastic_helper
             from app.services.database import get_database_service
-            
+            from app.services.tenant_manager import (
+                resolve_tenant_db_path, set_tenant_context, get_tenant_db_path,
+            )
+
             db = get_database_service()
-            
-            logger.info("Starting Elastic sync...")
+
+            # Resolve this client's mapped (siem_id, space) pairs FIRST so we
+            # fail fast with a clear message if the tenant has no SIEMs
+            # linked. Done outside the tenant context because
+            # ``client_siem_map`` is shared catalog data.
+            pairs = db.get_client_siem_scopes(client_id) or []
+            if not pairs:
+                logger.warning(
+                    f"Per-client sync: client_id={client_id} has no "
+                    f"client_siem_map rows — nothing to sync."
+                )
+                return 0
+            client_scope: dict[str, set[str]] = {}
+            for sid, sp in pairs:
+                client_scope.setdefault(sid, set()).add(sp)
+
+            # Resolve the tenant's DB file and pin it as the current
+            # contextvar so every subsequent ``db.get_connection()`` call
+            # inside this function (and inside ``elastic_helper`` callbacks)
+            # routes to the tenant's DuckDB file. There is no shared
+            # ``detection_rules`` table any more (4.1.13) — every read /
+            # write below MUST hit the tenant DB.
+            from app.config import get_settings as _get_settings
+            _tenant_path = resolve_tenant_db_path(client_id, _get_settings().data_dir)
+            if not _tenant_path:
+                logger.error(
+                    f"Per-client sync: client_id={client_id} has no tenant "
+                    f"DB file registered (clients.db_filename is NULL or "
+                    f"file missing). Re-create the tenant via the "
+                    f"Management page."
+                )
+                return 0
+            _prev_tenant_path = get_tenant_db_path()
+            set_tenant_context(_tenant_path)
+            logger.info(f"Starting Elastic sync for client_id={client_id} → {_tenant_path}")
             _t_start = _time.perf_counter()
-            
-            # Lazy Mapping: get existing rule data from DB so we can skip mapping for known rules
+
+            # Lazy Mapping: get existing rule data from THIS TENANT's DB
+            # so we can skip mapping for known rules.
             existing_rule_data = db.get_existing_rule_data()
             if force_mapping:
                 existing_rule_keys = set()  # Force full mapping for all rules
@@ -712,59 +653,39 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                         existing_rule_keys.add(key)
             logger.info(f"[perf] Loaded {len(existing_rule_data)} existing rules, {len(existing_rule_keys)} with mapping data, in {(_time.perf_counter() - _t_start)*1000:.0f}ms")
 
-            # Iterate every active SIEM in the inventory and fetch its rules
-            # using its OWN kibana_url + api_token + elasticsearch_url. The
-            # legacy global ELASTIC_URL/ELASTIC_API_KEY env-var fallback was
-            # removed in 4.0.10 — every SIEM must self-describe in
-            # siem_inventory or it will not be synced.
-            siems = [s for s in db.list_siem_inventory() if s.get("is_active")]
+            # Active SIEMs filtered to this tenant's mappings.
+            siems = [
+                s for s in db.list_siem_inventory()
+                if s.get("is_active") and s.get("id") in client_scope
+            ]
             if not siems:
-                logger.warning("No active SIEMs in inventory — nothing to sync. "
-                               "Add a SIEM via the Management page.")
-                return 0
-
-            # Per-client scope (optional). When client_id is set we collapse
-            # this client's client_siem_map rows into {siem_id: {space, ...}}
-            # and use it to (a) drop SIEMs the client isn't mapped to and
-            # (b) override db.get_siem_spaces(siem_id) (which is global)
-            # with just the spaces this client has linked.
-            client_scope: dict[str, set[str]] | None = None
-            if client_id:
-                pairs = db.get_client_siem_scopes(client_id) or []
-                client_scope = {}
-                for sid, sp in pairs:
-                    client_scope.setdefault(sid, set()).add(sp)
-                if not client_scope:
-                    logger.warning(
-                        f"Per-client sync requested for client_id={client_id} "
-                        f"but client_siem_map has no rows for this client — "
-                        f"nothing to sync."
-                    )
-                    return 0
-                before = len(siems)
-                siems = [s for s in siems if s.get("id") in client_scope]
-                logger.info(
-                    f"Per-client sync: client_id={client_id} restricted to "
-                    f"{len(siems)}/{before} SIEM(s), "
-                    f"{sum(len(v) for v in client_scope.values())} "
-                    f"(siem,space) pair(s)."
+                logger.warning(
+                    f"Per-client sync: client_id={client_id} maps to "
+                    f"{len(client_scope)} SIEM(s), but none are active "
+                    f"in siem_inventory — nothing to sync."
                 )
+                return 0
+            logger.info(
+                f"Per-client sync: client_id={client_id} → "
+                f"{len(siems)} SIEM(s), "
+                f"{sum(len(v) for v in client_scope.values())} "
+                f"(siem,space) pair(s)."
+            )
 
             _t_fetch = _time.perf_counter()
             import pandas as _pd
             frames = []
             # Track per-SIEM the spaces we attempted to sync, so the
-            # subtractive-delete pass can be scoped per-SIEM (4.0.13). Two
-            # SIEMs can share a space name so a global "this space is empty"
-            # check is unsafe \u2014 it would delete the other SIEM's rules.
+            # subtractive-delete pass can be scoped per-SIEM. Two SIEMs
+            # can share a space name so a global "this space is empty"
+            # check is unsafe — it would delete the other SIEM's rules.
             siem_spaces_attempted: dict = {}
             siem_spaces_synced: dict = {}
-            # Per-SIEM per-space diagnostics from elastic_helper. Used by the
-            # mirror-sync passes below to skip rule deletion in any
-            # (siem, space) where the fetch was incomplete (Kibana outage,
-            # transient 5xx, network drop). This is the safety half of the
-            # mirror-Kibana behaviour: clean fetch == authoritative source of
-            # truth; partial fetch == preserve existing rows.
+            # Per-SIEM per-space diagnostics from elastic_helper. Used by
+            # the mirror-sync passes below to skip rule deletion in any
+            # (siem, space) where the fetch was incomplete (Kibana
+            # outage, transient 5xx, network drop). Clean fetch ==
+            # authoritative source of truth; partial fetch == preserve.
             siem_diagnostics: dict = {}
             for siem in siems:
                 # Re-read to get the encrypted/raw token (list_siem_inventory omits it)
@@ -772,29 +693,12 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                 kurl = full.get("kibana_url") or siem.get("kibana_url")
                 token = full.get("api_token_enc")
                 es_url = full.get("elasticsearch_url") or siem.get("elasticsearch_url")
-                if client_scope is not None:
-                    # Per-client mode: only the spaces this client has linked
-                    # for this SIEM. Sorted for stable log output.
-                    spaces = sorted(client_scope.get(siem["id"], set()))
-                else:
-                    spaces = db.get_siem_spaces(siem["id"])
+                # Only the spaces this client has linked for this SIEM,
+                # sorted for stable log output.
+                spaces = sorted(client_scope.get(siem["id"], set()))
                 if not spaces:
-                    # No client_siem_map row yet. Two reasons this can
-                    # happen: (a) brand-new standalone deployment where the
-                    # operator hasn't linked the SIEM to a tenant yet; (b)
-                    # an existing SIEM that lost its mapping. In either case
-                    # we still want the link-to-tenant dropdown to be
-                    # populated, which means the persistent
-                    # ``siem_kibana_spaces`` cache (Migration 41) needs
-                    # spaces in it. Pre-4.1.7 the cache was only seeded by a
-                    # successful Test Connection click; sync silently did
-                    # nothing, which is exactly how a standalone client
-                    # ended up with an empty dropdown despite a working
-                    # SIEM. Now: bootstrap the cache via the shared
-                    # space_resolver, then skip the rule fetch (still no
-                    # attribution target). Rule attribution stays gated on
-                    # client_siem_map — we are NOT broadening tenant
-                    # visibility, only seeding the picker.
+                    # No client_siem_map row yet — bootstrap the picker
+                    # cache via space_resolver and skip rule fetch.
                     try:
                         from app.services.space_resolver import (
                             resolve_discoverable_spaces, REASON_LIVE, REASON_PERSISTED,
@@ -810,20 +714,13 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                         logger.info(
                             "Skipping rule fetch for SIEM '%s' — no "
                             "client_siem_map rows. Bootstrapped %d Kibana "
-                            "space(s) into the persistent cache via %s so "
-                            "the link-to-tenant dropdown will populate. "
-                            "Link this SIEM to a tenant in the Management "
-                            "UI to enable sync.",
+                            "space(s) via %s.",
                             siem.get("label"), len(discovered), reason,
                         )
                     else:
                         logger.info(
                             "Skipping SIEM '%s' — no client_siem_map rows "
-                            "and space discovery returned nothing "
-                            "(reason=%s). Link it to a client in the "
-                            "Management UI; if the dropdown is still "
-                            "empty, run Test Connection on the SIEM card "
-                            "to surface the underlying error.",
+                            "and space discovery returned nothing (reason=%s).",
                             siem.get("label"), reason,
                         )
                     continue
@@ -855,9 +752,6 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                         api_key=token,
                         spaces=spaces,
                         check_mappings=True,
-                        # fetch_detection_rules expects a set of rule_id strings
-                        # OR (rule_id, space) tuples \u2014 it does not know about
-                        # siem_id. Pass plain rule_ids scoped to this SIEM.
                         known_rule_keys=per_siem_known,
                         elasticsearch_url=es_url,
                     )
@@ -877,7 +771,7 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                     if siem_df is not None and not siem_df.empty:
                         # Stamp every row with its originating siem_id BEFORE
                         # frames get concatenated. save_audit_results requires
-                        # this to satisfy the new (rule_id, siem_id) PK.
+                        # this to satisfy the (rule_id, siem_id, space) PK.
                         siem_df = siem_df.copy()
                         siem_df['siem_id'] = siem_id
                         siem_spaces_synced[siem_id] = set(
@@ -988,14 +882,7 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                             )
                             db.delete_rules_for_spaces([space], siem_id=siem_id)
 
-                logger.info(f"Synced {count} rules from {len(siems)} SIEM(s)")
-
-                # Distribute rules to per-tenant databases
-                try:
-                    _distribute_rules_to_tenants()
-                except Exception as e:
-                    logger.warning(f"Rule distribution to tenants failed: {e}")
-                
+                logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count
             else:
                 # No rules returned from Elastic — this is likely a connectivity or auth issue.
@@ -1006,6 +893,15 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
                 return 0
         finally:
             os.chdir(original_cwd)
+            # Restore the previous tenant DB context (None unless this sync
+            # was nested inside an existing tenant scope). Always runs even
+            # if the body raised — keeps the contextvar from leaking the
+            # tenant DB path into the next request handled by this thread.
+            try:
+                from app.services.tenant_manager import set_tenant_context as _stc
+                _stc(_prev_tenant_path) if '_prev_tenant_path' in locals() else _stc(None)
+            except Exception:
+                pass
             
     except Exception as e:
         logger.error(f"Elastic sync failed: {e}")
@@ -1014,16 +910,20 @@ def run_elastic_sync(force_mapping=False, client_id: str | None = None):
         return -1
 
 
-async def trigger_sync(force_mapping=False, client_id: str | None = None):
-    """
-    Async wrapper to run the sync in a thread pool.
-    Use this from async endpoints.
+async def trigger_sync(client_id: str, force_mapping: bool = False):
+    """Async wrapper around :func:`run_elastic_sync`.
 
-    client_id: optional tenant scope. See ``run_elastic_sync`` for semantics.
+    ``client_id`` is **required** (per-tenant since 4.1.13). Runs the sync
+    in a thread pool so the FastAPI event loop stays responsive.
     """
+    if not client_id:
+        raise ValueError(
+            "trigger_sync requires client_id — detection rules are "
+            "per-tenant since 4.1.13."
+        )
     import asyncio
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: run_elastic_sync(force_mapping=force_mapping, client_id=client_id),
+        lambda: run_elastic_sync(client_id=client_id, force_mapping=force_mapping),
     )

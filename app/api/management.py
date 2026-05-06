@@ -2919,21 +2919,30 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     siem_rule_counts_by_pair: dict = {}
     siem_space_counts: dict = {}
     try:
-        import duckdb
-        conn = duckdb.connect(str(db.db_path), read_only=False)  # 4.1.0 P3: pool conflict
-        rows = conn.execute(
-            "SELECT siem_id, space, COUNT(*) AS total, "
-            "SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) AS enabled "
-            "FROM detection_rules "
-            "WHERE space IS NOT NULL AND siem_id IS NOT NULL "
-            "GROUP BY siem_id, space"
-        ).fetchall()
-        conn.close()
-        for sid, space, total, enabled in rows:
-            entry = {"total": int(total), "enabled": int(enabled or 0)}
-            siem_space_counts.setdefault(str(sid), {})[str(space)] = entry
-            siem_rule_counts_by_pair[f'{sid}|{str(space).lower()}'] = entry
-            siem_rule_counts[str(space)] = entry  # legacy fallback only
+        # Detection rules are per-tenant since 4.1.13 — read this client's
+        # tenant DB directly, not the shared cache (which no longer holds
+        # detection_rules).
+        from app.services.tenant_manager import resolve_tenant_db_path
+        from app.config import get_settings
+        import duckdb, os
+        tenant_path = resolve_tenant_db_path(client_id, get_settings().data_dir)
+        if tenant_path and os.path.exists(tenant_path):
+            conn = duckdb.connect(tenant_path, read_only=False)
+            try:
+                rows = conn.execute(
+                    "SELECT siem_id, space, COUNT(*) AS total, "
+                    "SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) AS enabled "
+                    "FROM detection_rules "
+                    "WHERE space IS NOT NULL AND siem_id IS NOT NULL "
+                    "GROUP BY siem_id, space"
+                ).fetchall()
+            finally:
+                conn.close()
+            for sid, space, total, enabled in rows:
+                entry = {"total": int(total), "enabled": int(enabled or 0)}
+                siem_space_counts.setdefault(str(sid), {})[str(space)] = entry
+                siem_rule_counts_by_pair[f'{sid}|{str(space).lower()}'] = entry
+                siem_rule_counts[str(space)] = entry  # legacy fallback only
     except Exception:
         pass
 

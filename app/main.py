@@ -77,28 +77,26 @@ def migration37_resync_required() -> bool:
             ).fetchone()
             ver = int(ver_row[0]) if ver_row and ver_row[0] is not None else 0
             if ver >= 37:
-                rules = int(_conn.execute(
-                    "SELECT COUNT(*) FROM detection_rules"
-                ).fetchone()[0])
-                if cache_key != "__shared__":
-                    # Tenant DB context: count only SIEMs mapped to *this*
-                    # tenant. ``client_siem_map`` is replicated into the
-                    # tenant DB by ``sync_shared_data`` and already
-                    # filtered to this client by Migration 29, so a
-                    # COUNT(*) here is the per-tenant scope.
+                if cache_key == "__shared__":
+                    # 4.1.13: shared detection_rules dropped (Migration 45).
+                    # The "resync required" banner is per-tenant only —
+                    # there's no global rule cache to be empty anymore.
+                    needed = False
+                else:
+                    # Tenant DB context: count rows directly. The tenant DB
+                    # still owns its own detection_rules table.
+                    rules = int(_conn.execute(
+                        "SELECT COUNT(*) FROM detection_rules"
+                    ).fetchone()[0])
                     siems = int(_conn.execute(
                         "SELECT COUNT(DISTINCT siem_id) FROM client_siem_map"
                     ).fetchone()[0])
-                else:
-                    siems = int(_conn.execute(
-                        "SELECT COUNT(*) FROM siem_inventory WHERE is_active"
-                    ).fetchone()[0])
-                # Banner only fires when the table is empty AND at least one
-                # mapped SIEM exists \u2014 the wipe only matters if there were
-                # rules to repopulate. Fresh installs / unmapped tenants
-                # would otherwise see a misleading "resync required"
-                # warning when the real action is "map a SIEM first".
-                needed = rules == 0 and siems > 0
+                    # Banner only fires when the table is empty AND at least one
+                    # mapped SIEM exists — the wipe only matters if there were
+                    # rules to repopulate. Fresh installs / unmapped tenants
+                    # would otherwise see a misleading "resync required"
+                    # warning when the real action is "map a SIEM first".
+                    needed = rules == 0 and siems > 0
     except Exception:
         needed = False
     _migration37_cache[cache_key] = {"ts": now, "needed": needed}
@@ -137,17 +135,27 @@ def get_last_sync_time() -> str:
 
 
 async def scheduled_sync(force_mapping=False, client_id: str | None = None):
-    """Background task: Sync detection rules from Elastic every 60 minutes.
+    """Per-tenant Elastic sync, triggered by user actions only.
 
-    client_id: optional tenant scope. When provided, only the (siem_id, space)
-    pairs in that client's ``client_siem_map`` rows are fetched. The unattended
-    interval timer always calls this with ``client_id=None`` so global drift
-    still gets reconciled.
+    Detection rules are per-tenant since 4.1.13 — there is no scheduled
+    background sync any more. ``client_id`` is **required**; passing
+    ``None`` (the legacy "global sync" call shape) logs a warning and
+    no-ops so any leftover startup/timer hook fails loud-but-safe rather
+    than silently iterating every SIEM × every space.
+
+    Triggers: manual ``Sync`` button on /rules and /promotion, the
+    post-promote refresh in ``api/promotion.py:promote_rule``, and the
+    post-deploy refresh in ``api/sigma.py:deploy_to_siem``.
     """
     settings = get_settings()
-    scope = f" (client_id={client_id})" if client_id else ""
+    if not client_id:
+        logger.warning(
+            "scheduled_sync called without client_id — no-op since 4.1.13. "
+            "Detection rules are per-tenant; pass the active client_id."
+        )
+        return
     logger.info(
-        f"Scheduled sync triggered{scope} (interval: {settings.sync_interval_minutes}m)"
+        f"Per-tenant sync triggered (client_id={client_id})"
     )
     
     _update_sync_status("running", "Connecting to Elastic...")
@@ -166,13 +174,13 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None):
         _update_sync_status("running", "Fetching detection rules...")
         
         # Run the actual sync
-        result = await trigger_sync(force_mapping=force_mapping, client_id=client_id)
+        result = await trigger_sync(client_id=client_id, force_mapping=force_mapping)
         
         count = result if isinstance(result, int) else 0
         _update_sync_status("complete", f"Synced {count} rules from Elastic", rule_count=count)
     except Exception as e:
-        logger.warning(f"Scheduled sync failed (Elastic may be unreachable): {e}")
-        logger.info("TIDE will continue running — sync will retry on next interval")
+        logger.warning(f"Per-tenant sync failed (Elastic may be unreachable): {e}")
+        logger.info("TIDE will continue running — sync will retry on next user action")
         _update_sync_status("error", str(e))
 
 
@@ -232,30 +240,21 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.warning(f"Legacy data backfill skipped: {_e}")
 
-        # Distribute rules from shared DB into each tenant DB. Without this
-        # step a fresh-provisioned tenant has empty detection_rules until the
-        # next elastic sync runs.
+        # Detection rules are per-tenant since 4.1.13 — there is no shared
+        # → tenant copy step on startup. Each tenant repopulates its own
+        # rules on its first user-triggered sync. The tenant-side
+        # detection_rules schema repair is still useful (handles legacy
+        # 23-column tenant DBs from earlier 4.1.x).
         try:
-            from app.services.sync import (
-                _distribute_rules_to_tenants,
-                ensure_all_tenant_detection_rules_schemas,
-            )
-            # Repair tenant detection_rules schemas BEFORE the first
-            # distribution. Pre-existing tenant DBs provisioned before the
-            # ``client_id`` column was added to the canonical schema have a
-            # 23-column table that rejects the 24-value INSERT performed by
-            # ``_distribute_rules_to_tenants`` ("table detection_rules has
-            # 23 columns but 24 values were supplied"). Idempotent on
-            # already-canonical tenants.
+            from app.services.sync import ensure_all_tenant_detection_rules_schemas
             try:
                 ensure_all_tenant_detection_rules_schemas()
             except Exception as _e:
                 logger.warning(
                     f"Tenant detection_rules schema sweep skipped: {_e}"
                 )
-            _distribute_rules_to_tenants()
         except Exception as _e:
-            logger.warning(f"Initial rule distribution skipped: {_e}")
+            logger.warning(f"Tenant schema sweep import failed: {_e}")
 
         # 4.1.3 \u2014 startup auth-source banner. Logs (in plain English) what
         # TIDE will use to talk to Kibana on the next sync. Saves operators
@@ -281,21 +280,21 @@ async def lifespan(app: FastAPI):
                     ).fetchall()
                 except Exception:
                     _maps = []
-                try:
-                    _rules = _cb.execute(
-                        "SELECT COUNT(*) FROM detection_rules"
-                    ).fetchone()[0]
-                except Exception:
-                    _rules = 0
+                # Detection rules are per-tenant since 4.1.13 — counting
+                # them here at the shared scope no longer makes sense.
+                # Per-tenant counts surface in Rule Health when the tenant
+                # is active.
+                _rules = -1
             _env_url = bool(os.environ.get("ELASTIC_URL"))
             _env_key = bool(os.environ.get("ELASTIC_API_KEY"))
             logger.info(
                 "[auth-banner] sync auth source: siem_inventory rows=%d "
                 "(active+token+url=%d), env ELASTIC_URL=%s ELASTIC_API_KEY=%s, "
-                "shared detection_rules=%d, client_siem_map siems=%d",
+                "shared detection_rules=N/A (per-tenant since 4.1.13), "
+                "client_siem_map siems=%d",
                 len(_siems),
                 sum(1 for _l, _u, _t, _a in _siems if _u and _t and _a),
-                _env_url, _env_key, _rules, len(_maps),
+                _env_url, _env_key, len(_maps),
             )
             for _l, _u, _t, _a in _siems:
                 logger.info(
@@ -384,23 +383,19 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Sigma backend warm-up failed (non-fatal): {e}")
     
-    # Run initial sync on startup (in background to not block startup)
-    asyncio.create_task(scheduled_sync())
-    
-    # Start background scheduler
-    scheduler.add_job(
-        scheduled_sync,
-        "interval",
-        minutes=settings.sync_interval_minutes,
-        id="elastic_sync",
-        replace_existing=True,
-    )
+    # Detection-rule sync is per-tenant since 4.1.13 — triggered ONLY by
+    # user actions (manual Sync button, post-promote refresh, post-deploy
+    # refresh). The previous global startup task and APScheduler interval
+    # job were removed because they iterated every SIEM × every space and
+    # had no tenant context, which broke the new "rules live in the
+    # tenant DB" model. Other scheduled jobs (rule-log export below) are
+    # unchanged.
     
     # Schedule rule log export job
     _schedule_rule_log_job(db)
     
     scheduler.start()
-    logger.info(f"Scheduler started (sync every {settings.sync_interval_minutes}m)")
+    logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
     
     yield
     
@@ -1427,20 +1422,32 @@ def create_app() -> FastAPI:
         if not _cid:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
-        
-        allowed_scopes = db.get_client_siem_scopes(_cid) if _cid else None
-        
-        metrics = db.get_rule_health_metrics(allowed_scopes=allowed_scopes)
-        # Derive spaces from metrics (avoids a second DB connection)
-        spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
 
-        # Build space → label mapping from client's SIEM inventory
+        # Per-tenant since 4.1.13 — tenant context is set above; rule
+        # health metrics read directly from the tenant DB.
+        metrics = db.get_rule_health_metrics()
+        # Build (siem_id, space)-keyed labels — keying by space alone
+        # collapses two SIEMs that share a Kibana space-name into one
+        # legend entry (AGENTS.md §8.2 g4 / §8.3 Bug C). The legacy
+        # space-only ``space_labels`` is preserved for any partial that
+        # has not been migrated yet.
         client_siems = db.get_client_siems(_cid) if _cid else []
-        space_labels = {}
+        space_labels: dict = {}
+        scope_labels: dict = {}
         for s in client_siems:
             sp = s.get("space")
-            if sp:
-                space_labels[sp] = f'{s["label"]} ({s["environment_role"].title()})'
+            sid = s.get("id")
+            if not sp or not sid:
+                continue
+            label = f'{s["label"]} ({s["environment_role"].title()})'
+            scope_labels[f'{sid}|{str(sp).lower()}'] = label
+            # last-writer-wins for the legacy dict (intentionally lossy)
+            space_labels[sp] = label
+
+        # Derive scope keys from the composite metric. Fall back to
+        # space-only keys for templates that haven't migrated.
+        scopes = sorted(metrics.rules_by_scope.keys()) if metrics.rules_by_scope else []
+        spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
         
         return render_template(
             "pages/rule_health.html",
@@ -1450,7 +1457,9 @@ def create_app() -> FastAPI:
                 "active_page": "rules",
                 "metrics": metrics,
                 "spaces": spaces,
+                "scopes": scopes,
                 "space_labels": space_labels,
+                "scope_labels": scope_labels,
                 "last_sync_time": get_last_sync_time(),
             }
         )
@@ -1739,12 +1748,10 @@ def create_app() -> FastAPI:
             technique_filter=technique,
             limit=100
         )
-        
-        # Coverage data for MITRE pills (single DB connection)
-        covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
 
-        # Dynamic env-driven dropdowns — scoped to active client's SIEMs
-        # Resolve active client (mirrors deps.get_active_client)
+        # Resolve active client and pin tenant context BEFORE any
+        # detection_rules read — rules are per-tenant since 4.1.13 and the
+        # shared DB no longer has the table (Migration 45).
         _cid = request.cookies.get("active_client_id")
         if not _cid and user:
             with db.get_shared_connection() as conn:
@@ -1757,6 +1764,9 @@ def create_app() -> FastAPI:
         if not _cid:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
+
+        # Coverage data for MITRE pills (single DB connection — now tenant-scoped)
+        covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
 
         # Build deploy targets from client's linked SIEMs
         client_siems = db.get_client_siems(_cid) if _cid else []
@@ -1936,19 +1946,34 @@ def create_app() -> FastAPI:
         available_systems = [s for s in all_systems if s.id not in assigned_sys_ids]
         assigned_bl_ids = {b.id for b in client_baselines}
         available_baselines = [b for b in all_baselines if b.id not in assigned_bl_ids]
-        # SIEM rule counts by space (total + enabled)
-        siem_rule_counts = {}
+        # SIEM rule counts keyed by (siem_id, space). Detection rules are
+        # per-tenant since 4.1.13, so we read this client's tenant DB
+        # directly. Two SIEMs sharing a Kibana space-name produce
+        # different (siem_id, space) keys — display stays isolated.
+        siem_rule_counts: dict = {}
+        siem_rule_counts_by_pair: dict = {}
         try:
+            from app.services.tenant_manager import resolve_tenant_db_path
             import duckdb
-            conn = duckdb.connect(str(db.db_path), read_only=False)  # 4.1.0 P3: pool conflict
-            rows = conn.execute(
-                "SELECT space, COUNT(*) as total, SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) as enabled FROM detection_rules WHERE space IS NOT NULL GROUP BY space"
-            ).fetchall()
-            conn.close()
-            for space, total, enabled in rows:
-                siem_rule_counts[str(space)] = {"total": int(total), "enabled": int(enabled)}
-        except Exception:
-            pass
+            tenant_path = resolve_tenant_db_path(client_id, settings.data_dir)
+            if tenant_path and os.path.exists(tenant_path):
+                conn = duckdb.connect(tenant_path, read_only=False)
+                try:
+                    rows = conn.execute(
+                        "SELECT siem_id, space, COUNT(*) AS total, "
+                        "SUM(CASE WHEN enabled=1 THEN 1 ELSE 0 END) AS enabled "
+                        "FROM detection_rules "
+                        "WHERE space IS NOT NULL AND siem_id IS NOT NULL "
+                        "GROUP BY siem_id, space"
+                    ).fetchall()
+                finally:
+                    conn.close()
+                for sid, space, total, enabled in rows:
+                    entry = {"total": int(total), "enabled": int(enabled or 0)}
+                    siem_rule_counts_by_pair[f'{sid}|{str(space).lower()}'] = entry
+                    siem_rule_counts[str(space)] = entry  # legacy fallback
+        except Exception as _exc:
+            logger.warning(f"siem_rule_counts read for client {client_id} failed: {_exc}")
         return render_template(
             "pages/client_detail.html",
             request,
@@ -1970,6 +1995,7 @@ def create_app() -> FastAPI:
                 "available_baselines": available_baselines,
                 "system_summaries": system_summaries,
                 "siem_rule_counts": siem_rule_counts,
+                "siem_rule_counts_by_pair": siem_rule_counts_by_pair,
                 "all_clients": [c for c in db.list_clients() if c["id"] != client_id],
             }
         )
@@ -2005,13 +2031,11 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         client_id: ActiveClient,
         background_tasks: BackgroundTasks,
-        scope: str = "client",
     ):
-        """Trigger manual Elastic sync.
+        """Trigger a manual Elastic sync for the active tenant.
 
-        scope: ``client`` (default) restricts the sync to the active tenant's
-        mapped (siem_id, space) pairs only. ``all`` falls back to a global
-        sync that iterates every active SIEM × every mapped space.
+        Always per-tenant since 4.1.13. Cross-tenant ``scope=all`` was
+        removed — detection rules are per-tenant.
         """
         import asyncio
         
@@ -2021,8 +2045,7 @@ def create_app() -> FastAPI:
         _sync_status["rule_count"] = 0
         _update_sync_status("running", "Initialising sync...")
         
-        sync_client_id = client_id if scope == "client" else None
-        asyncio.create_task(scheduled_sync(client_id=sync_client_id))
+        asyncio.create_task(scheduled_sync(client_id=client_id))
         
         # Return a live sync tracker that polls for status
         return HTMLResponse("""

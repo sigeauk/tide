@@ -294,6 +294,19 @@ async def promote_rule(
             )
             
             logger.info(f"Promoted rule '{rule.name}' from {source_space} to {target_space} by {username}")
+
+            # Fire-and-forget per-tenant sync so any cross-SIEM promotion
+            # (where staging and production live on different SIEMs) gets
+            # the fresh row under target_siem on the next render. Safe to
+            # run unawaited — errors are logged inside scheduled_sync and
+            # the optimistic local ``move_rule_space`` above already gave
+            # the operator instant UI feedback.
+            try:
+                import asyncio
+                from app.main import scheduled_sync
+                asyncio.create_task(scheduled_sync(client_id=client_id))
+            except Exception as _exc:  # pragma: no cover - background hint only
+                logger.warning(f"Post-promote sync schedule failed: {_exc}")
             
             # Return success toast with trigger to refresh
             response = HTMLResponse(
@@ -330,12 +343,11 @@ async def sync_rules(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
     force_mapping: bool = Query(False),
-    scope: str = Query("client", regex="^(client|all)$"),
 ):
-    """Trigger an immediate sync of rules from Elastic.
+    """Trigger an immediate per-tenant sync of rules from Elastic.
 
-    scope: ``client`` (default) restricts to the active tenant's mapped
-    (siem_id, space) pairs. ``all`` falls back to a global sync.
+    Always scoped to the active tenant. Cross-tenant ``scope=all`` was
+    removed in 4.1.13 — detection rules are per-tenant.
     """
     import asyncio
     from app.main import scheduled_sync, _sync_status, _update_sync_status
@@ -347,8 +359,7 @@ async def sync_rules(
     label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
     _update_sync_status("running", label)
     
-    sync_client_id = client_id if scope == "client" else None
-    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=sync_client_id))
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=client_id))
     
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(

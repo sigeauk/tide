@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 44
+SCHEMA_VERSION = 45
 
 
 def _scope_predicate(
@@ -1927,6 +1927,39 @@ class DatabaseService:
                 row_count,
             )
 
+        # ── Migration 45: drop shared detection_rules ─────────────────────
+        # Detection rules are per-tenant since 4.1.13. The shared cache
+        # ``detection_rules`` table in ``tide.duckdb`` is no longer used —
+        # ``run_elastic_sync(client_id)`` writes directly to the tenant's
+        # own DuckDB file via ``tenant_context_for(client_id)`` and every
+        # reader (`get_rules`, `get_rule_health_metrics`, etc.) routes to
+        # the tenant DB through the contextvar in ``DatabaseService.get_connection()``.
+        #
+        # Cache-only data: drop the table outright. The next user-triggered
+        # sync per tenant repopulates that tenant's DuckDB file. No
+        # operator state is lost. See CHANGELOG [4.1.13].
+        if current_version < 45:
+            try:
+                row_count = conn.execute(
+                    "SELECT COUNT(*) FROM detection_rules"
+                ).fetchone()[0]
+            except Exception:
+                row_count = 0
+            try:
+                conn.execute("DROP TABLE IF EXISTS detection_rules")
+            except Exception as exc:
+                logger.error(f"Migration 45 failed to drop shared detection_rules: {exc}")
+                raise
+            self._set_schema_version(conn, 45)
+            logger.warning(
+                "Migration 45: shared detection_rules dropped (%d rows removed). "
+                "Detection rules are per-tenant since 4.1.13 — sync writes "
+                "directly to the tenant DuckDB file. Each tenant must trigger "
+                "a sync (Sync button on /rules or /promotion) to repopulate "
+                "its own rules. See CHANGELOG [4.1.13].",
+                row_count,
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     def _validate_legacy_tables(self, conn):
@@ -2748,7 +2781,19 @@ class DatabaseService:
                     "WHERE rule_id = ? AND space = ? AND siem_id = ?",
                     [to_space, rule_id, from_space, siem_id]
                 )
-            conn.execute("CHECKPOINT")
+            # CHECKPOINT is best-effort — flushes pending writes to the
+            # main DB file. Will fail if a concurrent writer (e.g. a
+            # post-promote sync task on the same tenant DB) holds an open
+            # transaction; the move itself is already committed by the
+            # `with self.get_connection()` context exit, so we just log
+            # and move on instead of bubbling a 500 to the operator.
+            try:
+                conn.execute("CHECKPOINT")
+            except Exception as _ckpt_exc:  # noqa: BLE001
+                logger.debug(
+                    "move_rule_space CHECKPOINT skipped (non-fatal): %s",
+                    _ckpt_exc,
+                )
         logger.info(
             "Moved rule %s from '%s' to '%s' in DB (siem_id=%s)",
             rule_id, from_space, to_space, siem_id or '<unscoped>',
@@ -2926,13 +2971,13 @@ class DatabaseService:
                     return RuleHealthMetrics()
                 frag, params = _scope_predicate(allowed_scopes)
                 df = conn.execute(
-                    f"SELECT enabled, score, space, severity, name, raw_data "
+                    f"SELECT enabled, score, siem_id, space, severity, name, raw_data "
                     f"FROM detection_rules WHERE {frag}",
                     params,
                 ).df()
             else:
                 df = conn.execute(
-                    "SELECT enabled, score, space, severity, name, raw_data FROM detection_rules"
+                    "SELECT enabled, score, siem_id, space, severity, name, raw_data FROM detection_rules"
                 ).df()
             
             if df.empty:
@@ -2957,11 +3002,28 @@ class DatabaseService:
             quality_fair = len(df[(df['score'] >= 50) & (df['score'] < 70)])
             quality_poor = len(df[df['score'] < 50])
             
-            # Rules by space
+            # Rules by space (legacy, space-only) AND by composite scope.
+            # The composite map is the authoritative one — keying by space
+            # alone collapses two SIEMs that share a Kibana space-name into
+            # a single bucket (AGENTS.md §8.2 g4). Templates should prefer
+            # ``rules_by_scope`` and use ``rules_by_space`` only for
+            # single-SIEM legacy views.
             rules_by_space = {}
+            rules_by_scope = {}
             if 'space' in df.columns:
                 space_counts = df['space'].value_counts().to_dict()
                 rules_by_space = {str(k): int(v) for k, v in space_counts.items()}
+                if 'siem_id' in df.columns:
+                    pair_counts = (
+                        df.dropna(subset=['siem_id', 'space'])
+                          .groupby(['siem_id', 'space'])
+                          .size()
+                          .to_dict()
+                    )
+                    rules_by_scope = {
+                        f"{sid}|{str(sp).lower()}": int(cnt)
+                        for (sid, sp), cnt in pair_counts.items()
+                    }
             
             # Severity breakdown
             severity_breakdown = {}
@@ -3019,6 +3081,7 @@ class DatabaseService:
             quality_fair=quality_fair,
             quality_poor=quality_poor,
             rules_by_space=rules_by_space,
+            rules_by_scope=rules_by_scope,
             severity_breakdown=severity_breakdown,
             language_breakdown=language_breakdown,
         )
@@ -4291,12 +4354,19 @@ class DatabaseService:
         
         df_final = df[target_cols].copy()
         
-        # Check for duplicates within the incoming data (same rule_id + siem_id)
-        duplicates = df_final[df_final.duplicated(subset=['rule_id', 'siem_id'], keep='first')]
+        # Check for duplicates within the incoming data. The PK is
+        # (rule_id, siem_id, space) since 4.1.12 (Migration 44) — the same
+        # rule_id can legitimately appear in multiple Kibana spaces of the
+        # SAME SIEM (e.g. cloned base rule promoted to ``one`` and ``two``).
+        # Deduping by (rule_id, siem_id) here would silently drop the second
+        # space's row before INSERT, causing tenants mapped to multiple
+        # spaces of one SIEM to lose half their rules. Must dedupe on the
+        # full PK triple to match the storage contract.
+        duplicates = df_final[df_final.duplicated(subset=['rule_id', 'siem_id', 'space'], keep='first')]
         if not duplicates.empty:
             dup_names = duplicates['name'].tolist()
-            logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + siem_id): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
-            df_final = df_final.drop_duplicates(subset=['rule_id', 'siem_id'], keep='first')
+            logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + siem_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
+            df_final = df_final.drop_duplicates(subset=['rule_id', 'siem_id', 'space'], keep='first')
 
         with self.get_connection() as conn:
             try:

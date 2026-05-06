@@ -156,6 +156,12 @@ class RuleHealthMetrics(BaseModel):
     quality_poor: int = 0       # < 50
     
     rules_by_space: Dict[str, int] = Field(default_factory=dict)
+    # Composite-keyed counts: ``{f"{siem_id}|{space}": count}``. The
+    # space-only ``rules_by_space`` collapses two SIEMs that share a Kibana
+    # space-name into one bucket (AGENTS.md §8.2 g4). Templates should
+    # prefer this map and fall back to ``rules_by_space`` only for legacy
+    # single-SIEM views.
+    rules_by_scope: Dict[str, int] = Field(default_factory=dict)
     severity_breakdown: Dict[str, int] = Field(default_factory=dict)
     language_breakdown: Dict[str, int] = Field(default_factory=dict)
 

@@ -256,6 +256,16 @@ def deploy_to_siem(
     )
 
     if success:
+        # Fire-and-forget per-tenant sync so the freshly-pushed rule shows
+        # up in the active tenant's DB on the next render. Detection rules
+        # are per-tenant since 4.1.13 — the sync only writes to this
+        # client's DuckDB file, so no cross-tenant side-effects.
+        try:
+            import asyncio
+            from app.main import scheduled_sync
+            asyncio.create_task(scheduled_sync(client_id=client_id))
+        except Exception as _exc:  # pragma: no cover - background hint only
+            logger.warning(f"Post-deploy sync schedule failed: {_exc}")
         return HTMLResponse(f'<div class="alert alert-success">{message}</div>')
     else:
         return HTMLResponse(f'<div class="alert alert-danger">{message}</div>')
