@@ -299,7 +299,12 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
 
     for label, url, token, siem_id in targets:
         url = url.rstrip("/")
-        endpoint = f"{url}/api/detection_engine/rules/_find?per_page=1"
+        # 4.1.14 Fix 15: route through /s/default/ to match the standardised
+        # URL shape used by the production app (post-4.1.14). Hitting bare
+        # /api/detection_engine/... triggers proxy 404s / redirects on
+        # reverse-proxied Kibana ingresses, which historically made Section 3
+        # report a connection failure even when sync worked fine.
+        endpoint = f"{url}/s/default/api/detection_engine/rules/_find?per_page=1"
         print(f"  -> {label}")
         print(f"     URL: {endpoint}")
         print(f"     Auth: ApiKey {_redact(token)}")
@@ -904,7 +909,7 @@ def _check_live_sync_trace(info: dict) -> None:
     Uses snapshot-based DB reads (like sections 2-5) so the running app's
     write lock on tide.duckdb does not block the diagnostic.
     """
-    _line("9. Live sync trace (per-client, read-only)")
+    _line("10. Live sync trace (per-client, read-only)")
 
     if not info.get("db_read_ok"):
         print("  skipped: section 2 could not read shared DB")

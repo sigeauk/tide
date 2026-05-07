@@ -1140,17 +1140,27 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
         known_rule_keys = set()
 
     base_url = kibana_url.rstrip('/')
-    # `Connection: close` forces a fresh TCP connection per request. Defensive
-    # against reverse proxies / load balancers that silently drop idle keep-
-    # alive connections from the requests.Session pool, which would surface
-    # as a `ConnectionError`/`RemoteDisconnected` on the next page fetch.
+    # NOTE (4.1.14 Fix 15): Do NOT add `Connection: close` here. Combined with
+    # the ThreadPoolExecutor(max_workers=20) used downstream for parallel
+    # mapping fetches, it caused TCP port exhaustion against the default
+    # urllib3 pool of 10, surfacing as `urllib3.connectionpool is full` and
+    # SSL `Max retries exceeded` redirect storms. The HTTPAdapter mounted
+    # below sizes the pool to absorb the parallelism instead.
     headers = {
         "kbn-xsrf": "true",
         "Authorization": f"ApiKey {api_key}",
         "Content-Type": "application/json",
-        "Connection": "close",
     }
     session = requests.Session()
+    # 4.1.14 Fix 15: heavy-duty adapter sized for the 20-worker thread pool
+    # used by the parallel index-mapping fetches further down. Default
+    # urllib3 pool of 10 was being saturated, evicting in-flight connections
+    # mid-request and triggering retry-exhaustion on Kibana proxies.
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=25, pool_maxsize=25, max_retries=3,
+    )
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
     session.headers.update(headers)
     session.verify = False
 

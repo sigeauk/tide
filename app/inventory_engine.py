@@ -1795,7 +1795,22 @@ def _compute_coverage_status(host_id: str, system_id: str,
 
 def _resolve_rule_ref(rule_ref: Optional[str]) -> Optional[str]:
     """If rule_ref looks like a UUID/rule_id, look up the human-readable name
-    from detection_rules. Otherwise return as-is."""
+    from detection_rules. Otherwise return as-is.
+
+    Orphan handling (4.1.14): when a rule_ref looks like a rule UUID but no
+    matching ``detection_rules`` row exists in the active tenant DB, we now
+    return ``"⚠ Detached: <short_uuid>"`` instead of the bare UUID. This
+    happens when the operator removes a SIEM mapping (or moves a SIEM to a
+    different space) and the orphan-sweep in
+    ``app/services/sync.py:run_elastic_sync`` has cleaned up the
+    ``detection_rules`` rows. The mapping in ``step_detections`` /
+    ``vuln_detections`` is intentionally preserved (no FK cascade — see
+    schema in ``app/services/tenant_manager.py``) so the operator's hours of
+    baseline-mapping work survive a temporary sync regression or a deliberate
+    promote-to-staging move. The "Detached" prefix tells them the link still
+    exists but the source rule is currently absent from production rules,
+    while keeping the short UUID for debugging.
+    """
     if not rule_ref:
         return None
     # Quick heuristic: UUIDs are 32+ hex chars with dashes
@@ -1808,6 +1823,10 @@ def _resolve_rule_ref(rule_ref: Optional[str]) -> Optional[str]:
                 ).fetchone()
             if row and row[0]:
                 return row[0]
+            # UUID-shaped but not present in the tenant's detection_rules —
+            # mark as Detached so the operator can distinguish "rule
+            # temporarily missing" from "free-text rule reference".
+            return f"⚠ Detached: {rule_ref[:8]}"
         except Exception:
             pass
     return rule_ref

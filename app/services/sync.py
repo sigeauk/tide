@@ -882,6 +882,79 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                             )
                             db.delete_rules_for_spaces([space], siem_id=siem_id)
 
+                # ── Orphan-mapping sweep ────────────────────────────────
+                # The mirror reconcile above only visits (siem_id, space)
+                # pairs the operator currently has mapped in
+                # ``client_siem_map``. When a mapping is removed (or a SIEM
+                # is repointed at a different space), the rows previously
+                # written under the OLD (siem_id, space) pair are NEVER
+                # touched again — the per-pair fetch never runs, so neither
+                # ``save_audit_results`` nor ``reconcile_rules_for_siem_space``
+                # ever revisits them. They linger forever as ghost rules in
+                # the tenant DB (the customer-reported "14 rules in DB but
+                # only 7 in Kibana" symptom).
+                #
+                # This pass cleans them up: query DISTINCT (siem_id, space)
+                # in the tenant's ``detection_rules`` and delete every pair
+                # that is NOT in ``client_scope`` (this client's current
+                # mappings). Safe because:
+                #   * The operator deliberately removed the mapping — these
+                #     rows can never be refreshed by sync.
+                #   * ``step_detections.rule_ref`` and
+                #     ``applied_detections.detection_id`` are loose VARCHAR
+                #     columns (no FK), so deleting from ``detection_rules``
+                #     does NOT cascade and operator baseline mappings
+                #     survive. A subsequent UI render shows the mapping as
+                #     "Detached" via ``_resolve_rule_ref`` (see
+                #     ``app/inventory_engine.py``).
+                #   * Runs INSIDE the tenant context already pinned at the
+                #     top of this function — no shared-DB writes possible.
+                try:
+                    with db.get_connection() as _ocon:
+                        present_pairs = {
+                            (sid, sp) for sid, sp in _ocon.execute(
+                                "SELECT DISTINCT siem_id, space FROM detection_rules "
+                                "WHERE siem_id IS NOT NULL AND space IS NOT NULL"
+                            ).fetchall()
+                        }
+                        active_pairs = {
+                            (sid, sp) for sid, spset in client_scope.items() for sp in spset
+                        }
+                        orphan_pairs = present_pairs - active_pairs
+                        for o_sid, o_sp in orphan_pairs:
+                            before = _ocon.execute(
+                                "SELECT COUNT(*) FROM detection_rules "
+                                "WHERE siem_id = ? AND space = ?",
+                                [o_sid, o_sp],
+                            ).fetchone()[0]
+                            if not before:
+                                continue
+                            _ocon.execute(
+                                "DELETE FROM detection_rules "
+                                "WHERE siem_id = ? AND space = ?",
+                                [o_sid, o_sp],
+                            )
+                            siem_label = next(
+                                (s.get('label', '?') for s in siems if s.get('id') == o_sid),
+                                o_sid[:8] if o_sid else '?',
+                            )
+                            logger.info(
+                                f"Orphan sweep: client_id={client_id} removed "
+                                f"{before} rule(s) from siem='{siem_label}' "
+                                f"siem_id={o_sid} space='{o_sp}' — pair no longer "
+                                f"in client_siem_map. Baseline mappings to these "
+                                f"rule_ids are preserved (no FK cascade) and will "
+                                f"render as 'Detached' in the UI."
+                            )
+                        if orphan_pairs:
+                            _ocon.execute("CHECKPOINT")
+                except Exception as _orphan_exc:  # noqa: BLE001
+                    # Never let the orphan sweep break the sync return path.
+                    logger.error(
+                        f"Orphan sweep failed for client_id={client_id}: "
+                        f"{type(_orphan_exc).__name__}: {_orphan_exc}"
+                    )
+
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count
             else:
