@@ -11,7 +11,17 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from log import log_debug, log_error, log_info
+try:
+    # Works when caller put /app/app on sys.path (legacy sync entrypoint
+    # in app/services/sync.py does this before `import elastic_helper`).
+    from log import log_debug, log_error, log_info
+except ModuleNotFoundError:
+    # Works when caller imported via the package path
+    # (`from app.elastic_helper import ...`) — e.g. test_rule, promotion,
+    # management. Without this fallback, a uvicorn hot-reload that
+    # re-executes this module before sync.py has run leaves test_rule
+    # raising `ModuleNotFoundError: No module named 'log'` → HTTP 500.
+    from app.log import log_debug, log_error, log_info
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
@@ -726,10 +736,10 @@ def get_data_view_indices(session, base_url, space, rule):
     if not data_view_id:
         return []
 
-    if str(space).lower() == "default":
-        endpoint = f"{base_url}/api/data_views/data_view/{data_view_id}"
-    else:
-        endpoint = f"{base_url}/s/{space}/api/data_views/data_view/{data_view_id}"
+    # Always use /s/{space}/api/... -- see _space_api_prefix and
+    # fetch_detection_rules for the full rationale (4.1.14 fix). Do NOT
+    # special-case the literal 'default' here.
+    endpoint = f"{base_url}/s/{space}/api/data_views/data_view/{data_view_id}"
 
     try:
         res = session.get(endpoint, timeout=10)
@@ -1130,7 +1140,16 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
         known_rule_keys = set()
 
     base_url = kibana_url.rstrip('/')
-    headers = {"kbn-xsrf": "true", "Authorization": f"ApiKey {api_key}", "Content-Type": "application/json"}
+    # `Connection: close` forces a fresh TCP connection per request. Defensive
+    # against reverse proxies / load balancers that silently drop idle keep-
+    # alive connections from the requests.Session pool, which would surface
+    # as a `ConnectionError`/`RemoteDisconnected` on the next page fetch.
+    headers = {
+        "kbn-xsrf": "true",
+        "Authorization": f"ApiKey {api_key}",
+        "Content-Type": "application/json",
+        "Connection": "close",
+    }
     session = requests.Session()
     session.headers.update(headers)
     session.verify = False
@@ -1147,7 +1166,11 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
     # to run. See app/services/sync.py for the consumer.
     diagnostics: dict = {}
 
-    PAGE_SIZE = 1000          # Kibana _find documented max
+    PAGE_SIZE = 100           # Lowered from 1000 (Kibana documented max) to
+                              # keep per-page response construction well under
+                              # the 60s timeout on slow / large-rule-set
+                              # Kibanas. More pages, but each page completes
+                              # before the proxy / Kibana stalls.
     MAX_PAGE_RETRIES = 3
     BACKOFF_S = (0.5, 1.0, 2.0)
 
@@ -1169,11 +1192,25 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
             failure_endpoint: str = ""
 
             while True:
-                # Construct URL with space prefix if not 'default'
-                if space.lower() == 'default':
-                    endpoint = f"{base_url}/api/detection_engine/rules/_find"
-                else:
-                    endpoint = f"{base_url}/s/{space}/api/detection_engine/rules/_find"
+                # Always use /s/{space}/api/... for every space, including
+                # 'default'. Vanilla Kibana accepts both /api/... and
+                # /s/default/api/... at the application layer, but reverse
+                # proxies / nginx ingresses fronting Kibana commonly route on
+                # the /s/<space>/ prefix and 404 the bare /api/... form.
+                # `test_elastic_connection_full` (the working test-button
+                # path) always uses /s/<space>/...; aligning sync onto the
+                # same shape eliminates the test-vs-sync divergence that
+                # caused 4.1.13's `0/0 rules` regression for default-only
+                # SIEMs. Do NOT special-case the literal string 'default'
+                # here -- AGENTS.md §8.3 anti-pattern.
+                endpoint = f"{base_url}/s/{space}/api/detection_engine/rules/_find"
+                if page == 1:
+                    # Permanent visible proof of the URL being hit per
+                    # (siem, space). One line per space per sync; matches
+                    # the dry-run output from `diag_sync` section 9.
+                    log_debug(
+                        f"[sync url] GET {endpoint} (space={space!r})"
+                    )
 
                 # Per-page retry with exponential backoff for transient 5xx /
                 # network errors. Fatal errors (4xx other than 429) break out
@@ -1186,7 +1223,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                         res = session.get(
                             endpoint,
                             params={"page": page, "per_page": PAGE_SIZE},
-                            timeout=30,
+                            timeout=60,
                         )
                         if res.status_code == 200:
                             break
@@ -1215,7 +1252,19 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                         break
                     except (requests.exceptions.ConnectionError,
                             requests.exceptions.Timeout) as e:
-                        last_err = str(e)[:120]
+                        # Capture the exact exception class + full message so
+                        # the operator can tell `ReadTimeout` from
+                        # `ConnectTimeout` from `RemoteDisconnected` from
+                        # `ProtocolError` etc. Truncating to 120 chars (the
+                        # pre-4.1.14 behaviour) hid all of that under a
+                        # generic "network error" banner.
+                        import traceback as _tb
+                        last_err = f"{type(e).__name__}: {str(e)}"
+                        log_debug(
+                            f"[sync exc] space={space!r} page={page} "
+                            f"attempt={attempt + 1}/{MAX_PAGE_RETRIES} "
+                            f"endpoint={endpoint}\n{_tb.format_exc()}"
+                        )
                         attempt += 1
                         if attempt < MAX_PAGE_RETRIES:
                             _time.sleep(BACKOFF_S[attempt - 1])
@@ -1472,11 +1521,25 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
 
 def _space_api_prefix(base_url: str, space: str) -> str:
     """Build the correct Kibana API URL prefix for a space.
-    
-    Kibana's default space has NO /s/default/ prefix — it's just /api/...
-    Named spaces use /s/{space}/api/...
+
+    Always emits ``{base_url}/s/{space}`` for every space, including
+    ``default``. See the matching comment in ``fetch_detection_rules`` for
+    the full rationale (4.1.14 fix): vanilla Kibana accepts both forms but
+    reverse-proxy ingresses commonly only honour the ``/s/<space>/`` prefix,
+    so aligning every URL builder onto the prefixed shape matches the
+    working ``test_elastic_connection_full`` path and eliminates the
+    test-vs-sync divergence.
+
+    Empty/None ``space`` is a config bug (the link-to-tenant UI rejects
+    empty space); guarded so we don't silently emit ``/s//api/...`` and
+    return ``base_url`` with an error log so the operator sees it.
     """
-    if not space or space.lower() == "default":
+    if not space:
+        log_error(
+            f"_space_api_prefix called with empty space (base_url={base_url!r}). "
+            "This indicates a missing client_siem_map.space entry; falling back "
+            "to {base_url} but the call will likely 404."
+        )
         return f"{base_url}"
     return f"{base_url}/s/{space}"
 

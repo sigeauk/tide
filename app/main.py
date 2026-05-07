@@ -1426,6 +1426,12 @@ def create_app() -> FastAPI:
         # Per-tenant since 4.1.13 — tenant context is set above; rule
         # health metrics read directly from the tenant DB.
         metrics = db.get_rule_health_metrics()
+        # Hide orphan space buckets (rules whose (siem_id, space) is no
+        # longer in client_siem_map after a mapping change). The sync
+        # path eventually deletes the rows; this keeps the metrics card
+        # honest in the meantime.
+        from app.api.rules import _prune_orphan_scopes
+        _prune_orphan_scopes(metrics, db, _cid)
         # Build (siem_id, space)-keyed labels — keying by space alone
         # collapses two SIEMs that share a Kibana space-name into one
         # legend entry (AGENTS.md §8.2 g4 / §8.3 Bug C). The legacy

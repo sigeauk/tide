@@ -22,6 +22,8 @@ Sections:
   6. Recent ERROR / WARN log tail (when log files are mounted)
   7. Elasticsearch reachability (port 9200, info-only)
   8. Verdict block naming the failing link and the next action
+  9. Dry Run Sync URL Construction (literal URLs the app would hit, no network)
+ 10. Per-client live sync trace (calls fetch_detection_rules, no DB writes)
 
 Designed to handle TIDE 4.0.x (env-var driven), 4.0.13+ (siem_inventory) and
 4.1.x (per-tenant DB) without needing to know which version is running.
@@ -638,9 +640,11 @@ def _check_migrations(info: dict) -> None:
               f"print(duckdb.connect('/app/data/tide.duckdb', read_only=True)"
               f".execute('PRAGMA table_info(siem_inventory)').fetchall())\"")
 
-    # ── Shared DB: detection_rules column-diff ──────────────────────────────
-    # The shared detection_rules table uses a 23-column schema (no client_id).
-    # If this is wrong it indicates a failed Migration 37 rebuild.
+    # ── Shared DB: detection_rules column-diff (skipped post-4.1.13) ──────────────
+    # Since 4.1.13 (Migration 45) `detection_rules` exists ONLY in tenant
+    # DBs. Confirm the shared DB does NOT carry the table; presence here
+    # would be a real regression worth flagging. Tenant column-diff still
+    # runs in section 4 (`_check_tenant_dbs`).
     db_path = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
     import shutil, tempfile, duckdb as _ddb
     snap_dir2 = None
@@ -653,9 +657,23 @@ def _check_migrations(info: dict) -> None:
             shutil.copy2(wal2, snap2 + ".wal")
         conn2 = _ddb.connect(snap2, read_only=True)
         try:
-            _check_dr_columns(
-                conn2, "detection_rules", _SHARED_DR_COLS, "  shared DB"
-            )
+            tables = [r[0] for r in conn2.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_schema = 'main'"
+            ).fetchall()]
+            if "detection_rules" in tables:
+                print("  X shared DB still carries `detection_rules` table. "
+                      "Since 4.1.13 (Migration 45) this table is supposed to "
+                      "live ONLY in tenant DBs. Presence here means "
+                      "Migration 45 did not run — inspect schema_version and "
+                      "the migrations log.")
+                _check_dr_columns(
+                    conn2, "detection_rules", _SHARED_DR_COLS, "  shared DB"
+                )
+            else:
+                print("  + shared DB: detection_rules absent (expected since "
+                      "4.1.13 Migration 45 — rules are per-tenant). Per-tenant "
+                      "column-diff is in section 4.")
         finally:
             conn2.close()
     except Exception as exc:
@@ -788,6 +806,344 @@ def _check_elasticsearch(siems: list) -> None:
             print(f"     ERROR: {type(exc).__name__}: {exc}")
 
 
+def _check_dry_run_urls(info: dict) -> None:
+    """Section 9: Dry Run Sync URL Construction.
+
+    For every (client, siem, space) row in client_siem_map joined to
+    siem_inventory, print the EXACT HTTP method, fully-qualified URL, and
+    redacted headers that the sync would send to fetch detection rules.
+
+    Pure string construction — makes ZERO network calls. The live probe is
+    section 10 (`_check_live_sync_trace`). The point of this section is to
+    prove what the app is sending, divorced from network behaviour, so a
+    URL-builder regression (e.g. the 4.1.13 `default`-space stripping bug)
+    is visible from the operator's first run.
+
+    Uses the same `f"{base_url}/s/{space}/api/detection_engine/rules/_find"`
+    formula as `fetch_detection_rules` (post-4.1.14). Flags `[WARN]` if any
+    constructed URL contains the legacy bare `/api/detection_engine/...`
+    shape — that would mean the special-case has crept back in.
+    """
+    _line("9. Dry Run Sync URL Construction")
+    siems = {s["id"]: s for s in (info.get("siems") or [])}
+    clients = {c[0]: c[1] for c in (info.get("clients") or [])}
+    mappings = info.get("mappings") or []
+    if not mappings:
+        print("  no client_siem_map rows; nothing to construct.")
+        return
+    if not siems:
+        print("  no siem_inventory rows; cannot resolve base URLs.")
+        return
+
+    legacy_shape_seen = False
+    printed = 0
+    for client_id, siem_id, role, space in mappings:
+        siem = siems.get(siem_id)
+        client_name = clients.get(client_id, "<unknown>")
+        if not siem:
+            print(f"  [client={client_name!r}] [siem={siem_id[:8]}] "
+                  f"[space={space!r}] [role={role!r}] -- SKIP: "
+                  "siem_id not found in siem_inventory")
+            continue
+        base_url = (siem.get("kibana_url") or "").rstrip("/")
+        if not base_url:
+            print(f"  [client={client_name!r}] [siem={siem.get('label')!r}] "
+                  f"[space={space!r}] [role={role!r}] -- SKIP: "
+                  "siem_inventory.kibana_url is empty")
+            continue
+        # Mirror the post-4.1.14 fetch_detection_rules URL shape exactly.
+        # Empty-space guard mirrors _space_api_prefix.
+        if not space:
+            url = f"{base_url}/api/detection_engine/rules/_find"
+        else:
+            url = f"{base_url}/s/{space}/api/detection_engine/rules/_find"
+        # Detect the legacy bare-/api/ shape that 4.1.13 produced for the
+        # `default` space. If we ever see it again the [WARN] line below
+        # tells the operator the regression is back.
+        if "/s/" not in url and "/api/detection_engine/" in url:
+            legacy_shape_seen = True
+        token = siem.get("api_token") or ""
+        headers = {
+            "kbn-xsrf": "true",
+            "Content-Type": "application/json",
+            "Authorization": f"ApiKey {_redact(token)}",
+        }
+        print(
+            f"  [client={client_name!r}] [siem={siem.get('label')!r}] "
+            f"[space={space!r}] [role={role!r}]"
+        )
+        print(f"     METHOD : GET")
+        print(f"     URL    : {url}")
+        print(f"     HEADERS: {headers}")
+        printed += 1
+
+    if printed == 0:
+        print("  no dry-run lines emitted (all rows skipped above).")
+        return
+    if legacy_shape_seen:
+        print()
+        print("  [WARN] one or more URLs above use the bare /api/... shape "
+              "WITHOUT a /s/<space>/ prefix. This is the 4.1.13 regression "
+              "and means a URL builder is special-casing 'default' again. "
+              "Check fetch_detection_rules and _space_api_prefix in "
+              "app/elastic_helper.py.")
+    else:
+        print()
+        print(f"  [OK] {printed} URL(s) constructed; all use the "
+              "/s/<space>/api/... shape that matches the working "
+              "test-connection path.")
+
+
+def _check_live_sync_trace(info: dict) -> None:
+    """Section 10: per-client live sync trace.
+
+    Runs through every step of ``run_elastic_sync`` for each client,
+    printing exactly what happens at each decision point WITHOUT modifying
+    the database.  This shows you precisely where the pipeline stalls.
+
+    Uses snapshot-based DB reads (like sections 2-5) so the running app's
+    write lock on tide.duckdb does not block the diagnostic.
+    """
+    _line("9. Live sync trace (per-client, read-only)")
+
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read shared DB")
+        return
+
+    clients   = info.get("clients")   or []
+    siems_raw = info.get("siems")     or []
+    mappings  = info.get("mappings")  or []
+
+    if not clients:
+        print("  no clients found — nothing to trace")
+        return
+
+    import sys, os, shutil, tempfile
+    try:
+        import requests as _req
+        import duckdb as _ddb
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    except ImportError as exc:
+        print(f"  required library not available: {exc}")
+        return
+
+    # Build lookup structures from the snapshot data already gathered
+    siems_by_id = {s["id"]: s for s in siems_raw}
+
+    # (client_id → [(siem_id, space)]) — from the already-read mappings
+    scopes_by_client: dict = {}
+    for cid, sid, _role, space in mappings:
+        sp = (space or "default").strip().lower() or "default"
+        scopes_by_client.setdefault(cid, []).append((sid, sp))
+
+    # Re-open a snapshot to get the encrypted tokens (section 2 stores them)
+    # — they were already read into info["siems"] but let's confirm they match
+    db_path   = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
+    data_dir  = os.path.dirname(db_path)
+
+    app_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
+    if app_dir not in sys.path:
+        sys.path.insert(0, app_dir)
+
+    for cid, name, db_filename in clients:
+        print(f"\n  --- Client: '{name}' ({cid[:8]}...) ---")
+
+        # ── Step 1: (siem_id, space) pairs ────────────────────────────────
+        pairs = scopes_by_client.get(cid, [])
+        print(f"    client_siem_map pairs → {pairs}")
+        if not pairs:
+            print("    [STOP] No client_siem_map rows for this client.")
+            print("           Fix: add a SIEM mapping via Management → Link SIEM to Client.")
+            continue
+
+        # ── Step 2: tenant DB path ─────────────────────────────────────────
+        if not db_filename:
+            print("    [STOP] clients.db_filename is NULL — tenant DB not created.")
+            print("           Fix: recreate tenant via Management page.")
+            continue
+        tenant_path = os.path.join(data_dir, db_filename)
+        print(f"    tenant DB path → {tenant_path}")
+        if not os.path.exists(tenant_path):
+            print("    [WARN] Tenant DB file does not exist on disk yet.")
+            print("           It will be created on first successful sync.")
+
+        # ── Step 3: per-SIEM trace ─────────────────────────────────────────
+        client_scope: dict = {}
+        for sid, sp in pairs:
+            client_scope.setdefault(sid, set()).add(sp)
+
+        any_fail = False
+        for siem_id, spaces in client_scope.items():
+            siem = siems_by_id.get(siem_id)
+            if not siem:
+                print(f"\n    SIEM {siem_id[:8]} — [STOP] not found in siem_inventory")
+                any_fail = True
+                continue
+
+            kurl  = (siem.get("kibana_url") or "").rstrip("/")
+            token = siem.get("api_token") or ""
+            label = siem.get("label", "?")
+            active = siem.get("is_active", False)
+            spaces_sorted = sorted(spaces)
+
+            print(f"\n    SIEM '{label}' ({siem_id[:8]})")
+            print(f"      is_active  = {active}")
+            print(f"      kibana_url = {kurl!r}")
+            print(f"      api_token  = {_redact(token)}")
+            print(f"      spaces     = {spaces_sorted}")
+
+            if not active:
+                print("      [STOP] SIEM is inactive — sync skips inactive SIEMs.")
+                print("             Fix: enable SIEM in Management → SIEMs.")
+                any_fail = True
+                continue
+            if not kurl:
+                print("      [STOP] kibana_url is empty.")
+                any_fail = True
+                continue
+            if not token:
+                print("      [STOP] api_token is empty — no credential.")
+                any_fail = True
+                continue
+
+            # ── Step 3a: per-space HTTP probe ──────────────────────────────
+            for space in spaces_sorted:
+                if space.lower() == "default":
+                    ep = f"{kurl}/api/detection_engine/rules/_find?page=1&per_page=5"
+                else:
+                    ep = f"{kurl}/s/{space}/api/detection_engine/rules/_find?page=1&per_page=5"
+                print(f"      space '{space}' → {ep}")
+                try:
+                    r = _req.get(
+                        ep,
+                        headers={
+                            "kbn-xsrf": "true",
+                            "Authorization": f"ApiKey {token}",
+                        },
+                        verify=False, timeout=15,
+                    )
+                    if r.status_code == 200:
+                        try:
+                            j = r.json()
+                            total = j.get("total", "?")
+                            sample = [rr.get("name") for rr in (j.get("data") or [])[:3]]
+                            print(f"        HTTP 200  Kibana total={total}  sample={sample}")
+                            if total == 0:
+                                print("        [WARN] Kibana says 0 rules — space empty or API key")
+                                print("               lacks 'detections:read' privilege.")
+                        except Exception:
+                            print(f"        HTTP 200 (body not JSON): {r.text[:120]}")
+                    elif r.status_code == 404 and space.lower() != "default":
+                        print(f"        HTTP 404 — space '{space}' may not exist on this Kibana.")
+                        try:
+                            sp_r = _req.get(
+                                f"{kurl}/api/spaces/space",
+                                headers={"kbn-xsrf": "true", "Authorization": f"ApiKey {token}"},
+                                verify=False, timeout=10,
+                            )
+                            if sp_r.status_code == 200:
+                                real = sorted(s.get("id") for s in sp_r.json() if s.get("id"))
+                                print(f"        Real spaces on this Kibana: {real}")
+                                print(f"        [FIX] Update the mapping to use one of: {real}")
+                        except Exception:
+                            pass
+                        any_fail = True
+                    else:
+                        print(f"        HTTP {r.status_code}: {r.text[:200]}")
+                        any_fail = True
+                except Exception as exc:
+                    print(f"        [ERROR] {type(exc).__name__}: {exc}")
+                    any_fail = True
+
+            # ── Step 3b: fetch_detection_rules (no DB write, no field mapping) ──
+            print(f"\n      fetch_detection_rules (check_mappings=False) ...")
+            orig_cwd = os.getcwd()
+            siem_df = None
+            try:
+                os.chdir(app_dir)
+                import elastic_helper
+                siem_df = elastic_helper.fetch_detection_rules(
+                    kibana_url=kurl,
+                    api_key=token,
+                    spaces=spaces_sorted,
+                    check_mappings=False,
+                    known_rule_keys=set(),
+                    elasticsearch_url=siem.get("elasticsearch_url"),
+                )
+            except Exception as exc:
+                print(f"      [FAIL] fetch_detection_rules: {type(exc).__name__}: {exc}")
+                any_fail = True
+                continue
+            finally:
+                try:
+                    os.chdir(orig_cwd)
+                except Exception:
+                    pass
+
+            if siem_df is None or siem_df.empty:
+                print("      [FAIL] fetch_detection_rules returned empty DataFrame.")
+                print("             Kibana HTTP probe above shows the connection works;")
+                print("             check for exceptions inside elastic_helper logged to tide.log.")
+                any_fail = True
+                continue
+
+            print(f"      DataFrame rows: {len(siem_df)}")
+            if "space_id" in siem_df.columns:
+                sc = siem_df["space_id"].fillna("default").value_counts().to_dict()
+                print(f"      rows per space_id: {sc}")
+            else:
+                print("      [WARN] 'space_id' column absent — rules will all land in space='default'.")
+
+            cols = list(siem_df.columns)
+            print(f"      DataFrame columns ({len(cols)}): {cols}")
+            for must in ("rule_id", "space_id"):
+                if must not in cols:
+                    print(f"      [WARN] Missing expected column '{must}' — save_audit_results may drop rows.")
+            # siem_id is absent here by design — sync.py stamps it after
+            # fetch_detection_rules returns.  If it were present that would
+            # indicate a regression in elastic_helper.
+            if "siem_id" in cols:
+                print("      [WARN] 'siem_id' present in DataFrame — elastic_helper now stamps it,")
+                print("             which may conflict with the stamp in sync.py. Check for duplicates.")
+
+        # ── Step 4: tenant DB current state ───────────────────────────────
+        if os.path.exists(tenant_path):
+            try:
+                snap_dir = tempfile.mkdtemp(prefix="diag_t_")
+                snap     = os.path.join(snap_dir, "t.duckdb")
+                shutil.copy2(tenant_path, snap)
+                tc = _ddb.connect(snap, read_only=True)
+                try:
+                    before = tc.execute("SELECT COUNT(*) FROM detection_rules").fetchone()[0]
+                    sp_rows = tc.execute(
+                        "SELECT space, siem_id, COUNT(*) c FROM detection_rules "
+                        "GROUP BY space, siem_id ORDER BY space, siem_id"
+                    ).fetchall()
+                finally:
+                    tc.close()
+                shutil.rmtree(snap_dir, ignore_errors=True)
+                print(f"\n    tenant DB ({db_filename}): {before} detection_rules rows")
+                for sp, sid, cnt in sp_rows:
+                    print(f"      space='{sp}' siem={sid[:8] if sid else 'NULL'}: {cnt} rows")
+                if before == 0:
+                    print("    [WARN] Tenant DB has 0 rules — sync has not yet written successfully.")
+            except Exception as exc:
+                print(f"\n    [FAIL] could not snapshot tenant DB: {exc}")
+
+        if not any_fail:
+            print(f"\n    [OK] All pipeline steps passed for '{name}'.")
+            print(f"         Rules appear to reach save_audit_results.")
+            print(f"         If the UI still shows 0 rules, check:")
+            print(f"           a) Active client cookie set to {cid}")
+            print(f"           b) /api/rules?... query includes the correct space filter")
+            print(f"           c) Recent sync log lines in tide.log (section 6 above)")
+        else:
+            print(f"\n    [FAIL] Pipeline broken for '{name}' — fix items marked [STOP]/[FAIL] above.")
+
+
 def main() -> int:
     print("TIDE comprehensive diagnostic")
     print("=============================")
@@ -805,6 +1161,8 @@ def main() -> int:
     _check_logs()
     _check_elasticsearch(info.get("siems") or [])
     _verdict(env, info)
+    _check_dry_run_urls(info)
+    _check_live_sync_trace(info)
     return 0
 
 

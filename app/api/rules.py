@@ -61,6 +61,38 @@ def _build_space_labels_by_pair(db, client_id: str) -> dict:
     }
 
 
+def _prune_orphan_scopes(metrics, db, client_id: str):
+    """Strip rule-count buckets for spaces no longer in ``client_siem_map``.
+
+    After a SIEM mapping change (space removed / SIEM repointed) the old
+    rows linger in ``detection_rules`` until the next sync cleans them up.
+    They show up in the Rule Health metrics card as orphan entries (e.g.
+    ``One: 7`` once the ``one`` space was unmapped). The sync path will
+    eventually delete them, but in the meantime we hide them from the UI
+    so the card reflects the *current* mapping. Mutates ``metrics`` in
+    place; safe no-op if the client has no SIEMs.
+    """
+    try:
+        siems = db.get_client_siems(client_id) or []
+    except Exception:
+        return metrics
+    allowed_spaces = {s["space"] for s in siems if s.get("space")}
+    allowed_pairs = {
+        f'{s["id"]}|{str(s["space"]).lower()}'
+        for s in siems
+        if s.get("id") and s.get("space")
+    }
+    if metrics.rules_by_space:
+        metrics.rules_by_space = {
+            k: v for k, v in metrics.rules_by_space.items() if k in allowed_spaces
+        }
+    if metrics.rules_by_scope:
+        metrics.rules_by_scope = {
+            k: v for k, v in metrics.rules_by_scope.items() if k in allowed_pairs
+        }
+    return metrics
+
+
 @router.get("", response_class=HTMLResponse)
 def list_rules(
     request: Request,
@@ -129,6 +161,9 @@ def get_metrics(
     from app.main import get_last_sync_time
     # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
     metrics = db.get_rule_health_metrics()
+    # Hide orphan space buckets (rules whose (siem_id, space) is no
+    # longer in client_siem_map after a mapping change).
+    _prune_orphan_scopes(metrics, db, client_id)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",

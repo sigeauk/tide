@@ -4210,6 +4210,15 @@ class DatabaseService:
     ) -> List[Dict[str, Any]]:
         """Get detection rules as dicts for JSON log export.
 
+        Since 4.1.13 / Migration 45 `detection_rules` lives only in tenant
+        DBs (the shared `detection_rules` table was dropped). This function
+        therefore REQUIRES an active tenant context — the caller must wrap
+        the invocation in `set_tenant_context(resolve_tenant_db_path(...))`
+        first. If no tenant context is active we raise a clear RuntimeError
+        instead of letting `self.get_connection()` route to the shared DB
+        and crash with `Catalog Error: Table with name detection_rules does
+        not exist!` (the 4.1.14 rule_logger regression).
+
         Args:
             siem_id: When provided, restrict to rows whose
                 ``detection_rules.siem_id`` equals this value (4.0.13+ scoping).
@@ -4219,6 +4228,17 @@ class DatabaseService:
                 Empty / falsy entries are dropped; an empty list after
                 filtering is treated as 'no space filter'.
         """
+        from app.services.tenant_manager import get_tenant_db_path
+        if get_tenant_db_path() is None:
+            raise RuntimeError(
+                "get_all_rules_for_export requires an active tenant context. "
+                "Since 4.1.13 (Migration 45) `detection_rules` lives only in "
+                "tenant DBs. Wrap the call in `set_tenant_context("
+                "resolve_tenant_db_path(client_id, data_dir))` first. See "
+                "app/services/rule_logger.py:run_rule_log_export for the "
+                "reference per-tenant iteration pattern."
+            )
+
         clauses: List[str] = []
         params: List[Any] = []
         if siem_id:

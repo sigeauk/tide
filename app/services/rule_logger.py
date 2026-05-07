@@ -80,9 +80,60 @@ def export_rule_logs(
         # Caller can override the filename so multiple per-space files can
         # coexist in the same SIEM directory (e.g. 2026-04-29-default-rules.log).
         log_file = os.path.join(log_path, filename or f"{today}-rules.log")
-        
-        # Get rules from DB scoped to this SIEM / space when caller asked.
-        rules = db.get_all_rules_for_export(siem_id=siem_id, space=space)
+
+        # Since 4.1.13 (Migration 45) `detection_rules` lives only in tenant
+        # DBs. Iterate every tenant, set tenant context, fetch the
+        # SIEM/space-scoped slice from each, and dedupe by rule_id (rules
+        # for a given (siem_id, space) are identical across tenants that
+        # mapped that pair, so first-write-wins is correct).
+        from app.services.tenant_manager import (
+            resolve_tenant_db_path,
+            set_tenant_context,
+            clear_tenant_context,
+            get_tenant_db_path,
+        )
+        from app.config import get_settings
+        data_dir = get_settings().data_dir
+        prev_ctx = get_tenant_db_path()
+        rules_by_id: Dict[str, Dict] = {}
+        try:
+            tenants = db.list_clients() or []
+        except Exception as exc:
+            logger.error(f"export_rule_logs: list_clients() failed: {exc}")
+            return 0
+        for tenant in tenants:
+            cid = tenant.get("id")
+            tname = tenant.get("name") or cid
+            tpath = resolve_tenant_db_path(cid, data_dir) if cid else None
+            if not tpath or not os.path.exists(tpath):
+                logger.debug(
+                    f"export_rule_logs: tenant '{tname}' ({cid}) has no "
+                    f"tenant DB on disk yet; skipping."
+                )
+                continue
+            try:
+                set_tenant_context(tpath)
+                tenant_rules = db.get_all_rules_for_export(
+                    siem_id=siem_id, space=space
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"export_rule_logs: tenant '{tname}' ({cid}) read failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                tenant_rules = []
+            finally:
+                # Restore prior context (None when called from scheduler).
+                if prev_ctx is None:
+                    clear_tenant_context()
+                else:
+                    set_tenant_context(prev_ctx)
+            for r in tenant_rules:
+                rid = r.get("rule_id")
+                if rid and rid not in rules_by_id:
+                    rules_by_id[rid] = r
+        rules = list(rules_by_id.values())
+
         if not rules:
             logger.warning(
                 f"No detection rules to export (siem_id={siem_id or '<any>'}, "

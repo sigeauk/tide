@@ -3363,6 +3363,27 @@ _QUERY_PRESETS = [
      "target": "tenant",
      "sql": ("SELECT id, name, source, updated_at FROM threat_actors "
              "ORDER BY updated_at DESC NULLS LAST LIMIT 100")},
+    # 4.1.14: SIEM/space introspection presets. Pinned to target='tenant'
+    # because since 4.1.13 (Migration 45) `detection_rules` lives in each
+    # tenant DB, not the shared DB. Running these in shared scope would
+    # error with `Table does not exist`.
+    {"id": "rules_per_siem_space_role",
+     "label": "Rule count per SIEM/space/role",
+     "target": "tenant",
+     "sql": ("SELECT m.siem_id, m.space, m.environment_role, "
+             "COUNT(r.rule_id) AS rule_count "
+             "FROM client_siem_map m "
+             "LEFT JOIN detection_rules r "
+             "ON m.siem_id = r.siem_id AND m.space = r.space "
+             "GROUP BY m.siem_id, m.space, m.environment_role;")},
+    {"id": "top10_rules_prod_vs_staging",
+     "label": "Top 10 rules for production vs staging",
+     "target": "tenant",
+     "sql": ("SELECT m.environment_role, m.siem_id, m.space, r.name "
+             "FROM client_siem_map m "
+             "JOIN detection_rules r "
+             "ON m.siem_id = r.siem_id AND m.space = r.space "
+             "ORDER BY m.environment_role, r.name LIMIT 10;")},
 ]
 
 
