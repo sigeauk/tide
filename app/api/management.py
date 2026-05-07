@@ -1403,18 +1403,96 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)
 def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
                             db: DbDep, user: RequireAdmin):
-    """Unlink a SIEM from a client."""
+    """Unlink a SIEM from a client.
+
+    Ghost-rule prevention (4.1.16): after the ``client_siem_map`` row(s) are
+    deleted, the tenant's ``detection_rules`` rows for the unlinked
+    ``(siem_id, space)`` pairs are purged INSIDE ``tenant_context_for(client_id)``.
+    Without this, the rows lingered indefinitely — sync only iterates
+    currently-mapped pairs (AGENTS.md §8.2 g2), so an unlinked pair is never
+    revisited and the now-orphan rules stayed visible on the Rule Health page.
+    The previous "redistributor" call here was a no-op stub since 4.1.13 and
+    has been removed.
+
+    Partial-unlink contract (AGENTS.md §8.1 dual-role config): when
+    ``environment_role`` is supplied, we MUST only purge the specific
+    ``(siem_id, space)`` pair removed — the same ``siem_id`` may still be
+    mapped under the other role with a different space, and a blanket
+    ``DELETE WHERE siem_id = ?`` would destroy rules belonging to that
+    still-valid mapping. Pairs are captured BEFORE the map delete so the
+    purge is exact.
+    """
     env_role = request.query_params.get("environment_role")
+
+    # 1. Capture the (siem_id, space) pairs about to be removed, BEFORE the
+    #    map delete (otherwise the rows are gone and we can't know what to
+    #    purge). Space is lowercased + 'default'-normalised to match the
+    #    same shape ``get_client_siem_scopes`` uses, so the DELETE predicate
+    #    against detection_rules below is symmetric with the rest of the
+    #    tenant-isolation surface.
+    pairs_to_purge: list = []
+    try:
+        with db.get_shared_connection() as _sconn:
+            _q = (
+                "SELECT DISTINCT siem_id, "
+                "LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) "
+                "FROM client_siem_map "
+                "WHERE client_id = ? AND siem_id = ?"
+            )
+            _params: list = [client_id, siem_id]
+            if env_role:
+                _q += " AND environment_role = ?"
+                _params.append(env_role)
+            pairs_to_purge = [(sid, sp) for sid, sp in _sconn.execute(_q, _params).fetchall() if sid and sp]
+    except Exception as exc:
+        logger.warning(f"could not enumerate (siem_id, space) pairs prior to unlink: {exc}")
+
+    # 2. Delete the client_siem_map row(s).
     db.unlink_client_siem(client_id, siem_id, environment_role=env_role)
     logger.info(f"SIEM {siem_id} ({env_role or 'all'}) unlinked from client {client_id} by {user.username}")
-    # Re-run the distributor so the tenant DB reflects the removed scope
-    # immediately (the distributor wipes ``detection_rules`` per tenant
-    # before re-inserting only currently-mapped scopes).
-    try:
-        from app.services.sync import _distribute_rules_to_tenants
-        _distribute_rules_to_tenants()
-    except Exception as exc:
-        logger.warning(f"rule redistribution after SIEM unlink failed: {exc}")
+
+    # 3. Purge the orphaned detection_rules rows from the tenant DB. Wrapped
+    #    so a missing/empty detection_rules table on a never-synced tenant
+    #    cannot break the unlink response.
+    if pairs_to_purge:
+        try:
+            from app.services.tenant_manager import tenant_context_for
+            with tenant_context_for(client_id):
+                with db.get_connection() as _tconn:
+                    purged_total = 0
+                    for _sid, _space in pairs_to_purge:
+                        try:
+                            _res = _tconn.execute(
+                                "DELETE FROM detection_rules "
+                                "WHERE siem_id = ? AND LOWER(space) = ?",
+                                [_sid, _space],
+                            )
+                            # DuckDB returns affected-row count via .fetchall() on the result
+                            try:
+                                _affected = _res.fetchone()
+                                _n = int(_affected[0]) if _affected and _affected[0] is not None else 0
+                            except Exception:
+                                _n = 0
+                            purged_total += _n
+                        except Exception as _row_exc:
+                            # Likely "table does not exist" on a never-synced tenant
+                            # — non-fatal, the rules can't be ghosts if the table
+                            # itself isn't there.
+                            logger.debug(
+                                f"detection_rules purge skipped for client={client_id} "
+                                f"siem={_sid} space={_space}: {_row_exc}"
+                            )
+                            break  # table absent → no point retrying other pairs
+                    logger.info(
+                        f"ghost-rule purge: removed {purged_total} detection_rules rows "
+                        f"for client={client_id} pairs={pairs_to_purge}"
+                    )
+        except Exception as exc:
+            logger.warning(
+                f"ghost-rule purge after SIEM unlink failed for client={client_id} "
+                f"siem={siem_id} role={env_role or 'all'}: {exc}"
+            )
+
     return _render_client_siems_partial(client_id, db, toast="SIEM unlinked.")
 
 
