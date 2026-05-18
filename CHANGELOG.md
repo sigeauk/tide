@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Fixed
 
-- **Field mapping now works for rules built entirely from Kibana filter pills.** Rules created in the Kibana UI without a KQL/Lucene query (for example, the rule named `host rules`) previously scored 0% mapping coverage because only the query text was being inspected. Field names are now also extracted from the rule's filters and validated against the index mapping, so these rules are scored the same as standard query rules. Mixed rules (query + filters) and rules with empty filters are handled cleanly; preview and promotion are unaffected.
+- **Field mapping now works for rules built entirely from Kibana filter pills.** Rules created in the Kibana UI without a KQL/Lucene query previously scored 0% mapping coverage because only the query text was being inspected. Field names are now also extracted from the rule's filters and validated against the index mapping, so these rules are scored the same as standard query rules. Mixed rules (query + filters) and rules with empty filters are handled cleanly; preview and promotion are unaffected.
 
 ## [4.1.16] - 2026-05-07
 
