@@ -441,6 +441,91 @@ def extract_kuery_lucene(query):
     return {f for f in fields if f.lower() not in keywords and not f[0].isdigit()}
 
 
+def extract_filter_fields(filters):
+    """Extract field names from a Kibana detection-rule ``filters`` array.
+
+    UI-built rules (no top-level ``query`` string, only Kibana filter pills)
+    carry their selection criteria in ``rule.filters`` — an array of objects
+    shaped roughly like::
+
+        {"meta": {"key": "host.name", "type": "phrase", ...},
+         "query": {"match_phrase": {"host.name": "foo"}}}
+
+    The mapping validator needs those field names exactly the same way it
+    needs fields parsed out of a KQL/Lucene/EQL/ES|QL string, otherwise
+    filter-only rules silently score 0% mapping coverage and can fail the
+    field-mapping pass entirely (the rule named ``'host rules '`` is the
+    canonical repro). This helper walks both ``meta.key`` and the
+    Elasticsearch DSL ``query`` body (recursing through ``bool.{must,
+    should,must_not,filter}``) and returns the union of referenced field
+    names. Per AGENTS.md it adds no hardcoded field exclusion lists —
+    grammar/operator keys (``bool``, ``minimum_should_match`` …) are
+    skipped, everything else discovered dynamically is treated as a field.
+    """
+    if not filters or not isinstance(filters, (list, tuple)):
+        return set()
+
+    # DSL container keys that are NOT field names. Anything not in this set
+    # at a leaf-clause level is treated as a field name.
+    _dsl_containers = {
+        "bool", "must", "should", "must_not", "filter",
+        "minimum_should_match", "boost", "_name",
+    }
+    # Leaf clauses whose immediate child key IS the field name.
+    _field_keyed_clauses = {
+        "match", "match_phrase", "match_phrase_prefix", "term", "terms",
+        "terms_set", "range", "wildcard", "prefix", "regexp", "fuzzy",
+        "span_term", "exists",
+    }
+
+    out: set = set()
+
+    def _walk_query(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                kl = str(k).lower()
+                if kl == "exists" and isinstance(v, dict) and v.get("field"):
+                    out.add(str(v["field"]))
+                    continue
+                if kl in _field_keyed_clauses and isinstance(v, dict):
+                    for field_name in v.keys():
+                        if field_name and not str(field_name).startswith("_"):
+                            out.add(str(field_name))
+                    continue
+                if kl in _dsl_containers or kl == "query":
+                    _walk_query(v)
+                    continue
+                # Unknown structural key — recurse defensively so we don't
+                # miss nested clauses inside vendor extensions.
+                if isinstance(v, (dict, list)):
+                    _walk_query(v)
+        elif isinstance(node, list):
+            for item in node:
+                _walk_query(item)
+
+    for f in filters:
+        if not isinstance(f, dict):
+            continue
+        meta = f.get("meta") or {}
+        if isinstance(meta, dict):
+            key = meta.get("key")
+            if key:
+                out.add(str(key))
+            # Some filter exports stash the field under ``params.field``.
+            params = meta.get("params")
+            if isinstance(params, dict):
+                pfield = params.get("field")
+                if pfield:
+                    out.add(str(pfield))
+        q = f.get("query")
+        if q is not None:
+            _walk_query(q)
+
+    # Filter out anything that is clearly not an index field name
+    # (empty strings, leading underscores like ``_source``).
+    return {name for name in out if name and not name.startswith("_")}
+
+
 def normalize_rule_language(language):
     """Normalize Elastic rule language aliases used across sync/preview paths.
 
@@ -1422,6 +1507,16 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                 if language in ["kuery", "lucene"]: fields = extract_kuery_lucene(query)
                 elif language == "esql": fields = extract_esql(query)
                 elif language == "eql": fields = extract_eql(query)[0]
+
+                # UI-built rules can have an empty ``query`` and put every
+                # selection criterion into ``filters`` (the rule named
+                # ``'host rules '`` is the canonical repro — see CHANGELOG
+                # 4.1.18). Always union filter-derived fields into the
+                # mapping set, regardless of query language, so those rules
+                # are validated the same way as standard query rules.
+                filter_fields = extract_filter_fields(r.get("filters"))
+                if filter_fields:
+                    fields = fields | filter_fields
 
                 for idx in clean_indices: index_request_map[idx].update(fields)
             else:
