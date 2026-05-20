@@ -67,8 +67,8 @@
             hx-swap="innerHTML"
             hx-include="[name='search'], [name='origin'], [name='sort_by']">
             <option value="">All Sources</option>
-            {% for source in sources %}
-            <option value="{{ source }}">{{ 'OpenCTI' if source == 'OCTI' else source }}</option>
+            {% for raw, label in sources %}
+            <option value="{{ raw }}">{{ label }}</option>
             {% endfor %}
         </select>
     </div>

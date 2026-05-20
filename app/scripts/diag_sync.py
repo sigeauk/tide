@@ -24,6 +24,9 @@ Sections:
   8. Verdict block naming the failing link and the next action
   9. Dry Run Sync URL Construction (literal URLs the app would hit, no network)
  10. Per-client live sync trace (calls fetch_detection_rules, no DB writes)
+ 11. Per-tenant OpenCTI link state + shared/tenant threat_actors source split
+      (4.1.19 — catches OCTI rows leaking into the shared DB and tenants
+      that still believe they are linked to a deactivated OpenCTI instance)
 
 Designed to handle TIDE 4.0.x (env-var driven), 4.0.13+ (siem_inventory) and
 4.1.x (per-tenant DB) without needing to know which version is running.
@@ -1149,6 +1152,154 @@ def _check_live_sync_trace(info: dict) -> None:
             print(f"\n    [FAIL] Pipeline broken for '{name}' — fix items marked [STOP]/[FAIL] above.")
 
 
+def _check_opencti_tenants(info: dict) -> None:
+    """11. Per-tenant OpenCTI link state + threat_actors source split.
+
+    Designed to catch the 4.1.x leak where OpenCTI-sourced rows ended up
+    in the shared ``threat_actors`` table (because the sync writer ran
+    without a tenant context) and consequently appeared in every tenant's
+    Threat Landscape view. Also flags tenants whose only mapped OpenCTI
+    instance has been deactivated, which is what made
+    ``_client_has_opencti`` return True for tenants that no longer have an
+    active link before the 4.1.19 fix.
+    """
+    _line("11. Per-tenant OpenCTI link state")
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read the shared DB")
+        return
+    db_path = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
+    data_dir = os.environ.get("TIDE_DATA_DIR", "/app/data")
+    import duckdb
+    import shutil
+    import tempfile
+
+    def _snapshot_open(path: str):
+        snap_dir = tempfile.mkdtemp(prefix="diag_octi_")
+        snap = os.path.join(snap_dir, "snap.duckdb")
+        shutil.copy2(path, snap)
+        wal = path + ".wal"
+        if os.path.exists(wal):
+            shutil.copy2(wal, snap + ".wal")
+        return duckdb.connect(snap, read_only=True), snap_dir
+
+    # Shared side: opencti_inventory, client_opencti_map, threat_actors.
+    try:
+        c, snap_dir = _snapshot_open(db_path)
+    except Exception as exc:
+        print(f"  could not snapshot shared DB: {exc}")
+        return
+    try:
+        tables = {r[0] for r in c.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='main'"
+        ).fetchall()}
+        if "opencti_inventory" not in tables:
+            print("  opencti_inventory table missing -- OpenCTI feature not "
+                  "yet provisioned on this DB.")
+            return
+        inv = c.execute(
+            "SELECT id, label, COALESCE(is_active, TRUE) FROM opencti_inventory"
+        ).fetchall()
+        print(f"  opencti_inventory: {len(inv)} instance(s)")
+        for oid, label, active in inv:
+            print(f"     {oid[:8]} '{label}' active={active}")
+
+        if "client_opencti_map" in tables:
+            maps = c.execute(
+                "SELECT m.client_id, m.opencti_id, "
+                "COALESCE(o.is_active, TRUE) AS active, o.label "
+                "FROM client_opencti_map m "
+                "LEFT JOIN opencti_inventory o ON o.id = m.opencti_id"
+            ).fetchall()
+            print(f"  client_opencti_map rows: {len(maps)}")
+            for cid, oid, active, lbl in maps:
+                marker = "" if active else "  [STALE: instance is_active=FALSE]"
+                print(f"     client={cid[:8]} opencti={oid[:8]} '{lbl}' "
+                      f"active={active}{marker}")
+
+        # Shared threat_actors source distribution.
+        if "threat_actors" in tables:
+            try:
+                total = c.execute(
+                    "SELECT COUNT(*) FROM threat_actors"
+                ).fetchone()[0]
+                # DuckDB rejects unnest() alongside GROUP BY in the same
+                # SELECT; wrap it in a subquery instead.
+                src_rows = c.execute(
+                    "SELECT s, COUNT(*) FROM ("
+                    "  SELECT unnest(source) AS s FROM threat_actors "
+                    "  WHERE source IS NOT NULL"
+                    ") GROUP BY s ORDER BY 2 DESC"
+                ).fetchall()
+                # OCTI-only = source array has at least one element and no
+                # element starts with 'mitre' (case-insensitive).
+                octi_only = c.execute(
+                    "SELECT COUNT(*) FROM ("
+                    "  SELECT name, list_filter(source, "
+                    "    x -> LOWER(x) LIKE 'mitre%') AS mitre_tags, "
+                    "    source "
+                    "  FROM threat_actors WHERE source IS NOT NULL "
+                    "    AND len(source) > 0"
+                    ") WHERE len(mitre_tags) = 0 "
+                    "  AND list_contains(list_transform(source, "
+                    "    x -> UPPER(x)), 'OCTI')"
+                ).fetchone()[0]
+                print(f"  SHARED threat_actors: total={total}, "
+                      f"OCTI-only (no MITRE marker) rows={octi_only}")
+                if octi_only > 0:
+                    print("    [LEAK] OCTI-only rows in shared DB leak into "
+                          "every tenant's Threat Landscape. Run "
+                          "`docker exec tide-app python -m "
+                          "app.scripts.repair_octi_source_markers` to clean.")
+                for s, n in src_rows[:10]:
+                    print(f"     source={s!r}: {n}")
+            except Exception as exc:
+                print(f"  shared threat_actors source query failed: {exc}")
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        shutil.rmtree(snap_dir, ignore_errors=True)
+
+    # Per-tenant side: open each tenant snapshot and report actor counts +
+    # whether OCTI rows live in the tenant DB (the post-4.1.5 contract).
+    clients = info.get("clients") or []
+    for cid, name, fn in clients:
+        if not fn:
+            continue
+        path = os.path.join(data_dir, fn)
+        if not os.path.exists(path):
+            continue
+        try:
+            tc, tsnap = _snapshot_open(path)
+        except Exception as exc:
+            print(f"  tenant {cid[:8]} '{name}': snapshot failed: {exc}")
+            continue
+        try:
+            try:
+                total = tc.execute(
+                    "SELECT COUNT(*) FROM threat_actors"
+                ).fetchone()[0]
+                octi = tc.execute(
+                    "SELECT COUNT(*) FROM threat_actors "
+                    "WHERE source IS NOT NULL "
+                    "AND list_contains("
+                    "  list_transform(source, x -> UPPER(x)), 'OCTI'"
+                    ")"
+                ).fetchone()[0]
+                print(f"  tenant {cid[:8]} '{name}': "
+                      f"threat_actors={total} (OCTI={octi})")
+            except Exception:
+                print(f"  tenant {cid[:8]} '{name}': threat_actors table missing")
+        finally:
+            try:
+                tc.close()
+            except Exception:
+                pass
+            shutil.rmtree(tsnap, ignore_errors=True)
+
+
 def main() -> int:
     print("TIDE comprehensive diagnostic")
     print("=============================")
@@ -1168,6 +1319,7 @@ def main() -> int:
     _verdict(env, info)
     _check_dry_run_urls(info)
     _check_live_sync_trace(info)
+    _check_opencti_tenants(info)
     return 0
 
 

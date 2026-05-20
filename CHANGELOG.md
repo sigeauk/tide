@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.19]
+
+### Fixed
+
+- **Threat Landscape no longer shows OpenCTI actors to tenants that aren't linked to OpenCTI.** Previously, OpenCTI-sourced threat actors written during an earlier sync could appear in every tenant's Threat Landscape and Heatmap pages even after the OpenCTI link was removed. The OpenCTI writer now refuses to fall back to the shared database when no tenant context is active, the link check honours an instance's active/inactive state, and merging an OpenCTI actor whose name collides with a MITRE actor (e.g. APT28, Lazarus) preserves the MITRE marker so the row keeps showing up in the MITRE baseline.
+- **Threat Landscape "Source" filter now shows OpenCTI for linked tenants.** The dropdown previously dropped or mis-rendered OpenCTI and the MITRE matrix sources (Enterprise / Mobile / ICS / PRE) because each page normalised the source label slightly differently. Both the Threat Landscape and Heatmap dropdowns now use a single shared display layer, so the option labels are consistent and OpenCTI appears for any tenant with an active OpenCTI link.
+- **`diag_sync` adds an OpenCTI section.** A new section 11 reports, per tenant, whether the OpenCTI link is healthy or stale and whether OCTI rows are leaking into the shared database. When a leak is detected the report points operators at a new repair command (`docker exec tide-app python -m app.scripts.repair_octi_source_markers`) that strips OCTI markers from the shared `threat_actors` table without touching any per-tenant data.
+- **OpenCTI threat actors now sync into tenant databases.** Two compounding bugs were silently dropping every fetched OpenCTI actor on every sync. First, tenant databases created by earlier 4.1.x builds had a `threat_actors` table without a primary key on the actor name, which made the OpenCTI upsert fail with a "not referenced by a UNIQUE/PRIMARY KEY CONSTRAINT" binder error. Second, the post-sync "shared data → tenant" mirror was issuing `CREATE OR REPLACE TABLE tenant.threat_actors AS SELECT * FROM shared.threat_actors` on every sync, which dropped the primary key (CTAS does not carry constraints) and replaced any per-tenant OpenCTI rows with the shared MITRE-only contents. The mirror now leaves `threat_actors` alone (it was already documented as excluded in the function's own docstring), and tenant databases that were already missing the primary key are repaired automatically on first access after upgrade. The repair runs once per tenant database per process, preserves all existing rows, and logs a single warning per database when it fires.
+
 ## [4.1.18] - 2026-05-18
 
 ### Fixed

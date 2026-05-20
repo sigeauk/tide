@@ -1496,32 +1496,16 @@ def create_app() -> FastAPI:
 
         actors = db.get_threat_actors(client_id=_cid)
 
-        # Derive distinct sources from loaded actors for the source filter
-        # Normalise raw DB values to human-friendly display names
-        _SOURCE_DISPLAY = {
-            "enterprise": "Enterprise",
-            "mitre:enterprise": "Enterprise",
-            "mitre-enterprise": "Enterprise",
-            "mobile": "Mobile",
-            "mitre:mobile": "Mobile",
-            "ics": "ICS",
-            "mitre:ics": "ICS",
-            "opencti": "OpenCTI",
-            "open-cti": "OpenCTI",
-            "octi": "OpenCTI",
-        }
-        # Build unique normalised names (preserving sort order, deduplicating)
-        _seen = set()
-        sources = []
+        # Derive distinct sources from loaded actors for the source filter.
+        # 4.1.19: normalisation now lives in ``cti_source_labels`` so the
+        # heatmap and threat landscape pages stay in lockstep.
+        from app.services.cti_source_labels import filter_options as _cti_filter_options
+        _raw = []
         for actor in actors:
             for s in (actor.source or []):
-                if not s:
-                    continue
-                display = _SOURCE_DISPLAY.get(s.lower().strip(), s.title())
-                if display not in _seen:
-                    _seen.add(display)
-                    sources.append(display)
-        sources = sorted(sources)
+                if s:
+                    _raw.append(s)
+        sources = _cti_filter_options(_raw)
 
         # Empty initial data
         empty_data = HeatmapData(
@@ -1669,9 +1653,15 @@ def create_app() -> FastAPI:
                 "underlying error."
             )
 
-        # Derive filter options from metrics (avoids a second DB connection)
+        # Derive filter options from metrics (avoids a second DB connection).
+        # 4.1.19: normalise raw ``threat_actors.source`` strings via
+        # ``cti_source_labels`` so the dropdown shows e.g. ``OpenCTI`` and
+        # ``MITRE Enterprise`` instead of raw ``OCTI`` / ``MITRE: enterprise``.
+        # The option value stays as the canonical raw DB string so the
+        # ``/api/threats?source=...`` filter still matches.
+        from app.services.cti_source_labels import filter_options as _cti_filter_options
         origins = sorted(metrics.origin_breakdown.keys()) if metrics.origin_breakdown else []
-        sources = sorted(metrics.source_breakdown.keys()) if metrics.source_breakdown else []
+        sources = _cti_filter_options(metrics.source_breakdown.keys()) if metrics.source_breakdown else []
 
         return render_template(
             "pages/threat_landscape.html",

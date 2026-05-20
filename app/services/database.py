@@ -3263,18 +3263,27 @@ class DatabaseService:
     # --- THREAT ACTOR OPERATIONS ---
 
     def _client_has_opencti(self, client_id: Optional[str]) -> bool:
-        """Return True when *client_id* has at least one OpenCTI instance linked.
+        """Return True when *client_id* has at least one ACTIVE OpenCTI instance linked.
 
         Used to decide whether OpenCTI-sourced threat actors should be visible
         to a tenant. ``None``/empty client_id is treated as "no link" so any
         unauthenticated / pre-tenant code paths see the MITRE baseline only.
+
+        4.1.19: aligned with the sync loop's truth — a link to an instance
+        marked ``is_active = FALSE`` no longer counts as "linked", so a
+        tenant whose only OpenCTI instance has been deactivated stops
+        seeing stale OCTI rows in its landscape filters.
         """
         if not client_id:
             return False
         try:
             with self.get_shared_connection() as conn:
                 row = conn.execute(
-                    "SELECT 1 FROM client_opencti_map WHERE client_id = ? LIMIT 1",
+                    "SELECT 1 FROM client_opencti_map m "
+                    "JOIN opencti_inventory o ON o.id = m.opencti_id "
+                    "WHERE m.client_id = ? "
+                    "AND COALESCE(o.is_active, TRUE) = TRUE "
+                    "LIMIT 1",
                     [client_id],
                 ).fetchone()
             return bool(row)
@@ -3338,14 +3347,31 @@ class DatabaseService:
 
         4.1.5 isolation: callers must wrap this in
         ``tenant_manager.tenant_context_for(client_id)`` so the rows land in
-        the correct tenant DB. Without a tenant context the rows are written
-        to the shared DB (legacy/primary client behaviour).
+        the correct tenant DB.
+
+        4.1.19 hardening: refuse to run without an active tenant context.
+        Falling back to the shared DB historically caused OpenCTI-sourced
+        actors from one tenant's link to bleed into every other tenant's
+        landscape view (the shared ``threat_actors`` table is read by every
+        tenant before its per-tenant rows are merged in). Every tenant now
+        owns its own DuckDB file, so a missing context is a bug, not a
+        legacy fallback path.
 
         Mirrors the input shape of ``app.database.save_threat_data`` but uses
         the tenant-aware connection pool. Returns the number of rows
         upserted.
         """
         if df is None or df.empty:
+            return 0
+        from app.services.tenant_manager import get_tenant_db_path
+        if get_tenant_db_path() is None:
+            logger.error(
+                "save_octi_threat_actors_to_active_db refused: no tenant "
+                "context active. Wrap the call in "
+                "tenant_manager.tenant_context_for(client_id). Writing "
+                "OpenCTI rows to the shared DB would leak them into every "
+                "tenant's threat landscape."
+            )
             return 0
         try:
             from datetime import datetime as _dt
@@ -3372,12 +3398,148 @@ class DatabaseService:
             df["ttps"] = df["ttps"].apply(
                 lambda x: x if isinstance(x, list) else []
             )
+
+            # 4.1.19: alias-aware merge. OpenCTI and MITRE often disagree
+            # on the canonical name for the same actor (e.g. MITRE calls
+            # them "APT28" with "Fancy Bear" in aliases, OpenCTI returns
+            # "FANCY BEAR" with "APT28" in aliases). Without merging, the
+            # Threat Landscape shows two rows for the same group. Build a
+            # lookup of every known name+alias (case-insensitive) from the
+            # shared MITRE catalog AND any rows already in the tenant DB,
+            # then rewrite each incoming OCTI ``name`` to the canonical
+            # name it matches. MITRE-sourced canonicals win over OCTI when
+            # both match, so the user-visible name stays consistent with
+            # the ATT&CK framework.
+            def _split_aliases(raw):
+                if not raw:
+                    return []
+                if isinstance(raw, list):
+                    items = raw
+                else:
+                    items = str(raw).split(",")
+                return [a.strip() for a in items if a and str(a).strip()]
+
+            alias_to_canonical: dict = {}
+            canonical_is_mitre: dict = {}
+
+            def _register(name: str, aliases_raw, is_mitre: bool):
+                if not name:
+                    return
+                key = name.lower()
+                # MITRE canonical always wins; otherwise first writer wins.
+                if key not in alias_to_canonical or (
+                    is_mitre and not canonical_is_mitre.get(
+                        alias_to_canonical[key], False
+                    )
+                ):
+                    alias_to_canonical[key] = name
+                    canonical_is_mitre[name] = is_mitre
+                canonical = alias_to_canonical[key]
+                for alias in _split_aliases(aliases_raw):
+                    akey = alias.lower()
+                    if akey == key:
+                        continue
+                    # Don't overwrite a MITRE-owned alias with an OCTI one.
+                    if akey in alias_to_canonical and canonical_is_mitre.get(
+                        alias_to_canonical[akey], False
+                    ):
+                        continue
+                    alias_to_canonical[akey] = canonical
+
+            # Seed the lookup from existing rows (shared MITRE first so it
+            # claims canonical ownership, then tenant DB).
+            try:
+                with self.get_shared_connection() as sconn:
+                    for _n, _a, _s in sconn.execute(
+                        "SELECT name, aliases, source FROM threat_actors"
+                    ).fetchall():
+                        _register(_n, _a, self._row_is_mitre(_s))
+            except Exception as _exc:
+                logger.warning(
+                    f"save_octi_threat_actors_to_active_db: "
+                    f"failed to seed MITRE alias map: {_exc}"
+                )
+
             saved = 0
             with self.get_connection() as conn:
+                # Seed from any rows already in this tenant DB (previous OCTI
+                # sync) so re-runs stay stable.
+                try:
+                    for _n, _a, _s in conn.execute(
+                        "SELECT name, aliases, source FROM threat_actors"
+                    ).fetchall():
+                        _register(_n, _a, self._row_is_mitre(_s))
+                except Exception:
+                    pass
+
                 for _, row in df.iterrows():
                     name = row.get("name")
                     if not name:
                         continue
+
+                    # Resolve canonical name via alias map.
+                    candidates = {name.lower()} | {
+                        a.lower() for a in _split_aliases(row.get("aliases"))
+                    }
+                    canonical = None
+                    for cand in candidates:
+                        hit = alias_to_canonical.get(cand)
+                        if hit:
+                            # Prefer a MITRE-owned canonical if multiple hit.
+                            if canonical is None or (
+                                canonical_is_mitre.get(hit, False)
+                                and not canonical_is_mitre.get(canonical, False)
+                            ):
+                                canonical = hit
+                    if canonical is None:
+                        canonical = name
+                    # Remember for the rest of the batch so later OCTI rows
+                    # whose alias list overlaps merge into the same row.
+                    _register(canonical, row.get("aliases"), False)
+
+                    # Union the aliases string with whatever the canonical
+                    # row already has, so MITRE's alias list survives the
+                    # OCTI update.
+                    existing_aliases = ""
+                    try:
+                        existing_aliases = conn.execute(
+                            "SELECT aliases FROM threat_actors WHERE name = ?",
+                            [canonical],
+                        ).fetchone()
+                        existing_aliases = (
+                            existing_aliases[0] if existing_aliases else ""
+                        ) or ""
+                    except Exception:
+                        existing_aliases = ""
+                    merged_aliases_set = []
+                    seen_alias = set()
+                    # Include the *other* canonical names of this group so
+                    # the alias field always carries the OCTI display name
+                    # when MITRE wins (and vice versa).
+                    for src in (
+                        existing_aliases,
+                        row.get("aliases"),
+                        name if name.lower() != canonical.lower() else "",
+                    ):
+                        for a in _split_aliases(src):
+                            akey = a.lower()
+                            if akey == canonical.lower() or akey in seen_alias:
+                                continue
+                            seen_alias.add(akey)
+                            merged_aliases_set.append(a)
+                    merged_aliases = (
+                        ", ".join(merged_aliases_set)
+                        if merged_aliases_set else None
+                    )
+
+                    # 4.1.19: union the source array on conflict so the
+                    # MITRE-baseline marker is preserved when an OpenCTI
+                    # actor name collides with a MITRE actor name (e.g.
+                    # APT28, Lazarus). Previously ``SET source =
+                    # EXCLUDED.source`` overwrote ``["MITRE: enterprise"]``
+                    # with ``["OCTI"]``, which then caused the row to be
+                    # filtered out for tenants without an OpenCTI link
+                    # (``_row_is_mitre`` no longer matched).
                     conn.execute(
                         """
                         INSERT INTO threat_actors
@@ -3387,7 +3549,12 @@ class DatabaseService:
                         ON CONFLICT (name) DO UPDATE SET
                             ttps = EXCLUDED.ttps,
                             ttp_count = EXCLUDED.ttp_count,
-                            source = EXCLUDED.source,
+                            source = list_distinct(
+                                list_concat(
+                                    COALESCE(threat_actors.source, []),
+                                    COALESCE(EXCLUDED.source, [])
+                                )
+                            ),
                             aliases = EXCLUDED.aliases,
                             description = COALESCE(EXCLUDED.description,
                                                    threat_actors.description),
@@ -3396,11 +3563,11 @@ class DatabaseService:
                             last_updated = EXCLUDED.last_updated
                         """,
                         [
-                            name,
+                            canonical,
                             row.get("description"),
                             row["ttps"],
                             int(row.get("ttp_count") or 0),
-                            row.get("aliases"),
+                            merged_aliases,
                             row.get("origin"),
                             row["source"],
                             row.get("last_updated"),
@@ -3486,10 +3653,17 @@ class DatabaseService:
                         "SELECT * FROM threat_actors ORDER BY ttp_count DESC"
                     ).df()
                 import math as _math
-                seen_names = {a.name for a in actors}
+                # 4.1.19: when a tenant row's name matches a shared row
+                # (alias-aware merge writes OCTI updates under the MITRE
+                # canonical name), union the source markers and aliases
+                # into the shared row instead of dropping the tenant copy
+                # silently — otherwise the OCTI badge for actors like
+                # APT28 / Lazarus disappears even though OpenCTI knows
+                # about them.
+                by_name = {a.name: a for a in actors}
                 for _, row in tdf.iterrows():
                     name = row.get("name", "")
-                    if not name or name in seen_names:
+                    if not name:
                         continue
                     ttps = row.get("ttps", [])
                     if hasattr(ttps, "tolist"):
@@ -3509,7 +3683,40 @@ class DatabaseService:
                     if aliases_val is None or (isinstance(aliases_val, float)
                                                and _math.isnan(aliases_val)):
                         aliases_val = None
-                    actors.append(ThreatActor(
+
+                    existing = by_name.get(name)
+                    if existing is not None:
+                        # Merge: union source markers, union aliases string,
+                        # prefer shared description (MITRE-curated) but fall
+                        # back to OCTI's if shared is empty.
+                        merged_src = list(existing.source or [])
+                        for s in (source or []):
+                            if s and s not in merged_src:
+                                merged_src.append(s)
+                        existing.source = merged_src
+                        if aliases_val:
+                            existing_aliases = existing.aliases or ""
+                            seen = {
+                                a.strip().lower()
+                                for a in existing_aliases.split(",")
+                                if a.strip()
+                            }
+                            extra = []
+                            for a in aliases_val.split(","):
+                                ak = a.strip()
+                                if ak and ak.lower() not in seen:
+                                    extra.append(ak)
+                                    seen.add(ak.lower())
+                            if extra:
+                                existing.aliases = ", ".join(
+                                    ([existing_aliases] if existing_aliases else [])
+                                    + extra
+                                )
+                        if not existing.description and description_val:
+                            existing.description = description_val
+                        continue
+
+                    new_actor = ThreatActor(
                         name=name,
                         description=description_val,
                         ttps=ttps,
@@ -3518,7 +3725,9 @@ class DatabaseService:
                         origin=origin_val,
                         source=source if isinstance(source, list) else [],
                         last_updated=row.get("last_updated"),
-                    ))
+                    )
+                    actors.append(new_actor)
+                    by_name[name] = new_actor
                 actors.sort(key=lambda a: (a.ttp_count or 0), reverse=True)
             except Exception as exc:
                 logger.warning(

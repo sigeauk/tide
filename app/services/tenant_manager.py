@@ -635,8 +635,18 @@ def sync_shared_data(
                 try:
                     shared_conn.execute(f"ATTACH '{db_path}' AS {tenant_alias}")
                     try:
+                        # 4.1.19: ``threat_actors`` is intentionally
+                        # excluded. The tenant's own ``threat_actors`` table
+                        # holds the per-tenant OpenCTI rows (and is created
+                        # with a PRIMARY KEY on ``name`` so the OCTI upsert
+                        # can use ``ON CONFLICT``). ``CREATE OR REPLACE
+                        # TABLE … AS SELECT`` would drop the PK, clobber the
+                        # OCTI rows with the shared MITRE-only contents, and
+                        # break the next OCTI sync with a binder error.
+                        # MITRE actors are served to every tenant from the
+                        # shared DB by ``get_threat_actors``.
                         for table in (
-                            "mitre_techniques", "threat_actors",
+                            "mitre_techniques",
                             "siem_inventory", "client_siem_map",
                         ):
                             try:

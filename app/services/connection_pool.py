@@ -34,6 +34,12 @@ from contextlib import contextmanager
 from queue import Empty, Queue
 from typing import Optional
 
+# Per-process record of DB files whose lazy schema-fix migrations have
+# already been applied. Keyed by absolute db_path so each tenant DB is
+# checked exactly once per worker process.
+_TENANT_MIGRATED: set[str] = set()
+_MIGRATION_LOCK = threading.Lock()
+
 import duckdb
 
 logger = logging.getLogger(__name__)
@@ -118,6 +124,14 @@ class ConnectionPool:
             conn.execute(f"PRAGMA memory_limit='{DUCKDB_MEMORY_LIMIT}'")
         except Exception as exc:  # pragma: no cover - PRAGMA must never block usage
             logger.warning("ConnectionPool: PRAGMA tuning failed for %s: %s", db_path, exc)
+        # 4.1.19: self-healing tenant schema fix. Some early tenant DBs
+        # were created without a PRIMARY KEY on threat_actors.name (the
+        # canonical DDL has one, but the DDL drifted at some point in
+        # 4.1.x). Without that PK the OpenCTI sync's ``ON CONFLICT
+        # (name)`` upsert silently fails for every row, so OpenCTI data
+        # never lands in the tenant DB. Apply the fix lazily, once per
+        # process per DB.
+        _maybe_repair_threat_actors_pk(conn, db_path)
         return conn
 
     # ---- public API --------------------------------------------------------
@@ -215,3 +229,103 @@ _pool: ConnectionPool = ConnectionPool()
 
 def get_pool() -> ConnectionPool:
     return _pool
+
+
+# Canonical column list for the threat_actors table, used by the lazy
+# schema repair below. Must stay in lockstep with the DDL in
+# ``app.services.tenant_manager._create_tenant_schema`` and
+# ``app.services.database.DatabaseService._init_shared_schema``.
+_THREAT_ACTORS_DDL = (
+    "CREATE TABLE threat_actors_new ("
+    "name VARCHAR PRIMARY KEY, "
+    "description VARCHAR, "
+    "ttps VARCHAR[], "
+    "ttp_count INTEGER, "
+    "aliases VARCHAR, "
+    "origin VARCHAR, "
+    "last_updated TIMESTAMP, "
+    "source VARCHAR[], "
+    "client_id VARCHAR"
+    ")"
+)
+_THREAT_ACTORS_COPY = (
+    "INSERT INTO threat_actors_new "
+    "SELECT name, "
+    "       ANY_VALUE(description), "
+    "       ANY_VALUE(ttps), "
+    "       ANY_VALUE(ttp_count), "
+    "       ANY_VALUE(aliases), "
+    "       ANY_VALUE(origin), "
+    "       MAX(last_updated), "
+    "       ANY_VALUE(source), "
+    "       ANY_VALUE(client_id) "
+    "FROM threat_actors "
+    "WHERE name IS NOT NULL "
+    "GROUP BY name"
+)
+
+
+def _maybe_repair_threat_actors_pk(conn, db_path: str) -> None:
+    """Add the missing PRIMARY KEY on threat_actors.name if absent.
+
+    Idempotent and bounded to one run per (process, db_path). Safe to
+    call against the shared DB (where the PK already exists -> no-op)
+    and against any tenant DB. If the table doesn't exist yet (very
+    young tenant DB created before the table-creation migration ran)
+    this is also a no-op; the next ``_create_tenant_schema`` call will
+    create the table with the PK in place.
+    """
+    if db_path in _TENANT_MIGRATED:
+        return
+    with _MIGRATION_LOCK:
+        if db_path in _TENANT_MIGRATED:
+            return
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'threat_actors' AND table_schema = 'main'"
+            ).fetchone()
+            if not exists:
+                _TENANT_MIGRATED.add(db_path)
+                return
+            has_pk = conn.execute(
+                "SELECT 1 FROM duckdb_constraints() "
+                "WHERE table_name = 'threat_actors' "
+                "AND constraint_type = 'PRIMARY KEY'"
+            ).fetchone()
+            if has_pk:
+                _TENANT_MIGRATED.add(db_path)
+                return
+            logger.warning(
+                "ConnectionPool: %s has threat_actors without PRIMARY KEY "
+                "on name; rebuilding (4.1.19 schema repair).", db_path,
+            )
+            conn.execute("BEGIN")
+            try:
+                conn.execute("DROP TABLE IF EXISTS threat_actors_new")
+                conn.execute(_THREAT_ACTORS_DDL)
+                conn.execute(_THREAT_ACTORS_COPY)
+                conn.execute("DROP TABLE threat_actors")
+                conn.execute("ALTER TABLE threat_actors_new RENAME TO threat_actors")
+                conn.execute("COMMIT")
+                logger.warning(
+                    "ConnectionPool: threat_actors PK repair complete for %s",
+                    db_path,
+                )
+            except Exception:
+                try:
+                    conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            _TENANT_MIGRATED.add(db_path)
+        except Exception as exc:
+            # Don't fail the connection open; the worst case is the
+            # next OpenCTI sync continues to log the binder error, but
+            # the rest of the app keeps working. Mark as attempted so
+            # we don't loop on every acquire.
+            logger.error(
+                "ConnectionPool: threat_actors PK repair failed for %s: %s",
+                db_path, exc,
+            )
+            _TENANT_MIGRATED.add(db_path)
