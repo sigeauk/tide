@@ -1,0 +1,223 @@
+{# Partial: client_cti_egress.html
+   Context:
+     client          (dict)
+     cti_targets     (list of dicts from cti_database.list_egress_targets)
+     siems           (list of dicts from db.list_siem_inventory()) — used both
+                     to resolve the linked SIEM label for each row and to
+                     populate the "SIEM destination" dropdown on the create
+                     form.
+#}
+{% from "macros/icons.html" import icon %}
+
+{# Build siem_id -> label map for row rendering. The relationship is a soft
+   reference (cti_egress_targets lives in the per-tenant CTI DuckDB while
+   siem_inventory lives in tide.duckdb), so an unknown id is possible if a
+   SIEM is deleted while a target still references it -- show the raw id
+   with a warning chip in that case. #}
+{% set siem_by_id = {} %}
+{% for s in (siems or []) %}{% set _ = siem_by_id.__setitem__(s.id, s) %}{% endfor %}
+
+<div class="client-section-toggle"
+     onclick="var b=document.getElementById('cti-egress-body');var c=document.getElementById('cti-egress-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+    <span class="client-list-item__icon">{{ icon('upload', '14') }}</span>
+    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">CTI Egress Targets</h2>
+    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ cti_targets | length }}</span>
+    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button class="btn btn-info btn-sm" onclick="document.getElementById('add-cti-egress-modal').style.display='flex'">
+            {{ icon('plus', '14') }} New target
+        </button>
+    </div>
+    <span id="cti-egress-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
+</div>
+
+<div id="cti-egress-body">
+{% if cti_targets %}
+<div class="client-list">
+    {% for t in cti_targets %}
+    {% set linked_siem = siem_by_id.get(t.siem_id) %}
+    <div class="client-list-item client-list-item--{% if t.is_active %}active{% else %}inactive{% endif %}">
+        <div class="client-list-item__body" style="flex-wrap:wrap;gap:0.5rem;">
+            <span class="client-list-item__title" style="cursor:default;">{{ t.label }}</span>
+            {% if t.is_active %}
+            <span class="badge badge-success" style="font-size:0.68rem;">Active</span>
+            {% else %}
+            <span class="badge badge-grey" style="font-size:0.68rem;">Inactive</span>
+            {% endif %}
+            <span class="badge badge-muted" style="font-size:0.68rem;" title="TLP ceiling: indicators stricter than this are dropped at export time">TLP &le; {{ t.tlp_ceiling or 'amber' }}</span>
+            {% set kind_v = t.kind or 'elastic' %}
+            {% if kind_v == 'elastic' %}
+            <span class="badge badge-info" style="font-size:0.68rem;" title="Push to Elasticsearch _bulk">Kind: elastic</span>
+            {% elif kind_v == 'stix_folder' %}
+            <span class="badge badge-info" style="font-size:0.68rem;" title="Drop STIX bundles into {{ t.folder_path or '(unset)' }}">Kind: folder</span>
+            {% else %}
+            <span class="badge badge-warning" style="font-size:0.68rem;">Kind: {{ kind_v }}</span>
+            {% endif %}
+            {% if kind_v == 'elastic' %}
+            {% if t.siem_id %}
+                {% if linked_siem %}
+                <span class="badge badge-info" style="font-size:0.68rem;" title="{{ linked_siem.url }}">SIEM: {{ linked_siem.label }}</span>
+                {% else %}
+                <span class="badge badge-warning" style="font-size:0.68rem;" title="siem_inventory row {{ t.siem_id }} not found in shared DB">SIEM missing ({{ t.siem_id[:8] }}&hellip;)</span>
+                {% endif %}
+            {% else %}
+            <span class="badge badge-grey" style="font-size:0.68rem;">No SIEM</span>
+            {% endif %}
+            <span class="client-list-item__meta" style="font-family:var(--font-mono,monospace);font-size:0.72rem;" title="latest index / history pattern">
+                {{ t.latest_index }} &middot; {{ t.index_pattern }}
+            </span>
+            {% elif kind_v == 'stix_folder' %}
+            <span class="client-list-item__meta" style="font-family:var(--font-mono,monospace);font-size:0.72rem;" title="Bundle output folder">
+                {{ t.folder_path or '(folder_path unset)' }}
+            </span>
+            {% endif %}
+            <span id="cti-egress-status-{{ t.id }}" style="font-size:0.78rem;"></span>
+        </div>
+        <div style="display:flex;gap:0.35rem;align-items:center;">
+            <button class="btn btn-ghost btn-sm"
+                    hx-post="/api/management/clients/{{ client.id }}/cti-egress/{{ t.id }}/run"
+                    hx-target="#cti-egress-status-{{ t.id }}" hx-swap="innerHTML"
+                    title="Run egress now"
+                    {% if not t.is_active %}disabled{% endif %}
+                    style="padding:0.15rem 0.45rem;font-size:0.75rem;">
+                {{ icon('zap', '12') }} Run
+            </button>
+            <button class="btn btn-ghost btn-sm text-danger"
+                    hx-delete="/api/management/clients/{{ client.id }}/cti-egress/{{ t.id }}"
+                    hx-target="#client-cti-egress-section" hx-swap="innerHTML"
+                    hx-confirm="Delete CTI egress target '{{ t.label }}'?"
+                    title="Delete target"
+                    style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                {{ icon('trash-2', '12') }}
+            </button>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+    {{ icon('upload', '36') }}
+    <p style="margin-top:0.75rem;">No CTI egress targets configured for this client yet.</p>
+    <p style="font-size:0.85rem;">Targets describe where this tenant's STIX indicators are pushed (Elasticsearch <code>_bulk</code> against a SIEM in the shared inventory).</p>
+</div>
+{% endif %}
+</div>
+
+<!-- Add Egress Target Modal -->
+<div id="add-cti-egress-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-md">
+        <div class="modal-header">
+            <h3 class="modal-title">New CTI Egress Target &mdash; {{ client.name }}</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="document.getElementById('add-cti-egress-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <form hx-post="/api/management/clients/{{ client.id }}/cti-egress"
+              hx-target="#client-cti-egress-section" hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful){document.getElementById('add-cti-egress-modal').style.display='none';}"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div>
+                <label class="form-label" for="cti-egress-label">Label <span class="text-danger">*</span></label>
+                <input id="cti-egress-label" name="label" class="form-input" required
+                       placeholder="e.g. Primary ES (production)">
+            </div>
+            <div>
+                <label class="form-label" for="cti-egress-kind">Egress kind</label>
+                <select id="cti-egress-kind" name="kind" class="form-input"
+                        onchange="(function(v){
+                          var es=document.getElementById('cti-egress-elastic-fields');
+                          var sf=document.getElementById('cti-egress-stix-fields');
+                          es.style.display=(v==='elastic')?'':'none';
+                          sf.style.display=(v==='stix_folder')?'':'none';
+                        })(this.value);">
+                    <option value="elastic" selected>Elasticsearch</option>
+                    <option value="stix_folder">Folder</option>
+                </select>
+                <p class="form-help" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                    Selects the egress driver. <code>Elasticsearch</code> requires a SIEM; <code>Folder</code> requires a folder path.
+                </p>
+            </div>
+            <div id="cti-egress-elastic-fields">
+            <div>
+                <label class="form-label" for="cti-egress-siem">SIEM destination</label>
+                <select id="cti-egress-siem" name="siem_id" class="form-input">
+                    <option value="">&mdash; none (manual ES URL override required) &mdash;</option>
+                    {% for s in (siems or []) %}
+                    <option value="{{ s.id }}">{{ s.label }} &mdash; {{ s.url }}</option>
+                    {% endfor %}
+                </select>
+                <p class="form-help" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                    The SIEM provides the Elasticsearch URL and a default API token. Both can be overridden per target below.
+                </p>
+            </div>
+            </div>
+            <div id="cti-egress-stix-fields" style="display:none;">
+                <label class="form-label" for="cti-egress-folder">Bundle folder path</label>
+                <input id="cti-egress-folder" name="folder_path" class="form-input"
+                       placeholder="/data/cti_bundles/{{ client.id }}">
+                <p class="form-help" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                    A STIX 2.1 bundle JSON is written here per run: <code>tide-cti-&lt;client&gt;-&lt;ts&gt;.json</code>.
+                </p>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
+                <div>
+                    <label class="form-label" for="cti-egress-tlp">TLP ceiling</label>
+                    <select id="cti-egress-tlp" name="tlp_ceiling" class="form-input">
+                        <option value="clear">clear (most permissive)</option>
+                        <option value="green">green</option>
+                        <option value="amber" selected>amber (default)</option>
+                        <option value="red">red (most restrictive)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label" for="cti-egress-active">Status</label>
+                    <select id="cti-egress-active" name="is_active" class="form-input">
+                        <option value="true" selected>Active</option>
+                        <option value="false">Paused</option>
+                    </select>
+                </div>
+            </div>
+            <div id="cti-egress-elastic-extras">
+            <div>
+                <label class="form-label" for="cti-egress-latest">Latest index</label>
+                <input id="cti-egress-latest" name="latest_index" class="form-input"
+                       value="logs-ti_tide_latest">
+            </div>
+            <div>
+                <label class="form-label" for="cti-egress-pattern">History index pattern</label>
+                <input id="cti-egress-pattern" name="index_pattern" class="form-input"
+                       value="logs-ti_tide.indicator-*">
+                <p class="form-help" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                    Daily history index is derived as <code>logs-ti_tide.indicator-YYYY.MM.DD</code> per run.
+                </p>
+            </div>
+            <div>
+                <label class="form-label" for="cti-egress-key">API key override</label>
+                <input id="cti-egress-key" name="api_key" class="form-input" type="password"
+                       autocomplete="off" placeholder="Leave blank to use the SIEM's stored token">
+                <p class="form-help" style="font-size:0.75rem;color:var(--color-text-muted);margin-top:0.25rem;">
+                    Stored as-is on the target row and used directly in the <code>Authorization: ApiKey</code> header.
+                </p>
+            </div>
+            </div>
+            <script>
+            // Toggle elastic-only "extras" block when the kind selector changes
+            // so stix_folder / diode targets don't carry irrelevant index +
+            // api-key fields. Wired here so the partial works after an OOB swap
+            // (HTMX re-evaluates inline <script> on swap).
+            (function(){
+              var sel=document.getElementById('cti-egress-kind');
+              if(!sel) return;
+              sel.addEventListener('change', function(){
+                var ex=document.getElementById('cti-egress-elastic-extras');
+                if(ex) ex.style.display=(sel.value==='elastic')?'':'none';
+              });
+            })();
+            </script>
+            <div style="display:flex;justify-content:flex-end;gap:0.5rem;margin-top:0.5rem;">
+                <button type="button" class="btn btn-secondary btn-sm"
+                        onclick="document.getElementById('add-cti-egress-modal').style.display='none'">Cancel</button>
+                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Create target</button>
+            </div>
+        </form>
+    </div>
+</div>

@@ -369,126 +369,18 @@ def run_mitre_sync():
             result["mitre_count"] = mitre_actors
             result["mitre_files"] = mitre_files
             logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors across {mitre_files} file(s).")
-            
-            # --- Phase 2: Sync from OpenCTI (per-tenant, isolated) ---
-            # 4.1.5: OpenCTI is per-tenant intel. Iterate the
-            # client_opencti_map so each (client, instance) pair writes into
-            # the **tenant's** DB (or shared DB for the legacy primary
-            # client which has no tenant DB file). MITRE rows in shared are
-            # left untouched; only OpenCTI-sourced rows are wiped before
-            # the fresh fetch.
+
+            # --- Phase 2: OpenCTI GraphQL actor sync (retired in 5.0.0) ---
+            # The legacy ``cti_helper.get_threat_landscape`` GraphQL pull
+            # has been removed. Threat-actor TTP coverage is now
+            # projected from STIX 2.1 data at CTI ingest time
+            # (``cti_ingest._project_actors_to_threat_landscape``), so
+            # the /threats and /heatmap pages always reflect whatever
+            # is in the per-tenant CTI database without an out-of-band
+            # GraphQL round trip. ``octi_count`` is kept as a stable
+            # response field at zero so existing dashboards / scripts
+            # that read it don't break.
             octi_actors = 0
-            from app.services.tenant_manager import tenant_context_for
-
-            client_octi_pairs = []
-            try:
-                with db.get_shared_connection() as conn:
-                    rows = conn.execute(
-                        """
-                        SELECT m.client_id, c.name, o.id, o.label,
-                               o.url, o.token_enc
-                        FROM client_opencti_map m
-                        JOIN opencti_inventory o ON o.id = m.opencti_id
-                        JOIN clients c ON c.id = m.client_id
-                        WHERE COALESCE(o.is_active, TRUE) = TRUE
-                        ORDER BY c.name, o.label
-                        """
-                    ).fetchall()
-                client_octi_pairs = [
-                    {
-                        "client_id": r[0], "client_name": r[1],
-                        "opencti_id": r[2], "opencti_label": r[3],
-                        "url": r[4], "token": r[5],
-                    }
-                    for r in rows
-                ]
-            except Exception as e:
-                logger.warning(f"OpenCTI: could not load client_opencti_map: {e}")
-
-            # Legacy env-var fallback is no longer routed: without a
-            # client_opencti_map row there is no tenant to attribute the
-            # data to, and dumping it into shared would re-create the
-            # cross-tenant leak that 4.1.5 fixes. Surface a one-line
-            # warning so operators migrate to the Management UI.
-            if not client_octi_pairs:
-                if settings.opencti_url and settings.opencti_token:
-                    logger.warning(
-                        "OpenCTI: OPENCTI_URL/OPENCTI_TOKEN env vars are "
-                        "set but no client_opencti_map rows exist. "
-                        "Configure the instance via Management → OpenCTI "
-                        "and link it to a client; env-var fallback is "
-                        "deprecated in 4.1.5 to prevent cross-tenant data "
-                        "leakage."
-                    )
-                else:
-                    logger.info(
-                        "OpenCTI: no (client, instance) mappings configured — "
-                        "skipping per-tenant OpenCTI sync."
-                    )
-
-            # Group by client so we wipe the tenant's OpenCTI rows once,
-            # then upsert from each linked instance in turn.
-            from collections import defaultdict
-            by_client = defaultdict(list)
-            for p in client_octi_pairs:
-                by_client[p["client_id"]].append(p)
-
-            for client_id, pairs in by_client.items():
-                client_name = pairs[0]["client_name"]
-                try:
-                    with tenant_context_for(client_id):
-                        wiped = db.clear_octi_threat_actors_in_active_db()
-                        if wiped:
-                            logger.info(
-                                f"OpenCTI: cleared {wiped} stale actor(s) "
-                                f"for {client_name}"
-                            )
-                        for p in pairs:
-                            octi_url = p["url"]
-                            octi_token = p["token"]
-                            octi_label = p["opencti_label"]
-                            if not (octi_url and octi_token):
-                                continue
-                            logger.info(
-                                f"OpenCTI sync for {client_name}: "
-                                f"{octi_label} ({octi_url})..."
-                            )
-                            try:
-                                df_octi = cti_helper.get_threat_landscape(
-                                    octi_url, octi_token
-                                )
-                                if df_octi is None or df_octi.empty:
-                                    logger.warning(
-                                        f"OpenCTI: no actors returned from "
-                                        f"{octi_label} for {client_name}."
-                                    )
-                                    continue
-                                df_octi['source'] = df_octi['source'].apply(
-                                    lambda x: "OCTI" if isinstance(x, str) else x
-                                )
-                                count = db.save_octi_threat_actors_to_active_db(
-                                    df_octi
-                                )
-                                octi_actors += count
-                                logger.info(
-                                    f"OpenCTI sync complete for "
-                                    f"{client_name} / {octi_label}: "
-                                    f"{count} actors."
-                                )
-                            except Exception as e:
-                                msg = (
-                                    f"OpenCTI sync failed for "
-                                    f"{client_name} / {octi_label}: {e}"
-                                )
-                                logger.error(msg, exc_info=True)
-                                result["errors"].append(msg)
-                except Exception as e:
-                    msg = (
-                        f"OpenCTI tenant context failed for "
-                        f"{client_name}: {e}"
-                    )
-                    logger.error(msg, exc_info=True)
-                    result["errors"].append(msg)
 
             result["octi_count"] = octi_actors
             total = mitre_actors + octi_actors

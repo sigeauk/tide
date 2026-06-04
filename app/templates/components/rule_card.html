@@ -8,7 +8,7 @@
 {% set score_class = 'success' if rule_score >= 80 else ('warning' if rule_score >= 50 else 'danger') %}
 {% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
 {% set val_status = rule.validation_status | default('never') %}
-{% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'expired' else 'danger') %}
+{% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'amber' else ('danger' if val_status == 'expired' else 'muted')) %}
 
 <div class="rule-card" id="rule-{{ rule.rule_id }}">
     <div class="rule-header">
@@ -99,11 +99,17 @@
         </button>
         {% set card_space = rule.space | default('default') %}
         {% set kibana_obj_id = rule.raw_data.id if rule.raw_data and rule.raw_data.id else rule.rule_id %}
-        {% if card_space | lower == 'default' %}
-            {% set card_kibana_url = env.elastic_url ~ '/app/security/rules/id/' ~ kibana_obj_id %}
-        {% else %}
-            {% set card_kibana_url = env.elastic_url ~ '/s/' ~ card_space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
-        {% endif %}
+        {# Resolve the Kibana base from the rule's owning SIEM (per-tenant).
+           The legacy global env.elastic_url is a last-ditch fallback only \u2014
+           it was removed from settings in 4.0.10 so usually evaluates to ''. #}
+        {% set siem_kb = (kibana_urls_by_siem.get(rule.siem_id, '') if (kibana_urls_by_siem is defined and rule.siem_id) else '') %}
+        {% set kb_base = (siem_kb or env.elastic_url or '').rstrip('/') %}
+        {% if kb_base %}
+            {% if card_space | lower == 'default' %}
+                {% set card_kibana_url = kb_base ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+            {% else %}
+                {% set card_kibana_url = kb_base ~ '/s/' ~ card_space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+            {% endif %}
         <a href="{{ card_kibana_url }}"
            target="_blank"
            rel="noopener noreferrer"
@@ -112,5 +118,6 @@
            title="Open in Kibana ({{ (space_labels_by_pair.get((rule.siem_id ~ '|' ~ card_space), '') if (space_labels_by_pair is defined and rule.siem_id) else '') or space_labels.get(card_space, card_space | capitalize) }})">
             {{ icon_text('shield-check', 'Kibana', '14') }}
         </a>
+        {% endif %}
     </div>
 </div>

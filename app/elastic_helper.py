@@ -1650,8 +1650,24 @@ def _space_api_prefix(base_url: str, space: str) -> str:
 
 
 def _make_session(api_key: str) -> "requests.Session":
-    """Build a requests session with the given API key."""
+    """Build a requests session with the given API key.
+
+    Mounts a sized HTTPAdapter (same pattern as ``fetch_detection_rules`` —
+    see 4.1.14 Fix 15) so that SSL certificate verification is properly
+    suppressed for self-signed / private-CA Kibana endpoints and the
+    connection pool is not exhausted during multi-step promotion operations
+    (exception-list copy, target verify GET, source DELETE).  Without this
+    adapter the default urllib3 pool raises ``SSL: CERTIFICATE_VERIFY_FAILED``
+    on non-public CAs even when ``session.verify = False`` is set, because
+    urllib3 rebuilds the SSL context on each new connection without honouring
+    the session-level flag.
+    """
     session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=10, pool_maxsize=10, max_retries=3,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     session.headers.update({
         "kbn-xsrf": "true",
         "Content-Type": "application/json",

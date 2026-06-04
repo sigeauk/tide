@@ -53,6 +53,35 @@
     <p style="margin-top:0.75rem;">No SIEMs linked to this client yet.</p>
 </div>
 {% endif %}
+
+{# Per-tenant rule validation thresholds. Stored on the clients row
+   since schema 48 (4.1.20). Blank inputs clear the override and the
+   global RULE_VALIDATION_*_WEEKS settings take effect. Placeholders
+   show the inherited default so operators can see what they'd revert
+   to. #}
+<hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
+<form hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
+      hx-target="#client-siems-section" hx-swap="innerHTML"
+      style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;padding:0 0.25rem;">
+    <div style="flex:0 0 auto;">
+        <label class="form-label" style="font-size:0.78rem;">Validation amber after (weeks)</label>
+        <input type="number" min="1" name="amber_weeks" class="form-input"
+               style="width:9rem;"
+               placeholder="{{ settings.rule_validation_amber_weeks }} (default)"
+               value="{{ client.rule_validation_amber_weeks if client.rule_validation_amber_weeks is not none else '' }}">
+    </div>
+    <div style="flex:0 0 auto;">
+        <label class="form-label" style="font-size:0.78rem;">Validation expired after (weeks)</label>
+        <input type="number" min="1" name="expired_weeks" class="form-input"
+               style="width:9rem;"
+               placeholder="{{ settings.rule_validation_expired_weeks }} (default)"
+               value="{{ client.rule_validation_expired_weeks if client.rule_validation_expired_weeks is not none else '' }}">
+    </div>
+    <button type="submit" class="btn btn-primary btn-sm">Save thresholds</button>
+    <span style="flex-basis:100%;color:var(--color-text-muted);font-size:0.72rem;">
+        Leave blank to inherit the global default ({{ settings.rule_validation_amber_weeks }} / {{ settings.rule_validation_expired_weeks }} weeks).
+    </span>
+</form>
 </div>
 
 <!-- Edit SIEMs Modal -->

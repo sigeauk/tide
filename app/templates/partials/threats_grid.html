@@ -27,10 +27,13 @@
                     <span class="source-pill src-mobile" title="MITRE ATT&CK Mobile">MOB</span>
                     {% elif 'pre' in src_lower %}
                     <span class="source-pill src-pre" title="MITRE ATT&CK PRE">PRE</span>
-                    {% elif 'octi' in src_lower %}
-                    <span class="source-pill src-opencti" title="OpenCTI">CTI</span>
+                    {% elif src_lower == 'octi' or src_lower == 'opencti' or src_lower == 'stix' %}
+                    <span class="source-pill src-opencti" title="OpenCTI / STIX">CTI</span>
                     {% else %}
-                    <span class="source-pill">{{ src[:3] | upper }}</span>
+                    {# Arbitrary connector label (5.0.0+): show the
+                       full friendly name rather than truncating to 3
+                       letters so operators can tell connectors apart. #}
+                    <span class="source-pill src-opencti" title="{{ src }}">{{ src }}</span>
                     {% endif %}
                 {% endfor %}
                 {% endif %}

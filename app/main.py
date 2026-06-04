@@ -17,7 +17,7 @@ import time
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -197,6 +197,29 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
+
+    # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
+    # ``cti_connectors`` has been retired. It was useful for the 4.1.20
+    # upgrade path but is now actively harmful: deleting the legacy
+    # GraphQL "opencti" connector via the Management UI persists the
+    # delete, then this code path silently recreates the row on the
+    # next restart. The one-shot migration 47 already covered every
+    # historical row; operators on a brand-new install have nothing
+    # to migrate. If you need the migration to run again, call
+    # ``DatabaseService._backfill_legacy_opencti_to_connectors``
+    # explicitly from a maintenance script.
+
+    # T2 — swap the TAXII 2.1 client's process-wide cursor store from
+    # the in-memory default to the DuckDB-backed implementation so
+    # ``added_after`` watermarks survive container restarts.
+    try:
+        from app.services.cti_fetchers.taxii21 import (
+            DuckDBCursorStore, set_default_cursor_store,
+        )
+        set_default_cursor_store(DuckDBCursorStore())
+        logger.info("TAXII 2.1 cursor store: DuckDB-backed (cti_taxii_cursors)")
+    except Exception as _e:
+        logger.warning(f"TAXII cursor store wiring skipped: {_e}")
 
     # Initialize multi-tenant DB routing.
     # Per design (Migration 29), every client owns a physical DB file so that
@@ -396,11 +419,29 @@ async def lifespan(app: FastAPI):
     
     scheduler.start()
     logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
-    
+
+    # 5.0.x — CTI connector auto-sync scheduler. This is the only
+    # background ticker TIDE owns; per AGENTS.md §2 it is the
+    # sanctioned exception to the "operator-triggered only" rule.
+    # The scheduler wakes once a minute, asks the shared DB which
+    # cti_connectors rows are due (per the new sync_interval_minutes
+    # column) and submits jobs through the same cti_jobs registry the
+    # operator's Sync button uses.
+    try:
+        from app.services import cti_scheduler
+        cti_scheduler.start()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"CTI scheduler failed to start (non-fatal): {exc}")
+
     yield
-    
+
     # Shutdown
     scheduler.shutdown()
+    try:
+        from app.services import cti_scheduler
+        await cti_scheduler.stop()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"CTI scheduler stop failed: {exc}")
     # 4.1.0 P3 — close all pooled DuckDB connections so the file locks
     # are released cleanly before uvicorn exits.
     try:
@@ -565,6 +606,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/sigma": "page:sigma",
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
+        "/cti": "page:cti",
         "/settings": "page:settings",
         "/clients": "page:clients",
         "/management": "page:management",
@@ -1250,6 +1292,11 @@ def create_app() -> FastAPI:
                 ctx.setdefault("space_labels", {})
 
         return templates.TemplateResponse(request, name, ctx)
+
+    # Expose for routers that live in their own modules (e.g. app.api.cti)
+    # so page renders pick up active_client / user_clients / space_labels
+    # without each router re-deriving them.
+    app.state.render_template = render_template
     
     # Include API routers
     app.include_router(auth.router)
@@ -1264,6 +1311,7 @@ def create_app() -> FastAPI:
     app.include_router(clients_api.router)
     app.include_router(management_api.router)
     app.include_router(quest_api.router)
+    app.include_router(cti_api.router)
     
     # --- HEALTH CHECK ---
     
@@ -1425,7 +1473,9 @@ def create_app() -> FastAPI:
 
         # Per-tenant since 4.1.13 — tenant context is set above; rule
         # health metrics read directly from the tenant DB.
-        metrics = db.get_rule_health_metrics()
+        metrics = db.get_rule_health_metrics(
+            thresholds=db.get_client_validation_thresholds(_cid),
+        )
         # Hide orphan space buckets (rules whose (siem_id, space) is no
         # longer in client_siem_map after a mapping change). The sync
         # path eventually deletes the rows; this keeps the metrics card
@@ -1914,11 +1964,31 @@ def create_app() -> FastAPI:
         # Available SIEMs — show all so same SIEM can be linked as production + staging
         all_siems = db.list_siem_inventory()
         available_siems = all_siems
-        # OpenCTI instances linked to this client
-        client_opencti = db.get_client_opencti_instances(client_id)
-        all_opencti = db.list_opencti_inventory()
-        linked_opencti_ids = {o["id"] for o in client_opencti}
-        available_opencti = [o for o in all_opencti if o["id"] not in linked_opencti_ids]
+        # 5.0.0 — legacy per-tenant OpenCTI inventory linking has
+        # been removed. The new per-tenant link surface is the
+        # ``Linked CTI Connectors`` section just below, driven by
+        # ``client_connectors`` / ``available_connectors``.
+        client_opencti: list = []
+        available_opencti: list = []
+        # CTI connectors linked to this client (new generic framework).
+        # Per-tenant linking lives here on the client detail page, mirroring
+        # the SIEM/OpenCTI pattern, so operators add/remove connectors from
+        # the same surface as every other tenant-scoped resource.
+        try:
+            from app.api.management import _client_connector_rows
+            client_connectors, available_connectors = _client_connector_rows(client_id, db)
+        except Exception as _exc:
+            logger.warning(f"client_connectors read for client {client_id} failed: {_exc}")
+            client_connectors, available_connectors = [], []
+        # CTI egress targets for this client (per-tenant). We tolerate a
+        # missing per-tenant CTI DB (fresh clients) by returning an empty
+        # list rather than 500'ing the detail page.
+        cti_targets: list = []
+        try:
+            from app.services import cti_database as _cti_db
+            cti_targets = _cti_db.list_egress_targets(client_id)
+        except Exception as _exc:
+            logger.warning(f"cti_targets read for client {client_id} failed: {_exc}")
         # Available users not yet assigned
         all_users = db.get_all_users()
         assigned_user_ids = {u["id"] for u in client_users}
@@ -1985,6 +2055,10 @@ def create_app() -> FastAPI:
                 "known_kibana_spaces": (db.get_all_kibana_spaces() or []),
                 "client_opencti": client_opencti,
                 "available_opencti": available_opencti,
+                "client_connectors": client_connectors,
+                "available_connectors": available_connectors,
+                "cti_targets": cti_targets,
+                "siems": all_siems,
                 "client_systems": client_systems,
                 "client_baselines": client_baselines,
                 "available_systems": available_systems,

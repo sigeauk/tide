@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}CTI Reports | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ icon('file-text','24') }} CTI Reports</h1>
+        <p class="page-subtitle">STIX reports from configured CTI sources.</p>
+    </div>
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-post="/cti/reports/sync"
+                hx-target="#cti-sync-result"
+                hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync reports','14') }}</button>
+        <span id="cti-sync-result"></span>
+    </div>
+</div>
+
+{# ── Metric strip (6 cards) ─────────────────────────────── #}
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.total }}</p>
+        <p class="metric-label">Total reports</p>
+        <p class="metric-sub">{{ icon_text('file-text','Across this tenant','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.sources }}</p>
+        <p class="metric-label">Distinct sources</p>
+        <p class="metric-sub">{{ icon_text('database','Feeds contributing','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.labels }}</p>
+        <p class="metric-label">Unique labels</p>
+        <p class="metric-sub">{{ icon_text('tag','STIX labels seen','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.recent_30d }}</p>
+        <p class="metric-label">Published 30d</p>
+        <p class="metric-sub">{{ icon_text('clock','Last 30 days','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.linked_actors }}</p>
+        <p class="metric-label">Naming actors</p>
+        <p class="metric-sub">{{ icon_text('users','Reports → actors','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.linked_indicators }}</p>
+        <p class="metric-label">Citing indicators</p>
+        <p class="metric-sub">{{ icon_text('link','Reports → IOCs','14') }}</p>
+    </div>
+</div>
+
+{# ── Filters: per-column ─────────────────────────────────── #}
+<form class="filters-bar" method="get" action="/cti/reports">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input type="text" name="search" class="form-input"
+               value="{{ search }}"
+               placeholder="report name or description…">
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select name="source" class="form-input form-select">
+            <option value="">All sources</option>
+            {% for s in sources %}
+            <option value="{{ s }}" {% if s == selected_source %}selected{% endif %}>
+                {{ source_labels.get(s, s) }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Label</label>
+        <select name="label" class="form-input form-select">
+            <option value="">All labels</option>
+            {% for l in all_labels %}
+            <option value="{{ l }}" {% if l == selected_label %}selected{% endif %}>{{ l }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button type="submit" class="btn btn-primary">Apply</button>
+    </div>
+</form>
+
+{% if reports %}
+<div class="card card-flush" style="margin-top:1rem;">
+    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
+                border-bottom:1px solid var(--color-border);
+                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
+                text-transform:uppercase;color:var(--color-text-muted);">
+        <div style="min-width:240px;">Report</div>
+        <div style="flex:1;">Labels</div>
+        <div style="white-space:nowrap;">Source · Published</div>
+    </div>
+    <div class="cve-list" style="padding:0.75rem 1rem;">
+    {% for r in reports %}
+    <div class="cve-card-item cve-card-item--unaffected"
+         style="cursor:pointer;" onclick="window.location='/cti/reports/{{ r.id }}'">
+        <div class="cve-card-item__id" style="min-width:240px;">
+            {{ icon('file-text','14') }}
+            <a href="/cti/reports/{{ r.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
+               onclick="event.stopPropagation();">
+                {{ r.name or 'Untitled report' }}
+            </a>
+        </div>
+        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+            <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
+                {% if r.labels %}
+                {% for lbl in r.labels[:5] %}
+                <span class="badge badge-secondary" style="font-size:0.7rem;margin-right:0.25rem;">{{ lbl }}</span>
+                {% endfor %}
+                {% if r.labels|length > 5 %}<span>+{{ r.labels|length - 5 }}</span>{% endif %}
+                {% else %}
+                <span style="opacity:0.6;">No labels</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="cve-card-item__right" style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="font-size:0.75rem;color:var(--color-text-muted);white-space:nowrap;">
+                {{ source_labels.get(r.source_id, '—') if r.source_id else '—' }}
+                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
+                {{ r.published or '—' }}
+            </span>
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card card-padded-lg card-center" style="margin-top:1rem;">
+    <p style="color:var(--color-muted);margin:0;">No reports match the current filters.</p>
+</div>
+{% endif %}
+
+<div class="pagination" style="margin-top:1rem;">
+    {% set qbase = '&search=' ~ search ~ '&source=' ~ selected_source ~ '&label=' ~ selected_label %}
+    {% if page > 1 %}
+        <a class="btn btn-secondary"
+           href="/cti/reports?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
+    {% endif %}
+    <span style="margin:0 0.75rem;">Page {{ page }}</span>
+    {% if reports|length == page_size %}
+        <a class="btn btn-secondary"
+           href="/cti/reports?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}{{ actor.name }} | CTI Actor | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <p style="margin:0 0 0.25rem 0;"><a href="/cti/actors" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Actors</span></a></p>
+        <h1 class="page-title-hero">{{ icon('users','24') }} {{ actor.name }}</h1>
+        <p class="page-subtitle">
+            <span class="badge badge-secondary" style="font-size:0.7rem;">{{ actor.stix_type }}</span>
+            {% if actor.origin %}
+                <span style="margin-left:0.5rem;">{{ icon('globe','12') }} {{ actor.origin }}</span>
+            {% endif %}
+            {% if actor.source_id %}
+                <span style="margin-left:0.5rem;">{{ icon('database','12') }} {{ source_labels.get(actor.source_id, 'External CTI') }}</span>
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+{# ── Quick stats strip (no UUID, no raw STIX ids) ────────── #}
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ (actor.aliases or [])|length }}</p>
+        <p class="metric-label">Aliases</p>
+        <p class="metric-sub">{{ icon_text('tags','Also known as','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ actor.related_indicators|length }}</p>
+        <p class="metric-label">Indicators</p>
+        <p class="metric-sub">{{ icon_text('crosshair','Linked observables','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ actor.related_reports|length }}</p>
+        <p class="metric-label">Reports</p>
+        <p class="metric-sub">{{ icon_text('file-text','Mentions','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ actor.first_seen or '—' }}</p>
+        <p class="metric-label">First seen</p>
+        <p class="metric-sub">{{ icon_text('clock','Earliest sighting','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ actor.last_seen or '—' }}</p>
+        <p class="metric-label">Last seen</p>
+        <p class="metric-sub">{{ icon_text('clock','Most recent','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ actor.origin or '—' }}</p>
+        <p class="metric-label">Origin</p>
+        <p class="metric-sub">{{ icon_text('map-pin','Attributed region','14') }}</p>
+    </div>
+</div>
+
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">{{ icon('info','16') }} Details</h2>
+    <dl class="kv">
+        <dt>Aliases</dt><dd>{{ (actor.aliases or [])|join(', ') or '—' }}</dd>
+        <dt>Type</dt><dd>{{ actor.stix_type }}</dd>
+        <dt>Origin</dt><dd>{{ actor.origin or '—' }}</dd>
+        <dt>First seen</dt><dd>{{ actor.first_seen or '—' }}</dd>
+        <dt>Last seen</dt><dd>{{ actor.last_seen or '—' }}</dd>
+        <dt>Source</dt><dd>{{ source_labels.get(actor.source_id, '—') if actor.source_id else '—' }}</dd>
+    </dl>
+    {% if actor.description %}
+    <p style="margin-top:1rem;white-space:pre-wrap;">{{ actor.description }}</p>
+    {% endif %}
+</section>
+
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('crosshair','16') }} Indicators attributed to this actor
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ actor.related_indicators|length }}</span>
+    </h2>
+    <p style="color:var(--color-muted);font-size:0.85rem;margin-top:0;">
+        Filtered by your TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
+    </p>
+    {% if actor.related_indicators %}
+    <table class="data-table">
+        <thead>
+            <tr><th>Observable</th><th>Pattern</th><th>TLP</th><th>Confidence</th><th>Last seen</th></tr>
+        </thead>
+        <tbody>
+        {% for i in actor.related_indicators %}
+            <tr>
+                <td><a href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
+                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
+                <td>{{ (i.tlp or '—')|upper }}</td>
+                <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
+                <td>{{ i.last_seen or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No indicators visible under your TLP ceiling.</p>
+    {% endif %}
+</section>
+
+<section class="card card-padded">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('file-text','16') }} Mentioned in reports
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ actor.related_reports|length }}</span>
+    </h2>
+    {% if actor.related_reports %}
+    <table class="data-table">
+        <thead><tr><th>Report</th><th>Published</th></tr></thead>
+        <tbody>
+        {% for r in actor.related_reports %}
+            <tr>
+                <td><a href="/cti/reports/{{ r.id }}">{{ r.name or 'Untitled report' }}</a></td>
+                <td>{{ r.published or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No reports mention this actor.</p>
+    {% endif %}
+</section>
+{% endblock %}

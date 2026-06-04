@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}CTI Actors | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ icon('users','24') }} CTI Actors</h1>
+        <p class="page-subtitle">
+            Actors imported from configured CTI feeds (table <code>cti_actors</code>).
+            Separate from <a href="/threats">Threat Landscape</a>, which shows actors observed in your Elastic detections.
+        </p>
+    </div>
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-post="/cti/actors/sync"
+                hx-target="#cti-sync-result"
+                hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync actors','14') }}</button>
+        <span id="cti-sync-result"></span>
+    </div>
+</div>
+
+{# ── Metric strip (6 cards, matching Threat Landscape) ───── #}
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.total }}</p>
+        <p class="metric-label">Tracked actors</p>
+        <p class="metric-sub">{{ icon_text('users','Across this tenant','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.intrusion_sets }}</p>
+        <p class="metric-label">Intrusion sets</p>
+        <p class="metric-sub">{{ icon_text('shield','STIX intrusion-set','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.threat_actors }}</p>
+        <p class="metric-label">Threat actors</p>
+        <p class="metric-sub">{{ icon_text('user','STIX threat-actor','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.origins }}</p>
+        <p class="metric-label">Distinct origins</p>
+        <p class="metric-sub">{{ icon_text('globe','Attributed countries','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ metrics.with_aliases }}</p>
+        <p class="metric-label">With aliases</p>
+        <p class="metric-sub">{{ icon_text('tags','Known by other names','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value {{ 'success' if metrics.linked > 0 else '' }}">{{ metrics.linked }}</p>
+        <p class="metric-label">Linked to indicators</p>
+        <p class="metric-sub">{{ icon_text('link','STIX relationships','14') }}</p>
+    </div>
+</div>
+
+{# ── Filters: one control per column header ─────────────── #}
+<form class="filters-bar" method="get" action="/cti/actors">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input type="text" name="search" class="form-input"
+               value="{{ search }}"
+               placeholder="actor name or description…">
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Type</label>
+        <select name="stix_type" class="form-input form-select">
+            <option value="">All types</option>
+            {% for t in stix_types %}
+            <option value="{{ t }}" {% if t == selected_stix_type %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Origin</label>
+        <select name="origin" class="form-input form-select">
+            <option value="">All origins</option>
+            {% for o in origins %}
+            <option value="{{ o }}" {% if o == selected_origin %}selected{% endif %}>{{ o }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select name="source" class="form-input form-select">
+            <option value="">All sources</option>
+            {% for s in sources %}
+            <option value="{{ s }}" {% if s == selected_source %}selected{% endif %}>
+                {{ source_labels.get(s, s) }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button type="submit" class="btn btn-primary">Apply</button>
+    </div>
+</form>
+
+{% if actors %}
+<div class="card card-flush" style="margin-top:1rem;">
+    {# Column header row — aligned with .cve-card-item flex layout #}
+    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
+                border-bottom:1px solid var(--color-border);
+                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
+                text-transform:uppercase;color:var(--color-text-muted);">
+        <div style="min-width:240px;">Actor</div>
+        <div style="flex:1;">Type · Origin · Aliases</div>
+        <div style="white-space:nowrap;">Source · Last seen</div>
+    </div>
+    <div class="cve-list" style="padding:0.75rem 1rem;">
+    {% for a in actors %}
+    <div class="cve-card-item cve-card-item--unaffected"
+         style="cursor:pointer;"
+         onclick="window.location='/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}'">
+        <div class="cve-card-item__id" style="min-width:240px;">
+            <span class="badge badge-secondary"
+                  title="STIX type: {{ a.stix_type }}"
+                  style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">
+                {% if a.stix_type == 'intrusion-set' %}IS{% else %}TA{% endif %}
+            </span>
+            <a href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}"
+               style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
+               onclick="event.stopPropagation();">
+                {{ a.name }}
+            </a>
+        </div>
+        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+            <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
+                <span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span>
+                {% if a.origin %}<span style="margin-left:0.5rem;">{{ icon('globe','12') }} {{ a.origin }}</span>{% endif %}
+                {% if a.aliases %}
+                <span style="margin-left:0.5rem;">aka {{ (a.aliases or [])[:3]|join(', ') }}{% if a.aliases|length > 3 %} +{{ a.aliases|length - 3 }}{% endif %}</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="cve-card-item__right" style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="font-size:0.75rem;color:var(--color-text-muted);white-space:nowrap;">
+                {{ source_labels.get(a.source_id, '—') if a.source_id else '—' }}
+                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
+                {{ a.last_seen or '—' }}
+            </span>
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card card-padded-lg card-center" style="margin-top:1rem;">
+    <p style="color:var(--color-muted);margin:0;">No actors match the current filters.</p>
+</div>
+{% endif %}
+
+<div class="pagination" style="margin-top:1rem;">
+    {% set qbase = '&search=' ~ search ~ '&stix_type=' ~ selected_stix_type ~ '&origin=' ~ selected_origin ~ '&source=' ~ selected_source %}
+    {% if page > 1 %}
+        <a class="btn btn-secondary"
+           href="/cti/actors?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
+    {% endif %}
+    <span style="margin:0 0.75rem;">Page {{ page }}</span>
+    {% if actors|length == page_size %}
+        <a class="btn btn-secondary"
+           href="/cti/actors?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
+    {% endif %}
+</div>
+{% endblock %}

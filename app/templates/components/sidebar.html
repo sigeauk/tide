@@ -120,6 +120,30 @@ Children are indented, slightly muted, icon-free.
             </div>
         </div>
         {% endif %}
+
+        <!-- ── CTI ── -->
+        {% if not user or user.can_read('page:cti') %}
+        <div class="nav-group" id="nav-group-cti">
+            <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-cti')" data-tooltip="CTI">
+                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 2 4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-4Z"/>
+                </svg>
+                <span class="nav-label">CTI</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
+                <a href="/cti/indicators" class="nav-child {% if active_page == 'cti' and active_sub == 'indicators' %}active{% endif %}">
+                    <span class="nav-label">Indicators</span>
+                </a>
+                <a href="/cti/actors" class="nav-child {% if active_page == 'cti' and active_sub == 'actors' %}active{% endif %}">
+                    <span class="nav-label">Actors</span>
+                </a>
+                <a href="/cti/reports" class="nav-child {% if active_page == 'cti' and active_sub == 'reports' %}active{% endif %}">
+                    <span class="nav-label">Reports</span>
+                </a>
+            </div>
+        </div>
+        {% endif %}
     </nav>
     
     <div class="sidebar-footer">

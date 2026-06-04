@@ -90,6 +90,7 @@ def _check_db() -> dict:
     _line("2. Database state")
     info: dict = {"db_read_ok": False}
     db_path = os.environ.get("TIDE_DB_PATH", "/app/data/tide.duckdb")
+    info["db_path"] = db_path
     if not os.path.exists(db_path):
         print(f"  shared DB file not found at {db_path}")
         info["db_read_error"] = f"missing file {db_path}"
@@ -1320,7 +1321,135 @@ def main() -> int:
     _check_dry_run_urls(info)
     _check_live_sync_trace(info)
     _check_opencti_tenants(info)
+    _check_cti_dbs(info)
+    _check_taxii_cursors(info)
     return 0
+
+
+def _check_cti_dbs(info: dict) -> None:
+    """Section 12 — per-tenant CTI DB state (Native CTI Engine, Phase 1).
+
+    Reports whether each tenant has a ``cti_<slug>_<short_id>.duckdb``
+    file alongside its rule DB, what schema version it is on, and the
+    row counts for the core CTI tables. Pure read; never creates files.
+    """
+    _line("12. Per-tenant CTI DB state (Native CTI Engine)")
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read the shared DB")
+        return
+    clients = info.get("clients") or []
+    if not clients:
+        print("  no clients registered.")
+        return
+    try:
+        from app.services.cti_database import cti_db_stats
+    except Exception as exc:
+        print(f"  cti_database import failed: {exc}")
+        return
+    any_present = False
+    for cid, name, _fn in clients:
+        try:
+            stats = cti_db_stats(cid)
+        except Exception as exc:
+            print(f"  tenant {cid[:8]} '{name}': stats failed: {exc}")
+            continue
+        if not stats.get("exists"):
+            print(f"  tenant {cid[:8]} '{name}': no CTI DB yet "
+                  f"(would create at {stats['path']})")
+            continue
+        any_present = True
+        print(
+            f"  tenant {cid[:8]} '{name}': schema_v{stats['schema_version']} "
+            f"indicators={stats['indicators']} "
+            f"actors={stats.get('actors', 0)} "
+            f"reports={stats.get('reports', 0)} "
+            f"relationships={stats.get('relationships', 0)} "
+            f"egress_targets={stats['egress_targets']}"
+        )
+    if not any_present:
+        print("  (no tenant has run a CTI sync yet)")
+
+
+def _check_taxii_cursors(info: dict) -> None:
+    """Section 13 — TAXII 2.1 delta-cursor state.
+
+    Reports per-(connector, api_root, collection) ``added_after``
+    watermarks captured from upstream ``X-TAXII-Date-Added-Last``
+    response headers. Built by the generic TAXII client and used to
+    make repeat syncs delta-only. A connector with no cursor row means
+    "never synced via TAXII yet".
+
+    Opens its own read-only snapshot of the shared DB so it never has
+    to fight the live writer for the file lock.
+    """
+    _line("13. TAXII 2.1 delta cursors")
+    if not info.get("db_read_ok"):
+        print("  skipped: section 2 could not read the shared DB")
+        return
+    db_path = info.get("db_path") or "/app/data/tide.duckdb"
+    if not os.path.exists(db_path):
+        print(f"  skipped: shared DB missing at {db_path}")
+        return
+    import shutil
+    import tempfile
+    import duckdb as _ddb
+    snap_dir = None
+    try:
+        snap_dir = tempfile.mkdtemp(prefix="diag_taxii_")
+        snap = os.path.join(snap_dir, "snap.duckdb")
+        shutil.copy2(db_path, snap)
+        wal = db_path + ".wal"
+        if os.path.exists(wal):
+            shutil.copy2(wal, snap + ".wal")
+        c = _ddb.connect(snap, read_only=True)
+    except Exception as exc:
+        print(f"  could not snapshot shared DB: {exc}")
+        if snap_dir:
+            shutil.rmtree(snap_dir, ignore_errors=True)
+        return
+    try:
+        tables = {r[0] for r in c.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='main'"
+        ).fetchall()}
+        if "cti_taxii_cursors" not in tables:
+            print("  cti_taxii_cursors table not present "
+                  "(schema < v49 — no TAXII connectors run yet).")
+            return
+        rows = c.execute(
+            "SELECT connector_id, api_root, collection_id, "
+            "added_after, last_run_at FROM cti_taxii_cursors "
+            "ORDER BY last_run_at DESC NULLS LAST"
+        ).fetchall()
+        if not rows:
+            print("  no TAXII cursors recorded yet.")
+            return
+        label_by_id: dict[str, str] = {}
+        if "cti_connectors" in tables:
+            try:
+                for cid, vendor, label in c.execute(
+                    "SELECT id, vendor, label FROM cti_connectors"
+                ).fetchall():
+                    label_by_id[cid] = f"{vendor}/{label}"
+            except Exception:
+                pass
+        for connector_id, api_root, coll, added_after, last_run in rows:
+            label = label_by_id.get(connector_id, connector_id[:8])
+            print(
+                f"  {label} root={api_root} "
+                f"collection={coll} "
+                f"added_after={added_after} "
+                f"last_run={last_run}"
+            )
+    except Exception as exc:
+        print(f"  ERROR reading cursors: {exc}")
+    finally:
+        try:
+            c.close()
+        except Exception:
+            pass
+        if snap_dir:
+            shutil.rmtree(snap_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

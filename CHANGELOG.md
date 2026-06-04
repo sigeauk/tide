@@ -4,7 +4,71 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.1.19]
+## [5.0.0] - pending
+
+This is a major release introducing full Cyber Threat Intelligence (CTI) ingest and management. TIDE can now connect to multiple CTI sources — **OpenCTI**, **Mandiant Advantage**, **CrowdStrike Falcon Intelligence**, **MITRE ATT&CK** and **GreyNoise** — through a unified Connectors surface on the Management hub. All feeds use delta-aware polling so repeat syncs only fetch what has changed since the last run. The Threat Landscape, Heatmap, and rule coverage pages now draw from ingested STIX 2.1 data directly, with no dependency on the legacy OpenCTI GraphQL connector, which has been retired in this release.
+
+### Added
+
+- **CTI Connectors hub.** A new **Connectors** section in Management lets operators add, edit, test and delete CTI sources. Each connector card shows its current sync status, last-run result, and which tenants it is linked to. Supported vendors: OpenCTI (TAXII 2.1), Mandiant Advantage, CrowdStrike Falcon Intelligence, MITRE ATT&CK and GreyNoise.
+
+- **Import Connectors.** The Connectors hub has an **Import** button that accepts a single connector or a batch in JSON format, so operators can pre-populate connectors from a saved configuration rather than entering each one manually. Partially valid imports are reported cleanly — valid entries are created and skipped entries are listed.
+
+- **Auto-sync scheduler.** Each connector has an **Auto-sync interval** dropdown (Off / 15 min / 1 hour / 6 hours / 24 hours). Enabled connectors sync on schedule without operator intervention; the card badge updates live after each run. Set to **Off** to keep a connector strictly manual.
+
+- **CTI sync runs in the background.** Clicking **Sync** on any CTI page or connector card returns immediately. A live status badge polls for the result and settles into a green / amber / red summary when the job completes. Long-running backfills no longer time out or block the operator's browser session.
+
+- **Delta-aware polling with persistent cursors.** TIDE records a per-collection watermark after each sync. The next run — whether manual or scheduled — resumes from that point, so only new and updated objects are fetched. MITRE ATT&CK is always pulled in full since it is a structural framework rather than a live feed.
+
+- **"Start From" date on TAXII connectors.** Each connector has an optional **Start From** date (ISO 8601). For a brand-new connector with no history, this seeds the initial backfill window instead of starting from "now". Once a real cursor is recorded the field is ignored.
+
+- **STIX 2.1 ingest with version control.** Re-ingesting an unchanged object is a no-op and does not count against sync totals. Objects marked `revoked` in the upstream feed are automatically retired from the active CTI surface. TLP markings are normalised to `clear / green / amber / red` on ingest.
+
+- **Per-tenant CTI data store.** Each tenant's indicators, actors, reports and relationships are stored in a dedicated per-tenant CTI database, keeping holdings fully isolated between tenants. The database is created automatically on first use.
+
+- **In-browser CTI report viewer.** The CTI Reports page now renders attached PDFs inline using the browser's built-in viewer. Attached images display directly; other file types offer an **Open in new tab** link. Operators can read a full Mandiant or OpenCTI threat report without leaving TIDE. CrowdStrike report PDFs are cached locally after the first fetch so repeated views do not call out to Falcon.
+
+- **CrowdStrike Falcon Intelligence connector.** CrowdStrike indicator, actor and report data is pulled via the Falcon Intel REST API using the operator's OAuth2 client credentials. Indicators, actors and their relationships to reports are all ingested in a single efficient call rather than one request per report.
+
+- **Per-tenant Linked CTI Connectors on the client detail page.** A **Linked CTI Connectors** section on the client detail page lets operators link and unlink CTI sources for that tenant, using the same pattern as the existing Linked SIEMs section. The client metric strip's Threat Intel tile now counts linked CTI connectors.
+
+- **CTI Egress to Elasticsearch.** Each tenant can have one or more **CTI Egress Targets** pointing at an Elasticsearch instance. On each run, indicators are written to a current-state index (`logs-ti_tide_latest`) and a daily history index. A TLP ceiling on each target prevents indicators above the configured marking from leaving TIDE. Egress targets are managed from the client detail page, with a per-target API key override if the destination uses different credentials to the main SIEM.
+
+- **Threat Landscape projection from STIX.** Actor-to-technique relationships from ingested CTI feeds are projected directly onto the Threat Landscape and Heatmap pages at ingest time. The Threat Landscape no longer requires an active OpenCTI connection and a missing or expired token can no longer cause a sync failure.
+
+- **TAXII discovery auto-resolve.** Operators can paste either a discovery URL or a direct API root URL into the connector form — TIDE follows the standard TAXII discovery hop automatically. OpenCTI "Data sharing" collection URLs are also handled: TIDE strips the collection suffix and auto-pins the connector to the embedded collection ID.
+
+- **Connector Test button probes the upstream feed.** The **Test** button on each connector card performs a real HTTP probe — verifying credentials, reachability and collection access — and reports the outcome. The discovered collection count is shown on success; the upstream error is shown on failure.
+
+- **Per-sync object type breakdown.** Each sync result includes a count by STIX object type (`indicators`, `reports`, `attack-patterns`, `relationships`, etc.) so operators can see the shape of what was fetched and diagnose gaps between the upstream feed count and what landed in TIDE.
+
+- **Per-tenant rule validation thresholds.** The amber and expired validation thresholds that drive the rule validation badge can now be overridden per tenant from the client detail page. A blank value inherits the global defaults; a positive integer pins that tenant to its own review cadence.
+
+- **Configurable global rule validation windows.** Two new environment variables — `RULE_VALIDATION_AMBER_WEEKS` (default `8`) and `RULE_VALIDATION_EXPIRED_WEEKS` (default `26`) — replace the previous hard-coded 12-week cliff that jumped straight from valid to expired. Rules now progress through valid → amber → expired, and rules that have never been reviewed show a neutral "never" state.
+
+- **"Open in Kibana" links on rule cards now resolve correctly.** The button on each Rule Health card and on the rule detail modal now opens the correct Kibana instance for the rule's owning SIEM. It was previously anchored to a global setting that was removed in an earlier release.
+
+### Changed
+
+- **Connectors hub replaces the legacy Threat Intel tab.** All CTI source management is now under Management → Connectors. The legacy Threat Intel tab has been retired; existing OpenCTI instances are migrated to the new Connectors store automatically on upgrade.
+
+- **CTI list pages redesigned.** The Indicators, Actors and Reports pages use a slim card layout consistent with the rest of TIDE. Indicators lead with a summary strip showing per-type totals (IPv4, URL, domain, file hash, etc.). Actors and Reports lead with a six-card metric strip and expose column-level dropdown filters in addition to free-text search. The source column on all three pages shows the connector's friendly label instead of an internal ID.
+
+- **CTI detail pages use the standard TIDE card theme.** Actor, indicator and report detail pages use the same layout as the rest of TIDE and no longer expose raw internal IDs in the page body.
+
+- **Threat Landscape and Heatmap source labels.** The source pill on actor rows now shows the connector's friendly label (e.g. "Mandiant Advantage") so operators can tell feeds apart at a glance.
+
+- **CTI counts use local data.** The CTI counts displayed on list pages are now read from the per-tenant CTI store rather than issuing a live query to the upstream source on every page load.
+
+- **Sync logs show per-page progress.** Each page fetched from a TAXII collection now emits a progress line in the container logs (`page=N size=… running_total=… cursor=…`) so operators can confirm a large backfill is still running without waiting for the final summary.
+
+- **Check connection button consolidated to the Connectors hub.** Connectivity testing for CTI sources is now available only in Management → Connectors where the **Test** button probes the live TAXII root. The button has been removed from the individual CTI list pages.
+
+### Removed
+
+- **Legacy OpenCTI GraphQL connector.** The OpenCTI GraphQL connector and all supporting code have been removed. All CTI sources — including OpenCTI — are now managed through the TAXII 2.1 connector framework. Any data ingested by the legacy connector is cleaned up automatically on first startup after upgrade.
+
+## [4.1.19] - 2026-05-20
 
 ### Fixed
 

@@ -61,6 +61,52 @@ def _build_space_labels_by_pair(db, client_id: str) -> dict:
     }
 
 
+def _build_kibana_urls_by_siem(db, client_id: str) -> dict:
+    """``siem_id`` → ``kibana_url`` map for the active client.
+
+    The rule card's "Open in Kibana" link previously composed the URL
+    from a global ``env.elastic_url`` setting that was removed in 4.0.10,
+    so the button silently anchored to the TIDE host. Each rule carries
+    its owning ``siem_id``; the card template uses this dict to resolve
+    the right Kibana base URL per row. Returns an empty dict on failure
+    — the template falls back to the global env value (and ultimately
+    hides the link if neither is set).
+    """
+    try:
+        siems = db.get_client_siems(client_id)
+    except Exception:
+        return {}
+    return {
+        s["id"]: s.get("kibana_url") or ""
+        for s in (siems or [])
+        if s.get("id")
+    }
+
+
+def _resolve_kibana_url(db, rule, client_id: str) -> str:
+    """Return the Kibana base URL for a rule's owning SIEM (or '' if none).
+
+    The rule detail modal builds an "Open in Kibana" button. Before this
+    helper the template tried to read a non-existent global ``elastic_url``
+    setting (removed in 4.0.10), so the link silently anchored to the TIDE
+    host instead of Kibana. Now we look the rule's ``siem_id`` up in the
+    active client's SIEM map and return the per-SIEM ``kibana_url``. Returns
+    an empty string when the rule has no SIEM, when the SIEM is no longer
+    assigned to the active tenant, or when the SIEM row carries no Kibana
+    URL — the template hides the button in that case.
+    """
+    siem_id = getattr(rule, "siem_id", None) if rule else None
+    if not siem_id or not client_id:
+        return ""
+    try:
+        for s in (db.get_client_siems(client_id) or []):
+            if s.get("id") == siem_id:
+                return s.get("kibana_url") or ""
+    except Exception:
+        logger.debug("kibana_url resolution failed for rule siem_id=%s", siem_id)
+    return ""
+
+
 def _prune_orphan_scopes(metrics, db, client_id: str):
     """Strip rule-count buckets for spaces no longer in ``client_siem_map``.
 
@@ -120,7 +166,10 @@ def list_rules(
             page_size=page_size,
         )
         
-        rules, total, last_sync = db.get_rules(filters=filters)
+        rules, total, last_sync = db.get_rules(
+            filters=filters,
+            thresholds=db.get_client_validation_thresholds(client_id),
+        )
         total_pages = max(1, (total + page_size - 1) // page_size)
         
         logger.info(f"Fetched {len(rules)} rules (total: {total}, page: {page}/{total_pages})")
@@ -138,6 +187,7 @@ def list_rules(
             "sort_by": sort_by,
             "space_labels": _build_space_labels(db, client_id),
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
+            "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
         }
         return templates.TemplateResponse(request, "partials/rules_grid.html", context)
     except Exception as e:
@@ -160,7 +210,9 @@ def get_metrics(
     """Get rule health metrics."""
     from app.main import get_last_sync_time
     # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
-    metrics = db.get_rule_health_metrics()
+    metrics = db.get_rule_health_metrics(
+        thresholds=db.get_client_validation_thresholds(client_id),
+    )
     # Hide orphan space buckets (rules whose (siem_id, space) is no
     # longer in client_siem_map after a mapping change).
     _prune_orphan_scopes(metrics, db, client_id)
@@ -193,7 +245,8 @@ def get_rule_detail(
     ),
 ):
     """Get full rule details for modal display."""
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
+    thresholds = db.get_client_validation_thresholds(client_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
     
     if not rule:
         return HTMLResponse(
@@ -208,7 +261,12 @@ def get_rule_detail(
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "components/rule_detail_modal.html",
-        {"rule": rule, "env": settings, "space_labels": _build_space_labels(db, client_id)}
+        {
+            "rule": rule,
+            "env": settings,
+            "space_labels": _build_space_labels(db, client_id),
+            "kibana_url": _resolve_kibana_url(db, rule, client_id),
+        },
     )
 
 
@@ -224,14 +282,15 @@ def validate_rule(
     siem_id: Optional[str] = Query(None),
 ):
     """Mark a rule as validated by the current user."""
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
+    thresholds = db.get_client_validation_thresholds(client_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
     
     if not rule:
         return HTMLResponse('<div class="empty-state">Rule not found</div>', status_code=404)
     
     username = user.name or user.username if user else "Unknown"
     db.save_validation(rule.name, username)
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
     
     templates = request.app.state.templates
 
@@ -241,12 +300,23 @@ def validate_rule(
     if request.headers.get("X-Return-Modal") == "true":
         return templates.TemplateResponse(
             request, "components/rule_detail_modal.html",
-            {"rule": rule, "env": settings, "space_labels": _sl}
+            {
+                "rule": rule,
+                "env": settings,
+                "space_labels": _sl,
+                "kibana_url": _resolve_kibana_url(db, rule, client_id),
+            },
         )
 
     return templates.TemplateResponse(
         request, "components/rule_card.html",
-        {"rule": rule, "space_labels": _sl}
+        {
+            "rule": rule,
+            "space_labels": _sl,
+            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
+            "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
+            "env": settings,
+        }
     )
 
 

@@ -388,11 +388,20 @@ def tab_permissions(request: Request, db: DbDep, user: RequireAdmin):
 
 @router.get("/tab/threat-intel", response_class=HTMLResponse)
 def tab_threat_intel(request: Request, db: DbDep, user: RequireAdmin):
-    """Threat Intel tab partial for the management hub."""
-    instances = db.list_opencti_inventory()
-    for i in instances:
-        i["_clients"] = db.get_opencti_clients(i["id"])
-    return HTMLResponse(_render_threat_intel_tab(instances))
+    """Retired in 5.0.0 — see Management → Connectors instead.
+
+    Kept only so a legacy bookmark / HTMX poll renders a stable
+    explanatory message instead of a 404. Migration 50 dropped the
+    underlying ``opencti_inventory`` table.
+    """
+    return HTMLResponse(
+        '<div class="text-secondary" style="padding:1rem;">'
+        'Threat Intel (legacy OpenCTI GraphQL) was retired in 5.0.0. '
+        'Add OpenCTI as an <code>opencti_taxii</code> connector under '
+        '<a href="/management#mgmt-sub-connectors" '
+        'style="color:var(--color-primary);">Management → Connectors</a> '
+        'instead.</div>'
+    )
 
 
 @router.get("/tab/gitlab", response_class=HTMLResponse)
@@ -533,165 +542,341 @@ def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: Require
 
 
 
-@router.post("/opencti/test-connection", response_class=HTMLResponse)
-async def test_opencti_connection(request: Request, db: DbDep, user: RequireAdmin):
-    """Test connectivity to an OpenCTI instance via its GraphQL API."""
-    form = await request.form()
-    opencti_id = str(form.get("opencti_id", "")).strip()
-    url = str(form.get("url", "")).strip()
-    token = str(form.get("token", "")).strip()
+# ---------------------------------------------------------------------------
+# Legacy OpenCTI GraphQL endpoints (retired in 5.0.0).
+#
+# Every /opencti/* route below has been removed:
+#   * POST /opencti/test-connection          (GraphQL probe)
+#   * POST /opencti                          (create instance)
+#   * PUT  /opencti/{id}                     (update instance)
+#   * DELETE /opencti/{id}                   (delete instance)
+#   * POST /opencti/{id}/sync-cti            (GraphQL bundle pull)
+#   * POST /clients/{cid}/opencti            (link to client)
+#   * DELETE /clients/{cid}/opencti/{id}     (unlink from client)
+# Migration 50 drops the backing tables (``opencti_inventory`` and
+# ``client_opencti_map``); the corresponding section in the Management
+# UI was already removed in 4.1.20. The new path is
+# ``/api/management/connectors[/{id}[/test|/sync]]`` driven by the
+# multi-vendor framework in ``app.services.cti_connectors``.
+# ---------------------------------------------------------------------------
 
-    if not url:
-        return HTMLResponse('<span class="badge badge-warning">URL is required</span>')
 
-    # When editing an existing instance the token field may be blank ("keep existing").
-    # Fall back to the stored token.
-    if not token and opencti_id:
-        stored = db.get_opencti_active_instances()
-        # get_opencti_active_instances only returns active; fetch directly
-        try:
-            with db.get_shared_connection() as conn:
-                row = conn.execute(
-                    "SELECT token_enc FROM opencti_inventory WHERE id = ?", [opencti_id]
-                ).fetchone()
-                if row:
-                    token = row[0] or ""
-        except Exception:
-            pass
+# ---------------------------------------------------------------------------
+# CTI Egress Targets CRUD  (Phase 1 §4 — per-tenant)
+#
+# An egress target tells TIDE *where* to ship a tenant's CTI indicators.
+# It lives in the tenant's CTI DuckDB (``cti_<slug>_<short>.duckdb``)
+# rather than the shared ``tide.duckdb``, so a tenant's Elastic key
+# never leaves their database. ``siem_id`` is a soft reference to the
+# shared ``siem_inventory`` row — validated at this layer, not via FK.
+# ---------------------------------------------------------------------------
 
-    if not token:
-        return HTMLResponse('<span class="badge badge-warning">Token is required (no stored token found)</span>')
-
+def _validate_siem_id(db, siem_id: Optional[str]) -> Optional[str]:
+    """Return error message if siem_id is set but doesn't exist."""
+    if not siem_id:
+        return None
     try:
-        import requests as _req
-        gql_url = url.rstrip("/") + "/graphql"
-        payload = {"query": "{ me { name } }"}
-        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-        resp = _req.post(gql_url, json=payload, headers=headers, timeout=10, verify=False)
-        if resp.status_code == 200:
-            data = resp.json()
-            if "errors" in data:
-                msg = data["errors"][0].get("message", "Invalid token")[:140]
-                if opencti_id:
-                    try: db.update_inventory_test_status("opencti", opencti_id, "fail", msg)
-                    except Exception: pass
-                return HTMLResponse(
-                    f'<span class="badge badge-danger">Auth failed &mdash; {msg[:80]}</span>'
-                )
-            name = data.get("data", {}).get("me", {}).get("name", "unknown")
-            if opencti_id:
-                try: db.update_inventory_test_status("opencti", opencti_id, "pass", f"Logged in as {name}")
-                except Exception: pass
-            return HTMLResponse(f'<span class="badge badge-success">Connected &mdash; logged in as {_esc(name)}</span>')
-        elif resp.status_code in (401, 403):
-            if opencti_id:
-                try: db.update_inventory_test_status("opencti", opencti_id, "fail", "Authentication failed (invalid token)")
-                except Exception: pass
-            return HTMLResponse('<span class="badge badge-danger">Authentication failed (invalid token)</span>')
-        else:
-            if opencti_id:
-                try: db.update_inventory_test_status("opencti", opencti_id, "fail", f"HTTP {resp.status_code}")
-                except Exception: pass
-            return HTMLResponse(f'<span class="badge badge-danger">HTTP {resp.status_code}</span>')
+        with db.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM siem_inventory WHERE id = ?", [siem_id],
+            ).fetchone()
+    except Exception:
+        return "Could not verify siem_id against inventory."
+    if not row:
+        return f"SIEM id {siem_id!r} not found in inventory."
+    return None
+
+
+def _validate_client_id(db, client_id: str) -> bool:
+    try:
+        with db.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM clients WHERE id = ?", [client_id],
+            ).fetchone()
+    except Exception:
+        return False
+    return bool(row)
+
+
+def _render_client_cti_egress_partial(client_id: str, db,
+                                      toast: Optional[str] = None,
+                                      ) -> HTMLResponse:
+    """Re-render the client CTI egress section using the Jinja2 partial.
+
+    Mirrors :func:`_render_client_opencti_partial` so create / update /
+    delete endpoints can return a single OOB-aware payload that swaps the
+    full section in place.
+    """
+    from html import escape
+    import os
+    from jinja2 import Environment, FileSystemLoader
+    from app.services import cti_database
+
+    client = db.get_client(client_id)
+    try:
+        cti_targets = cti_database.list_egress_targets(client_id)
     except Exception as exc:
-        logger.warning(f"OpenCTI test-connection error: {exc}")
-        return HTMLResponse(f'<span class="badge badge-danger">Error &mdash; {str(exc)[:120]}</span>')
+        logger.warning(
+            f"cti_targets read for client {client_id} failed: {exc}"
+        )
+        cti_targets = []
+    siems = db.list_siem_inventory()
+
+    templates_dir = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "templates",
+    )
+    env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
+    template = env.get_template("partials/client_cti_egress.html")
+    html = template.render(
+        client=client,
+        cti_targets=cti_targets,
+        siems=siems,
+    )
+
+    toast_html = ""
+    if toast:
+        toast_html = (
+            f'<div hx-swap-oob="afterbegin:#toast-container">'
+            f'<div class="toast toast-success">{escape(toast)}</div></div>'
+        )
+    return HTMLResponse(f"{html}{toast_html}")
 
 
-@router.post("/opencti", response_class=HTMLResponse)
-async def create_opencti(request: Request, db: DbDep, user: RequireAdmin):
-    """Create an OpenCTI instance in the centralized inventory."""
+@router.get("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
+def list_cti_egress_targets(request: Request, client_id: str,
+                            db: DbDep, user: RequireAdmin):
+    """Render the CTI egress targets section for ``client_id``.
+
+    Returns the same partial used inside the client detail page, so HTMX
+    callers can swap it into ``#client-cti-egress-section``.
+    """
+    if not _validate_client_id(db, client_id):
+        return HTMLResponse(
+            '<span class="badge badge-warning">Client not found</span>',
+            status_code=404,
+        )
+    return _render_client_cti_egress_partial(client_id, db)
+
+
+@router.post("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
+async def create_cti_egress_target(request: Request, client_id: str,
+                                   db: DbDep, user: RequireAdmin):
+    """Create a CTI egress target for ``client_id``."""
+    from app.services import cti_database
+
+    if not _validate_client_id(db, client_id):
+        return HTMLResponse(
+            '<span class="badge badge-warning">Client not found</span>',
+            status_code=404,
+        )
     form = await request.form()
     label = str(form.get("label", "")).strip()
-    url = str(form.get("url", "")).strip()
-    token = str(form.get("token", "")).strip() or None
+    kind = (str(form.get("kind", "")).strip().lower() or "elastic")
+    siem_id = (str(form.get("siem_id", "")).strip() or None)
+    index_pattern = str(form.get("index_pattern", "")).strip() \
+        or "logs-ti_tide.indicator-*"
+    latest_index = str(form.get("latest_index", "")).strip() \
+        or "logs-ti_tide_latest"
+    api_key = (str(form.get("api_key", "")).strip() or None)
+    folder_path = (str(form.get("folder_path", "")).strip() or None)
+    diode_endpoint = (str(form.get("diode_endpoint", "")).strip() or None)
+    tlp_ceiling = (str(form.get("tlp_ceiling", "")).strip() or "amber")
+    is_active_raw = str(form.get("is_active", "true")).strip().lower()
+    is_active = is_active_raw not in ("false", "0", "no", "off")
 
-    if not label or not url:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Label and URL are required.</div>
-        </div>""")
+    if not label:
+        return HTMLResponse(
+            '<span class="badge badge-warning">label is required</span>',
+            status_code=400,
+        )
+    # Per-kind validation: elastic needs a SIEM; file-drop kinds need a path.
+    if kind == "elastic":
+        err = _validate_siem_id(db, siem_id)
+        if err:
+            return HTMLResponse(
+                f'<span class="badge badge-warning">{_esc(err)}</span>',
+                status_code=400,
+            )
+    elif kind == "stix_folder":
+        if not folder_path:
+            return HTMLResponse(
+                '<span class="badge badge-warning">folder_path is required for stix_folder targets</span>',
+                status_code=400,
+            )
+        siem_id = None  # not used by file-drop drivers
+    elif kind == "diode":
+        # diode_endpoint is optional — driver falls back to the per-client
+        # data/diode_outbox/<client_id>/ outbox when blank.
+        siem_id = None
+    else:
+        return HTMLResponse(
+            f'<span class="badge badge-warning">unknown egress kind {_esc(kind)!r}</span>',
+            status_code=400,
+        )
 
-    db.create_opencti_inventory_item(label=label, url=url, token_enc=token)
-    logger.info(f"OpenCTI instance created: {label} by {user.username}")
+    created = cti_database.create_egress_target(
+        client_id,
+        label=label, kind=kind, siem_id=siem_id,
+        index_pattern=index_pattern, latest_index=latest_index,
+        api_key_enc=api_key,
+        folder_path=folder_path, diode_endpoint=diode_endpoint,
+        tlp_ceiling=tlp_ceiling,
+        is_active=is_active,
+    )
+    logger.info(
+        f"CTI egress target created: client={client_id} label={label!r} "
+        f"siem_id={siem_id} id={created['id']} by {user.username}"
+    )
+    return _render_client_cti_egress_partial(
+        client_id, db, toast=f"Egress target '{label}' created.",
+    )
 
-    instances = db.list_opencti_inventory()
-    for i in instances:
-        i["_clients"] = db.get_opencti_clients(i["id"])
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">OpenCTI '{_esc(label)}' created.</div>
-    </div>
-    {_render_threat_intel_tab(instances)}""")
 
+@router.put("/clients/{client_id}/cti-egress/{target_id}",
+            response_class=HTMLResponse)
+async def update_cti_egress_target(request: Request, client_id: str,
+                                   target_id: str, db: DbDep,
+                                   user: RequireAdmin):
+    """Patch a CTI egress target. Only supplied form fields are updated."""
+    from app.services import cti_database
 
-@router.put("/opencti/{opencti_id}", response_class=HTMLResponse)
-async def update_opencti(request: Request, opencti_id: str, db: DbDep, user: RequireAdmin):
-    """Update an OpenCTI instance."""
+    if not _validate_client_id(db, client_id):
+        return HTMLResponse(
+            '<span class="badge badge-warning">Client not found</span>',
+            status_code=404,
+        )
     form = await request.form()
-    updates = {}
-    for field in ("label", "url"):
-        val = form.get(field)
-        if val is not None:
-            updates[field] = str(val).strip() or None
-    # The form sends 'token'; map to the DB column 'token_enc'.
-    # Only update if a new value was provided (blank = keep existing).
-    token_val = form.get("token")
-    if token_val is not None and str(token_val).strip():
-        updates["token_enc"] = str(token_val).strip()
-    is_active = form.get("is_active")
-    if is_active is not None:
-        updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
+    updates: dict = {}
+    for key in ("label", "kind", "siem_id", "index_pattern", "latest_index",
+                "api_key", "folder_path", "diode_endpoint",
+                "tlp_ceiling", "is_active"):
+        if key in form:
+            raw = str(form.get(key, "")).strip()
+            if key == "is_active":
+                updates[key] = raw.lower() not in ("false", "0", "no", "off")
+            elif key == "api_key":
+                updates["api_key_enc"] = raw or None
+            elif key == "kind":
+                updates[key] = raw.lower() or "elastic"
+            else:
+                updates[key] = raw or None
 
-    db.update_opencti_inventory_item(opencti_id, **updates)
-    logger.info(f"OpenCTI instance updated: {opencti_id} by {user.username}")
+    # Only validate siem_id when the (possibly updated) effective kind is
+    # elastic. For stix_folder/diode the SIEM is optional/ignored.
+    eff_kind = updates.get("kind")
+    if eff_kind is None:
+        existing = cti_database.get_egress_target(client_id, target_id)
+        eff_kind = (existing or {}).get("kind", "elastic")
+    if eff_kind == "elastic" and "siem_id" in updates:
+        err = _validate_siem_id(db, updates["siem_id"])
+        if err:
+            return HTMLResponse(
+                f'<span class="badge badge-warning">{_esc(err)}</span>',
+                status_code=400,
+            )
 
-    instances = db.list_opencti_inventory()
-    for i in instances:
-        i["_clients"] = db.get_opencti_clients(i["id"])
-    return HTMLResponse(_render_threat_intel_tab(instances))
-
-
-@router.delete("/opencti/{opencti_id}", response_class=HTMLResponse)
-def delete_opencti(request: Request, opencti_id: str, db: DbDep, user: RequireAdmin):
-    """Delete an OpenCTI instance from the inventory."""
-    ok = db.delete_opencti_inventory_item(opencti_id)
-    if not ok:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">OpenCTI instance not found.</div>
-        </div>""")
-    logger.info(f"OpenCTI instance deleted: {opencti_id} by {user.username}")
-
-    instances = db.list_opencti_inventory()
-    for i in instances:
-        i["_clients"] = db.get_opencti_clients(i["id"])
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">OpenCTI instance deleted.</div>
-    </div>
-    {_render_threat_intel_tab(instances)}""")
-
-
-@router.post("/clients/{client_id}/opencti", response_class=HTMLResponse)
-async def link_opencti_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
-    """Link an OpenCTI instance to a client."""
-    form = await request.form()
-    opencti_id = str(form.get("opencti_id", "")).strip()
-    if not opencti_id:
-        return HTMLResponse("")
-    db.link_client_opencti(client_id, opencti_id)
-    logger.info(f"OpenCTI {opencti_id} linked to client {client_id} by {user.username}")
-    return _render_client_opencti_partial(client_id, db, toast="Threat Intel instance linked.")
+    updated = cti_database.update_egress_target(
+        client_id, target_id, **updates,
+    )
+    if updated is None:
+        return HTMLResponse(
+            '<span class="badge badge-warning">Target not found</span>',
+            status_code=404,
+        )
+    logger.info(
+        f"CTI egress target updated: client={client_id} id={target_id} "
+        f"keys={sorted(updates)} by {user.username}"
+    )
+    return _render_client_cti_egress_partial(
+        client_id, db, toast="Egress target updated.",
+    )
 
 
-@router.delete("/clients/{client_id}/opencti/{opencti_id}", response_class=HTMLResponse)
-def unlink_opencti_from_client(request: Request, client_id: str, opencti_id: str,
-                               db: DbDep, user: RequireAdmin):
-    """Unlink an OpenCTI instance from a client."""
-    db.unlink_client_opencti(client_id, opencti_id)
-    logger.info(f"OpenCTI {opencti_id} unlinked from client {client_id} by {user.username}")
-    return _render_client_opencti_partial(client_id, db, toast="Threat Intel instance unlinked.")
+@router.delete("/clients/{client_id}/cti-egress/{target_id}",
+               response_class=HTMLResponse)
+def delete_cti_egress_target(request: Request, client_id: str, target_id: str,
+                             db: DbDep, user: RequireAdmin):
+    """Delete a CTI egress target."""
+    from app.services import cti_database
+
+    if not _validate_client_id(db, client_id):
+        return HTMLResponse(
+            '<span class="badge badge-warning">Client not found</span>',
+            status_code=404,
+        )
+    removed = cti_database.delete_egress_target(client_id, target_id)
+    if not removed:
+        return HTMLResponse(
+            '<span class="badge badge-warning">Target not found</span>',
+            status_code=404,
+        )
+    logger.info(
+        f"CTI egress target deleted: client={client_id} id={target_id} "
+        f"by {user.username}"
+    )
+    return _render_client_cti_egress_partial(
+        client_id, db, toast="Egress target deleted.",
+    )
+
+
+@router.post("/clients/{client_id}/cti-egress/{target_id}/run",
+             response_class=HTMLResponse)
+def run_cti_egress_target(request: Request, client_id: str, target_id: str,
+                          db: DbDep, user: RequireAdmin):
+    """Trigger an immediate export of indicators to one egress target.
+
+    Returns an HTML badge summarising the result (read / batches /
+    latest_indexed / history_created / failures), in the same shape as
+    the step 6b ``/opencti/.../sync-cti`` button.
+    """
+    from app.services import cti_egress
+
+    if not _validate_client_id(db, client_id):
+        return HTMLResponse(
+            '<span class="badge badge-warning">Client not found</span>',
+            status_code=404,
+        )
+    try:
+        summary = cti_egress.export_cti_for_client(
+            client_id, target_id=target_id,
+        )
+    except Exception as exc:
+        logger.error(
+            f"CTI egress run failed: client={client_id} target={target_id}: "
+            f"{exc}", exc_info=True,
+        )
+        return HTMLResponse(
+            f'<span class="badge badge-danger">Egress failed &mdash; '
+            f"{_esc(str(exc)[:120])}</span>"
+        )
+
+    if summary.get("targets", 0) == 0:
+        return HTMLResponse(
+            '<span class="badge badge-warning">Target not found '
+            "or inactive</span>"
+        )
+
+    read = summary.get("read", 0)
+    batches = summary.get("batches", 0)
+    latest = summary.get("latest_indexed", 0)
+    hist = summary.get("history_created", 0)
+    dup = summary.get("history_duplicates", 0)
+    fails = summary.get("failures", 0)
+    errors = summary.get("errors", [])
+    cls = "badge-success" if not errors and not fails else "badge-warning"
+    err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
+    fail_suffix = f" &middot; {fails} failed" if fails else ""
+    logger.info(
+        f"CTI egress run: client={client_id} target={target_id} "
+        f"read={read} batches={batches} latest={latest} "
+        f"hist={hist} dup={dup} fails={fails}"
+    )
+    return HTMLResponse(
+        f'<span class="badge {cls}">'
+        f"{read} read &middot; {batches} batch(es) &middot; "
+        f"{latest} latest &middot; {hist} hist (+{dup} dup)"
+        f"{fail_suffix}{err_suffix}</span>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1197,6 +1382,18 @@ async def test_inventory_card(
     """Run a live connection test against a stored inventory item and persist
     the result. Returns the refreshed status pill HTML for HTMX swap.
     """
+    # The CTI connectors test route (`/connectors/{id}/test`) is defined
+    # later in this module, so FastAPI's registration order means this
+    # generic ``/{kind}/{item_id}/test`` would otherwise shadow it and
+    # return a fast "Unknown kind 'connectors'" fail pill. Delegate so the
+    # real vendor probe actually runs. ``test_connector`` is a sync
+    # function whose tester uses ``asyncio.run`` internally, so we MUST
+    # bounce it through a worker thread — calling it inline from this
+    # async handler would trip ``asyncio.run() cannot be called from a
+    # running event loop`` and stamp every Test click as failed.
+    if kind == "connectors":
+        from starlette.concurrency import run_in_threadpool
+        return await run_in_threadpool(test_connector, item_id, db, user)
     if kind not in _KIND_TO_INVENTORY:
         return HTMLResponse(
             _status_pill_html(
@@ -1877,6 +2074,69 @@ async def move_from(request: Request, client_id: str,
         f'<path d="m4.9 4.9 2.9 2.9"/></svg>'
         f'<span>Moving system from {_esc(source_client["name"])}…</span>'
         f'</div></div>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-tenant rule validation thresholds (4.1.20)
+# ---------------------------------------------------------------------------
+# The amber/expired week thresholds that drive the rule validation badge
+# used to be a single global env var pair, but different tenants run
+# different review cadences. This endpoint persists per-tenant overrides
+# on the ``clients`` row (NULL means "inherit the global default") and
+# re-renders the Linked SIEMs partial so the form bounces back with the
+# new values.
+
+@router.post("/clients/{client_id}/validation-thresholds",
+             response_class=HTMLResponse)
+async def update_validation_thresholds(
+    request: Request, client_id: str, db: DbDep, user: RequireAdmin
+):
+    """Update the per-tenant amber/expired validation week thresholds.
+
+    Form fields ``amber_weeks`` and ``expired_weeks`` accept a positive
+    integer or an empty value (= clear override, inherit the global
+    setting). Rejects amber >= expired with a toast and leaves the row
+    unchanged.
+    """
+    form = await request.form()
+
+    def _parse(name: str):
+        v = form.get(name)
+        if v is None:
+            return None, True  # untouched
+        s = str(v).strip()
+        if s == "":
+            return None, True  # explicit clear
+        try:
+            iv = int(s)
+        except ValueError:
+            return None, False
+        return (iv if iv > 0 else None), True
+
+    amber, amber_ok = _parse("amber_weeks")
+    expired, expired_ok = _parse("expired_weeks")
+    if not amber_ok or not expired_ok:
+        return _render_client_siems_partial(
+            client_id, db,
+            toast="Thresholds must be positive whole numbers.",
+        )
+    if amber is not None and expired is not None and amber >= expired:
+        return _render_client_siems_partial(
+            client_id, db,
+            toast="Amber threshold must be less than expired threshold.",
+        )
+    db.update_client(
+        client_id,
+        rule_validation_amber_weeks=amber,
+        rule_validation_expired_weeks=expired,
+    )
+    logger.info(
+        f"Client {client_id} validation thresholds updated by "
+        f"{user.username}: amber={amber}, expired={expired}"
+    )
+    return _render_client_siems_partial(
+        client_id, db, toast="Validation thresholds saved.",
     )
 
 
@@ -2734,21 +2994,43 @@ def _render_threat_intel_tab(instances: list) -> str:
         iid = i["id"]
         lbl_esc = escape(i["label"])
         url_esc = escape(i["url"])
+        kind = (i.get("kind") or "actors").lower()
+        kind_label = {"actors": "actors", "cti": "CTI", "both": "actors + CTI"}.get(kind, kind)
+        kind_cls = {"actors": "badge-secondary", "cti": "badge-info", "both": "badge-success"}.get(kind, "badge-secondary")
+        kind_badge = (
+            f'<span class="badge {kind_cls}" title="kind={escape(kind)}">'
+            f'{escape(kind_label)}</span>'
+        )
         status_pill = _status_pill_html(i, target_id=f"opencti-status-{iid}")
         tenant_chips = _tenant_chips_html(i.get("_clients", []))
         test_btn = _test_button_html("opencti", iid, f"opencti-status-{iid}")
+
+        # Sync CTI button is only meaningful when this row participates in
+        # the new fetcher. Otherwise we omit it to keep the legacy actor
+        # cards unchanged.
+        sync_cti_btn = ""
+        if kind in ("cti", "both"):
+            sync_cti_btn = (
+                f'<button class="btn btn-ghost btn-sm" '
+                f'hx-post="/api/management/opencti/{iid}/sync-cti" '
+                f'hx-target="#opencti-cti-status-{iid}" hx-swap="innerHTML" '
+                f'title="Pull STIX bundle into every linked tenant\'s CTI DB">'
+                f'Sync CTI</button>'
+            )
 
         cards += f'''
         <div class="system-card" style="display:flex;flex-direction:column;">
             <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
                 <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
                     <span style="font-weight:600;">{lbl_esc}</span>
+                    {kind_badge}
                     {status_pill}
                 </div>
                 <div style="display:flex;gap:0.25rem;">
+                    {sync_cti_btn}
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editOpenCTI('{iid}', '{lbl_esc}', '{url_esc}')"
+                            onclick="editOpenCTI('{iid}', '{lbl_esc}', '{url_esc}', '{escape(kind)}')"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -2771,6 +3053,7 @@ def _render_threat_intel_tab(instances: list) -> str:
                     <span class="text-secondary">Token</span>
                     <span class="text-secondary" style="font-size:0.75rem;">{'&#x2713; configured' if i.get('token_enc') else '&#x2717; not set'}</span>
                 </div>
+                <div id="opencti-cti-status-{iid}" style="margin-top:0.5rem;font-size:0.8125rem;"></div>
             </div>
             <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
                 {tenant_chips}
@@ -2788,6 +3071,15 @@ def _render_threat_intel_tab(instances: list) -> str:
         </div>'''
 
     return f'''
+    <div class="info-box info-box--warning" style="margin-bottom:1rem;font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:0.15rem;">
+            <path d="M12 9v4"/><path d="M12 17h.01"/>
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
+        </svg>
+        <div>
+            <strong>Deprecated.</strong> Manage OpenCTI sources on the new <strong>Connectors</strong> tab below — it covers OpenCTI, Mandiant, CrowdStrike and any vendor added in future releases under one consistent surface. Existing instances were copied over automatically; this tab is kept for one release and will be removed in <code>5.0.0</code>.
+        </div>
+    </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
         <span class="text-secondary">{count} OpenCTI instance{"s" if count != 1 else ""} configured</span>
         <button class="btn btn-primary" onclick="showCreateOpenCTIModal()">
@@ -3027,6 +3319,8 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
     env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
     template = env.get_template("partials/client_siems.html")
+    from app.config import get_settings as _get_settings
+    _settings = _get_settings()
     # Build a per-SIEM map of Kibana spaces so the Add-SIEM picker can show
     # ONLY the spaces that exist on the SIEM the operator selected. AGENTS.md
     # §8.2 guarantee 1: a flat union across SIEMs leaks SIEM B's spaces into
@@ -3090,6 +3384,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
         siem_space_counts=siem_space_counts,
         siem_spaces_by_id=siem_spaces_by_id,
         known_kibana_spaces=known_kibana_spaces,
+        settings=_settings,
     )
 
     toast_html = ""
@@ -3121,6 +3416,78 @@ def _render_client_opencti_partial(client_id: str, db, toast: str = None) -> HTM
         client=client,
         client_opencti=client_opencti,
         available_opencti=available_opencti,
+    )
+
+    toast_html = ""
+    if toast:
+        toast_html = (
+            f'<div hx-swap-oob="afterbegin:#toast-container">'
+            f'<div class="toast toast-success">{escape(toast)}</div></div>'
+        )
+
+    return HTMLResponse(f"{html}{toast_html}")
+
+
+def _client_connector_rows(client_id: str, db) -> tuple[list, list]:
+    """Return ``(linked, available)`` connector dicts for ``client_id``.
+
+    Each entry carries the vendor label (resolved against the connector
+    registry) so the partial doesn't have to know how vendors are
+    registered. Used by both the client detail page renderer in
+    :mod:`app.main` and :func:`_render_client_connectors_partial` below
+    so the two surfaces stay in sync after every link / unlink.
+    """
+    from app.services.cti_connectors import all_vendors
+    vendor_by_name = {v.name: v.label for v in all_vendors()}
+    all_connectors = db.list_cti_connectors()
+    linked_ids: set[str] = set()
+    linked: list = []
+    for c in all_connectors:
+        members = db.get_cti_connector_clients(c["id"])
+        if any((m.get("id") == client_id) for m in members):
+            linked_ids.add(c["id"])
+            linked.append({
+                "id": c["id"],
+                "vendor": c.get("vendor"),
+                "vendor_label": vendor_by_name.get(c.get("vendor")) or c.get("vendor"),
+                "label": c.get("label"),
+                "is_active": c.get("is_active", True),
+                "last_status": c.get("last_status"),
+                "last_run_at": c.get("last_run_at"),
+            })
+    available = [
+        {
+            "id": c["id"],
+            "vendor": c.get("vendor"),
+            "vendor_label": vendor_by_name.get(c.get("vendor")) or c.get("vendor"),
+            "label": c.get("label"),
+        }
+        for c in all_connectors if c["id"] not in linked_ids
+    ]
+    return linked, available
+
+
+def _render_client_connectors_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
+    """Re-render the per-tenant ``Linked CTI Connectors`` section.
+
+    Mirrors :func:`_render_client_opencti_partial` so the link / unlink
+    endpoints can swap just the affected section instead of repainting
+    the full client detail page.
+    """
+    from html import escape
+    import os
+    from jinja2 import Environment, FileSystemLoader
+
+    client = db.get_client(client_id)
+    linked, available = _client_connector_rows(client_id, db)
+
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates")
+    env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
+    template = env.get_template("partials/client_connectors.html")
+    html = template.render(
+        client=client,
+        client_connectors=linked,
+        available_connectors=available,
     )
 
     toast_html = ""
@@ -3920,3 +4287,853 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
                 conn.close()
             except Exception:
                 pass
+
+
+# ===========================================================================
+# CTI Connectors (multi-vendor framework — F5)
+# ---------------------------------------------------------------------------
+# Lives alongside the legacy ``/opencti/*`` endpoints. The connectors framework
+# uses the vendor registry in ``app/services/cti_connectors/`` (FieldSpec +
+# ConnectorVendor) and the shared ``cti_connectors`` / ``cti_connector_clients``
+# tables (Migration 47). Storage CRUD already lives in ``app/services/database``.
+# ===========================================================================
+
+import json as _cn_json
+from datetime import datetime as _cn_datetime
+
+
+def _connector_status_pill(connector: dict, *, target_id: str | None = None) -> str:
+    """Adapter: connectors persist ``last_status`` / ``last_run_at`` /
+    ``last_message`` instead of the inventory ``last_test_*`` triplet. Wrap
+    so we can reuse :func:`_status_pill_html` verbatim.
+    """
+    adapted = {
+        "last_test_status": connector.get("last_status"),
+        "last_test_at": connector.get("last_run_at"),
+        "last_test_message": connector.get("last_message"),
+    }
+    return _status_pill_html(adapted, target_id=target_id)
+
+
+def _render_vendor_fields_html(vendor, current_cfg: dict | None = None) -> str:
+    """Render a vendor's :class:`FieldSpec` list as a stack of form inputs.
+
+    Inputs are named ``cfg_<key>`` so the form-submit JS can scoop them up
+    without knowing the schema. Secret fields render as ``<input type=password>``
+    with a placeholder reminder so operators don't accidentally blank stored
+    credentials.
+    """
+    current_cfg = current_cfg or {}
+    rows: list[str] = []
+    for spec in vendor.fields:
+        key = spec.key
+        name = f"cfg_{key}"
+        label = _esc(spec.label or key)
+        required = ' <span style="color:var(--color-danger)">*</span>' if spec.required else ""
+        help_html = (
+            f'<span class="text-secondary" style="font-size:0.75rem;">{_esc(spec.help)}</span>'
+            if spec.help else ""
+        )
+        existing = current_cfg.get(key)
+        if spec.type == "bool":
+            checked = "checked" if (existing if existing is not None else spec.default) else ""
+            field = (
+                f'<label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">'
+                f'<input type="checkbox" name="{name}" {checked}> {label}</label>'
+            )
+            rows.append(f'<div>{field}{help_html}</div>')
+            continue
+        if spec.type == "select":
+            opts_html = "".join(
+                f'<option value="{_esc(str(o))}"'
+                f'{" selected" if str(existing) == str(o) else ""}>{_esc(str(o))}</option>'
+                for o in (spec.options or [])
+            )
+            field = (
+                f'<select name="{name}" class="form-input"'
+                f'{" required" if spec.required else ""}>{opts_html}</select>'
+            )
+        elif spec.type == "textarea":
+            field = (
+                f'<textarea name="{name}" class="form-input" rows="3"'
+                f'{" required" if spec.required else ""}>{_esc(str(existing or spec.default or ""))}</textarea>'
+            )
+        else:
+            input_type = {
+                "password": "password",
+                "url": "url",
+                "number": "number",
+            }.get(spec.type, "text")
+            placeholder = ""
+            value_attr = ""
+            if spec.secret:
+                placeholder = ' placeholder="Leave blank to keep existing"'
+            else:
+                v = existing if existing is not None else spec.default
+                if v is not None:
+                    value_attr = f' value="{_esc(str(v))}"'
+            field = (
+                f'<input type="{input_type}" name="{name}" class="form-input"'
+                f'{value_attr}{placeholder}'
+                f'{" required" if (spec.required and not spec.secret) else ""}>'
+            )
+        rows.append(
+            f'<div><label class="form-label" for="{name}">{label}{required}</label>'
+            f'{field}{help_html}</div>'
+        )
+    if not rows:
+        return '<div class="text-secondary" style="font-size:0.8125rem;">This vendor has no configuration fields.</div>'
+    return "".join(rows)
+
+
+def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | None = None) -> str:
+    """Render the Connectors subsection: per-vendor cards + New button.
+
+    Mirrors :func:`_render_threat_intel_tab` (system-card grid) so the look
+    is consistent across Management subsections.
+    """
+    from html import escape as _e
+    all_clients = all_clients or []
+    vendor_by_name = {v.name: v for v in vendors}
+    count = len(connectors)
+    cards = ""
+    for c in connectors:
+        cid = c["id"]
+        vendor = vendor_by_name.get(c.get("vendor"))
+        vendor_label = _e(vendor.label if vendor else (c.get("vendor") or "Unknown"))
+        lbl_esc = _e(c.get("label") or "(unnamed)")
+        # 4.1.20 — the kind chip (CTI / actors / actors + CTI) was
+        # dropped from the card header to keep the row aligned with
+        # the SIEM cards; the kind is still editable from the modal.
+        vendor_badge = f'<span class="badge badge-muted">{vendor_label}</span>'
+        # 4.1.20 — drop the standalone "Active/Disabled" badge. It
+        # duplicated the live status pill (operators were seeing two
+        # green chips on every card), and the SIEM cards next door
+        # surface availability through the status pill alone. The
+        # disabled state is still reachable from the Edit modal's
+        # ``is_active`` toggle.
+        status_pill = _connector_status_pill(c, target_id=f"connector-status-{cid}")
+        # 5.0.x — auto-sync interval chip. Quiet "manual only" muted
+        # chip when interval is NULL/0 so operators can tell at a
+        # glance which connectors are on the scheduler.
+        iv = c.get("sync_interval_minutes")
+        if iv and int(iv) > 0:
+            iv_int = int(iv)
+            if iv_int % 1440 == 0:
+                iv_text = f"every {iv_int // 1440}d"
+            elif iv_int % 60 == 0:
+                iv_text = f"every {iv_int // 60}h"
+            else:
+                iv_text = f"every {iv_int}m"
+            auto_chip = f'<span class="badge badge-info" title="Auto-sync runs in the background through the CTI scheduler">auto &middot; {_e(iv_text)}</span>'
+        else:
+            auto_chip = '<span class="badge badge-muted" title="This connector only syncs when an operator clicks Sync">manual only</span>'
+        tenant_chips = _tenant_chips_html(c.get("_clients", []))
+        cfg = c.get("config") or {}
+        # Config summary line — non-secret keys only
+        summary_pairs = []
+        if vendor:
+            for spec in vendor.fields:
+                if spec.secret:
+                    has = bool(cfg.get(spec.key))
+                    summary_pairs.append(
+                        (spec.label, '<span class="text-secondary">&#x2713; set</span>' if has else '<span class="text-secondary">&#x2717; missing</span>')
+                    )
+                else:
+                    v = cfg.get(spec.key)
+                    if v is None or v == "":
+                        continue
+                    summary_pairs.append((spec.label, _e(str(v))))
+        summary_html = "".join(
+            f'<span class="text-secondary">{_e(k)}</span>'
+            f'<span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{_e(str(v))}">{v}</span>'
+            for k, v in summary_pairs
+        )
+        # Test connection button — mirrors the SIEM card layout. The
+        # standalone "Sync" button was removed in 4.1.20 (the
+        # per-connector sync now runs from the connector's edit modal
+        # / the per-page Check-connection action; the management hub
+        # card just confirms reachability and surfaces CRUD).
+        test_btn = (
+            f'<button class="btn btn-ghost btn-sm" '
+            f'hx-post="/api/management/connectors/{cid}/test" '
+            f'hx-target="#connector-status-{cid}" hx-swap="outerHTML" '
+            f'title="Test connection now" aria-label="Test connection">'
+            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
+            f'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>'
+        )
+        edit_btn = (
+            f'<button class="btn btn-ghost btn-sm" '
+            f'onclick="editConnector(\'{cid}\')" title="Edit">'
+            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+            f'<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
+        )
+        del_btn = (
+            f'<button class="btn btn-ghost btn-sm text-danger" '
+            f'hx-delete="/api/management/connectors/{cid}" '
+            f'hx-target="#mgmt-sub-connectors" hx-swap="innerHTML" '
+            f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients." '
+            f'title="Delete">'
+            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
+            f'<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>'
+            f'<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
+        )
+        cards += f'''
+        <div class="system-card" style="display:flex;flex-direction:column;">
+            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
+                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+                    <span style="font-weight:600;">{lbl_esc}</span>
+                    {vendor_badge}
+                    {status_pill}
+                    {auto_chip}
+                </div>
+                <div style="display:flex;gap:0.25rem;">
+                    {test_btn}
+                    {edit_btn}
+                    {del_btn}
+                </div>
+            </div>
+            <div class="system-card__desc" style="margin-top:0.5rem;">
+                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+                    {summary_html}
+                </div>
+            </div>
+            <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
+                {tenant_chips}
+            </div>
+        </div>'''
+
+    empty = ""
+    if not connectors:
+        empty = '''
+        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+            </svg>
+            <p style="margin-top:1rem;color:var(--color-text-muted);">No connectors configured yet.</p>
+        </div>'''
+
+    # Embed vendor list + connector rows for the modal JS to consume.
+    vendors_payload = _cn_json.dumps([
+        {"name": v.name, "label": v.label} for v in vendors
+    ])
+    rows_payload = _cn_json.dumps([
+        {
+            "id": c["id"],
+            "vendor": c.get("vendor"),
+            "label": c.get("label"),
+            "kind": c.get("kind"),
+            "sync_interval_minutes": c.get("sync_interval_minutes"),
+            "config": c.get("config") or {},
+        } for c in connectors
+    ])
+
+    return f'''
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+        <span class="text-secondary">{count} connector{"s" if count != 1 else ""} configured &middot; {len(vendors)} vendor{"s" if len(vendors) != 1 else ""} available</span>
+        <div style="display:flex;gap:0.5rem;">
+            <button class="btn btn-secondary" onclick="showImportConnectorModal()" title="Import a connector from JSON exported elsewhere">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Import
+            </button>
+            <button class="btn btn-primary" onclick="showCreateConnectorModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Connector
+            </button>
+        </div>
+    </div>
+    <div class="systems-grid">{cards}</div>
+    {empty}
+    <script>
+        window._connectorVendors = {vendors_payload};
+        window._connectorRows = {rows_payload};
+    </script>'''
+
+
+def _connectors_tab_response(db) -> HTMLResponse:
+    """Shared helper so every CRUD endpoint can return the refreshed tab."""
+    from app.services.cti_connectors import all_vendors
+    connectors = db.list_cti_connectors()
+    for c in connectors:
+        c["_clients"] = db.get_cti_connector_clients(c["id"])
+    all_clients = db.list_clients()
+    return HTMLResponse(_render_connectors_tab(connectors, all_vendors(), all_clients))
+
+
+def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> tuple[dict, dict, list[str]]:
+    """Extract generic + per-vendor config from a form submission.
+
+    Returns ``(generic_fields, config_dict, errors)``. Secret fields left
+    blank fall back to ``existing_cfg`` so editing without re-entering the
+    password works as operators expect.
+    """
+    existing_cfg = existing_cfg or {}
+    errors: list[str] = []
+    generic = {
+        "label": str(form.get("label", "")).strip(),
+        "kind": str(form.get("kind", "cti")).strip().lower() or "cti",
+    }
+    # 5.0.x — optional auto-sync interval (minutes). Blank/0/missing
+    # means "off"; the CTI scheduler skips connectors whose interval
+    # is NULL. Capped at 7 days (10 080 min) so a typo can't park a
+    # connector for years; min 5 min so the scheduler tick isn't
+    # outrun by the interval.
+    interval_raw = str(form.get("sync_interval_minutes", "")).strip()
+    interval_val: Optional[int] = None
+    if interval_raw:
+        try:
+            iv = int(interval_raw)
+            if iv > 0:
+                if iv < 5:
+                    errors.append("Auto-sync interval must be at least 5 minutes.")
+                elif iv > 10080:
+                    errors.append("Auto-sync interval cannot exceed 7 days (10080 minutes).")
+                else:
+                    interval_val = iv
+        except ValueError:
+            errors.append("Auto-sync interval must be a whole number of minutes.")
+    generic["sync_interval_minutes"] = interval_val
+    if not generic["label"]:
+        errors.append("Label is required.")
+    if generic["kind"] not in ("cti", "actors", "both"):
+        errors.append("Kind must be one of: cti, actors, both.")
+    cfg: dict = {}
+    for spec in vendor.fields:
+        raw = form.get(f"cfg_{spec.key}")
+        if spec.type == "bool":
+            cfg[spec.key] = (str(raw).lower() == "true") if raw is not None else bool(spec.default)
+            continue
+        s = "" if raw is None else str(raw).strip()
+        if not s:
+            if spec.secret and spec.key in existing_cfg:
+                cfg[spec.key] = existing_cfg[spec.key]  # preserve
+                continue
+            if spec.required and (spec.default is None):
+                errors.append(f"{spec.label} is required.")
+                continue
+            cfg[spec.key] = spec.default
+            continue
+        if spec.type == "number":
+            try:
+                cfg[spec.key] = int(s) if s.isdigit() else float(s)
+            except Exception:
+                errors.append(f"{spec.label} must be numeric.")
+                cfg[spec.key] = s
+        else:
+            cfg[spec.key] = s
+    return generic, cfg, errors
+
+
+@router.get("/tab/connectors", response_class=HTMLResponse)
+def tab_connectors(request: Request, db: DbDep, user: RequireAdmin):
+    """Connectors tab partial for the management hub."""
+    return _connectors_tab_response(db)
+
+
+@router.get("/connectors/vendor-fields/{vendor_name}", response_class=HTMLResponse)
+def connector_vendor_fields(vendor_name: str, user: RequireAdmin):
+    """Return the FieldSpec form-fragment for the chosen vendor.
+
+    Fired by the vendor ``<select onchange>`` in the connector modal so the
+    form can render the right inputs without a page reload.
+    """
+    from app.services.cti_connectors import get as get_vendor
+    vendor = get_vendor(vendor_name)
+    if vendor is None:
+        return HTMLResponse(
+            f'<span class="badge badge-danger">Unknown vendor: {_esc(vendor_name)}</span>',
+            status_code=404,
+        )
+    return HTMLResponse(_render_vendor_fields_html(vendor))
+
+
+@router.post("/connectors", response_class=HTMLResponse)
+async def create_connector(request: Request, db: DbDep, user: RequireAdmin):
+    """Create a new connector. Vendor + label + per-vendor cfg required."""
+    from app.services.cti_connectors import get as get_vendor
+    form = await request.form()
+    vendor_name = str(form.get("vendor", "")).strip()
+    vendor = get_vendor(vendor_name)
+    if vendor is None:
+        return HTMLResponse(
+            f'<span class="badge badge-danger">Unknown vendor: {_esc(vendor_name)}</span>',
+            status_code=400,
+        )
+    generic, cfg, errors = _parse_connector_form(form, vendor)
+    if errors:
+        return HTMLResponse(
+            '<div class="alert alert-error">' + "; ".join(_esc(e) for e in errors) + '</div>',
+            status_code=400,
+        )
+    try:
+        created = db.create_cti_connector(
+            vendor=vendor_name,
+            label=generic["label"],
+            kind=generic["kind"],
+            is_active=True,
+            config=cfg,
+        )
+        cid = (created or {}).get("id", "?")
+        # Apply interval as an update (create_cti_connector signature
+        # is a stable wire contract we don't want to change just for
+        # this optional field).
+        if cid and generic.get("sync_interval_minutes") is not None:
+            try:
+                db.update_cti_connector(
+                    cid, sync_interval_minutes=generic["sync_interval_minutes"],
+                )
+            except Exception:
+                logger.warning("create_connector: could not set interval on %s", cid)
+    except Exception as exc:
+        logger.error("create_cti_connector failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Create failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info("Connector created: %s (%s) by %s", cid, vendor_name, user.username)
+    return _connectors_tab_response(db)
+
+
+@router.post("/connectors/import", response_class=HTMLResponse)
+async def import_connectors(request: Request, db: DbDep, user: RequireAdmin):
+    """Bulk-create connectors from a pasted JSON payload.
+
+    Accepts either a single connector object or ``{"connectors": [...]}``.
+    Each entry must specify ``vendor`` + ``label``; ``kind`` defaults to the
+    vendor's ``kind_default``; ``config`` is validated against the vendor's
+    FieldSpec list using the same parser as the create form.
+    """
+    from app.services.cti_connectors import get as get_vendor
+    form = await request.form()
+    raw = str(form.get("payload", "")).strip()
+    if not raw:
+        return HTMLResponse(
+            '<div class="alert alert-error">Paste a JSON payload to import.</div>',
+            status_code=400,
+        )
+    try:
+        data = _cn_json.loads(raw)
+    except Exception as exc:
+        return HTMLResponse(
+            f'<div class="alert alert-error">Invalid JSON: {_esc(str(exc))}</div>',
+            status_code=400,
+        )
+    entries = data.get("connectors") if isinstance(data, dict) and "connectors" in data else data
+    if isinstance(entries, dict):
+        entries = [entries]
+    if not isinstance(entries, list) or not entries:
+        return HTMLResponse(
+            '<div class="alert alert-error">Payload must be a connector object or a list of connectors.</div>',
+            status_code=400,
+        )
+    created_ids: list[str] = []
+    errors: list[str] = []
+    for idx, entry in enumerate(entries, start=1):
+        if not isinstance(entry, dict):
+            errors.append(f"Entry {idx}: must be an object.")
+            continue
+        vendor_name = str(entry.get("vendor", "")).strip().lower()
+        try:
+            vendor = get_vendor(vendor_name) if vendor_name else None
+        except KeyError:
+            vendor = None
+        if vendor is None:
+            errors.append(f"Entry {idx}: unknown vendor '{vendor_name}'.")
+            continue
+        label = str(entry.get("label", "")).strip()
+        if not label:
+            errors.append(f"Entry {idx} ({vendor_name}): label is required.")
+            continue
+        kind = str(entry.get("kind", vendor.kind_default) or vendor.kind_default).strip().lower()
+        if kind not in ("cti", "actors", "both"):
+            errors.append(f"Entry {idx} ({label}): kind must be cti, actors, or both.")
+            continue
+        cfg_in = entry.get("config") or {}
+        if not isinstance(cfg_in, dict):
+            errors.append(f"Entry {idx} ({label}): config must be an object.")
+            continue
+        cfg: dict = {}
+        missing: list[str] = []
+        for spec in vendor.fields:
+            if spec.key in cfg_in:
+                cfg[spec.key] = cfg_in[spec.key]
+            elif spec.required and spec.default is None:
+                missing.append(spec.label)
+            else:
+                cfg[spec.key] = spec.default
+        if missing:
+            errors.append(f"Entry {idx} ({label}): missing required field(s): {', '.join(missing)}.")
+            continue
+        try:
+            created = db.create_cti_connector(
+                vendor=vendor_name,
+                label=label,
+                kind=kind,
+                is_active=bool(entry.get("is_active", True)),
+                config=cfg,
+            )
+            created_ids.append((created or {}).get("id", "?"))
+        except Exception as exc:
+            logger.error("import create_cti_connector failed: %s", exc, exc_info=True)
+            errors.append(f"Entry {idx} ({label}): {exc}")
+    logger.info(
+        "Connector import by %s: %d created, %d errors", user.username, len(created_ids), len(errors)
+    )
+    if errors and not created_ids:
+        return HTMLResponse(
+            '<div class="alert alert-error"><strong>Import failed.</strong><ul style="margin:0.5rem 0 0 1rem;">'
+            + "".join(f"<li>{_esc(e)}</li>" for e in errors)
+            + "</ul></div>",
+            status_code=400,
+        )
+    # Partial or full success: refresh tab, with a banner about errors if any.
+    refreshed = _render_connectors_tab(
+        [dict(c, _clients=db.get_cti_connector_clients(c["id"])) for c in db.list_cti_connectors()],
+        __import__("app.services.cti_connectors", fromlist=["all_vendors"]).all_vendors(),
+        db.list_clients(),
+    )
+    banner = (
+        f'<div class="alert alert-success" style="margin-bottom:1rem;">Imported {len(created_ids)} connector(s).</div>'
+    )
+    if errors:
+        banner += (
+            '<div class="alert alert-warning" style="margin-bottom:1rem;"><strong>Some entries skipped:</strong>'
+            '<ul style="margin:0.5rem 0 0 1rem;">'
+            + "".join(f"<li>{_esc(e)}</li>" for e in errors)
+            + "</ul></div>"
+        )
+    return HTMLResponse(banner + refreshed)
+
+
+@router.put("/connectors/{connector_id}", response_class=HTMLResponse)
+async def update_connector(request: Request, connector_id: str, db: DbDep, user: RequireAdmin):
+    """Update generic + vendor-specific fields on an existing connector."""
+    from app.services.cti_connectors import get as get_vendor
+    existing = db.get_cti_connector(connector_id)
+    if not existing:
+        return HTMLResponse(
+            '<div class="alert alert-error">Connector not found</div>',
+            status_code=404,
+        )
+    vendor = get_vendor(existing.get("vendor") or "")
+    if vendor is None:
+        return HTMLResponse(
+            f'<div class="alert alert-error">Vendor {_esc(existing.get("vendor") or "?")} is no longer registered</div>',
+            status_code=400,
+        )
+    form = await request.form()
+    generic, cfg, errors = _parse_connector_form(
+        form, vendor, existing_cfg=(existing.get("config") or {}),
+    )
+    if errors:
+        return HTMLResponse(
+            '<div class="alert alert-error">' + "; ".join(_esc(e) for e in errors) + '</div>',
+            status_code=400,
+        )
+    try:
+        db.update_cti_connector(
+            connector_id,
+            label=generic["label"],
+            kind=generic["kind"],
+            config=cfg,
+            sync_interval_minutes=generic.get("sync_interval_minutes"),
+        )
+    except Exception as exc:
+        logger.error("update_cti_connector failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Update failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info("Connector updated: %s by %s", connector_id, user.username)
+    return _connectors_tab_response(db)
+
+
+@router.delete("/connectors/{connector_id}", response_class=HTMLResponse)
+def delete_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+    """Delete a connector and all its client links."""
+    existing = db.get_cti_connector(connector_id)
+    if not existing:
+        return _connectors_tab_response(db)
+    try:
+        db.delete_cti_connector(connector_id)
+    except Exception as exc:
+        logger.error("delete_cti_connector failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Delete failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info("Connector deleted: %s by %s", connector_id, user.username)
+    return _connectors_tab_response(db)
+
+
+@router.post("/connectors/{connector_id}/test", response_class=HTMLResponse)
+def test_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+    """Run a lightweight connectivity probe and persist the result.
+
+    Every supported vendor wires a ``tester=`` callable on its
+    :class:`ConnectorVendor`; this endpoint dispatches to that probe
+    and persists ``last_status`` / ``last_run_at`` / ``last_message``
+    so the per-card pill reflects the most recent attempt. Vendors
+    without a probe registered surface that fact instead of silently
+    flashing fail.
+    """
+    from app.services.cti_connectors import get as get_vendor
+    connector = db.get_cti_connector(connector_id)
+    if not connector:
+        return HTMLResponse(
+            '<span class="status-pill status-pill--fail">Not found</span>',
+            status_code=404,
+        )
+    vendor_name = connector.get("vendor") or ""
+    try:
+        vendor = get_vendor(vendor_name)
+    except KeyError:
+        vendor = None
+    status = "fail"
+    message = ""
+    try:
+        if vendor is None:
+            message = (
+                f"Vendor '{vendor_name}' is not registered. "
+                f"This usually means a legacy connector row survived a "
+                f"vendor cutover; delete the connector and recreate it "
+                f"under the current vendor list."
+            )
+        elif vendor.tester is not None:
+            result = vendor.tester(connector) or {}
+            ok = bool(result.get("ok"))
+            err = (result.get("error") or "").strip()
+            cols = result.get("collections")
+            if ok:
+                status = "pass"
+                if isinstance(cols, list):
+                    message = f"collections={len(cols)}" + (
+                        f" ({', '.join(cols[:3])}{'…' if len(cols) > 3 else ''})"
+                        if cols else ""
+                    )
+                else:
+                    message = "connection ok"
+            else:
+                status = "fail"
+                message = err or "connection probe returned ok=false"
+        else:
+            message = "No test probe registered for this vendor yet"
+            status = "fail"
+    except Exception as exc:
+        message = str(exc)[:200]
+        status = "fail"
+    try:
+        db.update_cti_connector(
+            connector_id,
+            last_status=status,
+            last_message=message[:500],
+            last_run_at=_cn_datetime.utcnow(),
+        )
+        logger.info(
+            "connector test %s (%s) -> %s: %s",
+            connector_id[:8], connector.get("vendor"), status, message[:200],
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist test status for connector %s: %s",
+            connector_id, exc,
+        )
+    refreshed = db.get_cti_connector(connector_id) or connector
+    return HTMLResponse(_connector_status_pill(refreshed, target_id=f"connector-status-{connector_id}"))
+
+
+@router.post("/connectors/{connector_id}/sync", response_class=HTMLResponse)
+def sync_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+    """Kick off a background sync job and return the polling badge.
+
+    The pre-5.0.x synchronous implementation held the worker thread
+    through the entire vendor fetch, so the operator's HTMX click
+    timed out on populous OpenCTI / Mandiant tenants before the data
+    landed (nginx 504 → no visible state → row count silently caught
+    up minutes later if the work finished at all). We now submit the
+    work to :mod:`app.services.cti_jobs` and return a polling fragment
+    that swaps itself out for the terminal badge when the job ends.
+    """
+    from app.services.cti_connectors import get as get_vendor
+    from app.services import cti_jobs
+
+    connector = db.get_cti_connector(connector_id)
+    if not connector:
+        return HTMLResponse('<span class="badge badge-warning">Connector not found</span>')
+    vendor = get_vendor(connector.get("vendor") or "")
+    if vendor is None:
+        return HTMLResponse(
+            f'<span class="badge badge-danger">Vendor &lsquo;{_esc(connector.get("vendor") or "?")}&rsquo; is no longer registered</span>'
+        )
+    linked = db.get_cti_connector_clients(connector_id)
+    if not linked:
+        return HTMLResponse(
+            '<span class="badge badge-warning">No linked tenants &mdash; link this connector to at least one client first.</span>'
+        )
+
+    def _runner():
+        # Re-resolve at run-time so an operator who links/unlinks a
+        # tenant between submit and start still gets the current fan-out.
+        connector_now = db.get_cti_connector(connector_id) or connector
+        linked_now = db.get_cti_connector_clients(connector_id) or linked
+        try:
+            result = vendor.fetcher(connector_now, linked_now)
+        except Exception as exc:
+            msg = str(exc)[:200]
+            try:
+                db.update_cti_connector(
+                    connector_id,
+                    last_status="fail",
+                    last_message=msg,
+                    last_run_at=_cn_datetime.utcnow(),
+                )
+            except Exception:
+                pass
+            raise
+        summary = result.as_dict() if hasattr(result, "as_dict") else (result or {})
+        errors = summary.get("errors") or []
+        tenants = summary.get("tenants", 0)
+        new = summary.get("indicators_new", 0)
+        merged = summary.get("indicators_merged", 0)
+        review = summary.get("indicators_review", 0)
+        actors = summary.get("actors", 0) + summary.get("intrusion_sets", 0)
+        reports = summary.get("reports", 0)
+        rels = summary.get("relationships", 0)
+        badge_msg = (
+            f"{tenants} tenant(s) · +{new} new / ~{merged} merged / ?{review} review"
+            f" · {actors} actors / {reports} reports / {rels} links"
+        )
+        try:
+            db.update_cti_connector(
+                connector_id,
+                last_status="pass" if not errors else "fail",
+                last_message=badge_msg[:500],
+                last_run_at=_cn_datetime.utcnow(),
+            )
+        except Exception:
+            logger.warning("Failed to persist sync status for connector %s", connector_id)
+        return summary
+
+    job_id = cti_jobs.submit(
+        kind="connector",
+        runner=_runner,
+        label=connector.get("label") or connector.get("vendor") or connector_id,
+    )
+    # Inline polling fragment — re-uses the same render shape as the
+    # /cti/sync/jobs/{id} endpoint so the badge swap is identical.
+    target_id = f"connector-sync-job-{job_id}"
+    return HTMLResponse(
+        f'<span id="{target_id}" class="badge badge-info" '
+        f'hx-get="/api/management/connectors/sync/jobs/{job_id}" '
+        f'hx-trigger="every 2s" '
+        f'hx-swap="outerHTML">… syncing {_esc(connector.get("label") or "")}</span>'
+    )
+
+
+@router.get("/connectors/sync/jobs/{job_id}", response_class=HTMLResponse)
+def sync_connector_job_status(job_id: str, user: RequireAdmin):
+    """HTMX polling target for a connector sync job."""
+    from app.services import cti_jobs
+    job = cti_jobs.get(job_id)
+    target_id = f"connector-sync-job-{_esc(job_id)}"
+    if job is None:
+        return HTMLResponse(
+            f'<span id="{target_id}" class="badge badge-warning">'
+            f'Job no longer tracked &mdash; refresh to see status.</span>'
+        )
+    status = job.get("status")
+    label = job.get("label") or ""
+    if status in ("pending", "running"):
+        return HTMLResponse(
+            f'<span id="{target_id}" class="badge badge-info" '
+            f'hx-get="/api/management/connectors/sync/jobs/{_esc(job_id)}" '
+            f'hx-trigger="every 2s" '
+            f'hx-swap="outerHTML">… syncing {_esc(label)}</span>'
+        )
+    if status == "failed":
+        err = job.get("error") or "unknown error"
+        return HTMLResponse(
+            f'<span id="{target_id}" class="badge badge-danger">'
+            f'Sync failed &mdash; {_esc(err[:200])}</span>'
+        )
+    summary = job.get("summary") or {}
+    if not isinstance(summary, dict):
+        summary = {}
+    errors = summary.get("errors") or []
+    cls = "badge-success" if not errors else "badge-warning"
+    tenants = summary.get("tenants", 0)
+    new = summary.get("indicators_new", 0)
+    merged = summary.get("indicators_merged", 0)
+    review = summary.get("indicators_review", 0)
+    actors = summary.get("actors", 0) + summary.get("intrusion_sets", 0)
+    reports = summary.get("reports", 0)
+    rels = summary.get("relationships", 0)
+    err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
+    badge_msg = (
+        f"{tenants} tenant(s) &middot; +{new} new / ~{merged} merged / ?{review} review"
+        f" &middot; {actors} actors / {reports} reports / {rels} links{err_suffix}"
+    )
+    return HTMLResponse(
+        f'<span id="{target_id}" class="badge {cls}">{badge_msg}</span>'
+    )
+
+
+@router.post("/clients/{client_id}/connectors/{connector_id}", response_class=HTMLResponse)
+def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user: RequireAdmin):
+    """Link a connector to a client (positional path variant)."""
+    try:
+        db.link_cti_connector_client(connector_id, client_id)
+    except Exception as exc:
+        logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Link failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info("Connector %s linked to client %s by %s", connector_id, client_id, user.username)
+    return _render_client_connectors_partial(client_id, db, toast="Connector linked.")
+
+
+@router.post("/clients/{client_id}/connectors", response_class=HTMLResponse)
+async def add_connector_to_client(request: Request, client_id: str,
+                                  db: DbDep, user: RequireAdmin):
+    """Link a connector via form body (mirrors the SIEM/OpenCTI add pattern).
+
+    Used by the per-tenant ``Linked Connectors`` modal on the client
+    detail page; the dropdown posts ``connector_id`` here so the same
+    surface adds and removes connectors via the same partial swap.
+    """
+    form = await request.form()
+    connector_id = (form.get("connector_id") or "").strip()
+    if not connector_id:
+        return HTMLResponse("")
+    try:
+        db.link_cti_connector_client(connector_id, client_id)
+    except Exception as exc:
+        logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Link failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info(
+        "Connector %s linked to client %s by %s (form)",
+        connector_id, client_id, user.username,
+    )
+    return _render_client_connectors_partial(client_id, db, toast="Connector linked.")
+
+
+@router.delete("/clients/{client_id}/connectors/{connector_id}", response_class=HTMLResponse)
+def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, user: RequireAdmin):
+    """Unlink a connector from a client."""
+    try:
+        db.unlink_cti_connector_client(connector_id, client_id)
+    except Exception as exc:
+        logger.error("unlink_cti_connector_client failed: %s", exc, exc_info=True)
+        return HTMLResponse(
+            f'<div class="alert alert-error">Unlink failed: {_esc(str(exc))}</div>',
+            status_code=500,
+        )
+    logger.info("Connector %s unlinked from client %s by %s", connector_id, client_id, user.username)
+    return _render_client_connectors_partial(client_id, db, toast="Connector unlinked.")

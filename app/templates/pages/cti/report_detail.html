@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}{{ report.name or 'Untitled report' }} | CTI Report | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div style="min-width:0;">
+        <p style="margin:0 0 0.25rem 0;"><a href="/cti/reports" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Reports</span></a></p>
+        <h1 class="page-title-hero">{{ icon('file-text','24') }} {{ report.name or 'Untitled report' }}</h1>
+        <p class="page-subtitle">
+            {% if report.published %}<span>{{ icon('calendar','12') }} {{ report.published }}</span>{% endif %}
+            {% if report.source_id %}
+                <span style="margin-left:0.5rem;">{{ icon('database','12') }} {{ source_labels.get(report.source_id, 'External CTI') }}</span>
+            {% endif %}
+        </p>
+    </div>
+</div>
+
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ report.related_indicators|length }}</p>
+        <p class="metric-label">Indicators</p>
+        <p class="metric-sub">{{ icon_text('crosshair','Referenced IOCs','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ report.related_actors|length }}</p>
+        <p class="metric-label">Actors named</p>
+        <p class="metric-sub">{{ icon_text('users','Attribution','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value">{{ (report.labels or [])|length }}</p>
+        <p class="metric-label">Labels</p>
+        <p class="metric-sub">{{ icon_text('tag','STIX labels','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ report.published or '—' }}</p>
+        <p class="metric-label">Published</p>
+        <p class="metric-sub">{{ icon_text('calendar','Publication date','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ source_labels.get(report.source_id, '—') if report.source_id else '—' }}</p>
+        <p class="metric-label">Source</p>
+        <p class="metric-sub">{{ icon_text('database','Originating feed','14') }}</p>
+    </div>
+    <div class="metric-card">
+        <p class="metric-value" style="font-size:0.95rem;">{{ tlp_ceiling|upper }}</p>
+        <p class="metric-label">TLP ceiling</p>
+        <p class="metric-sub">{{ icon_text('shield','Your viewing limit','14') }}</p>
+    </div>
+</div>
+
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">{{ icon('info','16') }} Details</h2>
+    <dl class="kv">
+        <dt>Title</dt><dd>{{ report.name or '—' }}</dd>
+        <dt>Labels</dt><dd>
+            {% if report.labels %}
+                {% for l in report.labels %}
+                <span class="badge badge-secondary" style="font-size:0.7rem;margin-right:0.25rem;">{{ l }}</span>
+                {% endfor %}
+            {% else %}—{% endif %}
+        </dd>
+        <dt>Published</dt><dd>{{ report.published or '—' }}</dd>
+        <dt>Source</dt><dd>{{ source_labels.get(report.source_id, '—') if report.source_id else '—' }}</dd>
+    </dl>
+    {% if report.description %}
+    <p style="margin-top:1rem;white-space:pre-wrap;">{{ report.description }}</p>
+    {% endif %}
+</section>
+
+{# 5.0.x — Attachments (x_opencti_files). PDFs render inline via the browser's
+   built-in PDF viewer; other types offer a download link. Endpoint is
+   authenticated + tenant-scoped (see /cti/reports/{id}/attachments/{idx}). #}
+{% if report.attachments %}
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('paperclip','16') }} Attachments
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.attachments|length }}</span>
+    </h2>
+    {% for att in report.attachments %}
+        <div style="margin-bottom:1rem;">
+            <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap;">
+                <strong>{{ att.name }}</strong>
+                <span class="badge badge-secondary" style="font-size:0.7rem;">{{ att.mime_type }}</span>
+                <a href="/cti/reports/{{ report.id }}/attachments/{{ att.index }}"
+                   class="btn btn-ghost btn-sm" target="_blank" rel="noopener">
+                    {{ icon_text('download','Open in new tab','14') }}
+                </a>
+            </div>
+            {% if att.mime_type.startswith('application/pdf') %}
+                <iframe src="/cti/reports/{{ report.id }}/attachments/{{ att.index }}"
+                        title="{{ att.name }}"
+                        style="width:100%;height:75vh;border:1px solid var(--color-border,#444);border-radius:4px;background:#1a1a1a;"></iframe>
+            {% elif att.mime_type.startswith('image/') %}
+                <img src="/cti/reports/{{ report.id }}/attachments/{{ att.index }}"
+                     alt="{{ att.name }}"
+                     style="max-width:100%;border:1px solid var(--color-border,#444);border-radius:4px;" />
+            {% else %}
+                <p style="color:var(--color-muted);font-size:0.85rem;margin:0;">
+                    Preview not available for this file type — use <em>Open in new tab</em> to download.
+                </p>
+            {% endif %}
+        </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+{% if report.external_references %}
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('link','16') }} External references
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.external_references|length }}</span>
+    </h2>
+    <ul style="margin:0;padding-left:1.25rem;">
+        {% for ref in report.external_references %}
+            <li style="margin-bottom:0.5rem;">
+                {% if ref.url %}
+                    <a href="{{ ref.url }}" target="_blank" rel="noopener noreferrer">{{ ref.source_name or ref.url }}</a>
+                {% else %}
+                    <strong>{{ ref.source_name or '—' }}</strong>
+                {% endif %}
+                {% if ref.external_id %}
+                    <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.25rem;">{{ ref.external_id }}</span>
+                {% endif %}
+                {% if ref.description %}
+                    <div style="color:var(--color-muted);font-size:0.85rem;margin-top:0.15rem;">{{ ref.description }}</div>
+                {% endif %}
+            </li>
+        {% endfor %}
+    </ul>
+</section>
+{% endif %}
+
+<section class="card card-padded" style="margin-bottom:1rem;">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('crosshair','16') }} Referenced indicators
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.related_indicators|length }}</span>
+    </h2>
+    <p style="color:var(--color-muted);font-size:0.85rem;margin-top:0;">
+        Filtered by your TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
+    </p>
+    {% if report.related_indicators %}
+    <table class="data-table">
+        <thead>
+            <tr><th>Observable</th><th>Pattern</th><th>TLP</th><th>Confidence</th><th>Last seen</th></tr>
+        </thead>
+        <tbody>
+        {% for i in report.related_indicators %}
+            <tr>
+                <td><a href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
+                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
+                <td>{{ (i.tlp or '—')|upper }}</td>
+                <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
+                <td>{{ i.last_seen or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No indicators visible under your TLP ceiling.</p>
+    {% endif %}
+</section>
+
+<section class="card card-padded">
+    <h2 style="margin-top:0;font-size:1rem;">
+        {{ icon('users','16') }} Named actors
+        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.related_actors|length }}</span>
+    </h2>
+    {% if report.related_actors %}
+    <table class="data-table">
+        <thead><tr><th>Actor</th><th>Type</th><th>Origin</th></tr></thead>
+        <tbody>
+        {% for a in report.related_actors %}
+            <tr>
+                <td><a href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
+                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span></td>
+                <td>{{ a.origin or '—' }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state">No actors named in this report.</p>
+    {% endif %}
+</section>
+{% endblock %}

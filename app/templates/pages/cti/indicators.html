@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% block title %}CTI Indicators | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ icon('crosshair','24') }} CTI Indicators</h1>
+        <p class="page-subtitle">
+            Ingested observables. TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
+        </p>
+    </div>
+    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+        {# Check connection / per-tenant counts were retired here in
+           5.0.x — connector connectivity now lives on the Management →
+           Connectors hub (one place to test, one place to fix). #}
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-post="/cti/indicators/sync"
+                hx-target="#cti-sync-result"
+                hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync indicators','14') }}</button>
+        {# Polling fragment lands here. Background job + auto-refresh,
+           so the click returns immediately instead of holding the
+           worker thread through a multi-million-object pull. #}
+        <span id="cti-sync-result"></span>
+    </div>
+</div>
+
+{# ── Type-count summary cards (top 5 + total) ─────────────── #}
+<div class="metrics-grid" style="margin-bottom:1.5rem;">
+    <div class="metric-card">
+        <p class="metric-value">{{ total_indicators }}</p>
+        <p class="metric-label">Total indicators</p>
+        <p class="metric-sub">{{ icon_text('database','Within TLP ceiling','14') }}</p>
+    </div>
+    {% for pt, n in type_counts[:5] %}
+    <div class="metric-card">
+        <p class="metric-value">{{ n }}</p>
+        <p class="metric-label">{{ pt }}</p>
+        <p class="metric-sub">{{ icon_text('hash','Pattern type','14') }}</p>
+    </div>
+    {% endfor %}
+</div>
+
+{# ── Filters: one control per column header ──────────────── #}
+<form class="filters-bar" method="get" action="/cti/indicators">
+    <div class="filter-group grow">
+        <label class="form-label">Search</label>
+        <input type="text" name="search" class="form-input"
+               value="{{ search }}"
+               placeholder="observable value or pattern type…">
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Pattern</label>
+        <select name="pattern_type" class="form-input form-select">
+            <option value="">All patterns</option>
+            {% for t in pattern_types %}
+            <option value="{{ t }}" {% if t == selected_pattern_type %}selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">TLP</label>
+        <select name="tlp" class="form-input form-select">
+            <option value="">All TLPs</option>
+            {% for t in tlp_values %}
+            <option value="{{ t }}" {% if t == selected_tlp %}selected{% endif %}>{{ t|upper }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select name="source" class="form-input form-select">
+            <option value="">All sources</option>
+            {% for s in sources %}
+            <option value="{{ s }}" {% if s == selected_source %}selected{% endif %}>
+                {{ source_labels.get(s, s) }}
+            </option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group">
+        <label class="form-label">&nbsp;</label>
+        <button type="submit" class="btn btn-primary">Apply</button>
+    </div>
+</form>
+
+{% if indicators %}
+<div class="card card-flush" style="margin-top:1rem;">
+    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
+                border-bottom:1px solid var(--color-border);
+                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
+                text-transform:uppercase;color:var(--color-text-muted);">
+        <div style="min-width:240px;">TLP · Observable</div>
+        <div style="flex:1;">Pattern · Confidence · TTPs</div>
+        <div style="white-space:nowrap;">Source · Last seen</div>
+    </div>
+    <div class="cve-list" style="padding:0.75rem 1rem;">
+    {% for ind in indicators %}
+    {% set tlp_v = (ind.tlp or 'clear')|lower %}
+    {% set tlp_cls = 'cve-card-item--nocover' if tlp_v == 'red'
+                    else ('cve-card-item--detected' if tlp_v == 'amber'
+                    else 'cve-card-item--unaffected') %}
+    <div class="cve-card-item {{ tlp_cls }}"
+         style="cursor:pointer;" onclick="window.location='/cti/indicators/{{ ind.id }}'">
+        <div class="cve-card-item__id" style="min-width:240px;">
+            {# 5.0.0 — leading TLP dot removed; the TLP value is already
+               surfaced via the per-row card class colouring + the TLP
+               filter dropdown above, so the standalone circle added
+               only visual noise. #}
+            <a href="/cti/indicators/{{ ind.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;"
+               onclick="event.stopPropagation();">
+                {{ ind.observable_value }}
+            </a>
+        </div>
+        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+            <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
+                <span class="badge badge-secondary" style="font-size:0.7rem;">{{ ind.pattern_type or '—' }}</span>
+                {% if ind.confidence is not none %}
+                <span style="margin-left:0.5rem;">confidence {{ ind.confidence }}</span>
+                {% endif %}
+                {% if ind.mitre_techniques %}
+                <span style="margin-left:0.5rem;">{{ ind.mitre_techniques|length }} TTP{{ 's' if ind.mitre_techniques|length != 1 }}</span>
+                {% endif %}
+            </div>
+        </div>
+        <div class="cve-card-item__right" style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="font-size:0.75rem;color:var(--color-text-muted);white-space:nowrap;">
+                {{ source_labels.get(ind.source_id, '—') if ind.source_id else '—' }}
+                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
+                {{ ind.last_seen or '—' }}
+            </span>
+        </div>
+    </div>
+    {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="card card-padded-lg card-center" style="margin-top:1rem;">
+    <p style="color:var(--color-muted);margin:0;">
+        No indicators match the current filters. Either nothing has been
+        ingested for this tenant yet, or every indicator is above your
+        TLP ceiling.
+    </p>
+</div>
+{% endif %}
+
+<div class="pagination" style="margin-top:1rem;">
+    {% set qbase = '&search=' ~ search ~ '&pattern_type=' ~ selected_pattern_type ~ '&tlp=' ~ selected_tlp ~ '&source=' ~ selected_source %}
+    {% if page > 1 %}
+        <a class="btn btn-secondary"
+           href="/cti/indicators?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
+    {% endif %}
+    <span style="margin:0 0.75rem;">Page {{ page }}</span>
+    {% if indicators|length == page_size %}
+        <a class="btn btn-secondary"
+           href="/cti/indicators?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
+    {% endif %}
+</div>
+{% endblock %}

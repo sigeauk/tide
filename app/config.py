@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     trigger_dir: str = Field(default="/app/data/triggers", alias="TRIGGER_DIR")
     validation_file: str = Field(default="/app/data/checkedRule.json", alias="VALIDATION_FILE")
 
+    # --- RULE VALIDATION AGE THRESHOLDS ---
+    # Number of weeks before a validated rule is flagged "amber" (warning) or
+    # "expired" (danger) in the rule cards. Default 8/26 (≈ 2 months amber,
+    # 6 months expired). The previous hard-coded 12 weeks was too aggressive
+    # for customers with quarterly review cycles. Override via env at deploy.
+    rule_validation_amber_weeks: int = Field(default=8, alias="RULE_VALIDATION_AMBER_WEEKS")
+    rule_validation_expired_weeks: int = Field(default=26, alias="RULE_VALIDATION_EXPIRED_WEEKS")
+
     # --- BOOTSTRAP ADMIN ---
     # Credentials for the default admin account created on first run (no existing users).
     # Set these in docker-compose.yml environment section; they are only used once.

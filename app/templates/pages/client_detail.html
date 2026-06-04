@@ -35,8 +35,8 @@
         <div class="metric-value">{{ client_siems | length }}</div>
     </div>
     <div class="metric-card">
-        <div class="metric-label">{{ icon('shield', '16') }} Threat Intel</div>
-        <div class="metric-value">{{ client_opencti | length }}</div>
+        <div class="metric-label">{{ icon('link', '16') }} CTI Connectors</div>
+        <div class="metric-value">{{ client_connectors | length }}</div>
     </div>
     <div class="metric-card">
         <div class="metric-label">{{ icon('monitor', '16') }} Systems</div>
@@ -54,10 +54,6 @@
         <div class="metric-label">{{ icon('clock', '16') }} Created</div>
         <div class="metric-value" style="font-size:1rem;">{{ client.created_at.strftime('%Y-%m-%d') if client.created_at else 'N/A' }}</div>
     </div>
-    <div class="metric-card">
-        <div class="metric-label">{{ icon('check-circle', '16') }} Status</div>
-        <div class="metric-value">{% if client.is_default %}<span class="badge badge-info">Default</span>{% else %}<span class="badge badge-success">Active</span>{% endif %}</div>
-    </div>
 </div>
 
 <!-- Linked SIEMs Section -->
@@ -67,10 +63,17 @@
     </div>
 </div>
 
-<!-- Linked Threat Intel (OpenCTI) Section -->
-<div class="card card-padded card-mb" id="client-opencti-card">
-    <div id="client-opencti-section">
-        {% include "partials/client_opencti.html" %}
+<!-- Linked CTI Connectors Section (per-tenant CTI source linking) -->
+<div class="card card-padded card-mb" id="client-connectors-card">
+    <div id="client-connectors-section">
+        {% include "partials/client_connectors.html" %}
+    </div>
+</div>
+
+<!-- CTI Egress Targets Section -->
+<div class="card card-padded card-mb" id="client-cti-egress-card">
+    <div id="client-cti-egress-section">
+        {% include "partials/client_cti_egress.html" %}
     </div>
 </div>
 

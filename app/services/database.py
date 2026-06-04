@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 45
+SCHEMA_VERSION = 52
 
 
 def _scope_predicate(
@@ -230,7 +230,96 @@ class DatabaseService:
             VALUES (?, now())
             ON CONFLICT (version) DO UPDATE SET applied_at = now()
         """, [version])
-    
+
+    def _backfill_legacy_opencti_to_connectors(self, conn) -> int:
+        """No-op since 5.0.0.
+
+        The legacy OpenCTI GraphQL path has been fully retired and
+        migration 50 drops the source tables (``opencti_inventory`` /
+        ``client_opencti_map``) along with any ``cti_connectors`` rows
+        whose vendor is the legacy ``opencti``. This method is kept as
+        a stub so older callers (e.g. migration 47, which is now also
+        a no-op for fresh installs since migration 50 unconditionally
+        wipes its output) don't blow up when they import it.
+        """
+        return 0
+
+    def _backfill_legacy_opencti_to_connectors_DISABLED(self, conn) -> int:
+        """Original 4.1.20 implementation retained for archaeology only."""
+        import json as _json
+        backfilled = 0
+        try:
+            tables = {
+                r[0] for r in conn.execute(
+                    "SELECT table_name FROM information_schema.tables "
+                    "WHERE table_schema = 'main'"
+                ).fetchall()
+            }
+            if "opencti_inventory" not in tables or "cti_connectors" not in tables:
+                return 0
+            src_rows = conn.execute(
+                "SELECT id, label, url, token_enc, is_active, "
+                "COALESCE(kind, 'actors'), created_at, updated_at "
+                "FROM opencti_inventory"
+            ).fetchall()
+            for (oid, label, url, token_enc, is_active, kind,
+                 created_at, updated_at) in src_rows:
+                existing = conn.execute(
+                    "SELECT 1 FROM cti_connectors "
+                    "WHERE vendor = 'opencti' AND label = ? LIMIT 1",
+                    [label],
+                ).fetchone()
+                if existing:
+                    continue
+                config = _json.dumps({
+                    "url": url or "",
+                    "token": token_enc or "",
+                    "legacy_opencti_id": oid,
+                })
+                conn.execute(
+                    "INSERT INTO cti_connectors "
+                    "(vendor, label, is_active, kind, config_json, "
+                    "created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ["opencti", label, bool(is_active),
+                     kind if kind in ("actors", "cti", "both") else "actors",
+                     config,
+                     created_at, updated_at],
+                )
+                new_id_row = conn.execute(
+                    "SELECT id FROM cti_connectors "
+                    "WHERE vendor = 'opencti' AND label = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    [label],
+                ).fetchone()
+                if new_id_row:
+                    new_id = new_id_row[0]
+                    try:
+                        client_links = conn.execute(
+                            "SELECT client_id FROM client_opencti_map "
+                            "WHERE opencti_id = ?", [oid]
+                        ).fetchall()
+                    except Exception:
+                        client_links = []
+                    for (cid,) in client_links:
+                        conn.execute(
+                            "INSERT INTO cti_connector_clients "
+                            "(connector_id, client_id) VALUES (?, ?) "
+                            "ON CONFLICT DO NOTHING",
+                            [new_id, cid],
+                        )
+                backfilled += 1
+            if backfilled:
+                logger.info(
+                    "Legacy OpenCTI back-fill: copied %d row(s) into cti_connectors",
+                    backfilled,
+                )
+        except Exception as exc:
+            logger.warning(
+                f"Legacy OpenCTI back-fill skipped: {exc!r}"
+            )
+        return backfilled
+
     def _run_migrations(self, conn):
         """Run database migrations."""
         current_version = self._get_schema_version(conn)
@@ -1960,6 +2049,308 @@ class DatabaseService:
                 row_count,
             )
 
+        # ── Migration 46: opencti_inventory.kind column ──────────────────
+        # The native CTI engine reuses ``opencti_inventory`` rows as the
+        # source list for the new transitional STIX-bundle fetcher, but
+        # the legacy actor-only sync (cti_helper.get_threat_landscape →
+        # save_octi_threat_actors_to_active_db) must keep working
+        # untouched on existing rows. ``kind`` lets a single inventory
+        # row declare which fetcher(s) it participates in:
+        #   * 'actors'  — legacy intrusion-set/TTP sync only (default,
+        #                 matches pre-4.1.20 behaviour for existing rows)
+        #   * 'cti'     — new STIX bundle pull into the per-tenant
+        #                 cti_<tenant>.duckdb only
+        #   * 'both'    — same instance serves both fetchers
+        # The column is additive; no code path is changed by this
+        # migration. The CTI fetcher introduced in a follow-up step will
+        # filter ``WHERE kind IN ('cti', 'both')`` and the legacy sync
+        # is unchanged.
+        if current_version < 46:
+            try:
+                conn.execute(
+                    "ALTER TABLE opencti_inventory "
+                    "ADD COLUMN IF NOT EXISTS kind VARCHAR DEFAULT 'actors'"
+                )
+                # Backfill any pre-existing NULLs (DuckDB DEFAULT only
+                # applies to subsequent INSERTs, not to rows present
+                # before the column existed).
+                conn.execute(
+                    "UPDATE opencti_inventory SET kind = 'actors' "
+                    "WHERE kind IS NULL"
+                )
+            except Exception as exc:
+                logger.error(f"Migration 46 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 46)
+            logger.info(
+                "Migration 46: added opencti_inventory.kind "
+                "(default 'actors'; new CTI fetcher will opt-in via "
+                "'cti' or 'both')."
+            )
+
+        # ── Migration 47: cti_connectors + cti_connector_clients ─────────
+        # Generic per-vendor connector framework. Replaces the
+        # OpenCTI-only ``opencti_inventory`` shape with a vendor-tagged
+        # table whose vendor-specific knobs live in ``config_json``.
+        # The legacy ``opencti_inventory`` / ``client_opencti_map`` tables
+        # are kept for one release and back-filled into
+        # ``cti_connectors(vendor='opencti')`` so the new UI shows them
+        # on day one. The legacy CRUD paths and the
+        # ``cti_helper.get_threat_landscape`` actor sync are untouched
+        # by this migration.
+        if current_version < 47:
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS cti_connectors (
+                        id VARCHAR PRIMARY KEY DEFAULT (gen_random_uuid()::VARCHAR),
+                        vendor VARCHAR NOT NULL,
+                        label VARCHAR NOT NULL,
+                        is_active BOOLEAN DEFAULT true,
+                        kind VARCHAR DEFAULT 'cti',
+                        duration_period VARCHAR,
+                        confidence_floor INTEGER,
+                        marking_definition VARCHAR,
+                        config_json VARCHAR,
+                        last_run_at TIMESTAMP,
+                        last_status VARCHAR,
+                        last_message VARCHAR,
+                        created_at TIMESTAMP DEFAULT now(),
+                        updated_at TIMESTAMP DEFAULT now()
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS cti_connector_clients (
+                        connector_id VARCHAR NOT NULL,
+                        client_id VARCHAR NOT NULL,
+                        assigned_at TIMESTAMP DEFAULT now(),
+                        PRIMARY KEY (connector_id, client_id)
+                    )
+                """)
+
+                # Back-fill from opencti_inventory if it exists. Done as a
+                # left-anti join on (vendor='opencti', label) so re-runs
+                # are idempotent. Delegates to the shared backfill helper
+                # which is also invoked at app startup so any rows added
+                # after this migration ran (e.g. from a legacy import on
+                # an older release) eventually land in cti_connectors.
+                self._backfill_legacy_opencti_to_connectors(conn)
+            except Exception as exc:
+                logger.error(f"Migration 47 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 47)
+            logger.info(
+                "Migration 47: created cti_connectors + "
+                "cti_connector_clients (generic per-vendor connector "
+                "framework; opencti_inventory back-filled, legacy tables "
+                "retained for one release)."
+            )
+
+        # ── Migration 48: per-tenant rule validation thresholds ──────
+        # The amber/expired week thresholds used to colour the rule
+        # validation badge were a single global env var pair
+        # (RULE_VALIDATION_AMBER_WEEKS / RULE_VALIDATION_EXPIRED_WEEKS).
+        # Different tenants run different review cadences, so we now
+        # store per-tenant overrides on the ``clients`` table; NULL
+        # means "use the global default". Surfaced on the client
+        # detail page in the Linked SIEMs section.
+        if current_version < 48:
+            try:
+                cols = {
+                    r[1] for r in conn.execute(
+                        "PRAGMA table_info('clients')"
+                    ).fetchall()
+                }
+                if "rule_validation_amber_weeks" not in cols:
+                    conn.execute(
+                        "ALTER TABLE clients "
+                        "ADD COLUMN rule_validation_amber_weeks INTEGER"
+                    )
+                if "rule_validation_expired_weeks" not in cols:
+                    conn.execute(
+                        "ALTER TABLE clients "
+                        "ADD COLUMN rule_validation_expired_weeks INTEGER"
+                    )
+            except Exception as exc:
+                logger.error(f"Migration 48 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 48)
+            logger.info(
+                "Migration 48: added rule_validation_amber_weeks / "
+                "rule_validation_expired_weeks to clients (per-tenant "
+                "override of the global validation thresholds; NULL = "
+                "inherit settings default)."
+            )
+
+        # ── Migration 49: TAXII 2.1 cursor store ─────────────────────
+        # Persistent per-(connector, api_root, collection) watermark
+        # captured from the TAXII server's ``X-TAXII-Date-Added-Last``
+        # response header. Read by the generic TAXII client
+        # (``app.services.cti_fetchers.taxii21``) on each poll and
+        # written back at the end of each successful collection pull
+        # so subsequent runs are delta syncs (``added_after=...``).
+        # No FK to ``cti_connectors`` — DuckDB FKs are optional and
+        # this table is intentionally orphan-tolerant so a connector
+        # delete doesn't blow up on the cursor row; orphans are cleaned
+        # up lazily by the connector delete path.
+        if current_version < 49:
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS cti_taxii_cursors (
+                        connector_id VARCHAR NOT NULL,
+                        api_root     VARCHAR NOT NULL,
+                        collection_id VARCHAR NOT NULL,
+                        added_after  VARCHAR NOT NULL,
+                        last_run_at  TIMESTAMP DEFAULT now(),
+                        PRIMARY KEY (connector_id, api_root, collection_id)
+                    )
+                    """
+                )
+            except Exception as exc:
+                logger.error(f"Migration 49 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 49)
+            logger.info(
+                "Migration 49: created cti_taxii_cursors (per-collection "
+                "added_after watermark for the TAXII 2.1 client)."
+            )
+
+        # ── Migration 50: retire the legacy OpenCTI GraphQL surface ──
+        # The pre-5.0.0 OpenCTI GraphQL fetcher wrote ``opencti:<uuid>``
+        # source IDs and was driven by two shared tables
+        # (``opencti_inventory`` and ``client_opencti_map``). The new
+        # TAXII 2.1 ingest path replaces both, so this migration:
+        #   1. Deletes any ``cti_connectors`` row whose vendor is the
+        #      legacy ``opencti`` (the back-fill mirror introduced by
+        #      migration 47). These rows kept resurrecting themselves
+        #      across restarts because the boot-time back-fill kept
+        #      copying them out of ``opencti_inventory`` until the
+        #      back-fill helper was no-op'd in 5.0.0.
+        #   2. Cleans the ``cti_connector_clients`` membership and
+        #      ``cti_taxii_cursors`` watermark rows for those connectors
+        #      so a TAXII connector that is later created with the same
+        #      id starts clean.
+        #   3. Drops ``opencti_inventory`` and ``client_opencti_map``
+        #      entirely so no code path can re-introduce GraphQL rows.
+        # Operators on existing installs must re-create their OpenCTI
+        # source using the ``opencti_taxii`` vendor under Management →
+        # Connectors.
+        if current_version < 50:
+            try:
+                # Snapshot the ids we are about to nuke so we can clean
+                # up the FK-soft children (memberships, cursors).
+                tables = {
+                    r[0] for r in conn.execute(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'main'"
+                    ).fetchall()
+                }
+                legacy_ids: list = []
+                if "cti_connectors" in tables:
+                    legacy_ids = [
+                        r[0] for r in conn.execute(
+                            "SELECT id FROM cti_connectors "
+                            "WHERE vendor = 'opencti'"
+                        ).fetchall()
+                    ]
+                for lid in legacy_ids:
+                    if "cti_connector_clients" in tables:
+                        conn.execute(
+                            "DELETE FROM cti_connector_clients "
+                            "WHERE connector_id = ?", [lid],
+                        )
+                    if "cti_taxii_cursors" in tables:
+                        conn.execute(
+                            "DELETE FROM cti_taxii_cursors "
+                            "WHERE connector_id = ?", [lid],
+                        )
+                if legacy_ids:
+                    conn.execute(
+                        "DELETE FROM cti_connectors WHERE vendor = 'opencti'"
+                    )
+                    logger.info(
+                        "Migration 50: removed %d legacy GraphQL OpenCTI "
+                        "connector row(s)", len(legacy_ids),
+                    )
+                # Drop the legacy tables. ``client_opencti_map`` first
+                # because it referenced opencti_inventory.id (soft).
+                for tbl in ("client_opencti_map", "opencti_inventory"):
+                    if tbl in tables:
+                        conn.execute(f"DROP TABLE {tbl}")
+                        logger.info("Migration 50: dropped %s", tbl)
+            except Exception as exc:
+                logger.error(f"Migration 50 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 50)
+            logger.info(
+                "Migration 50: retired the legacy OpenCTI GraphQL "
+                "surface (dropped opencti_inventory + client_opencti_map; "
+                "removed vendor='opencti' rows from cti_connectors)."
+            )
+
+        # ── Migration 51: scrub legacy OCTI-only threat_actors rows ──
+        # 5.0.0 retired the GraphQL fetcher that wrote ``source=['OCTI']``
+        # into the shared ``threat_actors`` table. Those rows still
+        # render on the Threat Landscape page with a CTI badge from a
+        # connector that no longer exists. We only delete rows whose
+        # source list is exclusively ['OCTI'] (i.e. they never matched
+        # a MITRE baseline) so curated MITRE actors keep their CTI
+        # enrichment when a connector merge-projects into them later.
+        if current_version < 51:
+            try:
+                removed = 0
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM threat_actors "
+                    "WHERE source IS NOT NULL "
+                    "  AND list_contains(source, 'OCTI') "
+                    "  AND len(source) = 1"
+                ).fetchone()
+                if row and row[0]:
+                    removed = int(row[0])
+                    conn.execute(
+                        "DELETE FROM threat_actors "
+                        "WHERE source IS NOT NULL "
+                        "  AND list_contains(source, 'OCTI') "
+                        "  AND len(source) = 1"
+                    )
+                logger.info(
+                    "Migration 51: removed %d OCTI-only threat_actors row(s)",
+                    removed,
+                )
+            except Exception as exc:
+                logger.error(f"Migration 51 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 51)
+            logger.info(
+                "Migration 51: scrubbed legacy OCTI-only actors from "
+                "the shared threat_actors table."
+            )
+
+        # ── Migration 52: add CTI connector auto-sync interval columns ──
+        # The 5.0.x background-job scheduler reads these two columns
+        # to decide which connectors are due for a re-pull. Existing
+        # rows keep ``sync_interval_minutes IS NULL`` (auto-sync off)
+        # so the migration is non-disruptive — operators opt in per
+        # connector by editing the connector and choosing an interval.
+        if current_version < 52:
+            try:
+                conn.execute(
+                    "ALTER TABLE cti_connectors "
+                    "ADD COLUMN IF NOT EXISTS sync_interval_minutes INTEGER"
+                )
+                conn.execute(
+                    "ALTER TABLE cti_connectors "
+                    "ADD COLUMN IF NOT EXISTS last_sync_started_at TIMESTAMP"
+                )
+            except Exception as exc:
+                logger.error(f"Migration 52 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 52)
+            logger.info(
+                "Migration 52: added sync_interval_minutes + "
+                "last_sync_started_at to cti_connectors."
+            )
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     def _validate_legacy_tables(self, conn):
@@ -2590,10 +2981,18 @@ class DatabaseService:
     
     # --- RULE OPERATIONS ---
     
-    def get_rules(self, filters: RuleFilters) -> Tuple[List[DetectionRule], int, str]:
+    def get_rules(
+        self,
+        filters: RuleFilters,
+        thresholds: Optional[Tuple[int, int]] = None,
+    ) -> Tuple[List[DetectionRule], int, str]:
         """
         Get paginated list of detection rules with filters.
         Returns (rules, total_count, last_sync).
+
+        ``thresholds`` carries an optional ``(amber_weeks, expired_weeks)``
+        tuple resolved by :meth:`get_client_validation_thresholds`. When
+        omitted each rule's validation status uses the global defaults.
         """
         with self.get_connection() as conn:
             # Base query
@@ -2683,7 +3082,7 @@ class DatabaseService:
 
         for _, row in df.iterrows():
             try:
-                rule = self._row_to_rule(row.to_dict(), validation_data)
+                rule = self._row_to_rule(row.to_dict(), validation_data, thresholds)
                 rules.append(rule)
             except Exception as e:
                 rule_id = row.get('rule_id', '?')
@@ -2800,7 +3199,8 @@ class DatabaseService:
         )
 
     def get_rule_by_id(self, rule_id: str, space: str = "default",
-                       siem_id: Optional[str] = None) -> Optional[DetectionRule]:
+                       siem_id: Optional[str] = None,
+                       thresholds: Optional[Tuple[int, int]] = None) -> Optional[DetectionRule]:
         """Get a single rule by ID and space.
 
         Since 4.0.13, ``siem_id`` may be supplied to scope the lookup to a
@@ -2827,7 +3227,7 @@ class DatabaseService:
                 columns = [desc[0] for desc in conn.description]
                 row = dict(zip(columns, result))
                 validation_data = self._load_validation_data()
-                return self._row_to_rule(row, validation_data)
+                return self._row_to_rule(row, validation_data, thresholds)
 
         return None
     
@@ -2873,10 +3273,27 @@ class DatabaseService:
             return val
         return None
 
-    def _row_to_rule(self, row: Dict[str, Any], validation_data: Dict) -> DetectionRule:
-        """Convert database row to DetectionRule model."""
+    def _row_to_rule(
+        self,
+        row: Dict[str, Any],
+        validation_data: Dict,
+        thresholds: Optional[Tuple[int, int]] = None,
+    ) -> DetectionRule:
+        """Convert database row to DetectionRule model.
+
+        ``thresholds`` is an optional ``(amber_weeks, expired_weeks)``
+        pair — callers that know which tenant they're rendering for
+        should pass per-tenant overrides via
+        :meth:`get_client_validation_thresholds`. When omitted the
+        global settings defaults are used.
+        """
         _si = self._safe_int
         _ss = self._safe_str
+        if thresholds is None:
+            amber_weeks = int(self.settings.rule_validation_amber_weeks)
+            expired_weeks = int(self.settings.rule_validation_expired_weeks)
+        else:
+            amber_weeks, expired_weeks = thresholds
 
         # Parse raw_data
         raw_data = row.get('raw_data')
@@ -2922,8 +3339,13 @@ class DatabaseService:
                 try:
                     validation_date = datetime.strptime(val_str[:19], "%Y-%m-%dT%H:%M:%S")
                     weeks = (datetime.now() - validation_date).days / 7
-                    validation_status = "expired" if weeks > 12 else "valid"
-                except:
+                    if weeks > expired_weeks:
+                        validation_status = "expired"
+                    elif weeks > amber_weeks:
+                        validation_status = "amber"
+                    else:
+                        validation_status = "valid"
+                except Exception:
                     pass
 
         return DetectionRule(
@@ -2958,6 +3380,7 @@ class DatabaseService:
     def get_rule_health_metrics(
         self,
         allowed_scopes: Optional[List[Tuple[str, str]]] = None,
+        thresholds: Optional[Tuple[int, int]] = None,
     ) -> RuleHealthMetrics:
         """Calculate comprehensive rule health metrics.
 
@@ -3047,7 +3470,11 @@ class DatabaseService:
         validated_count = 0
         validation_expired_count = 0
         validation_data = self._load_validation_data()
-        
+        if thresholds is None:
+            expired_weeks = int(self.settings.rule_validation_expired_weeks)
+        else:
+            _, expired_weeks = thresholds
+
         if validation_data:
             now = datetime.now()
             for rule_name in df['name'].tolist():
@@ -3059,7 +3486,7 @@ class DatabaseService:
                         try:
                             val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
                             weeks = (now - val_date).days / 7
-                            if weeks > 12:
+                            if weeks > expired_weeks:
                                 validation_expired_count += 1
                         except:
                             pass
@@ -3263,26 +3690,22 @@ class DatabaseService:
     # --- THREAT ACTOR OPERATIONS ---
 
     def _client_has_opencti(self, client_id: Optional[str]) -> bool:
-        """Return True when *client_id* has at least one ACTIVE OpenCTI instance linked.
+        """Return True when *client_id* has at least one ACTIVE CTI connector linked.
 
-        Used to decide whether OpenCTI-sourced threat actors should be visible
-        to a tenant. ``None``/empty client_id is treated as "no link" so any
-        unauthenticated / pre-tenant code paths see the MITRE baseline only.
-
-        4.1.19: aligned with the sync loop's truth — a link to an instance
-        marked ``is_active = FALSE`` no longer counts as "linked", so a
-        tenant whose only OpenCTI instance has been deactivated stops
-        seeing stale OCTI rows in its landscape filters.
+        Post-5.0.0: the legacy ``client_opencti_map`` + ``opencti_inventory``
+        tables are dropped (migration 50). Linkage now lives in
+        ``cti_connector_clients`` keyed against ``cti_connectors`` (any
+        vendor — OpenCTI TAXII, Mandiant, CrowdStrike, MITRE, GreyNoise).
         """
         if not client_id:
             return False
         try:
             with self.get_shared_connection() as conn:
                 row = conn.execute(
-                    "SELECT 1 FROM client_opencti_map m "
-                    "JOIN opencti_inventory o ON o.id = m.opencti_id "
-                    "WHERE m.client_id = ? "
-                    "AND COALESCE(o.is_active, TRUE) = TRUE "
+                    "SELECT 1 FROM cti_connector_clients ccc "
+                    "JOIN cti_connectors c ON c.id = ccc.connector_id "
+                    "WHERE ccc.client_id = ? "
+                    "AND COALESCE(c.is_active, TRUE) = TRUE "
                     "LIMIT 1",
                     [client_id],
                 ).fetchone()
@@ -4275,6 +4698,11 @@ class DatabaseService:
             client_spaces = self.get_client_siem_spaces(client_id, environment_role)
             if not client_spaces:
                 return []
+        # Honour per-tenant validation thresholds when scoped to a client.
+        thresholds = (
+            self.get_client_validation_thresholds(client_id)
+            if client_id else None
+        )
 
         with self.get_connection() as conn:
             # Query rules where the technique ID is in the mitre_ids array
@@ -4323,7 +4751,7 @@ class DatabaseService:
             
             for row_tuple in result:
                 row = dict(zip(columns, row_tuple))
-                rules.append(self._row_to_rule(row, validation_data))
+                rules.append(self._row_to_rule(row, validation_data, thresholds))
             
             return rules
     
@@ -4935,23 +5363,31 @@ class DatabaseService:
         """List all clients."""
         with self.get_shared_connection() as conn:
             rows = conn.execute(
-                "SELECT id, name, slug, description, is_default, db_filename, created_at, updated_at "
+                "SELECT id, name, slug, description, is_default, db_filename, "
+                "rule_validation_amber_weeks, rule_validation_expired_weeks, "
+                "created_at, updated_at "
                 "FROM clients ORDER BY is_default DESC, name"
             ).fetchall()
-            cols = ["id", "name", "slug", "description", "is_default", "db_filename", "created_at", "updated_at"]
+            cols = ["id", "name", "slug", "description", "is_default", "db_filename",
+                    "rule_validation_amber_weeks", "rule_validation_expired_weeks",
+                    "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
     def get_client(self, client_id: str) -> Optional[Dict]:
         """Get a single client by id."""
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT id, name, slug, description, is_default, db_filename, created_at, updated_at "
+                "SELECT id, name, slug, description, is_default, db_filename, "
+                "rule_validation_amber_weeks, rule_validation_expired_weeks, "
+                "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
             if not row:
                 return None
             return dict(zip(
-                ["id", "name", "slug", "description", "is_default", "db_filename", "created_at", "updated_at"], row
+                ["id", "name", "slug", "description", "is_default", "db_filename",
+                 "rule_validation_amber_weeks", "rule_validation_expired_weeks",
+                 "created_at", "updated_at"], row
             ))
 
     def create_client(self, name: str, slug: str, description: str = None) -> Dict:
@@ -4994,9 +5430,33 @@ class DatabaseService:
             return new_client
 
     def update_client(self, client_id: str, **fields) -> Optional[Dict]:
-        """Update a client. Allowed fields: name, description. Returns updated client or None."""
-        allowed = {"name", "description"}
-        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        """Update a client. Allowed fields: name, description,
+        rule_validation_amber_weeks, rule_validation_expired_weeks.
+
+        Pass an empty string / ``None`` for either threshold to clear
+        the per-tenant override and fall back to the global default."""
+        allowed = {"name", "description",
+                   "rule_validation_amber_weeks",
+                   "rule_validation_expired_weeks"}
+        updates: dict = {}
+        for k, v in fields.items():
+            if k not in allowed:
+                continue
+            if k.startswith("rule_validation_"):
+                # Empty string → NULL (clear override). Otherwise coerce
+                # to int and reject non-positive values.
+                if v in (None, "", "null"):
+                    updates[k] = None
+                    continue
+                try:
+                    iv = int(v)
+                except (TypeError, ValueError):
+                    continue
+                updates[k] = iv if iv > 0 else None
+            else:
+                if v is None:
+                    continue
+                updates[k] = v
         if not updates:
             return self.get_client(client_id)
         set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -5006,6 +5466,41 @@ class DatabaseService:
                 f"UPDATE clients SET {set_clause}, updated_at = now() WHERE id = ?", values
             )
         return self.get_client(client_id)
+
+    def get_client_validation_thresholds(
+        self, client_id: Optional[str]
+    ) -> Tuple[int, int]:
+        """Resolve the (amber_weeks, expired_weeks) thresholds for a tenant.
+
+        Per-tenant overrides on ``clients`` win; either NULL falls back
+        to the global ``settings.rule_validation_*_weeks`` default. The
+        rule card / rule health metrics call this to honour each
+        tenant's review cadence (a global default suited one tenant but
+        flagged everything as stale for another).
+        """
+        amber = int(self.settings.rule_validation_amber_weeks)
+        expired = int(self.settings.rule_validation_expired_weeks)
+        if not client_id:
+            return amber, expired
+        try:
+            row = self.get_client(client_id)
+        except Exception:
+            return amber, expired
+        if not row:
+            return amber, expired
+        a = row.get("rule_validation_amber_weeks")
+        e = row.get("rule_validation_expired_weeks")
+        if a is not None:
+            try:
+                amber = int(a)
+            except (TypeError, ValueError):
+                pass
+        if e is not None:
+            try:
+                expired = int(e)
+            except (TypeError, ValueError):
+                pass
+        return amber, expired
 
     def delete_client(self, client_id: str) -> bool:
         """Delete a client. Cannot delete the default client."""
@@ -5347,127 +5842,279 @@ class DatabaseService:
 
     # --- OpenCTI Inventory ---
 
+    # ------------------------------------------------------------------
+    # Legacy OpenCTI GraphQL inventory (retired in 5.0.0 by migration 50)
+    #
+    # These methods used to read/write ``opencti_inventory`` and
+    # ``client_opencti_map``. Both tables are dropped by migration 50,
+    # so every method below is now a safe no-op that returns the
+    # equivalent empty value. They are kept here only so any orphan
+    # caller (e.g. an older diag script, an unfinished refactor in a
+    # template renderer) does not raise ``AttributeError`` while the
+    # last legacy import sites are being torn out. New code MUST use
+    # ``cti_connectors`` / ``cti_connector_clients`` and the
+    # multi-vendor framework in ``app.services.cti_connectors``.
+    # ------------------------------------------------------------------
+
     def list_opencti_inventory(self) -> List[Dict]:
-        """List all OpenCTI instances in the centralized inventory."""
-        with self.get_shared_connection() as conn:
-            rows = conn.execute(
-                "SELECT id, label, url, token_enc, is_active, "
-                "last_test_status, last_test_at, last_test_message, "
-                "created_at, updated_at "
-                "FROM opencti_inventory ORDER BY label"
-            ).fetchall()
-            cols = ["id", "label", "url", "token_enc", "is_active",
-                    "last_test_status", "last_test_at", "last_test_message",
-                    "created_at", "updated_at"]
-            return [dict(zip(cols, r)) for r in rows]
+        return []
 
     def get_opencti_active_instances(self) -> List[Dict]:
-        """Return active OpenCTI instances with their tokens (for sync service)."""
-        with self.get_shared_connection() as conn:
-            rows = conn.execute(
-                "SELECT id, label, url, token_enc "
-                "FROM opencti_inventory WHERE is_active = true ORDER BY label"
-            ).fetchall()
-            cols = ["id", "label", "url", "token_enc"]
-            return [dict(zip(cols, r)) for r in rows]
+        return []
 
     def create_opencti_inventory_item(self, label: str, url: str,
-                                      token_enc: str = None) -> Dict:
-        """Create an OpenCTI instance in the inventory."""
-        with self.get_shared_connection() as conn:
-            conn.execute(
-                "INSERT INTO opencti_inventory (label, url, token_enc) VALUES (?, ?, ?)",
-                [label, url, token_enc],
-            )
-            row = conn.execute(
-                "SELECT id, label, url, is_active, created_at, updated_at "
-                "FROM opencti_inventory WHERE label = ? ORDER BY created_at DESC LIMIT 1",
-                [label],
-            ).fetchone()
-            cols = ["id", "label", "url", "is_active", "created_at", "updated_at"]
-            return dict(zip(cols, row))
+                                      token_enc: str = None,
+                                      kind: str = "actors") -> Dict:
+        raise RuntimeError(
+            "Legacy OpenCTI GraphQL inventory was retired in 5.0.0. "
+            "Register an 'opencti_taxii' connector under Management → "
+            "Connectors instead."
+        )
 
     def update_opencti_inventory_item(self, opencti_id: str, **fields) -> bool:
-        """Update an OpenCTI instance in the inventory."""
-        allowed = {"label", "url", "token_enc", "is_active"}
-        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        return False
+
+    def delete_opencti_inventory_item(self, opencti_id: str) -> bool:
+        return False
+
+    def get_opencti_clients(self, opencti_id: str) -> List[Dict]:
+        return []
+
+    def get_client_opencti_instances(self, client_id: str) -> List[Dict]:
+        return []
+
+    def get_client_opencti_config(self, client_id: str) -> Optional[Dict]:
+        return None
+
+    def link_client_opencti(self, client_id: str, opencti_id: str):
+        return None
+
+    def unlink_client_opencti(self, client_id: str, opencti_id: str):
+        return None
+
+
+    # --- CTI Connectors (generic per-vendor framework, Migration 47) ---
+
+    _CONNECTOR_COLS = (
+        "id", "vendor", "label", "is_active", "kind",
+        "duration_period", "confidence_floor", "marking_definition",
+        "config_json", "last_run_at", "last_status", "last_message",
+        "sync_interval_minutes", "last_sync_started_at",
+        "created_at", "updated_at",
+    )
+
+    def _row_to_connector(self, row) -> Dict:
+        import json as _json
+        rec = dict(zip(self._CONNECTOR_COLS, row))
+        raw = rec.pop("config_json", None) or "{}"
+        try:
+            rec["config"] = _json.loads(raw)
+        except Exception:
+            rec["config"] = {}
+        return rec
+
+    def list_cti_connectors(self, *, vendor: Optional[str] = None,
+                            only_active: bool = False) -> List[Dict]:
+        """List CTI connectors, optionally filtered by vendor / active."""
+        where = []
+        params: list = []
+        if vendor:
+            where.append("vendor = ?")
+            params.append(vendor)
+        if only_active:
+            where.append("is_active = true")
+        clause = ("WHERE " + " AND ".join(where)) if where else ""
+        cols = ", ".join(self._CONNECTOR_COLS)
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"SELECT {cols} FROM cti_connectors {clause} "
+                "ORDER BY vendor, label", params,
+            ).fetchall()
+        return [self._row_to_connector(r) for r in rows]
+
+    def get_cti_connector(self, connector_id: str) -> Optional[Dict]:
+        cols = ", ".join(self._CONNECTOR_COLS)
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                f"SELECT {cols} FROM cti_connectors WHERE id = ?",
+                [connector_id],
+            ).fetchone()
+        return self._row_to_connector(row) if row else None
+
+    def create_cti_connector(
+        self, *, vendor: str, label: str,
+        kind: str = "cti",
+        is_active: bool = True,
+        duration_period: Optional[str] = None,
+        confidence_floor: Optional[int] = None,
+        marking_definition: Optional[str] = None,
+        config: Optional[Dict] = None,
+    ) -> Dict:
+        """Create a connector row. ``config`` is the vendor-specific blob."""
+        import json as _json
+        if kind not in ("actors", "cti", "both"):
+            kind = "cti"
+        cfg = _json.dumps(config or {})
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO cti_connectors "
+                "(vendor, label, is_active, kind, duration_period, "
+                "confidence_floor, marking_definition, config_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [vendor, label, bool(is_active), kind, duration_period,
+                 confidence_floor, marking_definition, cfg],
+            )
+            cols = ", ".join(self._CONNECTOR_COLS)
+            row = conn.execute(
+                f"SELECT {cols} FROM cti_connectors "
+                "WHERE vendor = ? AND label = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                [vendor, label],
+            ).fetchone()
+        return self._row_to_connector(row)
+
+    def update_cti_connector(self, connector_id: str, **fields) -> bool:
+        """Update a connector. ``config`` (dict) is serialised to ``config_json``."""
+        import json as _json
+        allowed = {"label", "is_active", "kind", "duration_period",
+                   "confidence_floor", "marking_definition",
+                   "last_run_at", "last_status", "last_message",
+                   "sync_interval_minutes", "last_sync_started_at"}
+        # ``sync_interval_minutes`` is the one allow-listed column where
+        # callers legitimately mean "set this back to NULL" (operator
+        # turning auto-sync off in the modal). Skip the None-filter for
+        # those keys so an explicit None survives to the UPDATE.
+        nullable = {"sync_interval_minutes"}
+        updates = {k: v for k, v in fields.items()
+                   if k in allowed and (v is not None or k in nullable)}
+        if "kind" in updates and updates["kind"] not in ("actors", "cti", "both"):
+            updates["kind"] = "cti"
+        if "config" in fields and fields["config"] is not None:
+            updates["config_json"] = _json.dumps(fields["config"])
         if not updates:
             return False
         set_clause = ", ".join(f"{k} = ?" for k in updates)
-        values = list(updates.values()) + [opencti_id]
+        params = list(updates.values()) + [connector_id]
         with self.get_shared_connection() as conn:
             conn.execute(
-                f"UPDATE opencti_inventory SET {set_clause}, updated_at = now() WHERE id = ?",
-                values,
+                f"UPDATE cti_connectors SET {set_clause}, "
+                "updated_at = now() WHERE id = ?", params,
             )
         return True
 
-    def delete_opencti_inventory_item(self, opencti_id: str) -> bool:
-        """Delete an OpenCTI instance from the inventory and remove all client mappings."""
+    def delete_cti_connector(self, connector_id: str) -> bool:
         with self.get_shared_connection() as conn:
-            conn.execute("DELETE FROM client_opencti_map WHERE opencti_id = ?", [opencti_id])
+            conn.execute(
+                "DELETE FROM cti_connector_clients WHERE connector_id = ?",
+                [connector_id],
+            )
+            # Drop any TAXII watermark rows owned by this connector so
+            # a re-create with the same id starts clean.
+            try:
+                conn.execute(
+                    "DELETE FROM cti_taxii_cursors WHERE connector_id = ?",
+                    [connector_id],
+                )
+            except Exception:
+                # Table only exists from migration 49 onward; ignore on
+                # older shared DBs that haven't migrated yet.
+                pass
             deleted = conn.execute(
-                "DELETE FROM opencti_inventory WHERE id = ? RETURNING id", [opencti_id]
+                "DELETE FROM cti_connectors WHERE id = ? RETURNING id",
+                [connector_id],
             ).fetchone()
         return deleted is not None
 
-    def get_opencti_clients(self, opencti_id: str) -> List[Dict]:
-        """Get all clients linked to an OpenCTI instance."""
+    def get_cti_connector_clients(self, connector_id: str) -> List[Dict]:
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT c.id, c.name, c.slug FROM clients c "
-                "JOIN client_opencti_map m ON c.id = m.client_id "
-                "WHERE m.opencti_id = ? ORDER BY c.name",
-                [opencti_id],
+                "JOIN cti_connector_clients m ON c.id = m.client_id "
+                "WHERE m.connector_id = ? ORDER BY c.name",
+                [connector_id],
             ).fetchall()
-            return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+        return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
 
-    def get_client_opencti_instances(self, client_id: str) -> List[Dict]:
-        """Get all OpenCTI instances linked to a client."""
+    def link_cti_connector_client(self, connector_id: str, client_id: str):
         with self.get_shared_connection() as conn:
-            rows = conn.execute(
-                "SELECT o.id, o.label, o.url, o.is_active "
-                "FROM opencti_inventory o JOIN client_opencti_map m ON o.id = m.opencti_id "
-                "WHERE m.client_id = ? ORDER BY o.label",
-                [client_id],
-            ).fetchall()
-            cols = ["id", "label", "url", "is_active"]
-            return [dict(zip(cols, r)) for r in rows]
+            conn.execute(
+                "INSERT INTO cti_connector_clients "
+                "(connector_id, client_id) VALUES (?, ?) "
+                "ON CONFLICT DO NOTHING",
+                [connector_id, client_id],
+            )
 
-    def get_client_opencti_config(self, client_id: str) -> Optional[Dict]:
-        """Return the first active OpenCTI instance (with token) linked to a client.
+    def unlink_cti_connector_client(self, connector_id: str, client_id: str):
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "DELETE FROM cti_connector_clients "
+                "WHERE connector_id = ? AND client_id = ?",
+                [connector_id, client_id],
+            )
 
-        Used by tenant-scoped enrichment paths to avoid cross-tenant data leakage.
-        Returns None when the client has no OpenCTI assigned.
-        """
+    # --- TAXII 2.1 cursor store (migration 49) ---
+
+    def get_taxii_cursor(self, connector_id: str, api_root: str,
+                         collection_id: str) -> Optional[str]:
+        """Return the stored ``added_after`` watermark, if any."""
         with self.get_shared_connection() as conn:
             row = conn.execute(
-                "SELECT o.id, o.label, o.url, o.token_enc "
-                "FROM opencti_inventory o JOIN client_opencti_map m ON o.id = m.opencti_id "
-                "WHERE m.client_id = ? AND COALESCE(o.is_active, TRUE) = TRUE "
-                "ORDER BY o.label LIMIT 1",
-                [client_id],
+                "SELECT added_after FROM cti_taxii_cursors "
+                "WHERE connector_id = ? AND api_root = ? "
+                "AND collection_id = ?",
+                [connector_id, api_root, collection_id],
             ).fetchone()
-            if not row:
-                return None
-            return {"id": row[0], "label": row[1], "url": row[2], "token": row[3]}
+        return row[0] if row else None
 
-    def link_client_opencti(self, client_id: str, opencti_id: str):
-        """Link a client to an OpenCTI instance."""
+    def set_taxii_cursor(self, connector_id: str, api_root: str,
+                         collection_id: str, added_after: str) -> None:
+        """Upsert the watermark for one (connector, root, collection)."""
         with self.get_shared_connection() as conn:
             conn.execute(
-                "INSERT INTO client_opencti_map (client_id, opencti_id) "
-                "VALUES (?, ?) ON CONFLICT DO NOTHING",
-                [client_id, opencti_id],
+                "INSERT INTO cti_taxii_cursors "
+                "(connector_id, api_root, collection_id, added_after, "
+                "last_run_at) VALUES (?, ?, ?, ?, now()) "
+                "ON CONFLICT (connector_id, api_root, collection_id) "
+                "DO UPDATE SET added_after = excluded.added_after, "
+                "last_run_at = now()",
+                [connector_id, api_root, collection_id, added_after],
             )
 
-    def unlink_client_opencti(self, client_id: str, opencti_id: str):
-        """Unlink a client from an OpenCTI instance."""
+    def list_taxii_cursors(self,
+                           connector_id: Optional[str] = None) -> List[Dict]:
+        """Return all cursors, optionally scoped to one connector.
+
+        Used by the diag surface (step T8) to report per-collection lag.
+        """
+        sql = (
+            "SELECT connector_id, api_root, collection_id, "
+            "added_after, last_run_at FROM cti_taxii_cursors"
+        )
+        params: list = []
+        if connector_id:
+            sql += " WHERE connector_id = ?"
+            params.append(connector_id)
+        sql += " ORDER BY connector_id, api_root, collection_id"
         with self.get_shared_connection() as conn:
-            conn.execute(
-                "DELETE FROM client_opencti_map WHERE client_id = ? AND opencti_id = ?",
-                [client_id, opencti_id],
-            )
+            rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "connector_id": r[0], "api_root": r[1],
+                "collection_id": r[2], "added_after": r[3],
+                "last_run_at": r[4],
+            }
+            for r in rows
+        ]
+
+    def delete_taxii_cursors_for_connector(self, connector_id: str) -> int:
+        """Drop every cursor row owned by a connector. Returns row count."""
+        with self.get_shared_connection() as conn:
+            n = conn.execute(
+                "DELETE FROM cti_taxii_cursors WHERE connector_id = ? "
+                "RETURNING connector_id",
+                [connector_id],
+            ).fetchall()
+        return len(n)
 
     # --- GitLab Inventory ---
 

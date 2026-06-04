@@ -8,16 +8,17 @@ Shows full rule information including query, field mappings, and scores.
         <div class="modal-header">
             <h2 class="modal-title">{{ rule.name }}</h2>
             <div style="display: flex; gap: 0.5rem; align-items: center;">
-                {% if env and env.elastic_url %}
+                {% if kibana_url %}
                 {% set space = rule.space | default('default') %}
                 {% set kibana_obj_id = rule.raw_data.id if rule.raw_data and rule.raw_data.id else rule.rule_id %}
+                {% set _kb = kibana_url.rstrip('/') %}
                 {% if space | lower == 'default' %}
-                    {% set kibana_rule_url = env.elastic_url ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+                    {% set kibana_rule_url = _kb ~ '/app/security/rules/id/' ~ kibana_obj_id %}
                 {% else %}
-                    {% set kibana_rule_url = env.elastic_url ~ '/s/' ~ space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
+                    {% set kibana_rule_url = _kb ~ '/s/' ~ space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
                 {% endif %}
-                <a href="{{ kibana_rule_url }}" 
-                   target="_blank" 
+                <a href="{{ kibana_rule_url }}"
+                   target="_blank"
                    rel="noopener noreferrer"
                    class="btn btn-secondary btn-sm"
                    title="Open in Kibana ({{ space_labels.get(space, space | capitalize) }})">

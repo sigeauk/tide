@@ -98,15 +98,23 @@
 
         <details class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">
-                {{ icon('target', '16') }}
-                <span class="mgmt-subsection__title">Threat Intel</span>
-                <span class="mgmt-subsection__hint">OpenCTI sources</span>
+                {{ icon('link', '16') }}
+                <span class="mgmt-subsection__title">Connectors</span>
+                <span class="mgmt-subsection__hint">Multi-vendor CTI framework (OpenCTI, Mandiant, CrowdStrike…)</span>
             </summary>
-            <div id="mgmt-sub-opencti" class="mgmt-subsection__body"
-                 hx-get="/api/management/tab/threat-intel" hx-trigger="load" hx-swap="innerHTML">
-                <div class="text-secondary" style="padding:1rem;">Loading Threat Intel…</div>
+            <div id="mgmt-sub-connectors" class="mgmt-subsection__body"
+                 hx-get="/api/management/tab/connectors" hx-trigger="load" hx-swap="innerHTML">
+                <div class="text-secondary" style="padding:1rem;">Loading Connectors…</div>
             </div>
         </details>
+
+        {# Threat Intel (legacy) section removed in 4.1.20. Any rows that
+           remain in opencti_inventory are auto-copied into the Connectors
+           framework at startup via
+           DatabaseService._backfill_legacy_opencti_to_connectors. The
+           legacy CRUD endpoints under /api/management/tab/threat-intel
+           are retained for one release as a deep-link safety net but are
+           no longer surfaced in the UI. #}
 
         <details class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">
@@ -474,6 +482,18 @@
                 <input type="password" id="opencti-form-token" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
+            <div>
+                <label for="opencti-form-kind" class="form-label">Kind</label>
+                <select id="opencti-form-kind" class="form-input">
+                    <option value="actors">actors &mdash; legacy intrusion-set sync</option>
+                    <option value="cti">CTI &mdash; STIX bundle pull into per-tenant CTI DB</option>
+                    <option value="both">both &mdash; actors + CTI</option>
+                </select>
+                <span class="text-secondary" style="font-size:0.75rem;">
+                    <strong>actors</strong> keeps the existing intrusion-set behavior unchanged.
+                    <strong>CTI</strong>/<strong>both</strong> enables the Sync CTI button on the card.
+                </span>
+            </div>
             <div id="opencti-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
                 <button type="button" class="btn btn-secondary btn-sm" onclick="testOpenCTIConnection()"
@@ -569,6 +589,104 @@
                     <button type="button" class="btn btn-secondary" onclick="closeKeycloakModal()">Cancel</button>
                     <button type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
                 </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- ── Create / Edit Connector Modal (multi-vendor CTI framework) ─── -->
+<div class="modal-overlay" id="connector-modal" style="display:none;"
+     onclick="if(event.target===this) closeConnectorModal()">
+    <div class="modal-content modal-sm" style="max-width:560px;">
+        <div class="modal-header">
+            <h3 class="modal-title" id="connector-modal-title">New Connector</h3>
+            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+                    onclick="closeConnectorModal()">&#x2715;</button>
+        </div>
+        <form id="connector-form" onsubmit="return submitConnectorForm(event)"
+              style="display:flex;flex-direction:column;gap:1rem;">
+            <input type="hidden" id="connector-form-id" value="">
+            <div>
+                <label for="connector-form-vendor" class="form-label">Vendor <span style="color:var(--color-danger)">*</span></label>
+                <select id="connector-form-vendor" class="form-input"
+                        onchange="onConnectorVendorChange()" required>
+                    <!-- options injected by showCreateConnectorModal() -->
+                </select>
+                <span class="text-secondary" style="font-size:0.75rem;">Vendor cannot be changed after creation.</span>
+            </div>
+            <div>
+                <label for="connector-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <input type="text" id="connector-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
+            </div>
+            {# 5.0.0 — the per-connector Kind dropdown was retired with the
+               legacy OpenCTI GraphQL fetcher. Every TAXII vendor now pulls
+               a full STIX bundle, so the create form defaults to "cti"
+               server-side and the operator has nothing useful to tweak. #}
+            <div id="connector-vendor-fields" style="display:flex;flex-direction:column;gap:0.75rem;">
+                <div class="text-secondary" style="font-size:0.8125rem;">Select a vendor to see its configuration fields.</div>
+            </div>
+            <div>
+                <label for="connector-form-interval" class="form-label">Auto-sync interval</label>
+                <select id="connector-form-interval" class="form-input">
+                    <option value="">Off &mdash; sync only when an operator clicks Sync</option>
+                    <option value="15">Every 15 minutes</option>
+                    <option value="60">Every hour</option>
+                    <option value="360">Every 6 hours</option>
+                    <option value="1440">Every 24 hours</option>
+                </select>
+                <span class="text-secondary" style="font-size:0.75rem;">Runs in the background through the same job queue as the manual Sync button.</span>
+            </div>
+            <div id="connector-test-result" style="min-height:1.5rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
+                <span class="text-secondary" style="font-size:0.75rem;">
+                    Stored secrets are kept encrypted server-side.
+                </span>
+                <div style="display:flex;gap:0.5rem;">
+                    <button type="button" class="btn btn-secondary" onclick="closeConnectorModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="connector-form-submit">Create</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="modal-overlay" id="connector-import-modal" style="display:none;"
+     onclick="if(event.target===this) closeImportConnectorModal()">
+    <div class="modal-content modal-sm" style="max-width:640px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Import Connectors</h3>
+            <button type="button" class="modal-close" aria-label="Close"
+                    onclick="closeImportConnectorModal()">&#x2715;</button>
+        </div>
+        <form id="connector-import-form" onsubmit="return submitImportConnectorForm(event)">
+            <p class="text-secondary" style="margin:0 0 0.5rem 0;font-size:0.85rem;">
+                Paste a connector descriptor or array exported from another TIDE instance. Each entry must include
+                <code>vendor</code> and <code>label</code>; <code>config</code> fields are validated against the vendor schema.
+            </p>
+            <details style="margin-bottom:0.75rem;font-size:0.8125rem;">
+                <summary class="text-secondary" style="cursor:pointer;">Example payload</summary>
+                <pre style="margin:0.5rem 0 0 0;padding:0.5rem;background:var(--color-bg-subtle,#1a1a1a);border-radius:4px;overflow:auto;">{
+  "connectors": [
+    {
+      "vendor": "opencti",
+      "label": "Production OpenCTI",
+      "kind": "both",
+      "is_active": true,
+      "config": { "url": "https://opencti.example", "token": "REPLACE_ME" }
+    }
+  ]
+}</pre>
+            </details>
+            <div>
+                <label for="connector-import-payload">JSON payload *</label>
+                <textarea id="connector-import-payload" name="payload" rows="12"
+                          style="width:100%;font-family:monospace;font-size:0.8125rem;"
+                          placeholder='{ "vendor": "opencti", "label": "...", "config": { ... } }'></textarea>
+            </div>
+            <div id="connector-import-result" style="margin-top:0.5rem;"></div>
+            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
+                <button type="button" class="btn btn-secondary" onclick="closeImportConnectorModal()">Cancel</button>
+                <button type="submit" class="btn btn-primary">Import</button>
             </div>
         </form>
     </div>
@@ -785,16 +903,20 @@ function showCreateOpenCTIModal() {
     document.getElementById('opencti-form-label').value = '';
     document.getElementById('opencti-form-url').value = '';
     document.getElementById('opencti-form-token').value = '';
+    document.getElementById('opencti-form-kind').value = 'actors';
     document.getElementById('opencti-modal').style.display = 'flex';
 }
 
-function editOpenCTI(id, label, url) {
+function editOpenCTI(id, label, url, kind) {
     document.getElementById('opencti-modal-title').textContent = 'Edit OpenCTI Instance';
     document.getElementById('opencti-form-submit').textContent = 'Save';
     document.getElementById('opencti-form-id').value = id;
     document.getElementById('opencti-form-label').value = label;
     document.getElementById('opencti-form-url').value = url;
     document.getElementById('opencti-form-token').value = '';
+    var k = (kind || 'actors').toLowerCase();
+    if (k !== 'actors' && k !== 'cti' && k !== 'both') k = 'actors';
+    document.getElementById('opencti-form-kind').value = k;
     document.getElementById('opencti-modal').style.display = 'flex';
 }
 
@@ -827,6 +949,7 @@ async function submitOpenCTIForm(e) {
     formData.append('label', document.getElementById('opencti-form-label').value);
     formData.append('url', document.getElementById('opencti-form-url').value);
     formData.append('token', document.getElementById('opencti-form-token').value);
+    formData.append('kind', document.getElementById('opencti-form-kind').value);
 
     var url = id ? '/api/management/opencti/' + id : '/api/management/opencti';
     var method = id ? 'PUT' : 'POST';
@@ -1348,5 +1471,140 @@ window.saveSigmaAssignment = function() {
         }
     });
 })();
+
+// ── Connectors modal (multi-vendor CTI framework) ─────────────────
+window._connectorVendors = [];  // populated by _render_connectors_tab embedding
+window._editingConnector = null;
+
+function showCreateConnectorModal() {
+    document.getElementById('connector-modal-title').textContent = 'New Connector';
+    document.getElementById('connector-form-submit').textContent = 'Create';
+    document.getElementById('connector-form-id').value = '';
+    document.getElementById('connector-form-label').value = '';
+    document.getElementById('connector-form-interval').value = '';
+    var vsel = document.getElementById('connector-form-vendor');
+    vsel.innerHTML = (window._connectorVendors || [])
+        .map(function(v) { return '<option value="' + v.name + '">' + v.label + '</option>'; })
+        .join('');
+    vsel.disabled = false;
+    document.getElementById('connector-test-result').innerHTML = '';
+    onConnectorVendorChange();
+    document.getElementById('connector-modal').style.display = 'flex';
+}
+
+function editConnector(id) {
+    var c = (window._connectorRows || []).find(function(r) { return r.id === id; });
+    if (!c) return;
+    window._editingConnector = c;
+    document.getElementById('connector-modal-title').textContent = 'Edit Connector';
+    document.getElementById('connector-form-submit').textContent = 'Save';
+    document.getElementById('connector-form-id').value = id;
+    document.getElementById('connector-form-label').value = c.label || '';
+    // Auto-sync interval: match against one of the preset options, fall
+    // back to '' (Off) if the stored value isn't one of the presets so
+    // the operator sees a defined state.
+    var presetIntervals = ['', '15', '60', '360', '1440'];
+    var ivStr = c.sync_interval_minutes == null ? '' : String(c.sync_interval_minutes);
+    document.getElementById('connector-form-interval').value =
+        presetIntervals.indexOf(ivStr) >= 0 ? ivStr : '';
+    var vsel = document.getElementById('connector-form-vendor');
+    vsel.innerHTML = (window._connectorVendors || [])
+        .map(function(v) { return '<option value="' + v.name + '"' + (v.name === c.vendor ? ' selected' : '') + '>' + v.label + '</option>'; })
+        .join('');
+    vsel.disabled = true;
+    document.getElementById('connector-test-result').innerHTML = '';
+    onConnectorVendorChange();
+    document.getElementById('connector-modal').style.display = 'flex';
+}
+
+function closeConnectorModal() {
+    document.getElementById('connector-modal').style.display = 'none';
+    window._editingConnector = null;
+}
+
+function showImportConnectorModal() {
+    document.getElementById('connector-import-payload').value = '';
+    document.getElementById('connector-import-result').innerHTML = '';
+    document.getElementById('connector-import-modal').style.display = 'flex';
+}
+
+function closeImportConnectorModal() {
+    document.getElementById('connector-import-modal').style.display = 'none';
+}
+
+async function submitImportConnectorForm(ev) {
+    ev.preventDefault();
+    var payload = document.getElementById('connector-import-payload').value;
+    var result = document.getElementById('connector-import-result');
+    result.innerHTML = '<span class="text-secondary">Importing…</span>';
+    var fd = new FormData();
+    fd.append('payload', payload);
+    try {
+        var resp = await fetch('/api/management/connectors/import', { method: 'POST', body: fd });
+        var html = await resp.text();
+        if (!resp.ok) {
+            result.innerHTML = html;
+            return false;
+        }
+        document.getElementById('mgmt-sub-connectors').innerHTML = html;
+        closeImportConnectorModal();
+    } catch (ex) {
+        result.innerHTML = '<div class="alert alert-error">Import failed: ' + (ex && ex.message ? ex.message : ex) + '</div>';
+    }
+    return false;
+}
+
+async function onConnectorVendorChange() {
+    var vendor = document.getElementById('connector-form-vendor').value;
+    var container = document.getElementById('connector-vendor-fields');
+    if (!vendor) { container.innerHTML = ''; return; }
+    container.innerHTML = '<div class="text-secondary" style="font-size:0.8125rem;">Loading fields…</div>';
+    try {
+        var resp = await fetch('/api/management/connectors/vendor-fields/' + encodeURIComponent(vendor));
+        container.innerHTML = await resp.text();
+        // Pre-fill non-secret values when editing
+        if (window._editingConnector && window._editingConnector.vendor === vendor) {
+            var cfg = window._editingConnector.config || {};
+            Object.keys(cfg).forEach(function(key) {
+                var inp = container.querySelector('[name="cfg_' + key + '"]');
+                if (inp && inp.type !== 'password') inp.value = cfg[key];
+            });
+        }
+    } catch (ex) {
+        container.innerHTML = '<span class="badge badge-danger">Failed to load vendor fields</span>';
+    }
+}
+
+async function submitConnectorForm(e) {
+    e.preventDefault();
+    var id = document.getElementById('connector-form-id').value;
+    var form = document.getElementById('connector-form');
+    var formData = new FormData();
+    formData.append('vendor', document.getElementById('connector-form-vendor').value);
+    formData.append('label', document.getElementById('connector-form-label').value);
+    formData.append('kind', 'cti');
+    formData.append('sync_interval_minutes', document.getElementById('connector-form-interval').value || '');
+    // Append all cfg_* fields from the vendor-specific block
+    form.querySelectorAll('[name^="cfg_"]').forEach(function(inp) {
+        if (inp.type === 'checkbox') {
+            formData.append(inp.name, inp.checked ? 'true' : 'false');
+        } else {
+            formData.append(inp.name, inp.value);
+        }
+    });
+    var url = id ? '/api/management/connectors/' + id : '/api/management/connectors';
+    var method = id ? 'PUT' : 'POST';
+    try {
+        var resp = await fetch(url, {method: method, body: formData});
+        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
+        closeConnectorModal();
+        var html = await resp.text();
+        var panel = document.getElementById('mgmt-sub-connectors');
+        if (panel) { panel.innerHTML = html; htmx.process(panel); }
+    } catch (ex) {
+        showToast('Network error', 'error');
+    }
+    return false;
+}
 </script>
 {% endblock %}
