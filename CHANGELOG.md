@@ -4,6 +4,52 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.2] - 2026-07-01
+
+### Added
+
+- **Criticality-aware rule validation.** Tenants can now switch between the legacy master cadence and a criticality-aware mode with per-severity amber and expired thresholds. The Rule Health validation badges now respect the active tenant mode when calculating status.
+
+- **Rule edit reasons are required.** Editing a rule now requires a reason before the change is pushed to Elastic. Rule validation auto-fills the audit reason as the validating user's name plus "validated rule".
+
+- **Rule history now shows table and score views.** The rule history modal now defaults to a table layout, keeps the activity-feed view available, and adds a dated score history table populated from sync snapshots.
+
+- **Sigma conversion can open the shared rule modal.** Converted Sigma output can now launch the shared rule form prefilled with the converted rule fields so operators can review and edit before deploying.
+
+- **Rule form includes the Elastic fields operators asked for.** The shared rule modal now exposes description, index patterns, timestamp override, investigation fields, risk score, and a clearer MITRE ATT&CK selector, with the UI label changed from Notes to Investigation Guide.
+
+- **Rule Creation and Editing.** Operators can now create new detection rules directly from the Rule Health page without leaving TIDE. A **Create Rule** button opens a modal form where operators can define the query, language (KQL, EQL, ES|QL, Lucene), severity, author, MITRE ATT&CK IDs, tags, and deployment space. Rules are created in Kibana and synced back on the next auto-discovery.
+
+- **Enable/Disable controls on rule cards.** Each rule card now displays an **Enable** or **Disable** button (depending on current status) for immediate status toggling in Kibana without leaving the Rule Health grid. The rule card updates instantly to reflect the new state.
+
+- **Full audit trail for rule lifecycle events.** Every rule creation, edit, enable/disable, and validation is recorded with a timestamp, actor name, and contextual detail (reason, before/after values). The audit log persists in the per-tenant DuckDB and is immutable — a complete forensic record of who changed what and when.
+
+- **Timeline view for rule audit history.** The rule detail modal now shows a **Lifecycle** section with a chronological timeline of all events tied to that rule. Events are color-coded by action type (created, enabled, disabled, edited, validated, promoted) for quick visual scanning.
+
+- **Bootstrap history from Elastic metadata on first sync.** When a rule is synced from Kibana for the first time, TIDE extracts the `created_by` and `created_at` metadata from the Elastic response and records an initial "created" event. All future edits, promotions, and validations append to this immutable record.
+
+### Changed
+
+- **Tenant validation settings now support mode switching.** The client detail page now lets operators choose between master cadence and criticality-based validation thresholds, with per-severity week overrides saved on the tenant record.
+
+- **Detection rule CRUD now tenant-scoped via composite key.** All rule operations (read, create, update, delete, enable/disable) enforce the (siem_id, space) composite key pair to guarantee tenant isolation. A rule synced from SIEM A in space "production" is distinct from SIEM B's rule in the same space-name.
+
+- **Rule form UX now mirrors analyst workflow.** The create/edit modal now starts with all sections collapsed, moves Index Patterns into Define Rule above Query, renames Investigation Fields to Custom Highlighted Fields, and replaces the large MITRE multi-select with tactic-first technique rows that support adding multiple selections.
+
+- **Rule form defaults and MITRE spacing refined.** The Create Rule section now opens by default while the other sections remain collapsed, and the Add technique control spacing is tuned to match the expected ATT&CK entry flow.
+
+- **Sigma convert workspace now focuses on browser + YAML editing.** The Sigma page now presents Rule Browser and rule.yml side by side and removes the legacy visible query output panel from the operator flow.
+
+- **Sigma workbench now uses fixed-open equal panels.** Rule Browser is permanently expanded, sized to match the rule.yml panel, and conversion responses now use a hidden swap target that reliably opens the shared Create Rule modal.
+
+- **Sigma panel parity and browser fill corrected.** The Rule Browser and rule.yml panes now render at equal width, and the rules list now fills the left pane height instead of leaving a large empty block under the list.
+
+
+## [5.0.1] - 2026-06-08
+
+### Added
+- **Docker Overview.** Add docker overview form `README.md` into dockerhub on build. 
+
 ## [5.0.0] - 2026-06-04
 
 This is a major release introducing full Cyber Threat Intelligence (CTI) ingest and management. TIDE can now connect to multiple CTI sources — **OpenCTI**, **Mandiant Advantage**, **CrowdStrike Falcon Intelligence**, **MITRE ATT&CK** and **GreyNoise** — through a unified Connectors surface on the Management hub. All feeds use delta-aware polling so repeat syncs only fetch what has changed since the last run. The Threat Landscape, Heatmap, and rule coverage pages now draw from ingested STIX 2.1 data directly, with no dependency on the legacy OpenCTI GraphQL connector, which has been retired in this release.

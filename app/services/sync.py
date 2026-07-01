@@ -707,9 +707,17 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                 if restored_count:
                     logger.info(f"[perf] Lazy mapping: restored scores/mappings for {restored_count} existing rules")
                 
-                count = db.save_audit_results(audit_records)
+                count = db.save_audit_results(audit_records, client_id=client_id)
                 logger.info(f"[perf] save_audit_results completed in {(_time.perf_counter() - _t_save)*1000:.0f}ms")
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
+                
+                # Bootstrap lifecycle history for newly synced rules
+                try:
+                    for rec in audit_records:
+                        db.bootstrap_rule_history_from_elastic(rec, client_id)
+                    logger.info("Bootstrapped rule lifecycle history from Elastic metadata")
+                except Exception as _exc:
+                    logger.warning(f"Failed to bootstrap rule history: {_exc!r}")
                 
                 # --- Mirror-Kibana sync (drift-aware) ---
                 # For each (siem_id, space):

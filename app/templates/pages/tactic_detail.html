@@ -185,14 +185,12 @@
             {% endif %}
         </div>
 
-        {# Two-column: YAML editor + Query output #}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem;">
-            {# Left — YAML editor #}
+        <div style="margin-bottom:1rem;">
             <div style="display:flex;flex-direction:column;border:1px solid var(--color-border-muted);border-radius:var(--radius);">
                 <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
                     {{ icon('file-text','13') }} rule.yml
                 </div>
-                <form id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-query-output" hx-swap="innerHTML">
+                <form id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-convert-response" hx-swap="innerHTML">
                     <textarea id="tc-yaml-editor" name="yaml_content" style="width:100%;min-height:280px;font-family:monospace;font-size:0.8rem;background:var(--color-bg);color:var(--color-text);border:none;padding:0.5rem;resize:vertical;" spellcheck="false"></textarea>
                     <input type="hidden" id="tc-form-backend" name="backend" value="elasticsearch">
                     <input type="hidden" id="tc-form-pipeline" name="pipeline" value="none">
@@ -209,19 +207,6 @@
                             hx-post="/api/sigma/validate" hx-target="#tc-validation-result" hx-include="#tc-yaml-editor">
                         {{ icon_text('check-circle', 'Validate', '12') }}
                     </button>
-                </div>
-            </div>
-
-            {# Right — Query output #}
-            <div style="display:flex;flex-direction:column;border:1px solid var(--color-border-muted);border-radius:var(--radius);">
-                <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
-                    {{ icon('zap','13') }} Query Output
-                </div>
-                <div id="tc-query-output" style="flex:1;min-height:280px;padding:0.5rem;font-family:monospace;font-size:0.8rem;overflow:auto;background:var(--color-bg);">
-                    <div style="text-align:center;padding:2rem 1rem;color:var(--color-text-muted);">
-                        {{ icon('terminal','28') }}
-                        <p style="margin:0.5rem 0 0;font-size:0.82rem;">Click Convert to generate the query</p>
-                    </div>
                 </div>
                 <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;align-items:center;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
                     <form id="tc-deploy-form" hx-post="/api/sigma/deploy" hx-target="#tc-deploy-result" hx-swap="innerHTML" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
@@ -250,6 +235,7 @@
                 </div>
             </div>
         </div>
+        <div id="tc-convert-response" style="display:none;" aria-hidden="true"></div>
         </div>{# /tc-body #}
     </div>
 
@@ -345,6 +331,18 @@
                 if (tf) document.getElementById('tc-form-template-file').value = tf.value;
             });
         }
+
+        // Modal-first convert flow: use hidden response target and then open the
+        // shared rule modal from the returned partial's button link.
+        document.addEventListener('htmx:afterSwap', function(event) {
+            var target = event.detail && event.detail.target;
+            if (!target || target.id !== 'tc-convert-response') return;
+            var openRuleButton = target.querySelector('button[hx-get^="/api/rules/create-form?prefill="]');
+            if (!openRuleButton || !window.htmx) return;
+            var url = openRuleButton.getAttribute('hx-get');
+            if (!url) return;
+            htmx.ajax('GET', url, { target: '#modal-container', swap: 'innerHTML' });
+        });
 
         // Fetch formats when backend changes
         var bSel = document.getElementById('tc-backend-select');

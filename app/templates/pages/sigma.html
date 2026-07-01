@@ -13,6 +13,87 @@
 <link rel="stylesheet" href="/static/css/vendor/prism-tomorrow.min.css">
 <script defer src="/static/js/vendor/prism.min.js"></script>
 <script defer src="/static/js/vendor/prism-json.min.js"></script>
+<style>
+    .sigma-workbench {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 1rem;
+        align-items: stretch;
+        height: calc(100vh - 280px);
+        min-height: 520px;
+        max-height: 700px;
+    }
+    .sigma-workbench > .rule-browser,
+    .sigma-workbench > .sigma-main {
+        height: 100%;
+        min-height: 0;
+    }
+    .sigma-workbench .rule-browser {
+        margin-bottom: 0;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+    }
+    .sigma-workbench .rule-browser .rule-browser-content {
+        display: flex !important;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow: hidden;
+    }
+    .sigma-workbench .rule-browser .rule-browser-chevron {
+        display: none;
+    }
+    .sigma-workbench .rule-browser .rule-browser-header {
+        cursor: default;
+    }
+    .sigma-main {
+        margin-top: 0;
+        height: 100%;
+        display: block;
+    }
+    .sigma-main > .sigma-panel:nth-child(2) {
+        display: none;
+    }
+    .sigma-main > .sigma-panel:first-child {
+        width: 100%;
+        height: 100%;
+        min-height: 520px;
+    }
+    .sigma-workbench .browser-filters,
+    .sigma-workbench .rules-count {
+        flex-shrink: 0;
+    }
+    .sigma-workbench #rules-list {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overflow-x: hidden;
+        scrollbar-gutter: stable;
+    }
+    .sigma-workbench .rules-list-container {
+        flex: 0 0 auto;
+        max-height: none;
+        overflow: visible;
+    }
+    #sigma-convert-response {
+        display: none;
+    }
+    @media (max-width: 960px) {
+        .sigma-workbench {
+            grid-template-columns: 1fr;
+            height: auto;
+            min-height: 0;
+            max-height: none;
+        }
+        .sigma-workbench > .rule-browser,
+        .sigma-workbench > .sigma-main {
+            height: auto;
+        }
+    }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -88,76 +169,73 @@
 
 </div>
 
-<!-- Collapsible Rule Browser -->
-<div class="rule-browser" id="rule-browser">
-    <div class="rule-browser-header" onclick="toggleRuleBrowser()">
-        <span>{{ icon('search', '16') }} Rule Browser</span>
-        <svg class="rule-browser-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <polyline points="6 9 12 15 18 9"></polyline>
-        </svg>
-    </div>
-    <div class="rule-browser-content">
-        <div class="browser-filters">
-            <div class="browser-filter" style="flex: 2;">
-                <label>Search</label>
-                <input type="text" id="rule-search" 
-                       placeholder="Title, description, technique..."
-                       hx-get="/api/sigma/rules"
-                       hx-trigger="keyup changed delay:300ms"
-                       hx-target="#rules-list"
-                       hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
-                       name="q">
+<div class="sigma-workbench">
+    <div class="rule-browser open" id="rule-browser">
+        <div class="rule-browser-header">
+            <span>{{ icon('search', '16') }} Rule Browser</span>
+        </div>
+        <div class="rule-browser-content">
+            <div class="browser-filters">
+                <div class="browser-filter" style="flex: 2;">
+                    <label>Search</label>
+                    <input type="text" id="rule-search" 
+                           placeholder="Title, description, technique..."
+                           hx-get="/api/sigma/rules"
+                           hx-trigger="keyup changed delay:300ms"
+                           hx-target="#rules-list"
+                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                           name="q">
+                </div>
+                <div class="browser-filter">
+                    <label>MITRE Technique</label>
+                    <input type="text" id="technique-filter" 
+                           placeholder="e.g., T1059"
+                           hx-get="/api/sigma/rules"
+                           hx-trigger="keyup changed delay:300ms"
+                           hx-target="#rules-list"
+                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                           name="technique"
+                           value="{{ technique_filter }}">
+                </div>
+                <div class="browser-filter">
+                    <label>Category</label>
+                    <select id="category-filter"
+                            hx-get="/api/sigma/rules"
+                            hx-trigger="change"
+                            hx-target="#rules-list"
+                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                            name="category">
+                        <option value="">All</option>
+                        {% for cat in categories %}
+                        <option value="{{ cat }}">{{ cat | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label>Level</label>
+                    <select id="level-filter"
+                            hx-get="/api/sigma/rules"
+                            hx-trigger="change"
+                            hx-target="#rules-list"
+                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                            name="level">
+                        <option value="">All</option>
+                        <option value="critical">Critical</option>
+                        <option value="high">High</option>
+                        <option value="medium">Medium</option>
+                        <option value="low">Low</option>
+                        <option value="informational">Info</option>
+                    </select>
+                </div>
             </div>
-            <div class="browser-filter">
-                <label>MITRE Technique</label>
-                <input type="text" id="technique-filter" 
-                       placeholder="e.g., T1059"
-                       hx-get="/api/sigma/rules"
-                       hx-trigger="keyup changed delay:300ms"
-                       hx-target="#rules-list"
-                       hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
-                       name="technique"
-                       value="{{ technique_filter }}">
-            </div>
-            <div class="browser-filter">
-                <label>Category</label>
-                <select id="category-filter"
-                        hx-get="/api/sigma/rules"
-                        hx-trigger="change"
-                        hx-target="#rules-list"
-                        hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
-                        name="category">
-                    <option value="">All</option>
-                    {% for cat in categories %}
-                    <option value="{{ cat }}">{{ cat | title }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <div class="browser-filter">
-                <label>Level</label>
-                <select id="level-filter"
-                        hx-get="/api/sigma/rules"
-                        hx-trigger="change"
-                        hx-target="#rules-list"
-                        hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
-                        name="level">
-                    <option value="">All</option>
-                    <option value="critical">Critical</option>
-                    <option value="high">High</option>
-                    <option value="medium">Medium</option>
-                    <option value="low">Low</option>
-                    <option value="informational">Info</option>
-                </select>
+            <div id="rules-list">
+                {% include "partials/sigma_rules_list.html" %}
             </div>
         </div>
-        <div id="rules-list">
-            {% include "partials/sigma_rules_list.html" %}
-        </div>
     </div>
-</div>
 
-<!-- Main two-column layout (Symmetric Mirror) -->
-<div class="sigma-main">
+    <!-- Main layout -->
+    <div class="sigma-main">
     <!-- Left: YAML Editor Panel -->
     <div class="sigma-panel">
         <div class="sigma-panel-header">
@@ -166,7 +244,7 @@
         
         <!-- Panel Body: Code Area -->
         <div class="sigma-panel-body">
-            <form id="convert-form" hx-post="/api/sigma/convert" hx-target="#query-output-container" hx-swap="innerHTML" class="sigma-form-body">
+            <form id="convert-form" hx-post="/api/sigma/convert" hx-target="#sigma-convert-response" hx-swap="innerHTML" class="sigma-form-body">
                 <div class="code-editor-container">
                     <textarea 
                         id="yaml-editor" 
@@ -287,7 +365,10 @@ level: medium"></textarea>
         </div>
         <div id="deploy-result"></div>
     </div>
+    </div>
 </div>
+
+<div id="sigma-convert-response" aria-hidden="true"></div>
 
 <script>
 // Clean up any stale state from previous page visits
@@ -456,11 +537,8 @@ window.initSigmaPage = function(retryCount = 0) {
     }
     if (window._syncDeploySiemId) window._syncDeploySiemId();
 
-    // Auto-open if there's a technique filter
-    {% if technique_filter %}
     const ruleBrowser = document.getElementById('rule-browser');
     if (ruleBrowser) ruleBrowser.classList.add('open');
-    {% endif %}
     
     // Refresh the Custom Pipeline dropdown from the API so edits on the
     // Settings page are visible without a hard browser refresh.
@@ -790,10 +868,20 @@ window.refreshTemplateFileSelect = function() {
 console.log('[Sigma] Script block executing, calling initSigmaPage...');
 window.initSigmaPage();
 
+document.addEventListener('htmx:afterSwap', function(event) {
+    var target = event.detail && event.detail.target;
+    if (!target || target.id !== 'sigma-convert-response') return;
+
+    var openRuleButton = target.querySelector('button[hx-get^="/api/rules/create-form?prefill="]');
+    if (!openRuleButton) return;
+
+    var url = openRuleButton.getAttribute('hx-get');
+    if (!url || !window.htmx) return;
+    htmx.ajax('GET', url, { target: '#modal-container', swap: 'innerHTML' });
+});
+
 // Toggle rule browser (global for onclick)
-window.toggleRuleBrowser = function() {
-    document.getElementById('rule-browser').classList.toggle('open');
-};
+window.toggleRuleBrowser = function() {};
 
 // Load rule YAML into editor (global for onclick)
 window.loadRuleYaml = function(ruleId) {
@@ -809,14 +897,8 @@ window.loadRuleYaml = function(ruleId) {
             editor.setValue(yaml);
             // Force refresh to ensure syntax highlighting is applied
             setTimeout(() => editor.refresh(), 10);
-            document.getElementById('query-output-container').innerHTML = `
-                <div class="query-output-box">
-                    <div class="empty-output">
-                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
-                        <p>Click Convert to generate the query</p>
-                    </div>
-                </div>
-            `;
+            var convertTarget = document.getElementById('sigma-convert-response');
+            if (convertTarget) convertTarget.innerHTML = '';
             document.getElementById('validation-result').innerHTML = '';
         })
         .catch(err => console.error('Failed to load rule:', err));
@@ -828,14 +910,8 @@ window.clearYamlEditor = function() {
     if (!editor) return;
     
     editor.setValue('');
-    document.getElementById('query-output-container').innerHTML = `
-        <div class="query-output-box">
-            <div class="empty-output">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg>
-                <p>Select a rule or paste YAML, then click Convert</p>
-            </div>
-        </div>
-    `;
+    var convertTarget = document.getElementById('sigma-convert-response');
+    if (convertTarget) convertTarget.innerHTML = '';
     document.getElementById('validation-result').innerHTML = '';
 };
 

@@ -127,6 +127,13 @@
         <div class="promo-actions">
             <button 
                 class="btn btn-secondary btn-sm"
+                hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
+                hx-target="#modal-container"
+                hx-swap="innerHTML">
+                {{ icon_text('clock', 'History', '14') }}
+            </button>
+            <button 
+                class="btn btn-secondary btn-sm"
                 hx-get="/api/promotion/{{ rule.rule_id }}/detail{% if rule.siem_id %}?siem_id={{ rule.siem_id }}{% endif %}"
                 hx-target="#modal-container"
                 hx-swap="innerHTML">

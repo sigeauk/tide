@@ -1,0 +1,470 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<div class="modal-overlay" data-history-modal onclick="if(event.target===this)this.remove()">
+    <div class="modal-content modal-lg">
+        <style>
+            .history-meta {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.6rem;
+                margin-bottom: 1rem;
+            }
+            .history-pill {
+                display: inline-flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.45rem 0.7rem;
+                border-radius: 999px;
+                background: color-mix(in srgb, var(--color-primary-muted) 25%, var(--color-bg-action));
+                border: 1px solid var(--color-border);
+                color: var(--color-text);
+                font: var(--small);
+                font-weight: 600;
+            }
+            .history-toolbar {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.5rem;
+                margin-bottom: 1rem;
+                padding: 0.75rem;
+                border: 1px solid var(--color-border);
+                border-radius: var(--radius-md);
+                background: var(--color-bg-action);
+            }
+            .detail-section-head {
+                margin-bottom: 0.9rem;
+            }
+            .history-tabbar {
+                display: flex;
+                gap: 0.4rem;
+                margin-bottom: 0.75rem;
+                flex-wrap: wrap;
+            }
+            .history-tab {
+                border: 1px solid var(--color-border);
+                background: var(--color-bg-surface);
+                color: var(--color-text-secondary);
+                border-radius: 999px;
+                padding: 0.45rem 0.8rem;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .history-tab.is-active {
+                background: color-mix(in srgb, var(--color-primary-muted) 28%, var(--color-bg-surface));
+                color: var(--color-primary);
+                border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border));
+            }
+            .history-view {
+                display: none;
+            }
+            .history-view.is-active {
+                display: block;
+            }
+            .history-filter-row {
+                display: grid;
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.75rem;
+                width: 100%;
+            }
+            .history-filter-row label {
+                display: block;
+                margin-bottom: 0.35rem;
+                font-size: 0.78rem;
+                font-weight: 600;
+                color: var(--color-text-secondary);
+            }
+            .history-filter-row select {
+                width: 100%;
+                border-radius: var(--radius-md);
+                border: 1px solid var(--color-border);
+                padding: 0.45rem 0.6rem;
+                background: var(--color-bg-surface);
+                color: var(--color-text);
+            }
+            .history-section-title {
+                margin: 0 0 0.75rem;
+                font-size: 0.95rem;
+                font-weight: 700;
+                color: var(--color-text);
+            }
+            .history-table-wrap {
+                overflow-x: auto;
+                margin-bottom: 1rem;
+            }
+            .history-table {
+                width: 100%;
+                border-collapse: collapse;
+                border: 1px solid var(--color-border);
+                border-radius: var(--radius-md);
+                overflow: hidden;
+                background: var(--color-bg-surface);
+            }
+            .history-table th,
+            .history-table td {
+                padding: 0.75rem 0.8rem;
+                border-bottom: 1px solid var(--color-border);
+                text-align: left;
+                vertical-align: top;
+                font-size: 0.88rem;
+            }
+            .history-table th {
+                background: color-mix(in srgb, var(--color-primary-muted) 18%, var(--color-bg-surface));
+                color: var(--color-text-secondary);
+                font-size: 0.76rem;
+                letter-spacing: 0.02em;
+                text-transform: uppercase;
+            }
+            .history-table tr:last-child td { border-bottom: none; }
+            .timeline-list {
+                border-left: 2px solid var(--color-border);
+                padding-left: 1.5rem;
+                position: relative;
+            }
+            .timeline-marker {
+                min-width: 5.4rem;
+                padding-top: 0.05rem;
+            }
+            .timeline-content {
+                flex: 1;
+            }
+            .event-meta {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.7rem;
+                margin-bottom: 0.35rem;
+                font-size: 0.9rem;
+                align-items: baseline;
+            }
+            .actor { font-weight: 600; color: var(--color-text); }
+            .timestamp { color: var(--color-text-secondary); font-size: 0.85rem; }
+            .event-detail,
+            .event-reason {
+                color: var(--color-text-secondary);
+                font-size: 0.9rem;
+                margin-top: 0.25rem;
+            }
+            .timeline-empty {
+                padding: 1.5rem;
+                text-align: center;
+                color: var(--color-text-secondary);
+                background: var(--color-bg-action);
+                border: 1px solid var(--color-border);
+                border-radius: var(--radius-md);
+            }
+            .timeline-event {
+                display: flex;
+                gap: 0.8rem;
+                margin-bottom: 1.1rem;
+                position: relative;
+            }
+            .timeline-event::before {
+                content: '';
+                position: absolute;
+                left: -2.15rem;
+                top: 0.5rem;
+                width: 0.8rem;
+                height: 0.8rem;
+                border-radius: 50%;
+                background: var(--timeline-dot-bg, var(--color-bg-surface));
+                border: 2px solid var(--timeline-dot-border, var(--color-primary));
+            }
+            .timeline-event.action-created,
+            .timeline-event.action-validated {
+                --timeline-dot-border: var(--color-success);
+                --timeline-dot-bg: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-surface));
+            }
+            .timeline-event.action-enabled,
+            .timeline-event.action-promoted {
+                --timeline-dot-border: var(--color-primary);
+                --timeline-dot-bg: color-mix(in srgb, var(--color-primary) 18%, var(--color-bg-surface));
+            }
+            .timeline-event.action-disabled,
+            .timeline-event.action-edited {
+                --timeline-dot-border: var(--color-warning);
+                --timeline-dot-bg: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface));
+            }
+            .timeline-event.action-created .badge,
+            .timeline-event.action-validated .badge {
+                background: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-surface));
+                color: var(--color-success);
+                border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+            }
+            .timeline-event.action-enabled .badge,
+            .timeline-event.action-promoted .badge {
+                background: color-mix(in srgb, var(--color-primary) 18%, var(--color-bg-surface));
+                color: var(--color-primary);
+                border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+            }
+            .timeline-event.action-disabled .badge,
+            .timeline-event.action-edited .badge {
+                background: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface));
+                color: var(--color-warning);
+                border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+            }
+            .score-history-list {
+                display: flex;
+                flex-direction: column;
+                gap: 0.7rem;
+            }
+            .score-history-card {
+                border: 1px solid var(--color-border);
+                border-radius: var(--radius-md);
+                background: var(--color-bg-surface);
+                padding: 0.8rem 0.9rem;
+            }
+            .score-history-head {
+                display: flex;
+                justify-content: space-between;
+                align-items: baseline;
+                gap: 0.8rem;
+                margin-bottom: 0.55rem;
+            }
+            .score-history-date {
+                color: var(--color-text-secondary);
+                font-size: 0.84rem;
+                white-space: nowrap;
+            }
+            .score-history-overall {
+                font-size: 0.92rem;
+                font-weight: 700;
+                color: var(--color-text);
+            }
+            .score-value-danger { color: var(--color-danger); }
+            .score-value-warning { color: var(--color-warning); }
+            .score-value-success { color: var(--color-success); }
+            .score-breakdown-row {
+                display: grid;
+                grid-template-columns: auto auto minmax(0, 1fr);
+                gap: 1rem;
+                padding-top: 0.4rem;
+                align-items: center;
+            }
+            .score-breakdown-row + .score-breakdown-row {
+                border-top: 1px solid var(--color-border);
+                margin-top: 0.45rem;
+            }
+            .score-row-title {
+                font-size: 0.78rem;
+                font-weight: 700;
+                color: var(--color-text-secondary);
+                text-transform: uppercase;
+                letter-spacing: 0.02em;
+                padding-top: 0.1rem;
+            }
+            .score-row-total {
+                font-size: 0.84rem;
+                font-weight: 700;
+                min-width: 5.2rem;
+                text-align: right;
+            }
+            .score-items-grid {
+                display: grid;
+                gap: 0.55rem;
+            }
+            .score-items-grid.meta {
+                grid-template-columns: repeat(6, minmax(0, 1fr));
+            }
+            .score-items-grid.quality {
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+            }
+            .score-item {
+                display: flex;
+                justify-content: space-between;
+                gap: 0.35rem;
+                font-size: 0.8rem;
+                color: var(--color-text-secondary);
+            }
+            .score-item strong {
+                color: var(--color-text);
+            }
+        </style>
+        <div class="modal-header">
+            <h2>{{ icon_text('clock', 'Rule History') }} {{ rule.name }}</h2>
+            <button class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
+        </div>
+
+        <div class="modal-body">
+            <div class="history-meta">
+                <span class="history-pill">{{ icon_text('alert-triangle', rule.severity | capitalize, '12') }}</span>
+                <span class="history-pill">{{ icon_text('shield-check', scope_label, '12') }}</span>
+            </div>
+
+            <div class="history-tabbar" role="tablist" aria-label="Rule history views">
+                <button type="button" class="history-tab is-active" data-history-tab="table">Table</button>
+                <button type="button" class="history-tab" data-history-tab="activity">Activity</button>
+                <button type="button" class="history-tab" data-history-tab="scores">Scores</button>
+            </div>
+
+            <div class="detail-section">
+                <div class="detail-section-head">
+                    <h3>{{ icon_text('clock', 'Rule History') }}</h3>
+                    <button
+                        class="btn btn-primary btn-sm"
+                        hx-get="/api/rules/{{ rule.rule_id }}/edit-form?space={{ space }}{% if siem_id %}&siem_id={{ siem_id }}{% endif %}"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        hx-include="unset">
+                        {{ icon_text('edit-2', 'Edit Rule', '14') }}
+                    </button>
+                </div>
+                <div class="history-toolbar">
+                    <div class="history-filter-row">
+                        <div>
+                            <label for="history-user-filter">User</label>
+                            <select id="history-user-filter">
+                                <option value="">All</option>
+                                {% for username in history_users %}
+                                <option value="{{ username }}">{{ username }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div>
+                            <label for="history-action-filter">Action</label>
+                            <select id="history-action-filter">
+                                <option value="">All</option>
+                                <option value="created">Created</option>
+                                <option value="enabled">Enabled</option>
+                                <option value="disabled">Disabled</option>
+                                <option value="edited">Edited</option>
+                                <option value="validated">Validated</option>
+                                <option value="promoted">Promoted</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="history-sort-filter">Date/Time</label>
+                            <select id="history-sort-filter">
+                                <option value="desc" selected>New to old</option>
+                                <option value="asc">Old to new</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="history-view is-active" data-history-view="table">
+                    <h4 class="history-section-title">Table view</h4>
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>Date/Time</th>
+                                <th>User</th>
+                                <th>Action</th>
+                                <th>Field(s) Changed</th>
+                                <th>Details / Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="history-table-body">
+                            {% for event in history %}
+                            <tr data-history-row data-user="{{ event.actor_name or 'system' }}" data-action="{{ event.action }}" data-time="{{ event.created_at.isoformat() if event.created_at else '' }}">
+                                <td>{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else 'N/A' }}</td>
+                                <td>{{ event.actor_name or 'system' }}</td>
+                                <td>
+                                    {% if event.action == 'created' %}<span class="badge badge-success">Created</span>
+                                    {% elif event.action == 'enabled' %}<span class="badge badge-info">Enabled</span>
+                                    {% elif event.action == 'disabled' %}<span class="badge badge-warning">Disabled</span>
+                                    {% elif event.action == 'edited' %}<span class="badge badge-warning">Edited</span>
+                                    {% elif event.action == 'validated' %}<span class="badge badge-success">Validated</span>
+                                    {% elif event.action == 'promoted' %}<span class="badge badge-info">Promoted</span>
+                                    {% else %}<span class="badge badge-default">{{ event.action.title() }}</span>{% endif %}
+                                </td>
+                                <td>{{ event.detail.get('changed_fields') or event.detail.get('field') or '-' }}</td>
+                                <td>
+                                    {% if event.detail.get('message') %}<div>{{ event.detail.get('message') }}</div>{% endif %}
+                                    {% if event.detail.get('reason') %}<div class="event-reason">Reason: {{ event.detail.get('reason') }}</div>{% endif %}
+                                    {% if event.detail.get('elastic_timestamp') %}<div class="event-detail">Elastic timestamp: {{ event.detail.get('elastic_timestamp') }}</div>{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="history-view" data-history-view="activity">
+                    <h4 class="history-section-title">Activity view</h4>
+                    <div class="timeline-list" id="history-activity-list">
+                        {% for event in history %}
+                        <div class="timeline-event action-{{ event.action }}" data-history-row data-user="{{ event.actor_name or 'system' }}" data-action="{{ event.action }}" data-time="{{ event.created_at.isoformat() if event.created_at else '' }}">
+                            <div class="timeline-marker">
+                                {% if event.action == 'created' %}
+                                    <span class="badge badge-success">Created</span>
+                                {% elif event.action == 'enabled' %}
+                                    <span class="badge badge-info">Enabled</span>
+                                {% elif event.action == 'disabled' %}
+                                    <span class="badge badge-warning">Disabled</span>
+                                {% elif event.action == 'edited' %}
+                                    <span class="badge badge-warning">Edited</span>
+                                {% elif event.action == 'validated' %}
+                                    <span class="badge badge-success">Validated</span>
+                                {% elif event.action == 'promoted' %}
+                                    <span class="badge badge-info">Promoted</span>
+                                {% else %}
+                                    <span class="badge badge-default">{{ event.action.title() }}</span>
+                                {% endif %}
+                            </div>
+                            <div class="timeline-content">
+                                <div class="event-meta">
+                                    <span class="actor">{{ event.actor_name or 'system' }}</span>
+                                    <span class="timestamp">{{ event.created_at.strftime('%Y-%m-%d %H:%M') if event.created_at else 'N/A' }}</span>
+                                </div>
+                                {% if event.detail.get('message') %}
+                                    <div class="event-detail">{{ event.detail.get('message') }}</div>
+                                {% endif %}
+                                {% if event.detail.get('elastic_timestamp') %}
+                                    <div class="event-detail">Elastic timestamp: {{ event.detail.get('elastic_timestamp') }}</div>
+                                {% endif %}
+                                {% if event.detail.get('reason') %}
+                                    <div class="event-reason">Reason: {{ event.detail.get('reason') }}</div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div class="history-view" data-history-view="scores">
+                    <h4 class="history-section-title">Score history</h4>
+                    {% if score_history %}
+                    <div class="score-history-list">
+                        {% for row in score_history %}
+                        {% set overall_value = row.score if row.score is not none else 0 %}
+                        {% set meta_value = row.meta_score if row.meta_score is not none else 0 %}
+                        {% set quality_value = row.quality_score if row.quality_score is not none else 0 %}
+                        {% set overall_class = 'score-value-success' if overall_value >= 80 else ('score-value-warning' if overall_value >= 50 else 'score-value-danger') %}
+                        {% set meta_class = 'score-value-success' if meta_value >= 40 else ('score-value-warning' if meta_value >= 25 else 'score-value-danger') %}
+                        {% set quality_class = 'score-value-success' if quality_value >= 40 else ('score-value-warning' if quality_value >= 25 else 'score-value-danger') %}
+                        <div class="score-history-card">
+                            <div class="score-history-head">
+                                <span class="score-history-date">{{ row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else 'N/A' }}</span>
+                                <span class="score-history-overall {{ overall_class }}">Overall: {{ row.score if row.score is not none else 'N/A' }}</span>
+                            </div>
+                            <div class="score-breakdown-row">
+                                <div class="score-row-title">Meta</div>
+                                <div class="score-row-total {{ meta_class }}">Total: {{ row.meta_score if row.meta_score is not none else 'N/A' }}</div>
+                                <div class="score-items-grid meta">
+                                    <div class="score-item"><span>Investigation</span><strong>{{ row.score_note if row.score_note is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Override</span><strong>{{ row.score_override if row.score_override is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Tactics</span><strong>{{ row.score_tactics if row.score_tactics is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Techniques</span><strong>{{ row.score_techniques if row.score_techniques is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Author</span><strong>{{ row.score_author if row.score_author is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Highlights</span><strong>{{ row.score_highlights if row.score_highlights is not none else 'N/A' }}</strong></div>
+                                </div>
+                            </div>
+                            <div class="score-breakdown-row">
+                                <div class="score-row-title">Quality</div>
+                                <div class="score-row-total {{ quality_class }}">Total: {{ row.quality_score if row.quality_score is not none else 'N/A' }}</div>
+                                <div class="score-items-grid quality">
+                                    <div class="score-item"><span>Mapping</span><strong>{{ row.score_mapping if row.score_mapping is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Field Type</span><strong>{{ row.score_field_type if row.score_field_type is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Search</span><strong>{{ row.score_search_time if row.score_search_time is not none else 'N/A' }}</strong></div>
+                                    <div class="score-item"><span>Language</span><strong>{{ row.score_language if row.score_language is not none else 'N/A' }}</strong></div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="timeline-empty">No score snapshots recorded yet</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

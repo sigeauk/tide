@@ -1,0 +1,268 @@
+<div class="rule-timeline">
+  {% if history %}
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Action</th>
+            <th>Actor</th>
+            <th>When</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in history %}
+            <tr>
+              <td>
+                {% if event.action == 'created' %}<span class="badge badge-success">Created</span>
+                {% elif event.action == 'enabled' %}<span class="badge badge-info">Enabled</span>
+                {% elif event.action == 'disabled' %}<span class="badge badge-warning">Disabled</span>
+                {% elif event.action == 'edited' %}<span class="badge badge-warning">Edited</span>
+                {% elif event.action == 'validated' %}<span class="badge badge-success">Validated</span>
+                {% elif event.action == 'promoted' %}<span class="badge badge-info">Promoted</span>
+                {% else %}<span class="badge badge-default">{{ event.action.title() }}</span>{% endif %}
+              </td>
+              <td>{{ event.actor_name or 'system' }}</td>
+              <td>{{ event.created_at.strftime('%Y-%m-%d %H:%M:%S') if event.created_at else 'N/A' }}</td>
+              <td>
+                {% if event.detail.get('message') %}<div>{{ event.detail.get('message') }}</div>{% endif %}
+                {% if event.detail.get('reason') %}<div class="event-reason">Reason: {{ event.detail.get('reason') }}</div>{% endif %}
+                {% if event.detail.get('elastic_timestamp') %}<div class="event-detail">Elastic timestamp: {{ event.detail.get('elastic_timestamp') }}</div>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <details class="timeline-feed-panel">
+      <summary class="timeline-feed-summary">Activity feed view</summary>
+      <div class="timeline-list">
+        {% for event in history %}
+          <div class="timeline-event">
+            <div class="timeline-marker">
+              {% if event.action == 'created' %}
+                <span class="badge badge-success">Created</span>
+              {% elif event.action == 'enabled' %}
+                <span class="badge badge-info">Enabled</span>
+              {% elif event.action == 'disabled' %}
+                <span class="badge badge-warning">Disabled</span>
+              {% elif event.action == 'edited' %}
+                <span class="badge badge-warning">Edited</span>
+              {% elif event.action == 'validated' %}
+                <span class="badge badge-success">Validated</span>
+              {% elif event.action == 'promoted' %}
+                <span class="badge badge-info">Promoted</span>
+              {% else %}
+                <span class="badge badge-default">{{ event.action.title() }}</span>
+              {% endif %}
+            </div>
+            <div class="timeline-content">
+              <div class="event-meta">
+                <span class="actor">{{ event.actor_name or 'system' }}</span>
+                <span class="timestamp">{{ event.created_at.strftime('%Y-%m-%d %H:%M:%S') if event.created_at else 'N/A' }}</span>
+              </div>
+              {% if event.detail.get('message') %}
+                <div class="event-detail">{{ event.detail.get('message') }}</div>
+              {% endif %}
+              {% if event.detail.get('elastic_timestamp') %}
+                <div class="event-detail">Elastic timestamp: {{ event.detail.get('elastic_timestamp') }}</div>
+              {% endif %}
+              {% if event.detail.get('reason') %}
+                <div class="event-reason">Reason: {{ event.detail.get('reason') }}</div>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </details>
+
+  {% else %}
+    <div class="timeline-empty">No events recorded yet</div>
+  {% endif %}
+
+  {% if score_history %}
+    <details class="timeline-feed-panel" open>
+      <summary class="timeline-feed-summary">Score history</summary>
+      <div class="history-table-wrap">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>When</th>
+              <th>Score</th>
+              <th>Quality</th>
+              <th>Meta</th>
+              <th>Highlights</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in score_history %}
+              <tr>
+                <td>{{ row.created_at.strftime('%Y-%m-%d %H:%M:%S') if row.created_at else 'N/A' }}</td>
+                <td>{{ row.score if row.score is not none else 'N/A' }}</td>
+                <td>{{ row.quality_score if row.quality_score is not none else 'N/A' }}</td>
+                <td>{{ row.meta_score if row.meta_score is not none else 'N/A' }}</td>
+                <td>{{ row.score_highlights if row.score_highlights is not none else 'N/A' }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  {% endif %}
+</div>
+
+<style>
+.rule-timeline {
+  padding: 1rem 0;
+}
+
+.timeline-list {
+  border-left: 2px solid var(--color-border);
+  padding-left: 1.5rem;
+  position: relative;
+}
+
+.history-table-wrap {
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--color-bg-surface);
+}
+
+.history-table th,
+.history-table td {
+  padding: 0.75rem 0.8rem;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.history-table th {
+  background: color-mix(in srgb, var(--color-primary-muted) 18%, var(--color-bg-surface));
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.history-table tr:last-child td {
+  border-bottom: none;
+}
+
+.timeline-feed-panel {
+  margin-top: 1rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-action);
+  padding: 0.75rem 0.9rem;
+}
+
+.timeline-feed-summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--color-primary);
+}
+
+.timeline-event {
+  display: flex;
+  margin-bottom: 1.5rem;
+  position: relative;
+}
+
+.timeline-event::before {
+  content: '';
+  position: absolute;
+  left: -2.15rem;
+  top: 0.5rem;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+  background: var(--color-bg-surface);
+  border: 2px solid var(--color-primary);
+}
+
+.timeline-marker {
+  min-width: 100px;
+  margin-right: 1rem;
+}
+
+.timeline-content {
+  flex: 1;
+}
+
+.event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.actor {
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.timestamp {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+}
+
+.event-detail,
+.event-reason {
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  margin-top: 0.25rem;
+}
+
+.timeline-empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-action);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.28rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge-success {
+  background: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-surface));
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 35%, transparent);
+}
+
+.badge-info {
+  background: color-mix(in srgb, var(--color-primary) 18%, var(--color-bg-surface));
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+.badge-warning {
+  background: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface));
+  color: var(--color-warning);
+  border-color: color-mix(in srgb, var(--color-warning) 35%, transparent);
+}
+
+.badge-default {
+  background: color-mix(in srgb, var(--color-border) 35%, var(--color-bg-surface));
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+</style>

@@ -1,0 +1,389 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<div class="modal-overlay" onclick="if(event.target === this) this.remove()">
+  <div class="modal-content rule-form-modal" style="max-width: 860px;">
+    <style>
+      .rule-form-modal .rule-accordion {
+        border: 1px solid var(--color-border);
+        border-top: 1px solid var(--color-highlight-1);
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--color-bg-surface) 0%, var(--color-bg-action) 100%);
+        box-shadow: var(--shadow-sm);
+      }
+      .rule-form-modal .rule-accordion > summary {
+        cursor: pointer;
+        list-style: none;
+        padding: 1rem 1rem;
+        font-weight: 700;
+        color: var(--color-primary);
+        letter-spacing: 0.01em;
+      }
+      .rule-form-modal .rule-accordion > summary::-webkit-details-marker {
+        display: none;
+      }
+      .rule-form-modal .rule-accordion[open] > summary {
+        border-bottom: 1px solid var(--color-border);
+        background: color-mix(in srgb, var(--color-primary-muted) 22%, transparent);
+      }
+      .rule-form-modal .rule-accordion-panel {
+        padding: 1rem 1rem 0.5rem;
+      }
+      .rule-form-modal .rule-grid-2 {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+      }
+      .rule-form-modal .form-section {
+        margin-bottom: 1rem;
+      }
+      .rule-form-modal label {
+        display: block;
+        margin-bottom: 0.4rem;
+        font: var(--small);
+        font-weight: 600;
+        color: var(--color-text-secondary);
+      }
+      .rule-form-modal .rule-form-control,
+      .rule-form-modal .rule-form-select,
+      .rule-form-modal .rule-form-textarea {
+        width: 100%;
+        padding: 0.65rem 0.8rem;
+        font: var(--p);
+        font-size: 0.9rem;
+        color: var(--color-text);
+        background: color-mix(in srgb, var(--color-bg-surface) 82%, white 18%);
+        border: 1px solid var(--color-border);
+        border-top: 1px solid var(--color-highlight-1);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-sm);
+      }
+      .rule-form-modal .rule-form-control::placeholder,
+      .rule-form-modal .rule-form-textarea::placeholder {
+        color: var(--color-text-muted);
+      }
+      .rule-form-modal .rule-form-control:focus,
+      .rule-form-modal .rule-form-select:focus,
+      .rule-form-modal .rule-form-textarea:focus {
+        outline: none;
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px var(--color-primary-muted);
+      }
+      .rule-form-modal .rule-form-textarea {
+        min-height: 110px;
+        resize: vertical;
+      }
+      .rule-form-modal .rule-form-select[multiple] {
+        min-height: 220px;
+      }
+      .rule-form-modal .rule-help {
+        margin-top: 0.35rem;
+        font-size: 0.8rem;
+        color: var(--color-text-muted);
+      }
+      .rule-form-modal .rule-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-bottom: 0.5rem;
+      }
+      .rule-form-modal .rule-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        padding: 0.25rem 0.55rem;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--color-primary-muted) 18%, var(--color-bg-surface));
+        border: 1px solid var(--color-border);
+        color: var(--color-text);
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .rule-form-modal .scope-note {
+        margin-top: 0.4rem;
+        font-size: 0.8rem;
+        color: var(--color-text-muted);
+      }
+      @media (max-width: 720px) {
+        .rule-form-modal .rule-grid-2 {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+    <div class="modal-header">
+      <h2>
+        {% if mode == 'edit' %}
+          {{ icon_text('edit-2', modal_title) }}
+        {% else %}
+          {{ icon_text('plus-circle', modal_title) }}
+        {% endif %}
+      </h2>
+      <button type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()" title="Close">
+        <span style="font-size: 1.25rem; line-height: 1;">✕</span>
+      </button>
+    </div>
+
+    <form hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form">
+      <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
+      <div class="rule-accordion-stack" style="display:flex; flex-direction:column; gap:0.75rem;">
+        <details class="rule-accordion" open>
+          <summary>Create Rule</summary>
+          <div class="rule-accordion-panel">
+            <div class="form-section">
+              <label for="rule-name">Rule Name *</label>
+              <input class="rule-form-control" type="text" id="rule-name" name="name" required value="{{ form_values.name }}" placeholder="e.g., Suspicious Process Execution">
+            </div>
+            <div class="form-section">
+              <label for="rule-scope-pair">Target SIEM / Space *</label>
+              {% if scope_locked %}
+                <input type="hidden" name="scope_pair" value="{{ form_values.scope_pair }}">
+              {% endif %}
+              <select class="rule-form-select" id="rule-scope-pair" name="scope_pair" required {% if scope_locked %}disabled{% endif %}>
+                <option value="">-- Select SIEM and Space --</option>
+                {% for s in scope_options %}
+                  {% set scope_value = s.siem_id ~ '|' ~ s.space %}
+                  <option value="{{ scope_value }}" {% if form_values.scope_pair == scope_value %}selected{% endif %}>{{ s.label }} - {{ s.space }}</option>
+                {% endfor %}
+              </select>
+              {% if scope_locked %}
+                <div class="scope-note">Scope stays fixed during edit so the rule remains attached to its current SIEM and space.</div>
+              {% endif %}
+            </div>
+          </div>
+        </details>
+
+        <details class="rule-accordion">
+          <summary>Define Rule</summary>
+          <div class="rule-accordion-panel">
+            <div class="form-section">
+              <label for="rule-language">Query Language *</label>
+              <select class="rule-form-select" id="rule-language" name="language" required>
+                <option value="kuery" {% if form_values.language == 'kuery' %}selected{% endif %}>KQL (Kibana Query Language)</option>
+                <option value="kql" {% if form_values.language == 'kql' %}selected{% endif %}>KQL (Legacy)</option>
+                <option value="eql" {% if form_values.language == 'eql' %}selected{% endif %}>EQL (Event Query Language)</option>
+                <option value="esql" {% if form_values.language == 'esql' %}selected{% endif %}>ES|QL</option>
+                <option value="lucene" {% if form_values.language == 'lucene' %}selected{% endif %}>Lucene</option>
+              </select>
+            </div>
+            <div class="form-section">
+              <label for="rule-index">Index Patterns</label>
+              <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
+            </div>
+            <div class="form-section">
+              <label for="rule-query">Query *</label>
+              <textarea class="rule-form-textarea" id="rule-query" name="query" required rows="6" style="font-family: monospace;">{{ form_values.query }}</textarea>
+            </div>
+          </div>
+        </details>
+
+        <details class="rule-accordion">
+          <summary>About Rule</summary>
+          <div class="rule-accordion-panel">
+            <div class="rule-grid-2">
+              <div class="form-section">
+                <label for="rule-severity">Severity</label>
+                <select class="rule-form-select" id="rule-severity" name="severity">
+                  <option value="low" {% if form_values.severity == 'low' %}selected{% endif %}>Low</option>
+                  <option value="medium" {% if form_values.severity == 'medium' %}selected{% endif %}>Medium</option>
+                  <option value="high" {% if form_values.severity == 'high' %}selected{% endif %}>High</option>
+                  <option value="critical" {% if form_values.severity == 'critical' %}selected{% endif %}>Critical</option>
+                </select>
+              </div>
+              <div class="form-section">
+                <label for="rule-risk-score">Risk Score</label>
+                <input class="rule-form-control" type="number" min="0" max="100" id="rule-risk-score" name="risk_score" value="{{ form_values.risk_score }}" placeholder="47">
+              </div>
+            </div>
+            <div class="form-section">
+              <label for="rule-description">Description</label>
+              <textarea class="rule-form-textarea" id="rule-description" name="description" rows="3" placeholder="Rule description or analyst summary">{{ form_values.description }}</textarea>
+            </div>
+            <div class="form-section">
+              <label for="rule-author">Author</label>
+              <input class="rule-form-control" type="text" id="rule-author" name="author" value="{{ form_values.author }}" placeholder="Security Team">
+            </div>
+            <div class="form-section">
+              <label for="rule-tags">Tags (optional, comma-separated)</label>
+              <input class="rule-form-control" type="text" id="rule-tags" name="tags" value="{{ form_values.tags }}" placeholder="detection, process, suspicious">
+            </div>
+            <div class="form-section">
+              <label for="rule-timestamp-override">Timestamp Override</label>
+              <input class="rule-form-control" type="text" id="rule-timestamp-override" name="timestamp_override" value="{{ form_values.timestamp_override }}" placeholder="event.ingested">
+            </div>
+            <div class="form-section">
+              <label>MITRE ATT&CK Techniques</label>
+              <input type="hidden" id="rule-mitre-values" name="mitre_ids" value="{{ form_values.mitre_ids | join(', ') }}">
+              <div id="mitre-builder" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
+              <button type="button" class="btn btn-secondary btn-sm" id="mitre-add-btn" style="margin-top:0.4rem;">{{ icon_text('plus-circle', 'Add technique', '14') }}</button>
+              <div class="rule-help">Choose a tactic first, then a technique. Add multiple pairs as needed.</div>
+              {% if selected_tactics %}
+                <div class="rule-chip-row" aria-label="Selected MITRE tactics">
+                  {% for tactic in selected_tactics %}
+                    <span class="rule-chip">{{ tactic }}</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+            <div class="form-section">
+              <label for="rule-highlighted-fields">Custom Highlighted Fields</label>
+              <input class="rule-form-control" type="text" id="rule-highlighted-fields" name="highlighted_fields" value="{{ form_values.highlighted_fields }}" placeholder="user.name, process.name, source.ip">
+              <div class="rule-help">Fields to surface prominently in investigation context and SIEM payload.</div>
+            </div>
+            <div class="form-section">
+              <label for="rule-note">Investigation Guide</label>
+              <textarea class="rule-form-textarea" id="rule-note" name="note" rows="3" placeholder="Optional investigation guidance">{{ form_values.note }}</textarea>
+            </div>
+            <div class="form-section">
+              <label for="rule-reason">Reason for Change{% if mode == 'edit' %} *{% endif %}</label>
+              <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" {% if mode == 'edit' %}required{% endif %} placeholder="Document the change before saving">{{ form_values.reason }}</textarea>
+              <div class="rule-help">Required when editing a rule. Validation fills this automatically.</div>
+            </div>
+          </div>
+        </details>
+
+        <details class="rule-accordion">
+          <summary>Schedule</summary>
+          <div class="rule-accordion-panel">
+            <div class="rule-grid-2">
+              <div class="form-section">
+                <label for="rule-interval">Run every (optional)</label>
+                <input class="rule-form-control" type="text" id="rule-interval" name="interval" value="{{ form_values.interval }}" placeholder="5m">
+              </div>
+              <div class="form-section">
+                <label for="rule-lookback">Look back (optional)</label>
+                <input class="rule-form-control" type="text" id="rule-lookback" name="from" value="{{ form_values.from }}" placeholder="now-6m">
+              </div>
+            </div>
+          </div>
+        </details>
+
+        <details class="rule-accordion">
+          <summary>Action</summary>
+          <div class="rule-accordion-panel">
+            <div class="form-section">
+              <label for="rule-enabled">Status</label>
+              <select class="rule-form-select" id="rule-enabled" name="enabled">
+                <option value="true" {% if form_values.enabled %}selected{% endif %}>Enabled</option>
+                <option value="false" {% if not form_values.enabled %}selected{% endif %}>Disabled</option>
+              </select>
+            </div>
+          </div>
+        </details>
+      </div>
+
+      <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem; justify-content: flex-end; padding-top: 1rem; border-top: 1px solid var(--color-border);">
+        <button type="submit" class="btn btn-primary">
+          {% if mode == 'edit' %}
+            {{ icon_text('save', submit_label, '14') }}
+          {% else %}
+            {{ icon_text('plus-circle', submit_label, '14') }}
+          {% endif %}
+        </button>
+        <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function() {
+  const builder = document.getElementById('mitre-builder');
+  const addBtn = document.getElementById('mitre-add-btn');
+  const hidden = document.getElementById('rule-mitre-values');
+  if (!builder || !addBtn || !hidden) return;
+
+  const groups = {{ technique_groups | tojson }};
+  const selectedIds = (hidden.value || '').split(',').map(function(v) { return v.trim().toUpperCase(); }).filter(Boolean);
+
+  function createOption(value, text, selected) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    if (selected) option.selected = true;
+    return option;
+  }
+
+  function updateTechniqueSelect(tacticSelect, techniqueSelect, selectedTechnique) {
+    const selectedTactic = tacticSelect.value;
+    while (techniqueSelect.firstChild) techniqueSelect.removeChild(techniqueSelect.firstChild);
+    techniqueSelect.appendChild(createOption('', 'Select a technique...', false));
+    if (!selectedTactic) return;
+
+    const group = groups.find(function(item) { return item.tactic === selectedTactic; });
+    if (!group) return;
+    group.options.forEach(function(opt) {
+      techniqueSelect.appendChild(createOption(opt.id, opt.id + ' - ' + opt.name, opt.id === selectedTechnique));
+    });
+  }
+
+  function syncHidden() {
+    const values = Array.from(builder.querySelectorAll('select[data-role="technique"]'))
+      .map(function(select) { return (select.value || '').trim().toUpperCase(); })
+      .filter(Boolean);
+    hidden.value = values.join(', ');
+  }
+
+  function addRow(initialTechnique) {
+    const row = document.createElement('div');
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = 'minmax(0, 1fr) minmax(0, 1fr) auto';
+    row.style.gap = '0.5rem';
+    row.style.marginBottom = '0.2rem';
+
+    const tacticSelect = document.createElement('select');
+    tacticSelect.className = 'rule-form-select';
+    tacticSelect.setAttribute('data-role', 'tactic');
+    tacticSelect.appendChild(createOption('', 'Select a tactic...', true));
+    groups.forEach(function(group) {
+      tacticSelect.appendChild(createOption(group.tactic, group.tactic, false));
+    });
+
+    const techniqueSelect = document.createElement('select');
+    techniqueSelect.className = 'rule-form-select';
+    techniqueSelect.setAttribute('data-role', 'technique');
+    techniqueSelect.appendChild(createOption('', 'Select a technique...', true));
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn btn-secondary btn-sm';
+    removeBtn.textContent = 'Remove';
+
+    row.appendChild(tacticSelect);
+    row.appendChild(techniqueSelect);
+    row.appendChild(removeBtn);
+    builder.appendChild(row);
+
+    if (initialTechnique) {
+      let matchedTactic = '';
+      groups.forEach(function(group) {
+        if (group.options.some(function(opt) { return opt.id === initialTechnique; })) {
+          matchedTactic = group.tactic;
+        }
+      });
+      if (matchedTactic) {
+        tacticSelect.value = matchedTactic;
+        updateTechniqueSelect(tacticSelect, techniqueSelect, initialTechnique);
+      }
+    }
+
+    tacticSelect.addEventListener('change', function() {
+      updateTechniqueSelect(tacticSelect, techniqueSelect, '');
+      syncHidden();
+    });
+    techniqueSelect.addEventListener('change', syncHidden);
+    removeBtn.addEventListener('click', function() {
+      row.remove();
+      syncHidden();
+      if (!builder.children.length) addRow('');
+    });
+
+    syncHidden();
+  }
+
+  if (selectedIds.length) {
+    selectedIds.forEach(function(id) { addRow(id); });
+  } else {
+    addRow('');
+  }
+
+  addBtn.addEventListener('click', function() { addRow(''); });
+})();
+</script>

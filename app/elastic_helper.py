@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from typing import Tuple, Optional, Dict, Any
 from dotenv import load_dotenv
 try:
     # Works when caller put /app/app on sys.path (legacy sync entrypoint
@@ -2071,6 +2072,167 @@ def create_exception_list_for_rule(exc_object, rule_name, source_space, target_s
         "type": created["type"],
         "namespace_type": "single"
     }
+
+
+def create_detection_rule(
+    rule_data: dict,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str, Optional[str]]:
+    """Create a new detection rule in Kibana.
+    
+    Args:
+        rule_data: Rule object with name, query, language, enabled, etc.
+        space: Target Kibana space
+        kibana_url: Base Kibana URL
+        api_key: Kibana API key
+    
+    Returns: (success, message, rule_id)
+    """
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key", None
+    
+    session = _make_session(api_key)
+    base_url = kibana_url.rstrip("/")
+    
+    # Remove read-only fields
+    rule = rule_data.copy()
+    for readonly in ["id", "rule_id", "_version", "created_at", "created_by", "updated_at", "updated_by"]:
+        rule.pop(readonly, None)
+    
+    # Ensure required fields
+    if not rule.get("name") or not rule.get("query"):
+        return False, "Rule must have name and query", None
+    
+    prefix = _space_api_prefix(base_url, space)
+    url = f"{prefix}/api/detection_engine/rules"
+    
+    try:
+        response = session.post(url, json=rule)
+        if response.status_code not in (200, 201):
+            error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+            log_error(f"Failed to create rule: {error_msg}")
+            return False, error_msg, None
+        
+        data = response.json()
+        new_rule_id = data.get("rule_id") or data.get("id")
+        log_info(f"Created rule '{rule.get('name')}' with ID {new_rule_id} in {space}")
+        return True, f"Created rule '{rule.get('name')}'", new_rule_id
+    except Exception as e:
+        log_error(f"Create rule failed: {e}")
+        return False, str(e), None
+
+
+def update_detection_rule(
+    rule_id: str,
+    rule_data: dict,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str]:
+    """Update an existing detection rule in Kibana.
+    
+    Args:
+        rule_id: Kibana rule ID to update
+        rule_data: Updated rule object
+        space: Target Kibana space
+        kibana_url: Base Kibana URL
+        api_key: Kibana API key
+    
+    Returns: (success, message)
+    """
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key"
+    
+    session = _make_session(api_key)
+    base_url = kibana_url.rstrip("/")
+    
+    # Prepare update (preserve rule_id and id fields)
+    rule = rule_data.copy()
+    rule["rule_id"] = rule_id
+    for readonly in ["id", "_version", "created_at", "created_by", "updated_by"]:
+        rule.pop(readonly, None)
+    
+    prefix = _space_api_prefix(base_url, space)
+    url = f"{prefix}/api/detection_engine/rules"
+    
+    try:
+        response = session.put(url, json=rule)
+        if response.status_code not in (200, 201):
+            error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+            log_error(f"Failed to update rule: {error_msg}")
+            return False, error_msg
+        
+        log_info(f"Updated rule {rule_id} in {space}")
+        return True, f"Updated rule '{rule.get('name', rule_id)}'"
+    except Exception as e:
+        log_error(f"Update rule failed: {e}")
+        return False, str(e)
+
+
+def enable_detection_rule(
+    rule_id: str,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str]:
+    """Enable a detection rule in Kibana.
+    
+    Returns: (success, message)
+    """
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key"
+    
+    session = _make_session(api_key)
+    base_url = kibana_url.rstrip("/")
+    prefix = _space_api_prefix(base_url, space)
+    
+    # First get the rule to preserve all its data
+    get_url = f"{prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    try:
+        get_resp = session.get(get_url)
+        if get_resp.status_code != 200:
+            return False, f"Could not fetch rule: HTTP {get_resp.status_code}"
+        
+        rule_data = get_resp.json()
+        rule_data["enabled"] = True
+        return update_detection_rule(rule_id, rule_data, space, base_url, api_key)
+    except Exception as e:
+        log_error(f"Enable rule failed: {e}")
+        return False, str(e)
+
+
+def disable_detection_rule(
+    rule_id: str,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str]:
+    """Disable a detection rule in Kibana.
+    
+    Returns: (success, message)
+    """
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key"
+    
+    session = _make_session(api_key)
+    base_url = kibana_url.rstrip("/")
+    prefix = _space_api_prefix(base_url, space)
+    
+    # First get the rule to preserve all its data
+    get_url = f"{prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    try:
+        get_resp = session.get(get_url)
+        if get_resp.status_code != 200:
+            return False, f"Could not fetch rule: HTTP {get_resp.status_code}"
+        
+        rule_data = get_resp.json()
+        rule_data["enabled"] = False
+        return update_detection_rule(rule_id, rule_data, space, base_url, api_key)
+    except Exception as e:
+        log_error(f"Disable rule failed: {e}")
+        return False, str(e)
 
 
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",

@@ -277,9 +277,78 @@ console.debug('TIDE app.js loading...');
             if (openMenu) openMenu.classList.remove('open');
             return;
         }
+
+        var historyTab = e.target.closest('[data-history-tab]');
+        if (historyTab) {
+            var historyRoot = historyTab.closest('.modal-overlay[data-history-modal]');
+            if (!historyRoot) return;
+
+            var selectedTab = historyTab.dataset.historyTab;
+            historyRoot.querySelectorAll('[data-history-tab]').forEach(function(tab) {
+                tab.classList.toggle('is-active', tab.dataset.historyTab === selectedTab);
+            });
+            historyRoot.querySelectorAll('[data-history-view]').forEach(function(view) {
+                view.classList.toggle('is-active', view.dataset.historyView === selectedTab);
+            });
+            e.preventDefault();
+            return;
+        }
+
         document.querySelectorAll('.action-menu.open').forEach(function(m) {
             m.classList.remove('open');
         });
+    });
+
+    document.addEventListener('change', function(e) {
+        var filter = e.target;
+        if (!filter || !filter.id) return;
+        if (filter.id !== 'history-user-filter' && filter.id !== 'history-action-filter' && filter.id !== 'history-sort-filter') return;
+
+        var historyRoot = filter.closest('.modal-overlay[data-history-modal]');
+        if (!historyRoot) return;
+
+        var userFilter = historyRoot.querySelector('#history-user-filter');
+        var actionFilter = historyRoot.querySelector('#history-action-filter');
+        var sortFilter = historyRoot.querySelector('#history-sort-filter');
+        var tableBody = historyRoot.querySelector('#history-table-body');
+        var activityList = historyRoot.querySelector('#history-activity-list');
+
+        var userValue = (userFilter && userFilter.value) || '';
+        var actionValue = (actionFilter && actionFilter.value) || '';
+        var sortValue = (sortFilter && sortFilter.value) || 'desc';
+        var containers = [tableBody, activityList].filter(Boolean);
+
+        containers.forEach(function(container) {
+            var rows = Array.from(container.querySelectorAll('[data-history-row]'));
+            rows.forEach(function(row) {
+                var matchesUser = !userValue || (row.dataset.user || '') === userValue;
+                var matchesAction = !actionValue || (row.dataset.action || '') === actionValue;
+                row.style.display = (matchesUser && matchesAction) ? '' : 'none';
+            });
+
+            var sortedRows = rows.slice().sort(function(a, b) {
+                var aTime = Date.parse(a.dataset.time || '') || 0;
+                var bTime = Date.parse(b.dataset.time || '') || 0;
+                return sortValue === 'asc' ? aTime - bTime : bTime - aTime;
+            });
+
+            sortedRows.forEach(function(row) {
+                container.appendChild(row);
+            });
+        });
+    });
+
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var target = e.detail && e.detail.target;
+        if (!target || target.id !== 'modal-container') return;
+
+        var historyRoot = target.querySelector('.modal-overlay[data-history-modal]');
+        if (!historyRoot) return;
+
+        var sortFilter = historyRoot.querySelector('#history-sort-filter');
+        if (sortFilter) {
+            sortFilter.dispatchEvent(new Event('change', { bubbles: true }));
+        }
     });
 
     /**

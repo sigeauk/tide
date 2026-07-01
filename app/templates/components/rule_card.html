@@ -10,7 +10,13 @@
 {% set val_status = rule.validation_status | default('never') %}
 {% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'amber' else ('danger' if val_status == 'expired' else 'muted')) %}
 
-<div class="rule-card" id="rule-{{ rule.rule_id }}">
+<div class="rule-card"
+    id="rule-{{ rule.rule_id }}"
+    hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
+    hx-target="#modal-container"
+    hx-swap="innerHTML"
+    hx-include="unset"
+    style="cursor:pointer;">
     <div class="rule-header">
         <div class="rule-name" title="{{ rule.name }}">{{ rule.name }}</div>
         <div class="rule-pills-stack">
@@ -82,6 +88,7 @@
     <div class="rule-footer">
         <button 
             class="btn btn-validate btn-sm"
+            onclick="event.stopPropagation();"
             hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
             hx-target="#rule-{{ rule.rule_id }}"
             hx-swap="outerHTML"
@@ -91,6 +98,7 @@
         </button>
         <button 
             class="btn btn-logic btn-sm"
+            onclick="event.stopPropagation();"
             hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
             hx-target="#modal-container"
             hx-swap="innerHTML"
@@ -111,6 +119,7 @@
                 {% set card_kibana_url = kb_base ~ '/s/' ~ card_space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
             {% endif %}
         <a href="{{ card_kibana_url }}"
+           onclick="event.stopPropagation();"
            target="_blank"
            rel="noopener noreferrer"
            class="btn btn-secondary btn-sm"

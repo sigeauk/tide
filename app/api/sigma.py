@@ -3,6 +3,10 @@ API routes for Sigma Converter.
 Provides endpoints for rule browsing, conversion, validation, and SIEM deployment.
 """
 
+import json
+from urllib.parse import quote
+
+import yaml
 from fastapi import APIRouter, Request, Query, Form, UploadFile, File, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Optional
@@ -121,6 +125,31 @@ def convert_rule(
             template_file=template_file,
         )
         raw_query = raw_result if raw_success else ""
+
+    prefill_payload = ""
+    try:
+        sigma_rule = yaml.safe_load(yaml_content) or {}
+        prefill_payload = quote(json.dumps({
+            "name": str(sigma_rule.get("title") or "").strip(),
+            "description": str(sigma_rule.get("description") or "").strip(),
+            "query": raw_query or result,
+            "language": "kuery" if backend == "elasticsearch" else backend,
+            "severity": str(sigma_rule.get("level") or "medium").strip().lower(),
+            "author": sigma_rule.get("author") or "",
+            "tags": sigma_rule.get("tags") or [],
+            "mitre_ids": sigma.extract_mitre_techniques(sigma_rule),
+            "note": str(sigma_rule.get("description") or "").strip(),
+            "risk_score": sigma_rule.get("risk_score"),
+            "index": [part.strip() for part in index_pattern.split(",") if part.strip()],
+            "timestamp_override": "event.ingested",
+            "highlighted_fields": [],
+            "enabled": False,
+            "type": "query",
+            "from": "now-6m",
+            "interval": "5m",
+        }))
+    except Exception:
+        prefill_payload = ""
     
     # Determine code language for highlighting
     if backend == 'eql':
@@ -142,6 +171,7 @@ def convert_rule(
             "raw_query": raw_query,
             "backend": backend,
             "code_lang": code_lang,
+            "prefill_payload": prefill_payload,
         }
     )
 

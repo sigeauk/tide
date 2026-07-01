@@ -1,0 +1,44 @@
+{% from "macros/icons.html" import icon, icon_text %}
+<div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+    <div class="modal-content modal-md">
+        <div class="modal-header">
+            <h2>{{ icon_text('edit', 'Edit Rule') }} {{ rule.name }}</h2>
+            <button class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
+        </div>
+
+        <div class="modal-body">
+            <form
+                hx-post="/api/rules/{{ rule.rule_id }}/edit?space={{ space }}{% if siem_id %}&siem_id={{ siem_id }}{% endif %}"
+                hx-target="#modal-container"
+                hx-swap="innerHTML"
+                hx-include="unset">
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-rule-name">Rule Name</label>
+                    <input id="edit-rule-name" type="text" name="name" class="form-input" value="{{ rule.name }}">
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-rule-severity">Severity</label>
+                    <select id="edit-rule-severity" name="severity" class="form-select">
+                        {% set current = (rule.severity or 'medium') | lower %}
+                        <option value="low" {% if current == 'low' %}selected{% endif %}>Low</option>
+                        <option value="medium" {% if current == 'medium' %}selected{% endif %}>Medium</option>
+                        <option value="high" {% if current == 'high' %}selected{% endif %}>High</option>
+                        <option value="critical" {% if current == 'critical' %}selected{% endif %}>Critical</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label" for="edit-rule-note">Note</label>
+                    <textarea id="edit-rule-note" name="note" class="form-textarea" rows="4">{{ rule.note or '' }}</textarea>
+                </div>
+
+                <div class="form-actions" style="justify-content:flex-end; margin-top: 1rem;">
+                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-container').innerHTML=''">Cancel</button>
+                    <button type="submit" class="btn btn-primary">{{ icon_text('save', 'Save Changes', '14') }}</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>

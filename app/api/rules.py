@@ -2,9 +2,12 @@
 API routes for Detection Rules (Rule Health page).
 """
 
+import json
+from urllib.parse import unquote
+
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
-from typing import Optional
+from typing import Optional, Any
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.models.rules import RuleFilters
@@ -14,6 +17,281 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
+
+MITRE_TACTIC_MAP = {
+    "Reconnaissance": {"id": "TA0043", "reference": "https://attack.mitre.org/tactics/TA0043/"},
+    "Resource Development": {"id": "TA0042", "reference": "https://attack.mitre.org/tactics/TA0042/"},
+    "Initial Access": {"id": "TA0001", "reference": "https://attack.mitre.org/tactics/TA0001/"},
+    "Execution": {"id": "TA0002", "reference": "https://attack.mitre.org/tactics/TA0002/"},
+    "Persistence": {"id": "TA0003", "reference": "https://attack.mitre.org/tactics/TA0003/"},
+    "Privilege Escalation": {"id": "TA0004", "reference": "https://attack.mitre.org/tactics/TA0004/"},
+    "Defense Evasion": {"id": "TA0005", "reference": "https://attack.mitre.org/tactics/TA0005/"},
+    "Credential Access": {"id": "TA0006", "reference": "https://attack.mitre.org/tactics/TA0006/"},
+    "Discovery": {"id": "TA0007", "reference": "https://attack.mitre.org/tactics/TA0007/"},
+    "Lateral Movement": {"id": "TA0008", "reference": "https://attack.mitre.org/tactics/TA0008/"},
+    "Collection": {"id": "TA0009", "reference": "https://attack.mitre.org/tactics/TA0009/"},
+    "Exfiltration": {"id": "TA0010", "reference": "https://attack.mitre.org/tactics/TA0010/"},
+    "Command And Control": {"id": "TA0011", "reference": "https://attack.mitre.org/tactics/TA0011/"},
+    "Impact": {"id": "TA0040", "reference": "https://attack.mitre.org/tactics/TA0040/"},
+}
+
+
+def _parse_scope_pair(scope_pair: str) -> tuple[str, str]:
+    """Parse `<siem_id>|<space>` from create/edit forms."""
+    if not scope_pair or "|" not in scope_pair:
+        return "", ""
+    siem_id, space = scope_pair.split("|", 1)
+    return (siem_id or "").strip(), (space or "").strip() or "default"
+
+
+def _format_tactic_label(raw_tactic: str) -> str:
+    value = (raw_tactic or "other").replace("_", " ").replace("-", " ").strip()
+    return value.title() if value else "Other"
+
+
+def _normalize_author(raw_author: Any) -> str:
+    if isinstance(raw_author, list):
+        return ", ".join(str(item).strip() for item in raw_author if str(item).strip())
+    return str(raw_author or "").strip()
+
+
+def _split_csv(raw_value: Any) -> list[str]:
+    if isinstance(raw_value, list):
+        return [str(item).strip() for item in raw_value if str(item).strip()]
+    return [part.strip() for part in str(raw_value or "").split(",") if part.strip()]
+
+
+def _build_technique_groups(db) -> tuple[list[dict], dict[str, dict]]:
+    groups: dict[str, list[dict]] = {}
+    lookup: dict[str, dict] = {}
+    for item in db.get_mitre_techniques() or []:
+        technique_id = str(item.get("id") or "").strip().upper()
+        technique_name = str(item.get("name") or "").strip()
+        if not technique_id or not technique_name:
+            continue
+        tactic = _format_tactic_label(str(item.get("tactic") or ""))
+        option = {
+            "id": technique_id,
+            "name": technique_name,
+            "tactic": tactic,
+            "url": item.get("url") or "",
+        }
+        groups.setdefault(tactic, []).append(option)
+        lookup[technique_id] = option
+
+    ordered = [
+        {"tactic": tactic, "options": options}
+        for tactic, options in sorted(groups.items(), key=lambda pair: pair[0])
+    ]
+    return ordered, lookup
+
+
+def _extract_prefill(raw_prefill: Optional[str]) -> dict:
+    if not raw_prefill:
+        return {}
+    try:
+        return json.loads(unquote(raw_prefill))
+    except Exception:
+        logger.warning("Invalid rule form prefill payload")
+        return {}
+
+
+def _build_threat_entries(mitre_ids: list[str], technique_lookup: dict[str, dict]) -> list[dict]:
+    tactic_map: dict[str, dict] = {}
+    for technique_id in mitre_ids:
+        option = technique_lookup.get(technique_id.upper())
+        if not option:
+            continue
+        tactic = option["tactic"]
+        tactic_meta = MITRE_TACTIC_MAP.get(tactic)
+        if not tactic_meta:
+            continue
+        bucket = tactic_map.setdefault(
+            tactic,
+            {
+                "framework": "MITRE ATT&CK",
+                "tactic": {
+                    "id": tactic_meta["id"],
+                    "name": tactic,
+                    "reference": tactic_meta["reference"],
+                },
+                "technique": [],
+            },
+        )
+        technique_entry = {
+            "id": option["id"],
+            "name": option["name"],
+        }
+        if option.get("url"):
+            technique_entry["reference"] = option["url"]
+        bucket["technique"].append(technique_entry)
+    return list(tactic_map.values())
+
+
+def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) -> dict:
+    raw = (getattr(rule, "raw_data", None) or {}) if rule else {}
+    severity = getattr(rule, "severity", "medium") if rule else "medium"
+    severity_value = severity
+    enabled = getattr(rule, "enabled", True) if rule is not None else True
+
+    prefill = prefill or {}
+    if prefill:
+        name = str(prefill.get("name") or "").strip()
+        description = str(prefill.get("description") or "").strip()
+        query = str(prefill.get("query") or "").strip()
+        language = str(prefill.get("language") or "kuery").strip().lower()
+        severity_value = str(prefill.get("severity") or severity_value).strip().lower()
+        author = _normalize_author(prefill.get("author") or raw.get("author") or (getattr(rule, "author", "") if rule else "") or username)
+        tags_value = prefill.get("tags") or raw.get("tags") or []
+        mitre_ids = [str(item).upper() for item in (prefill.get("mitre_ids") or []) if str(item).strip()]
+        note = str(prefill.get("note") or raw.get("note") or "")
+        index_value = prefill.get("index") or []
+        timestamp_override = str(prefill.get("timestamp_override") or raw.get("timestamp_override") or "event.ingested")
+        highlighted_fields = prefill.get("highlighted_fields") or []
+        risk_score = prefill.get("risk_score")
+        scope_pair = str(prefill.get("scope_pair") or "")
+        return {
+            "name": name,
+            "description": description,
+            "scope_pair": scope_pair or (f'{getattr(rule, "siem_id", "")}|{getattr(rule, "space", "default")}' if rule and getattr(rule, "siem_id", None) else ""),
+            "language": language,
+            "query": query,
+            "severity": severity_value,
+            "author": author,
+            "tags": ", ".join(_split_csv(tags_value)),
+            "mitre_ids": mitre_ids,
+            "note": note,
+            "interval": str(prefill.get("interval") or raw.get("interval") or "5m"),
+            "from": str(prefill.get("from") or raw.get("from") or "now-6m"),
+            "enabled": bool(prefill.get("enabled", enabled if enabled is not None else True)),
+            "type": str(prefill.get("type") or raw.get("type") or "query"),
+            "risk_score": str(risk_score if risk_score is not None else prefill.get("risk_score_default") or _severity_to_risk_score(severity_value)),
+            "index": ", ".join(_split_csv(index_value)),
+            "timestamp_override": timestamp_override,
+            "highlighted_fields": ", ".join(_split_csv(highlighted_fields)),
+            "reason": str(prefill.get("reason") or ""),
+        }
+
+    return {
+        "name": getattr(rule, "name", "") if rule else "",
+        "scope_pair": f'{getattr(rule, "siem_id", "")}|{getattr(rule, "space", "default")}' if rule and getattr(rule, "siem_id", None) else "",
+        "language": str(raw.get("language") or (rule.language if rule else "kuery") or "kuery").lower(),
+        "query": str(raw.get("query") or (rule.query if rule else "") or ""),
+        "description": str(raw.get("description") or ""),
+        "severity": severity_value.lower(),
+        "author": _normalize_author(raw.get("author") or (getattr(rule, "author", "") if rule else "") or username),
+        "tags": ", ".join(_split_csv(raw.get("tags") or [])),
+        "mitre_ids": [str(item).upper() for item in (getattr(rule, "mitre_ids", []) or []) if str(item).strip()],
+        "note": str(raw.get("note") or ""),
+        "interval": str(raw.get("interval") or "5m"),
+        "from": str(raw.get("from") or "now-6m"),
+        "enabled": bool(enabled if enabled is not None else True),
+        "type": str(raw.get("type") or "query"),
+        "risk_score": str(raw.get("risk_score") or _severity_to_risk_score(severity_value.lower())),
+        "index": ", ".join(_split_csv(raw.get("index") or [])),
+        "timestamp_override": str(raw.get("timestamp_override") or "event.ingested"),
+        "highlighted_fields": ", ".join(_split_csv(raw.get("investigation_fields", {}).get("field_names", []) if isinstance(raw.get("investigation_fields"), dict) else raw.get("investigation_fields") or [])),
+        "reason": "",
+    }
+
+
+def _build_rule_form_context(db, client_id: str, username: str, form_action: str, submit_label: str,
+                             title: str, rule=None, scope_locked: bool = False,
+                             prefill: Optional[dict] = None) -> dict:
+    siems = db.get_client_siems(client_id) or []
+    technique_groups, technique_lookup = _build_technique_groups(db)
+    scope_options = [
+        {
+            "siem_id": s.get("id"),
+            "space": s.get("space") or "default",
+            "label": f'{s.get("label", "SIEM")} ({(s.get("environment_role") or "staging").title()})',
+        }
+        for s in siems
+        if s.get("id") and (s.get("space") is not None)
+    ]
+    form_values = _rule_form_values(rule, username=username, prefill=prefill)
+    selected_tactics = []
+    for mitre_id in form_values.get("mitre_ids", []):
+        option = technique_lookup.get(str(mitre_id).upper())
+        if option and option.get("tactic") not in selected_tactics:
+            selected_tactics.append(option.get("tactic"))
+    return {
+        "form_action": form_action,
+        "submit_label": submit_label,
+        "modal_title": title,
+        "scope_options": scope_options,
+        "technique_groups": technique_groups,
+        "mitre_tactics": [group["tactic"] for group in technique_groups],
+        "selected_tactics": selected_tactics,
+        "form_values": form_values,
+        "mode": "edit" if rule else "create",
+        "scope_locked": scope_locked,
+        "rule": rule,
+    }
+
+
+def _severity_to_risk_score(severity: str) -> int:
+    return {
+        "low": 21,
+        "medium": 47,
+        "high": 73,
+        "critical": 99,
+    }.get((severity or "medium").lower(), 47)
+
+
+def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_author: str) -> tuple[dict, str, str, list[str]]:
+    rule_name = (form_data.get("name") or "").strip()
+    description = (form_data.get("description") or "").strip()
+    query = (form_data.get("query") or "").strip()
+    language = (form_data.get("language") or "kuery").strip().lower()
+    severity = (form_data.get("severity") or "medium").strip().lower()
+    enabled = str(form_data.get("enabled") or "true").lower() == "true"
+    author_value = (form_data.get("author") or "").strip() or default_author
+    tags = _split_csv(form_data.get("tags") or "")
+    note = (form_data.get("note") or "").strip()
+    interval = (form_data.get("interval") or "5m").strip() or "5m"
+    lookback = (form_data.get("from") or "now-6m").strip() or "now-6m"
+    risk_score_raw = (form_data.get("risk_score") or "").strip()
+    index_patterns = _split_csv(form_data.get("index") or "")
+    timestamp_override = (form_data.get("timestamp_override") or "event.ingested").strip() or "event.ingested"
+    highlighted_fields = _split_csv(form_data.get("highlighted_fields") or "")
+    reason = (form_data.get("reason") or "").strip()
+    mitre_ids = [
+        str(item).strip().upper()
+        for item in (form_data.getlist("mitre_ids") if hasattr(form_data, "getlist") else [])
+        if str(item).strip()
+    ]
+    if not mitre_ids:
+        mitre_ids = [item.upper() for item in _split_csv(form_data.get("mitre_ids") or "")]
+
+    payload = {
+        "name": rule_name,
+        "description": description or rule_name,
+        "query": query,
+        "language": language,
+        "severity": severity,
+        "risk_score": int(risk_score_raw) if risk_score_raw.isdigit() else _severity_to_risk_score(severity),
+        "enabled": enabled,
+        "author": [author_value],
+        "tags": tags,
+        "note": note,
+        "interval": interval,
+        "from": lookback,
+        "type": (form_data.get("type") or "query").strip() or "query",
+        "mitre_ids": mitre_ids,
+        "index": index_patterns,
+        "timestamp_override": timestamp_override,
+    }
+    if highlighted_fields:
+        payload["investigation_fields"] = {"field_names": highlighted_fields}
+    if reason:
+        payload["reason"] = reason
+    threat = _build_threat_entries(mitre_ids, technique_lookup)
+    if threat:
+        payload["threat"] = threat
+    else:
+        payload["threat"] = []
+    return payload, rule_name, query, mitre_ids
 
 
 def _build_space_labels(db, client_id: str) -> dict:
@@ -168,7 +446,7 @@ def list_rules(
         
         rules, total, last_sync = db.get_rules(
             filters=filters,
-            thresholds=db.get_client_validation_thresholds(client_id),
+            client_id=client_id,
         )
         total_pages = max(1, (total + page_size - 1) // page_size)
         
@@ -211,7 +489,7 @@ def get_metrics(
     from app.main import get_last_sync_time
     # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
     metrics = db.get_rule_health_metrics(
-        thresholds=db.get_client_validation_thresholds(client_id),
+        client_id=client_id,
     )
     # Hide orphan space buckets (rules whose (siem_id, space) is no
     # longer in client_siem_map after a mapping change).
@@ -245,8 +523,7 @@ def get_rule_detail(
     ),
 ):
     """Get full rule details for modal display."""
-    thresholds = db.get_client_validation_thresholds(client_id)
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     
     if not rule:
         return HTMLResponse(
@@ -290,6 +567,21 @@ def validate_rule(
     
     username = user.name or user.username if user else "Unknown"
     db.save_validation(rule.name, username)
+    validation_reason = f"{username} validated rule"
+    if siem_id:
+        try:
+            db.record_rule_history(
+                rule_id=rule_id,
+                siem_id=siem_id,
+                space=space,
+                client_id=client_id,
+                action="validated",
+                actor_user_id=user.id,
+                actor_name=username,
+                detail={"message": validation_reason, "reason": validation_reason},
+            )
+        except Exception:
+            logger.exception("Failed to write validation history for rule %s", rule_id)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
     
     templates = request.app.state.templates
@@ -348,7 +640,7 @@ async def test_rule(
     if lookback not in allowed:
         lookback = "24h"
     
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
         return HTMLResponse(
             '<div class="test-result test-error">Rule not found</div>',
@@ -512,9 +804,388 @@ async def sync_rules(
         '    if(el && el.classList.contains("sync-complete")){'
         '      clearInterval(iv);'
         '      htmx.trigger(document.body,"refreshRules");'
-        '      htmx.ajax("GET","/api/rules/metrics",{target:"#metrics-row",swap:"innerHTML"});'
+        '      htmx.ajax("GET","/api/rules/metrics",{target:"#metrics-container",swap:"innerHTML"});'
         '    }'
         '  },1000);'
         '})();'
         '</script>'
     )
+
+
+@router.get("/create-form", response_class=HTMLResponse)
+async def get_create_form(
+    request: Request,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    prefill: Optional[str] = Query(None),
+):
+    """Render the create-rule modal form."""
+    try:
+        templates = request.app.state.templates
+        return templates.TemplateResponse(
+            request,
+            "components/rule_create_form.html",
+            _build_rule_form_context(
+                db,
+                client_id,
+                user.username,
+                "/api/rules/create",
+                "Create Rule",
+                "Create Rule",
+                prefill=_extract_prefill(prefill),
+            ),
+        )
+    except Exception as e:
+        logger.exception("get_create_form failed")
+        return HTMLResponse(
+            f'<div class="empty-state-text">Error loading form: {str(e)}</div>',
+            status_code=500,
+        )
+
+
+@router.post("/create", response_class=HTMLResponse)
+async def create_rule(
+    request: Request,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+):
+    """Create a detection rule in the selected tenant-scoped SIEM/space."""
+    from app import elastic_helper
+
+    try:
+        form_data = await request.form()
+        scope_pair = (form_data.get("scope_pair") or "").strip()
+        siem_id, space = _parse_scope_pair(scope_pair)
+        _, technique_lookup = _build_technique_groups(db)
+        rule_data, rule_name, query, _ = _build_rule_payload(form_data, technique_lookup, user.username)
+
+        if not rule_name or not query:
+            return HTMLResponse(
+                '<div class="empty-state-text">Rule name and query are required.</div>',
+                status_code=400,
+            )
+        if not siem_id or not space:
+            return HTMLResponse(
+                '<div class="empty-state-text">Select a target SIEM/space pair.</div>',
+                status_code=400,
+            )
+
+        allowed_pairs = set(db.get_client_siem_scopes(client_id) or [])
+        if (siem_id, space) not in allowed_pairs:
+            return HTMLResponse(
+                '<div class="empty-state-text">Selected SIEM/space is not assigned to this tenant.</div>',
+                status_code=403,
+            )
+
+        siem = next(
+            (
+                s for s in (db.get_client_siems(client_id) or [])
+                if s.get("id") == siem_id and (s.get("space") or "default") == space
+            ),
+            None,
+        )
+        if not siem:
+            return HTMLResponse(
+                '<div class="empty-state-text">Unable to resolve SIEM credentials for selected pair.</div>',
+                status_code=404,
+            )
+
+        success, message, new_rule_id = elastic_helper.create_detection_rule(
+            rule_data,
+            space=space,
+            kibana_url=siem.get("kibana_url"),
+            api_key=siem.get("api_token_enc"),
+        )
+        if not success:
+            return HTMLResponse(
+                f'<div class="empty-state-text">Failed to create rule: {message}</div>',
+                status_code=400,
+            )
+
+        db.record_rule_history(
+            rule_id=new_rule_id,
+            siem_id=siem_id,
+            space=space,
+            client_id=client_id,
+            action="created",
+            actor_user_id=user.id,
+            actor_name=user.username,
+            detail={
+                "rule_name": rule_name,
+                "message": message,
+            },
+        )
+
+        return HTMLResponse(
+            '<div></div>'
+            '<script>'
+            'htmx.ajax("POST","/api/rules/sync",{target:"#sync-status",swap:"outerHTML"});'
+            '</script>'
+        )
+    except Exception as e:
+        logger.exception("create_rule failed")
+        return HTMLResponse(
+            f'<div class="empty-state-text">Error: {str(e)}</div>',
+            status_code=500,
+        )
+
+
+@router.get("/{rule_id}/history", response_class=HTMLResponse)
+def get_rule_history(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Render lifecycle timeline for one rule."""
+    if not siem_id:
+        return HTMLResponse('<div class="timeline-empty">Missing SIEM context.</div>', status_code=400)
+
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+
+    history = db.get_rule_history(rule_id, siem_id, space, limit=100)
+    score_history = db.get_rule_score_history(rule_id, siem_id, space, limit=50)
+    history_users = sorted({event.get("actor_name") for event in history if event.get("actor_name")})
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "partials/rule_timeline.html",
+        {
+            "history": history,
+            "history_users": history_users,
+            "score_history": score_history,
+        },
+    )
+
+
+@router.get("/{rule_id}/history-modal", response_class=HTMLResponse)
+def get_rule_history_modal(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Open a focused history modal with edit action when clicking a rule card."""
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+
+    history = db.get_rule_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=100)
+    score_history = db.get_rule_score_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=50)
+    history_users = sorted({event.get("actor_name") for event in history if event.get("actor_name")})
+    templates = request.app.state.templates
+    scope_label = (
+        _build_space_labels_by_pair(db, client_id).get(f'{siem_id or getattr(rule, "siem_id", "")}|{space}')
+        or _build_space_labels(db, client_id).get(space, space.capitalize())
+    )
+    return templates.TemplateResponse(
+        request,
+        "components/rule_history_modal.html",
+        {
+            "rule": rule,
+            "history": history,
+            "history_users": history_users,
+            "score_history": score_history,
+            "space": space,
+            "scope_label": scope_label,
+            "siem_id": siem_id or getattr(rule, "siem_id", ""),
+        },
+    )
+
+
+@router.get("/{rule_id}/edit-form", response_class=HTMLResponse)
+def get_rule_edit_form(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Render full edit form for a rule using the create/edit modal layout."""
+    thresholds = db.get_client_validation_thresholds(client_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    if not rule:
+        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "components/rule_create_form.html",
+        _build_rule_form_context(
+            db,
+            client_id,
+            user.username,
+            f'/api/rules/{rule_id}/edit?space={space}'
+            + (f'&siem_id={siem_id or getattr(rule, "siem_id", "")}' if (siem_id or getattr(rule, "siem_id", "")) else ""),
+            "Save Changes",
+            "Edit Rule",
+            rule=rule,
+            scope_locked=True,
+        ),
+    )
+
+
+@router.post("/{rule_id}/edit", response_class=HTMLResponse)
+async def edit_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Update a rule in Kibana and append lifecycle history."""
+    from app import elastic_helper
+
+    thresholds = db.get_client_validation_thresholds(client_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    if not rule:
+        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+
+    actual_siem_id = siem_id or getattr(rule, "siem_id", None)
+    if not actual_siem_id:
+        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+
+    siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == actual_siem_id), None)
+    if not siem:
+        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+
+    form = await request.form()
+    _, technique_lookup = _build_technique_groups(db)
+    updated_fields, new_name, _, _ = _build_rule_payload(form, technique_lookup, user.username)
+    reason = (form.get("reason") or "").strip()
+    if not reason:
+        return HTMLResponse(
+            '<div class="empty-state-text">Reason for change is required before saving.</div>',
+            status_code=400,
+        )
+
+    payload = dict(rule.raw_data or {})
+    payload.update(updated_fields)
+    if new_name:
+        payload["name"] = new_name
+
+    success, message = elastic_helper.update_detection_rule(
+        rule_id=rule_id,
+        rule_data=payload,
+        space=space,
+        kibana_url=siem.get("kibana_url"),
+        api_key=siem.get("api_token_enc"),
+    )
+    if not success:
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+
+    db.record_rule_history(
+        rule_id=rule_id,
+        siem_id=actual_siem_id,
+        space=space,
+        client_id=client_id,
+        action="edited",
+        actor_user_id=user.id,
+        actor_name=user.username,
+        detail={"message": reason, "reason": reason},
+    )
+
+    return HTMLResponse(
+        '<div></div>'
+        '<script>'
+        'htmx.ajax("POST","/api/rules/sync",{target:"#sync-status",swap:"outerHTML"});'
+        '</script>'
+    )
+
+
+@router.post("/{rule_id}/enable", response_class=HTMLResponse)
+async def enable_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Enable a detection rule in Kibana and refresh the grid."""
+    from app import elastic_helper
+
+    if not siem_id:
+        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+
+    siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
+    if not siem:
+        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+
+    success, message = elastic_helper.enable_detection_rule(
+        rule_id,
+        space=space,
+        kibana_url=siem.get("kibana_url"),
+        api_key=siem.get("api_token_enc"),
+    )
+    if not success:
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+
+    db.record_rule_history(
+        rule_id=rule_id,
+        siem_id=siem_id,
+        space=space,
+        client_id=client_id,
+        action="enabled",
+        actor_user_id=user.id,
+        actor_name=user.username,
+        detail={"message": message},
+    )
+    return HTMLResponse('<script>htmx.trigger(document.body,"refreshRules");</script>')
+
+
+@router.patch("/{rule_id}/disable", response_class=HTMLResponse)
+async def disable_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Disable a detection rule in Kibana and refresh the grid."""
+    from app import elastic_helper
+
+    if not siem_id:
+        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+
+    siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
+    if not siem:
+        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+
+    success, message = elastic_helper.disable_detection_rule(
+        rule_id,
+        space=space,
+        kibana_url=siem.get("kibana_url"),
+        api_key=siem.get("api_token_enc"),
+    )
+    if not success:
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+
+    db.record_rule_history(
+        rule_id=rule_id,
+        siem_id=siem_id,
+        space=space,
+        client_id=client_id,
+        action="disabled",
+        actor_user_id=user.id,
+        actor_name=user.username,
+        detail={"message": message},
+    )
+    return HTMLResponse('<script>htmx.trigger(document.body,"refreshRules");</script>')

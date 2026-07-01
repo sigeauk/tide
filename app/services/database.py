@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 52
+SCHEMA_VERSION = 54
 
 
 def _scope_predicate(
@@ -2181,6 +2181,46 @@ class DatabaseService:
                 "inherit settings default)."
             )
 
+        # ── Migration 54: validation mode + per-criticality thresholds ─
+        # The original amber/expired pair remains the master cadence.
+        # Tenants can now switch to a criticality-aware mode where each
+        # severity level carries its own pair.
+        if current_version < 54:
+            try:
+                cols = {
+                    r[1] for r in conn.execute(
+                        "PRAGMA table_info('clients')"
+                    ).fetchall()
+                }
+                if "rule_validation_mode" not in cols:
+                    conn.execute(
+                        "ALTER TABLE clients ADD COLUMN rule_validation_mode VARCHAR"
+                    )
+                for name in (
+                    "rule_validation_low_amber_weeks",
+                    "rule_validation_low_expired_weeks",
+                    "rule_validation_medium_amber_weeks",
+                    "rule_validation_medium_expired_weeks",
+                    "rule_validation_high_amber_weeks",
+                    "rule_validation_high_expired_weeks",
+                    "rule_validation_critical_amber_weeks",
+                    "rule_validation_critical_expired_weeks",
+                ):
+                    if name not in cols:
+                        conn.execute(f"ALTER TABLE clients ADD COLUMN {name} INTEGER")
+                conn.execute(
+                    "UPDATE clients SET rule_validation_mode = COALESCE(rule_validation_mode, 'master')"
+                )
+            except Exception as exc:
+                logger.error(f"Migration 54 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 54)
+            logger.info(
+                "Migration 54: added rule_validation_mode and per-severity "
+                "validation thresholds to clients (criticality mode augments "
+                "the existing master cadence)."
+            )
+
         # ── Migration 49: TAXII 2.1 cursor store ─────────────────────
         # Persistent per-(connector, api_root, collection) watermark
         # captured from the TAXII server's ``X-TAXII-Date-Added-Last``
@@ -2349,6 +2389,43 @@ class DatabaseService:
             logger.info(
                 "Migration 52: added sync_interval_minutes + "
                 "last_sync_started_at to cti_connectors."
+            )
+
+        # ── Migration 53: rule lifecycle history audit trail ──────────
+        # Tracks rule create/edit/enable/disable/validate/promote/demote
+        # events with actor, timestamp, and before/after detail (JSON).
+        # Per-tenant scoped via client_id for tenant isolation.
+        if current_version < 53:
+            try:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS rule_lifecycle_history (
+                        id VARCHAR PRIMARY KEY DEFAULT (uuid()::VARCHAR),
+                        rule_id VARCHAR NOT NULL,
+                        siem_id VARCHAR NOT NULL,
+                        space VARCHAR NOT NULL,
+                        client_id VARCHAR NOT NULL,
+                        action VARCHAR NOT NULL,
+                        actor_user_id VARCHAR,
+                        actor_name VARCHAR,
+                        detail JSON,
+                        created_at TIMESTAMP DEFAULT now()
+                    )
+                """)
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_rule_lifecycle_rule "
+                    "ON rule_lifecycle_history (rule_id, siem_id, space, client_id)"
+                )
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_rule_lifecycle_created "
+                    "ON rule_lifecycle_history (created_at DESC)"
+                )
+            except Exception as exc:
+                logger.error(f"Migration 53 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 53)
+            logger.info(
+                "Migration 53: created rule_lifecycle_history table "
+                "for audit trail tracking."
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -2985,6 +3062,7 @@ class DatabaseService:
         self,
         filters: RuleFilters,
         thresholds: Optional[Tuple[int, int]] = None,
+        client_id: Optional[str] = None,
     ) -> Tuple[List[DetectionRule], int, str]:
         """
         Get paginated list of detection rules with filters.
@@ -3082,7 +3160,12 @@ class DatabaseService:
 
         for _, row in df.iterrows():
             try:
-                rule = self._row_to_rule(row.to_dict(), validation_data, thresholds)
+                rule = self._row_to_rule(
+                    row.to_dict(),
+                    validation_data,
+                    thresholds,
+                    client_id=client_id,
+                )
                 rules.append(rule)
             except Exception as e:
                 rule_id = row.get('rule_id', '?')
@@ -3200,7 +3283,8 @@ class DatabaseService:
 
     def get_rule_by_id(self, rule_id: str, space: str = "default",
                        siem_id: Optional[str] = None,
-                       thresholds: Optional[Tuple[int, int]] = None) -> Optional[DetectionRule]:
+                       thresholds: Optional[Tuple[int, int]] = None,
+                       client_id: Optional[str] = None) -> Optional[DetectionRule]:
         """Get a single rule by ID and space.
 
         Since 4.0.13, ``siem_id`` may be supplied to scope the lookup to a
@@ -3227,7 +3311,12 @@ class DatabaseService:
                 columns = [desc[0] for desc in conn.description]
                 row = dict(zip(columns, result))
                 validation_data = self._load_validation_data()
-                return self._row_to_rule(row, validation_data, thresholds)
+                return self._row_to_rule(
+                    row,
+                    validation_data,
+                    thresholds,
+                    client_id=client_id,
+                )
 
         return None
     
@@ -3278,6 +3367,7 @@ class DatabaseService:
         row: Dict[str, Any],
         validation_data: Dict,
         thresholds: Optional[Tuple[int, int]] = None,
+        client_id: Optional[str] = None,
     ) -> DetectionRule:
         """Convert database row to DetectionRule model.
 
@@ -3289,11 +3379,6 @@ class DatabaseService:
         """
         _si = self._safe_int
         _ss = self._safe_str
-        if thresholds is None:
-            amber_weeks = int(self.settings.rule_validation_amber_weeks)
-            expired_weeks = int(self.settings.rule_validation_expired_weeks)
-        else:
-            amber_weeks, expired_weeks = thresholds
 
         # Parse raw_data
         raw_data = row.get('raw_data')
@@ -3323,6 +3408,17 @@ class DatabaseService:
         # Parse severity — NULL / unexpected values fall back to 'low'
         sev_str = _ss(row.get('severity'), 'low').lower()
         severity = sev_str if sev_str in {'low', 'medium', 'high', 'critical'} else 'low'
+
+        if client_id:
+            amber_weeks, expired_weeks = self.get_client_validation_thresholds(
+                client_id,
+                severity=severity,
+            )
+        elif thresholds is None:
+            amber_weeks = int(self.settings.rule_validation_amber_weeks)
+            expired_weeks = int(self.settings.rule_validation_expired_weeks)
+        else:
+            amber_weeks, expired_weeks = thresholds
 
         # Get validation info
         rule_name = _ss(row.get('name'))
@@ -3381,6 +3477,7 @@ class DatabaseService:
         self,
         allowed_scopes: Optional[List[Tuple[str, str]]] = None,
         thresholds: Optional[Tuple[int, int]] = None,
+        client_id: Optional[str] = None,
     ) -> RuleHealthMetrics:
         """Calculate comprehensive rule health metrics.
 
@@ -3477,8 +3574,9 @@ class DatabaseService:
 
         if validation_data:
             now = datetime.now()
-            for rule_name in df['name'].tolist():
-                rule_v = validation_data.get(str(rule_name), {})
+            for _, row in df.iterrows():
+                rule_name = str(row.get('name') or '')
+                rule_v = validation_data.get(rule_name, {})
                 if rule_v:
                     validated_count += 1
                     val_str = rule_v.get('last_checked_on', '')
@@ -3486,6 +3584,15 @@ class DatabaseService:
                         try:
                             val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
                             weeks = (now - val_date).days / 7
+                            severity = str(row.get('severity') or 'low').lower()
+                            amber_weeks, expired_weeks = (
+                                self.get_client_validation_thresholds(client_id, severity=severity)
+                                if client_id
+                                else thresholds or (
+                                    int(self.settings.rule_validation_amber_weeks),
+                                    int(self.settings.rule_validation_expired_weeks),
+                                )
+                            )
                             if weeks > expired_weeks:
                                 validation_expired_count += 1
                         except:
@@ -3686,6 +3793,335 @@ class DatabaseService:
                 'staging_never_validated': staging_total - staging_validated,
                 'production_total': production_total,
             }
+    
+    # --- RULE LIFECYCLE HISTORY ---
+
+    def _ensure_rule_lifecycle_history_table(self, conn) -> None:
+        """Ensure lifecycle history table exists in the active DB connection.
+
+        TIDE uses per-tenant DuckDB files for tenant-scoped rule data. Migrations
+        run on the shared DB at startup, so this guard also creates the table in
+        tenant DBs lazily when lifecycle methods are called.
+        """
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rule_lifecycle_history (
+                id VARCHAR PRIMARY KEY DEFAULT (uuid()::VARCHAR),
+                rule_id VARCHAR NOT NULL,
+                siem_id VARCHAR NOT NULL,
+                space VARCHAR NOT NULL,
+                client_id VARCHAR NOT NULL,
+                action VARCHAR NOT NULL,
+                actor_user_id VARCHAR,
+                actor_name VARCHAR,
+                detail JSON,
+                created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rule_lifecycle_rule "
+            "ON rule_lifecycle_history (rule_id, siem_id, space, client_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rule_lifecycle_created "
+            "ON rule_lifecycle_history (created_at DESC)"
+        )
+    
+    def record_rule_history(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        client_id: str,
+        action: str,
+        actor_user_id: Optional[str] = None,
+        actor_name: Optional[str] = None,
+        detail: Optional[Dict[str, Any]] = None,
+        created_at: Optional[datetime] = None,
+    ) -> str:
+        """Record a rule lifecycle event (create/edit/enable/disable/validate/promote).
+        
+        Returns the history record ID.
+        """
+        import json as _json
+        detail_json = _json.dumps(detail or {})
+        with self.get_connection() as conn:
+            self._ensure_rule_lifecycle_history_table(conn)
+            if created_at is None:
+                conn.execute(
+                    "INSERT INTO rule_lifecycle_history "
+                    "(rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json],
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO rule_lifecycle_history "
+                    "(rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json, created_at],
+                )
+            row = conn.execute(
+                "SELECT id FROM rule_lifecycle_history "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? AND action = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                [rule_id, siem_id, space, action],
+            ).fetchone()
+        return row[0] if row else None
+    
+    def get_rule_history(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Get audit trail for a specific rule (scoped by siem_id + space).
+        
+        Returns a list of history records sorted by creation time (newest first).
+        """
+        import json as _json
+        with self.get_connection() as conn:
+            self._ensure_rule_lifecycle_history_table(conn)
+            rows = conn.execute(
+                "SELECT id, action, actor_user_id, actor_name, detail, created_at "
+                "FROM rule_lifecycle_history "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                [rule_id, siem_id, space, limit],
+            ).fetchall()
+        
+        result = []
+        for row in rows:
+            detail = {}
+            try:
+                if row[4]:
+                    detail = _json.loads(row[4])
+            except Exception:
+                pass
+            result.append({
+                "id": row[0],
+                "action": row[1],
+                "actor_user_id": row[2],
+                "actor_name": row[3],
+                "detail": detail,
+                "created_at": row[5],
+            })
+        return result
+
+    def _ensure_rule_score_history_table(self, conn) -> None:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rule_score_history (
+                id UUID DEFAULT uuid(),
+                rule_id VARCHAR NOT NULL,
+                siem_id VARCHAR NOT NULL,
+                space VARCHAR NOT NULL,
+                client_id VARCHAR NOT NULL,
+                score INTEGER,
+                quality_score INTEGER,
+                meta_score INTEGER,
+                score_mapping INTEGER,
+                score_field_type INTEGER,
+                score_search_time INTEGER,
+                score_language INTEGER,
+                score_note INTEGER,
+                score_override INTEGER,
+                score_tactics INTEGER,
+                score_techniques INTEGER,
+                score_author INTEGER,
+                score_highlights INTEGER,
+                created_at TIMESTAMP DEFAULT now()
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rule_score_history_rule "
+            "ON rule_score_history (rule_id, siem_id, space, client_id)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_rule_score_history_created "
+            "ON rule_score_history (created_at DESC)"
+        )
+
+    def record_rule_score_snapshot(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        client_id: str,
+        rule_data: Dict[str, Any],
+        created_at: Optional[datetime] = None,
+    ) -> Optional[str]:
+        """Store the score payload for one synced rule."""
+        with self.get_connection() as conn:
+            self._ensure_rule_score_history_table(conn)
+            columns = [
+                "rule_id", "siem_id", "space", "client_id", "score",
+                "quality_score", "meta_score", "score_mapping",
+                "score_field_type", "score_search_time", "score_language",
+                "score_note", "score_override", "score_tactics",
+                "score_techniques", "score_author", "score_highlights",
+            ]
+            values = [
+                rule_id,
+                siem_id,
+                space,
+                client_id,
+                rule_data.get("score"),
+                rule_data.get("quality_score"),
+                rule_data.get("meta_score"),
+                rule_data.get("score_mapping"),
+                rule_data.get("score_field_type"),
+                rule_data.get("score_search_time"),
+                rule_data.get("score_language"),
+                rule_data.get("score_note"),
+                rule_data.get("score_override"),
+                rule_data.get("score_tactics"),
+                rule_data.get("score_techniques"),
+                rule_data.get("score_author"),
+                rule_data.get("score_highlights"),
+            ]
+            if created_at is None:
+                conn.execute(
+                    f"INSERT INTO rule_score_history ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))})",
+                    values,
+                )
+            else:
+                conn.execute(
+                    f"INSERT INTO rule_score_history ({', '.join(columns)}, created_at) VALUES ({', '.join(['?'] * len(columns))}, ?)",
+                    values + [created_at],
+                )
+            row = conn.execute(
+                "SELECT id FROM rule_score_history WHERE rule_id = ? AND siem_id = ? AND space = ? ORDER BY created_at DESC LIMIT 1",
+                [rule_id, siem_id, space],
+            ).fetchone()
+        return row[0] if row else None
+
+    def get_rule_score_history(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """Return score snapshots for one rule, newest first."""
+        with self.get_connection() as conn:
+            self._ensure_rule_score_history_table(conn)
+            rows = conn.execute(
+                "SELECT score, quality_score, meta_score, score_mapping, score_field_type, score_search_time, score_language, score_note, score_override, score_tactics, score_techniques, score_author, score_highlights, created_at "
+                "FROM rule_score_history WHERE rule_id = ? AND siem_id = ? AND space = ? ORDER BY created_at DESC LIMIT ?",
+                [rule_id, siem_id, space, limit],
+            ).fetchall()
+        return [
+            {
+                "score": row[0],
+                "quality_score": row[1],
+                "meta_score": row[2],
+                "score_mapping": row[3],
+                "score_field_type": row[4],
+                "score_search_time": row[5],
+                "score_language": row[6],
+                "score_note": row[7],
+                "score_override": row[8],
+                "score_tactics": row[9],
+                "score_techniques": row[10],
+                "score_author": row[11],
+                "score_highlights": row[12],
+                "created_at": row[13],
+            }
+            for row in rows
+        ]
+    
+    def bootstrap_rule_history_from_elastic(
+        self,
+        rule_data: Dict[str, Any],
+        client_id: str,
+    ) -> None:
+        """Bootstrap lifecycle history from Elastic metadata on first sync.
+        
+        Extracts created_by/created_at from raw_data and records a 'created' event
+        if this is the rule's first appearance in TIDE.
+        """
+        rule_id = rule_data.get("rule_id")
+        siem_id = rule_data.get("siem_id")
+        space = rule_data.get("space") or rule_data.get("space_id") or "default"
+        
+        if not all([rule_id, siem_id, space]):
+            return
+        
+        raw_data = rule_data.get("raw_data", {})
+        created_by = (raw_data.get("created_by") or "system").strip() or "system"
+        updated_by = (raw_data.get("updated_by") or created_by or "system").strip() or "system"
+
+        def _coerce_ts(value: Any) -> Optional[datetime]:
+            if not value:
+                return None
+            if isinstance(value, datetime):
+                return value
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        created_at = _coerce_ts(raw_data.get("created_at")) or datetime.now()
+        updated_at = _coerce_ts(raw_data.get("updated_at"))
+        updated_stamp = updated_at.isoformat() if updated_at else ""
+
+        has_created = False
+        has_matching_elastic_edit = False
+        with self.get_connection() as conn:
+            self._ensure_rule_lifecycle_history_table(conn)
+            rows = conn.execute(
+                "SELECT action, detail FROM rule_lifecycle_history "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                [rule_id, siem_id, space],
+            ).fetchall()
+            for action, detail_json in rows:
+                detail = {}
+                try:
+                    detail = json.loads(detail_json) if detail_json else {}
+                except Exception:
+                    detail = {}
+                if action == "created":
+                    has_created = True
+                if (
+                    action == "edited"
+                    and detail.get("source") == "elastic_sync"
+                    and detail.get("elastic_timestamp") == updated_stamp
+                ):
+                    has_matching_elastic_edit = True
+
+        if not has_created:
+            self.record_rule_history(
+                rule_id=rule_id,
+                siem_id=siem_id,
+                space=space,
+                client_id=client_id,
+                action="created",
+                actor_user_id=None,
+                actor_name=created_by,
+                detail={
+                    "source": "elastic_sync",
+                    "message": "Created in Kibana before initial sync.",
+                    "elastic_timestamp": created_at.isoformat(),
+                },
+                created_at=created_at,
+            )
+
+        if updated_at and updated_at > created_at and not has_matching_elastic_edit:
+            self.record_rule_history(
+                rule_id=rule_id,
+                siem_id=siem_id,
+                space=space,
+                client_id=client_id,
+                action="edited",
+                actor_user_id=None,
+                actor_name=updated_by,
+                detail={
+                    "source": "elastic_sync",
+                    "message": "Updated in Kibana before sync.",
+                    "elastic_timestamp": updated_stamp,
+                },
+                created_at=updated_at,
+            )
     
     # --- THREAT ACTOR OPERATIONS ---
 
@@ -4679,6 +5115,25 @@ class DatabaseService:
                 "SELECT id, name FROM mitre_techniques"
             ).fetchall()
             return {row[0]: row[1] for row in result if row[0] and row[1]}
+
+    def get_mitre_techniques(self) -> List[Dict[str, str]]:
+        """Return MITRE technique definitions for rule form selections."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, name, tactic, url "
+                "FROM mitre_techniques "
+                "WHERE id IS NOT NULL AND name IS NOT NULL "
+                "ORDER BY COALESCE(tactic, ''), id"
+            ).fetchall()
+        return [
+            {
+                "id": row[0],
+                "name": row[1],
+                "tactic": row[2] or "",
+                "url": row[3] or "",
+            }
+            for row in rows
+        ]
     
     def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True,
                                 search: str = None, client_id: str = None,
@@ -4923,7 +5378,7 @@ class DatabaseService:
             logger.info(f"Cleared {count} detection rules")
             return count
     
-    def save_audit_results(self, audit_list: List[Dict[str, Any]]) -> int:
+    def save_audit_results(self, audit_list: List[Dict[str, Any]], client_id: Optional[str] = None) -> int:
         """
         Save detection rules from Elastic sync to database.
         This replaces rules for each synced space to ensure live/accurate data.
@@ -5058,6 +5513,30 @@ class DatabaseService:
                     f"Synced {count} detection rules to database "
                     f"(replaced rules in scopes: {synced_scopes})"
                 )
+
+                score_cols = [
+                    'rule_id', 'siem_id', 'space', 'score', 'quality_score',
+                    'meta_score', 'score_mapping', 'score_field_type',
+                    'score_search_time', 'score_language', 'score_note',
+                    'score_override', 'score_tactics', 'score_techniques',
+                    'score_author', 'score_highlights',
+                ]
+                snapshot_df = df_final[[col for col in score_cols if col in df_final.columns]].copy()
+                for row in snapshot_df.to_dict(orient='records'):
+                    try:
+                        if client_id:
+                            self.record_rule_score_snapshot(
+                                row.get('rule_id'),
+                                row.get('siem_id'),
+                                row.get('space') or 'default',
+                                client_id,
+                                row,
+                            )
+                    except Exception:
+                        logger.exception(
+                            'Failed to record score snapshot for rule_id=%s siem_id=%s space=%s',
+                            row.get('rule_id'), row.get('siem_id'), row.get('space'),
+                        )
                 
             except Exception as e:
                 try:
@@ -5365,11 +5844,21 @@ class DatabaseService:
             rows = conn.execute(
                 "SELECT id, name, slug, description, is_default, db_filename, "
                 "rule_validation_amber_weeks, rule_validation_expired_weeks, "
+                "rule_validation_mode, "
+                "rule_validation_low_amber_weeks, rule_validation_low_expired_weeks, "
+                "rule_validation_medium_amber_weeks, rule_validation_medium_expired_weeks, "
+                "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
+                "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
                 "created_at, updated_at "
                 "FROM clients ORDER BY is_default DESC, name"
             ).fetchall()
             cols = ["id", "name", "slug", "description", "is_default", "db_filename",
                     "rule_validation_amber_weeks", "rule_validation_expired_weeks",
+                    "rule_validation_mode",
+                    "rule_validation_low_amber_weeks", "rule_validation_low_expired_weeks",
+                    "rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks",
+                    "rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks",
+                    "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -5379,6 +5868,11 @@ class DatabaseService:
             row = conn.execute(
                 "SELECT id, name, slug, description, is_default, db_filename, "
                 "rule_validation_amber_weeks, rule_validation_expired_weeks, "
+                "rule_validation_mode, "
+                "rule_validation_low_amber_weeks, rule_validation_low_expired_weeks, "
+                "rule_validation_medium_amber_weeks, rule_validation_medium_expired_weeks, "
+                "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
+                "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
                 "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
@@ -5387,6 +5881,11 @@ class DatabaseService:
             return dict(zip(
                 ["id", "name", "slug", "description", "is_default", "db_filename",
                  "rule_validation_amber_weeks", "rule_validation_expired_weeks",
+                 "rule_validation_mode",
+                 "rule_validation_low_amber_weeks", "rule_validation_low_expired_weeks",
+                 "rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks",
+                 "rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks",
+                 "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
                  "created_at", "updated_at"], row
             ))
 
@@ -5431,16 +5930,32 @@ class DatabaseService:
 
     def update_client(self, client_id: str, **fields) -> Optional[Dict]:
         """Update a client. Allowed fields: name, description,
-        rule_validation_amber_weeks, rule_validation_expired_weeks.
+        rule_validation_amber_weeks, rule_validation_expired_weeks,
+        rule_validation_mode and per-severity validation thresholds.
 
         Pass an empty string / ``None`` for either threshold to clear
         the per-tenant override and fall back to the global default."""
-        allowed = {"name", "description",
-                   "rule_validation_amber_weeks",
-                   "rule_validation_expired_weeks"}
+        allowed = {
+            "name", "description",
+            "rule_validation_mode",
+            "rule_validation_amber_weeks",
+            "rule_validation_expired_weeks",
+            "rule_validation_low_amber_weeks",
+            "rule_validation_low_expired_weeks",
+            "rule_validation_medium_amber_weeks",
+            "rule_validation_medium_expired_weeks",
+            "rule_validation_high_amber_weeks",
+            "rule_validation_high_expired_weeks",
+            "rule_validation_critical_amber_weeks",
+            "rule_validation_critical_expired_weeks",
+        }
         updates: dict = {}
         for k, v in fields.items():
             if k not in allowed:
+                continue
+            if k == "rule_validation_mode":
+                mode = str(v or "master").strip().lower()
+                updates[k] = "criticality" if mode == "criticality" else "master"
                 continue
             if k.startswith("rule_validation_"):
                 # Empty string → NULL (clear override). Otherwise coerce
@@ -5468,15 +5983,15 @@ class DatabaseService:
         return self.get_client(client_id)
 
     def get_client_validation_thresholds(
-        self, client_id: Optional[str]
+        self, client_id: Optional[str], severity: Optional[str] = None
     ) -> Tuple[int, int]:
         """Resolve the (amber_weeks, expired_weeks) thresholds for a tenant.
 
-        Per-tenant overrides on ``clients`` win; either NULL falls back
-        to the global ``settings.rule_validation_*_weeks`` default. The
-        rule card / rule health metrics call this to honour each
-        tenant's review cadence (a global default suited one tenant but
-        flagged everything as stale for another).
+        In ``master`` mode, the legacy ``rule_validation_amber_weeks`` /
+        ``rule_validation_expired_weeks`` pair is used. In
+        ``criticality`` mode, severity-specific overrides are used when
+        available; missing values fall back to the master pair and then
+        to the global defaults.
         """
         amber = int(self.settings.rule_validation_amber_weeks)
         expired = int(self.settings.rule_validation_expired_weeks)
@@ -5488,8 +6003,20 @@ class DatabaseService:
             return amber, expired
         if not row:
             return amber, expired
+        mode = str(row.get("rule_validation_mode") or "master").strip().lower()
         a = row.get("rule_validation_amber_weeks")
         e = row.get("rule_validation_expired_weeks")
+        severity_key = (severity or "").strip().lower()
+        severity_cols = {
+            "low": ("rule_validation_low_amber_weeks", "rule_validation_low_expired_weeks"),
+            "medium": ("rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks"),
+            "high": ("rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks"),
+            "critical": ("rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks"),
+        }
+        if mode == "criticality" and severity_key in severity_cols:
+            sa, se = severity_cols[severity_key]
+            a = row.get(sa, a)
+            e = row.get(se, e)
         if a is not None:
             try:
                 amber = int(a)

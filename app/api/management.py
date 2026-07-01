@@ -2101,6 +2101,10 @@ async def update_validation_thresholds(
     """
     form = await request.form()
 
+    mode = str(form.get("rule_validation_mode") or "master").strip().lower()
+    if mode not in {"master", "criticality"}:
+        mode = "master"
+
     def _parse(name: str):
         v = form.get(name)
         if v is None:
@@ -2121,6 +2125,25 @@ async def update_validation_thresholds(
             client_id, db,
             toast="Thresholds must be positive whole numbers.",
         )
+
+    per_severity = {}
+    if mode == "criticality":
+        for severity in ("low", "medium", "high", "critical"):
+            a, a_ok = _parse(f"{severity}_amber_weeks")
+            e, e_ok = _parse(f"{severity}_expired_weeks")
+            if not a_ok or not e_ok:
+                return _render_client_siems_partial(
+                    client_id, db,
+                    toast=f"{severity.title()} thresholds must be positive whole numbers.",
+                )
+            if a is not None and e is not None and a >= e:
+                return _render_client_siems_partial(
+                    client_id, db,
+                    toast=f"{severity.title()} amber threshold must be less than expired threshold.",
+                )
+            per_severity[f"rule_validation_{severity}_amber_weeks"] = a
+            per_severity[f"rule_validation_{severity}_expired_weeks"] = e
+
     if amber is not None and expired is not None and amber >= expired:
         return _render_client_siems_partial(
             client_id, db,
@@ -2128,12 +2151,14 @@ async def update_validation_thresholds(
         )
     db.update_client(
         client_id,
+        rule_validation_mode=mode,
         rule_validation_amber_weeks=amber,
         rule_validation_expired_weeks=expired,
+        **per_severity,
     )
     logger.info(
         f"Client {client_id} validation thresholds updated by "
-        f"{user.username}: amber={amber}, expired={expired}"
+        f"{user.username}: mode={mode} amber={amber}, expired={expired}, per_severity={per_severity}"
     )
     return _render_client_siems_partial(
         client_id, db, toast="Validation thresholds saved.",

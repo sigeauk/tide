@@ -63,23 +63,42 @@
 <form hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
       hx-target="#client-siems-section" hx-swap="innerHTML"
       style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;padding:0 0.25rem;">
+    <div style="flex:0 0 auto;min-width:10rem;">
+        <label class="form-label" style="font-size:0.78rem;">Validation mode</label>
+        <select name="rule_validation_mode" class="form-input" style="width:10rem;" onchange="window.__toggleValidationModeFields(this.value)">
+            <option value="master" {% if client.rule_validation_mode != 'criticality' %}selected{% endif %}>Master cadence</option>
+            <option value="criticality" {% if client.rule_validation_mode == 'criticality' %}selected{% endif %}>By criticality</option>
+        </select>
+    </div>
     <div style="flex:0 0 auto;">
-        <label class="form-label" style="font-size:0.78rem;">Validation amber after (weeks)</label>
+        <label class="form-label" style="font-size:0.78rem;">Master amber after (weeks)</label>
         <input type="number" min="1" name="amber_weeks" class="form-input"
                style="width:9rem;"
                placeholder="{{ settings.rule_validation_amber_weeks }} (default)"
                value="{{ client.rule_validation_amber_weeks if client.rule_validation_amber_weeks is not none else '' }}">
     </div>
     <div style="flex:0 0 auto;">
-        <label class="form-label" style="font-size:0.78rem;">Validation expired after (weeks)</label>
+        <label class="form-label" style="font-size:0.78rem;">Master expired after (weeks)</label>
         <input type="number" min="1" name="expired_weeks" class="form-input"
                style="width:9rem;"
                placeholder="{{ settings.rule_validation_expired_weeks }} (default)"
                value="{{ client.rule_validation_expired_weeks if client.rule_validation_expired_weeks is not none else '' }}">
     </div>
+    <div id="criticality-validation-grid" style="display:{% if client.rule_validation_mode == 'criticality' %}grid{% else %}none{% endif %};grid-template-columns:repeat(4,minmax(0,1fr));gap:0.5rem;align-items:flex-end;flex:1 1 100%;margin-top:0.25rem;">
+        {% for severity in ['low', 'medium', 'high', 'critical'] %}
+        <div style="min-width:0;">
+            <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} amber</label>
+            <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
+        </div>
+        <div style="min-width:0;">
+            <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} expired</label>
+            <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
+        </div>
+        {% endfor %}
+    </div>
     <button type="submit" class="btn btn-primary btn-sm">Save thresholds</button>
     <span style="flex-basis:100%;color:var(--color-text-muted);font-size:0.72rem;">
-        Leave blank to inherit the global default ({{ settings.rule_validation_amber_weeks }} / {{ settings.rule_validation_expired_weeks }} weeks).
+        Leave blank to inherit the global default. Criticality mode stores overrides per severity.
     </span>
 </form>
 </div>
@@ -177,6 +196,12 @@
 // §8.2 guarantee 4: never key by space alone.
 window.__siemSpaceCounts = {{ (siem_space_counts | default({})) | tojson }};
 
+window.__toggleValidationModeFields = function(mode) {
+    var grid = document.getElementById('criticality-validation-grid');
+    if (!grid) return;
+    grid.style.display = (mode === 'criticality') ? 'grid' : 'none';
+};
+
 function onAddSiemChange(sel) {
     var opt = sel.options[sel.selectedIndex];
     var siemType = opt ? opt.getAttribute('data-siem-type') : '';
@@ -211,4 +236,9 @@ function onAddSiemChange(sel) {
 
 // Back-compat shim — older callers still wire ``onchange="toggleSpaceField(this)"``.
 function toggleSpaceField(sel) { onAddSiemChange(sel); }
+
+document.addEventListener('DOMContentLoaded', function() {
+    var mode = document.querySelector('select[name="rule_validation_mode"]');
+    if (mode) window.__toggleValidationModeFields(mode.value);
+});
 </script>
