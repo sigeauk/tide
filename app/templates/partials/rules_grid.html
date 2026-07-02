@@ -12,7 +12,7 @@
     {% if page > 1 %}
     <button 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page - 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-get="/api/rules?page={{ page - 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
         hx-target="#rules-grid"
         hx-swap="innerHTML">
         ← Previous
@@ -28,7 +28,7 @@
     {% if page < total_pages %}
     <button 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page + 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-get="/api/rules?page={{ page + 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
         hx-target="#rules-grid"
         hx-swap="innerHTML">
         Next →

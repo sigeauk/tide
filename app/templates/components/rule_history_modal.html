@@ -214,66 +214,73 @@
             .score-history-head {
                 display: flex;
                 justify-content: space-between;
-                align-items: baseline;
+                align-items: center;
                 gap: 0.8rem;
-                margin-bottom: 0.55rem;
+                margin-bottom: 0.6rem;
             }
             .score-history-date {
                 color: var(--color-text-secondary);
                 font-size: 0.84rem;
                 white-space: nowrap;
             }
+            .score-history-body {
+                display: grid;
+                grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
+                gap: 0.75rem;
+                align-items: stretch;
+            }
             .score-history-overall {
-                font-size: 0.92rem;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                align-items: flex-start;
+                border: 1px solid var(--color-border);
+                border-radius: var(--radius-sm);
+                background: var(--color-bg-action);
+                padding: 0.45rem 0.6rem;
+                min-height: 4.25rem;
+                font-size: 0.8rem;
+                color: var(--color-text-secondary);
+                line-height: 1.2;
+            }
+            .score-history-overall strong {
+                font-size: 1rem;
                 font-weight: 700;
                 color: var(--color-text);
             }
             .score-value-danger { color: var(--color-danger); }
             .score-value-warning { color: var(--color-warning); }
             .score-value-success { color: var(--color-success); }
-            .score-breakdown-row {
-                display: grid;
-                grid-template-columns: auto auto minmax(0, 1fr);
-                gap: 1rem;
-                padding-top: 0.4rem;
+            .score-breakdown {
+                display: flex;
+                flex-direction: column;
+                gap: 0.35rem;
+                justify-content: center;
+            }
+            .score-line {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 0.8rem;
                 align-items: center;
+                font-size: 0.8rem;
+                color: var(--color-text-secondary);
             }
-            .score-breakdown-row + .score-breakdown-row {
+            .score-line + .score-line {
+                padding-top: 0.35rem;
                 border-top: 1px solid var(--color-border);
-                margin-top: 0.45rem;
             }
-            .score-row-title {
-                font-size: 0.78rem;
+            .score-line .score-tag {
+                min-width: 3.4rem;
+                font-size: 0.76rem;
                 font-weight: 700;
                 color: var(--color-text-secondary);
                 text-transform: uppercase;
                 letter-spacing: 0.02em;
-                padding-top: 0.1rem;
             }
-            .score-row-total {
-                font-size: 0.84rem;
-                font-weight: 700;
-                min-width: 5.2rem;
-                text-align: right;
+            .score-line .score-kv {
+                white-space: nowrap;
             }
-            .score-items-grid {
-                display: grid;
-                gap: 0.55rem;
-            }
-            .score-items-grid.meta {
-                grid-template-columns: repeat(6, minmax(0, 1fr));
-            }
-            .score-items-grid.quality {
-                grid-template-columns: repeat(4, minmax(0, 1fr));
-            }
-            .score-item {
-                display: flex;
-                justify-content: space-between;
-                gap: 0.35rem;
-                font-size: 0.8rem;
-                color: var(--color-text-secondary);
-            }
-            .score-item strong {
+            .score-line .score-kv strong {
                 color: var(--color-text);
             }
         </style>
@@ -433,28 +440,31 @@
                         <div class="score-history-card">
                             <div class="score-history-head">
                                 <span class="score-history-date">{{ row.created_at.strftime('%Y-%m-%d %H:%M') if row.created_at else 'N/A' }}</span>
-                                <span class="score-history-overall {{ overall_class }}">Overall: {{ row.score if row.score is not none else 'N/A' }}</span>
                             </div>
-                            <div class="score-breakdown-row">
-                                <div class="score-row-title">Meta</div>
-                                <div class="score-row-total {{ meta_class }}">Total: {{ row.meta_score if row.meta_score is not none else 'N/A' }}</div>
-                                <div class="score-items-grid meta">
-                                    <div class="score-item"><span>Investigation</span><strong>{{ row.score_note if row.score_note is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Override</span><strong>{{ row.score_override if row.score_override is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Tactics</span><strong>{{ row.score_tactics if row.score_tactics is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Techniques</span><strong>{{ row.score_techniques if row.score_techniques is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Author</span><strong>{{ row.score_author if row.score_author is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Highlights</span><strong>{{ row.score_highlights if row.score_highlights is not none else 'N/A' }}</strong></div>
+                            <div class="score-history-body">
+                                <div class="score-history-overall {{ overall_class }}">
+                                    <span>Overall</span>
+                                    <strong>{{ row.score if row.score is not none else 'N/A' }}</strong>
                                 </div>
-                            </div>
-                            <div class="score-breakdown-row">
-                                <div class="score-row-title">Quality</div>
-                                <div class="score-row-total {{ quality_class }}">Total: {{ row.quality_score if row.quality_score is not none else 'N/A' }}</div>
-                                <div class="score-items-grid quality">
-                                    <div class="score-item"><span>Mapping</span><strong>{{ row.score_mapping if row.score_mapping is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Field Type</span><strong>{{ row.score_field_type if row.score_field_type is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Search</span><strong>{{ row.score_search_time if row.score_search_time is not none else 'N/A' }}</strong></div>
-                                    <div class="score-item"><span>Language</span><strong>{{ row.score_language if row.score_language is not none else 'N/A' }}</strong></div>
+                                <div class="score-breakdown">
+                                    <div class="score-line">
+                                        <span class="score-tag">Meta</span>
+                                        <span class="score-kv {{ meta_class }}"><strong>Total: {{ row.meta_score if row.meta_score is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Investigation: <strong>{{ row.score_note if row.score_note is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Override: <strong>{{ row.score_override if row.score_override is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Tactics: <strong>{{ row.score_tactics if row.score_tactics is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Techniques: <strong>{{ row.score_techniques if row.score_techniques is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Author: <strong>{{ row.score_author if row.score_author is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Highlights: <strong>{{ row.score_highlights if row.score_highlights is not none else 'N/A' }}</strong></span>
+                                    </div>
+                                    <div class="score-line">
+                                        <span class="score-tag">Quality</span>
+                                        <span class="score-kv {{ quality_class }}"><strong>Total: {{ row.quality_score if row.quality_score is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Mapping: <strong>{{ row.score_mapping if row.score_mapping is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Field Type: <strong>{{ row.score_field_type if row.score_field_type is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Search: <strong>{{ row.score_search_time if row.score_search_time is not none else 'N/A' }}</strong></span>
+                                        <span class="score-kv">Language: <strong>{{ row.score_language if row.score_language is not none else 'N/A' }}</strong></span>
+                                    </div>
                                 </div>
                             </div>
                         </div>

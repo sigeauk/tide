@@ -43,6 +43,21 @@
                 <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
             </span>
             {% endif %}
+            <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/default-index"
+                  hx-target="#client-siems-section"
+                  hx-swap="innerHTML"
+                  style="display:flex;gap:0.4rem;align-items:center;margin-top:0.35rem;">
+                <input type="hidden" name="environment_role" value="{{ s.environment_role }}">
+                <input type="text"
+                       name="default_index"
+                       class="form-input"
+                       style="max-width:20rem;height:30px;padding:0.35rem 0.55rem;font-size:0.78rem;"
+                       placeholder="Default index (e.g. logs-*)"
+                       value="{{ s.default_index or '' }}">
+                <button type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;">
+                    {{ icon('save', '12') }} Save
+                </button>
+            </form>
         </div>
     </div>
     {% endfor %}
@@ -178,6 +193,12 @@
                         </datalist>
                         {% endfor %}
                     {% endif %}
+                </div>
+                <div>
+                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                        Default index pattern (optional)
+                    </label>
+                    <input type="text" name="default_index" class="form-input" placeholder="logs-*">
                 </div>
                 <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
             </form>

@@ -97,11 +97,22 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1 class="page-title-hero" style="font-size: 2rem; margin-bottom: 0.25rem;">
-        Sigma Converter
-    </h1>
-    <p class="page-subtitle">Convert Sigma detection rules into SIEM-specific queries for deployment.</p>
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero" style="font-size: 2rem; margin-bottom: 0.25rem;">
+            Sigma Converter
+        </h1>
+        <p class="page-subtitle">Convert Sigma detection rules into SIEM-specific queries for deployment.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
+        <button type="button"
+                class="btn btn-secondary btn-sm"
+                hx-get="/api/rules/create-form"
+                hx-target="#modal-container"
+                hx-swap="innerHTML">
+            {{ icon_text('plus-circle', 'Open Rule Modal', '14') }}
+        </button>
+    </div>
 </div>
 
 <!-- Compact horizontal selects -->

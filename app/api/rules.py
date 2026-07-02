@@ -205,6 +205,7 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
             "siem_id": s.get("id"),
             "space": s.get("space") or "default",
             "label": f'{s.get("label", "SIEM")} ({(s.get("environment_role") or "staging").title()})',
+            "default_index": s.get("default_index") or "",
         }
         for s in siems
         if s.get("id") and (s.get("space") is not None)
@@ -247,6 +248,11 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
     severity = (form_data.get("severity") or "medium").strip().lower()
     enabled = str(form_data.get("enabled") or "true").lower() == "true"
     author_value = (form_data.get("author") or "").strip() or default_author
+    author_values = _split_csv(author_value)
+    if not author_values:
+        author_values = _split_csv(default_author)
+    if not author_values:
+        author_values = ["Unknown"]
     tags = _split_csv(form_data.get("tags") or "")
     note = (form_data.get("note") or "").strip()
     interval = (form_data.get("interval") or "5m").strip() or "5m"
@@ -272,7 +278,7 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
         "severity": severity,
         "risk_score": int(risk_score_raw) if risk_score_raw.isdigit() else _severity_to_risk_score(severity),
         "enabled": enabled,
-        "author": [author_value],
+        "author": author_values,
         "tags": tags,
         "note": note,
         "interval": interval,
@@ -292,6 +298,58 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
     else:
         payload["threat"] = []
     return payload, rule_name, query, mitre_ids
+
+
+def _value_for_compare(value: Any) -> str:
+    if isinstance(value, list):
+        return ",".join(str(v).strip() for v in value if str(v).strip())
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+    return str(value or "").strip()
+
+
+def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, str]:
+    labels = {
+        "name": "name",
+        "description": "description",
+        "query": "query",
+        "language": "language",
+        "severity": "severity",
+        "risk_score": "risk score",
+        "enabled": "enabled",
+        "author": "author",
+        "tags": "tags",
+        "note": "investigation guide",
+        "interval": "interval",
+        "from": "lookback",
+        "index": "index",
+        "timestamp_override": "timestamp override",
+        "investigation_fields": "custom highlighted fields",
+        "mitre_ids": "MITRE techniques",
+    }
+    changed: list[str] = []
+    for key, label in labels.items():
+        if key not in new_payload:
+            continue
+        before = _value_for_compare(old_payload.get(key))
+        after = _value_for_compare(new_payload.get(key))
+        if before != after:
+            changed.append(label)
+
+    if not changed:
+        return "Updated rule settings.", "-"
+
+    if len(changed) == 1:
+        message = f"Edited '{changed[0]}' field."
+    elif len(changed) == 2:
+        message = f"Edited '{changed[0]}' and '{changed[1]}' fields."
+    else:
+        quoted = ", ".join(f"'{name}'" for name in changed[:-1])
+        message = f"Edited {quoted}, and '{changed[-1]}' fields."
+    return message, ", ".join(changed)
 
 
 def _build_space_labels(db, client_id: str) -> dict:
@@ -426,7 +484,11 @@ def list_rules(
     search: Optional[str] = Query(None),
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
-    sort_by: str = Query("score_asc"),
+    sort_by: str = Query("score_desc"),
+    sort_score: str = Query("desc"),
+    sort_criticality: str = Query(""),
+    sort_validated: str = Query(""),
+    sort_name: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
 ):
@@ -440,6 +502,10 @@ def list_rules(
             space=space if space else None,
             enabled=None if not enabled else (enabled.lower() == 'true'),
             sort_by=sort_by,
+            sort_score=sort_score,
+            sort_criticality=sort_criticality,
+            sort_validated=sort_validated,
+            sort_name=sort_name,
             page=page,
             page_size=page_size,
         )
@@ -463,6 +529,10 @@ def list_rules(
             "space": space or "",
             "enabled": enabled or "",
             "sort_by": sort_by,
+            "sort_score": sort_score,
+            "sort_criticality": sort_criticality,
+            "sort_validated": sort_validated,
+            "sort_name": sort_name,
             "space_labels": _build_space_labels(db, client_id),
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
             "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
@@ -1088,6 +1158,8 @@ async def edit_rule(
     if not success:
         return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
 
+    change_message, changed_fields = _summarize_rule_changes(rule.raw_data or {}, payload)
+
     db.record_rule_history(
         rule_id=rule_id,
         siem_id=actual_siem_id,
@@ -1096,7 +1168,11 @@ async def edit_rule(
         action="edited",
         actor_user_id=user.id,
         actor_name=user.username,
-        detail={"message": reason, "reason": reason},
+        detail={
+            "message": change_message,
+            "reason": reason,
+            "changed_fields": changed_fields,
+        },
     )
 
     return HTMLResponse(

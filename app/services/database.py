@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 54
+SCHEMA_VERSION = 55
 
 
 def _scope_predicate(
@@ -866,7 +866,9 @@ class DatabaseService:
                 'page:home', 'page:dashboard', 'page:systems',
                 'page:cve_overview', 'page:baselines',
                 'page:rules', 'page:promotion', 'page:sigma',
-                'page:threats', 'page:heatmap', 'page:settings',
+                'page:threats', 'page:heatmap',
+                'page:cti_indicators', 'page:cti_actors', 'page:cti_reports',
+                'page:settings',
             ]
             tab_resources = [
                 'tab:logging', 'tab:integrations', 'tab:sigma',
@@ -888,6 +890,7 @@ class DatabaseService:
                     'page:cve_overview', 'page:baselines',
                     'page:rules', 'page:promotion', 'page:sigma',
                     'page:threats', 'page:heatmap',
+                    'page:cti_indicators', 'page:cti_actors', 'page:cti_reports',
                 }
                 analyst_read = {
                     'page:settings',
@@ -912,6 +915,7 @@ class DatabaseService:
                     'page:home', 'page:dashboard', 'page:systems',
                     'page:cve_overview', 'page:baselines',
                     'page:rules', 'page:threats', 'page:heatmap',
+                    'page:cti_indicators', 'page:cti_actors', 'page:cti_reports',
                     'page:settings',
                     'tab:logging', 'tab:integrations', 'tab:sigma',
                     'tab:classifications', 'tab:apikeys',
@@ -2221,6 +2225,68 @@ class DatabaseService:
                 "the existing master cadence)."
             )
 
+        # ── Migration 55: CTI page RBAC + default index per SIEM link ──
+        # Adds explicit page resources for the three CTI list pages so the
+        # Role Templates matrix can control them independently, and adds an
+        # optional default index pattern on each (client, siem, role) mapping
+        # row used to prefill Rule Health/Sigma create flows.
+        if current_version < 55:
+            try:
+                # 55.1 — per-link default index setting.
+                cols = {
+                    r[1] for r in conn.execute(
+                        "PRAGMA table_info('client_siem_map')"
+                    ).fetchall()
+                }
+                if "default_index" not in cols:
+                    conn.execute(
+                        "ALTER TABLE client_siem_map ADD COLUMN default_index VARCHAR"
+                    )
+
+                # 55.2 — seed CTI page permissions for built-in roles per tenant.
+                resources = [
+                    "page:cti_indicators",
+                    "page:cti_actors",
+                    "page:cti_reports",
+                ]
+                role_rows = conn.execute("SELECT id, name FROM roles").fetchall()
+                role_map = {name: rid for rid, name in role_rows}
+                client_rows = conn.execute("SELECT id FROM clients").fetchall()
+
+                for cid, in client_rows:
+                    if "ADMIN" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, true) ON CONFLICT DO NOTHING",
+                                [role_map["ADMIN"], cid, res],
+                            )
+                    if "ANALYST" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, true) ON CONFLICT DO NOTHING",
+                                [role_map["ANALYST"], cid, res],
+                            )
+                    if "ENGINEER" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, false) ON CONFLICT DO NOTHING",
+                                [role_map["ENGINEER"], cid, res],
+                            )
+            except Exception as exc:
+                logger.error(f"Migration 55 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 55)
+            logger.info(
+                "Migration 55: added client_siem_map.default_index and seeded "
+                "CTI page permissions (indicators/actors/reports) per tenant."
+            )
+
         # ── Migration 49: TAXII 2.1 cursor store ─────────────────────
         # Persistent per-(connector, api_root, collection) watermark
         # captured from the TAXII server's ``X-TAXII-Date-Added-Last``
@@ -3123,21 +3189,54 @@ class DatabaseService:
             # Get total count before pagination
             count_query = query.replace("SELECT *", "SELECT COUNT(*)")
             total = conn.execute(count_query, params).fetchone()[0]
+
+            # Build effective sort specification from independent sort selectors
+            # and fall back to legacy sort_by when no independent sort is set.
+            sort_spec = []
+            if (filters.sort_score or "") in ("asc", "desc"):
+                sort_spec.append(("score", filters.sort_score))
+            if (filters.sort_criticality or "") in ("asc", "desc"):
+                sort_spec.append(("criticality", filters.sort_criticality))
+            if (filters.sort_validated or "") in ("asc", "desc"):
+                sort_spec.append(("validated", filters.sort_validated))
+            if (filters.sort_name or "") in ("asc", "desc"):
+                sort_spec.append(("name", filters.sort_name))
+
+            if not sort_spec:
+                legacy_map = {
+                    "score_asc": [("score", "asc")],
+                    "score_desc": [("score", "desc")],
+                    "criticality_desc": [("criticality", "desc")],
+                    "criticality_asc": [("criticality", "asc")],
+                    "validated_desc": [("validated", "desc")],
+                    "validated_asc": [("validated", "asc")],
+                    "name_asc": [("name", "asc")],
+                    "name_desc": [("name", "desc")],
+                }
+                sort_spec = legacy_map.get(filters.sort_by, [("score", "desc")])
             
             # Check if sorting by validation date (Python-side sort needed)
-            is_validation_sort = filters.sort_by in ("validated_asc", "validated_desc")
+            is_validation_sort = any(field == "validated" for field, _ in sort_spec)
             
             # Apply sorting (DB-side for DB columns)
             # Use COALESCE to eliminate NULL-handling edge cases across DuckDB versions
             if not is_validation_sort:
-                sort_map = {
-                    "score_asc": "COALESCE(score, 0) ASC, name ASC",
-                    "score_desc": "COALESCE(score, 0) DESC, name ASC",
-                    "name_asc": "COALESCE(name, '') ASC",
-                    "name_desc": "COALESCE(name, '') DESC",
-                }
-                order_by = sort_map.get(filters.sort_by, "COALESCE(score, 0) ASC, name ASC")
-                query += f" ORDER BY {order_by}"
+                order_parts = []
+                for field, direction in sort_spec:
+                    dir_sql = "DESC" if direction == "desc" else "ASC"
+                    if field == "score":
+                        order_parts.append(f"COALESCE(score, 0) {dir_sql}")
+                    elif field == "criticality":
+                        order_parts.append(
+                            "CASE LOWER(COALESCE(severity, 'low')) "
+                            "WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END "
+                            f"{dir_sql}"
+                        )
+                    elif field == "name":
+                        order_parts.append(f"COALESCE(name, '') {dir_sql}")
+                if not any(field == "name" for field, _ in sort_spec):
+                    order_parts.append("COALESCE(name, '') ASC")
+                query += f" ORDER BY {', '.join(order_parts)}"
             
             if is_validation_sort:
                 # Fetch ALL matching rows for Python-side sort, then paginate
@@ -3172,13 +3271,28 @@ class DatabaseService:
                 space = row.get('space', '?')
                 logger.warning(f"Skipping rule {rule_id} (space={space}): {e}")
         
-        # Python-side sort for validation date
+        # Python-side sort for any order involving validation date.
         if is_validation_sort:
-            reverse = filters.sort_by == "validated_desc"
-            rules.sort(
-                key=lambda r: r.validation_date or datetime.min,
-                reverse=reverse,
-            )
+            severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+
+            # Apply stable sorts from lowest priority to highest priority.
+            for field, direction in reversed(sort_spec):
+                reverse = direction == "desc"
+                if field == "validated":
+                    rules.sort(key=lambda r: r.validation_date or datetime.min, reverse=reverse)
+                elif field == "score":
+                    rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
+                elif field == "criticality":
+                    rules.sort(
+                        key=lambda r: severity_rank.get(str(getattr(r, "severity", "low") or "low").lower(), 1),
+                        reverse=reverse,
+                    )
+                elif field == "name":
+                    rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower(), reverse=reverse)
+
+            if not any(field == "name" for field, _ in sort_spec):
+                rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
+
             # Manual pagination
             offset = (filters.page - 1) * filters.page_size
             rules = rules[offset:offset + filters.page_size]
@@ -6295,10 +6409,16 @@ class DatabaseService:
         """Get all SIEMs linked to a client via the inventory.
         Optionally filter by environment_role ('production' or 'staging')."""
         with self.get_shared_connection() as conn:
+            cmap_cols = {
+                str(r[1]).lower()
+                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
+            }
+            has_default_index = "default_index" in cmap_cols
+            default_index_sql = "m.default_index" if has_default_index else "NULL AS default_index"
             query = (
                 "SELECT s.id, s.label, s.siem_type, s.elasticsearch_url, s.kibana_url, "
                 "s.api_token_enc, "
-                "m.environment_role, m.space, s.is_active, s.created_at "
+                f"m.environment_role, m.space, {default_index_sql}, s.is_active, s.created_at "
                 "FROM siem_inventory s JOIN client_siem_map m ON s.id = m.siem_id "
                 "WHERE m.client_id = ?"
             )
@@ -6309,8 +6429,8 @@ class DatabaseService:
             query += " ORDER BY m.environment_role, s.label"
             rows = conn.execute(query, params).fetchall()
             cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
-                    "api_token_enc",
-                    "environment_role", "space", "is_active", "created_at"]
+                "api_token_enc",
+                "environment_role", "space", "default_index", "is_active", "created_at"]
             result = []
             for r in rows:
                 d = dict(zip(cols, r))
@@ -6321,17 +6441,32 @@ class DatabaseService:
             return result
 
     def link_client_siem(self, client_id: str, siem_id: str,
-                         environment_role: str = "production", space: str = None):
+                         environment_role: str = "production", space: str = None,
+                         default_index: Optional[str] = None):
         """Link a client to a SIEM from the inventory with an environment role."""
         # Normalise empty/None space to 'default' (Kibana's built-in space)
         if not space or not str(space).strip():
             space = "default"
+        default_index_val = (default_index or "").strip() or None
         with self.get_shared_connection() as conn:
-            conn.execute(
-                "INSERT INTO client_siem_map (client_id, siem_id, environment_role, space) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                [client_id, siem_id, environment_role, space],
-            )
+            cmap_cols = {
+                str(r[1]).lower()
+                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
+            }
+            if "default_index" in cmap_cols:
+                conn.execute(
+                    "INSERT INTO client_siem_map "
+                    "(client_id, siem_id, environment_role, space, default_index) "
+                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                    [client_id, siem_id, environment_role, space, default_index_val],
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO client_siem_map "
+                    "(client_id, siem_id, environment_role, space) "
+                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                    [client_id, siem_id, environment_role, space],
+                )
             # Bidirectional: also populate legacy client_siem_configs
             siem = conn.execute(
                 "SELECT id, label, siem_type, kibana_url, api_token_enc "
@@ -6345,6 +6480,30 @@ class DatabaseService:
                     "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
                     [sid, client_id, stype, lbl, kurl, token, space],
                 )
+
+    def update_client_siem_default_index(
+        self,
+        client_id: str,
+        siem_id: str,
+        environment_role: str,
+        default_index: Optional[str],
+    ) -> bool:
+        """Update the default index pattern for one linked (client, siem, role) row."""
+        value = (default_index or "").strip() or None
+        with self.get_shared_connection() as conn:
+            cmap_cols = {
+                str(r[1]).lower()
+                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
+            }
+            if "default_index" not in cmap_cols:
+                return False
+            updated = conn.execute(
+                "UPDATE client_siem_map SET default_index = ? "
+                "WHERE client_id = ? AND siem_id = ? AND environment_role = ? "
+                "RETURNING client_id",
+                [value, client_id, siem_id, environment_role],
+            ).fetchone()
+        return updated is not None
 
     def unlink_client_siem(self, client_id: str, siem_id: str, environment_role: str = None):
         """Unlink a client from a SIEM (bidirectional).

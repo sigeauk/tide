@@ -140,7 +140,9 @@
                 <option value="">-- Select SIEM and Space --</option>
                 {% for s in scope_options %}
                   {% set scope_value = s.siem_id ~ '|' ~ s.space %}
-                  <option value="{{ scope_value }}" {% if form_values.scope_pair == scope_value %}selected{% endif %}>{{ s.label }} - {{ s.space }}</option>
+                  <option value="{{ scope_value }}"
+                          data-default-index="{{ s.default_index | default('') }}"
+                          {% if form_values.scope_pair == scope_value %}selected{% endif %}>{{ s.label }} - {{ s.space }}</option>
                 {% endfor %}
               </select>
               {% if scope_locked %}
@@ -233,7 +235,7 @@
             </div>
             <div class="form-section">
               <label for="rule-reason">Reason for Change{% if mode == 'edit' %} *{% endif %}</label>
-              <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" {% if mode == 'edit' %}required{% endif %} placeholder="Document the change before saving">{{ form_values.reason }}</textarea>
+              <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Document the change before saving">{{ form_values.reason }}</textarea>
               <div class="rule-help">Required when editing a rule. Validation fills this automatically.</div>
             </div>
           </div>
@@ -270,6 +272,9 @@
       </div>
 
       <div style="display: flex; gap: 0.75rem; margin-top: 1.5rem; justify-content: flex-end; padding-top: 1rem; border-top: 1px solid var(--color-border);">
+        <div id="rule-form-popup"
+             style="display:none;align-self:center;margin-right:auto;padding:0.45rem 0.65rem;border-radius:8px;border:1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));background:color-mix(in srgb, var(--color-danger) 12%, var(--color-bg-surface));color:var(--color-danger);font-size:0.8rem;font-weight:600;">
+        </div>
         <button type="submit" class="btn btn-primary">
           {% if mode == 'edit' %}
             {{ icon_text('save', submit_label, '14') }}
@@ -385,5 +390,83 @@
   }
 
   addBtn.addEventListener('click', function() { addRow(''); });
+})();
+
+(function() {
+  var scopeSelect = document.getElementById('rule-scope-pair');
+  var indexInput = document.getElementById('rule-index');
+  var reasonInput = document.getElementById('rule-reason');
+  var popup = document.getElementById('rule-form-popup');
+  var form = document.querySelector('.rule-create-form');
+  if (!form) return;
+
+  function updateDefaultIndex() {
+    if (!scopeSelect || !indexInput) return;
+    var selected = scopeSelect.options[scopeSelect.selectedIndex];
+    if (!selected) return;
+    var defaultIndex = (selected.getAttribute('data-default-index') || '').trim();
+    if (!defaultIndex) return;
+    // Only prefill untouched/empty values so explicit operator edits win.
+    if (!indexInput.value.trim()) {
+      indexInput.value = defaultIndex;
+    }
+  }
+
+  if (scopeSelect) {
+    scopeSelect.addEventListener('change', function() {
+      updateDefaultIndex();
+    });
+    if ("{{ mode }}" === "create") {
+      updateDefaultIndex();
+    }
+  }
+
+  function showPopup(message) {
+    if (!popup) return;
+    popup.textContent = message;
+    popup.style.display = 'inline-flex';
+  }
+
+  function hidePopup() {
+    if (!popup) return;
+    popup.style.display = 'none';
+    popup.textContent = '';
+  }
+
+  if (reasonInput) {
+    reasonInput.addEventListener('input', hidePopup);
+  }
+
+  function enforceEditReason() {
+    if ("{{ mode }}" !== "edit") return true;
+    var value = (reasonInput && reasonInput.value || '').trim();
+    if (value) return true;
+    var about = Array.from(document.querySelectorAll('.rule-accordion > summary')).find(function(summary) {
+      return (summary.textContent || '').trim().toLowerCase() === 'about rule';
+    });
+    if (about && about.parentElement && !about.parentElement.open) {
+      about.parentElement.open = true;
+    }
+    if (reasonInput) {
+      reasonInput.focus();
+    }
+    showPopup('Reason for Change is required before saving.');
+    return false;
+  }
+
+  form.addEventListener('submit', function(evt) {
+    hidePopup();
+    if (!enforceEditReason()) {
+      evt.preventDefault();
+      evt.stopPropagation();
+    }
+  });
+
+  form.addEventListener('htmx:beforeRequest', function(evt) {
+    hidePopup();
+    if (!enforceEditReason()) {
+      evt.preventDefault();
+    }
+  });
 })();
 </script>

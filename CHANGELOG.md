@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.3] - Unreleased
+
+### Added
+
+- **CTI page permissions in Role Templates.** Role Templates now include separate read/write controls for CTI Indicators, CTI Actors, and CTI Reports so tenant admins can grant CTI access at page level.
+
+- **Per-linked-SIEM default index setting.** Each linked SIEM row on the client detail page now supports a default index pattern, and that value pre-populates new rule creation flows.
+
+- **Rule score history backfill utility.** A standalone script is now available under `app/scripts` to import historical rule score snapshots from rule log files into the in-app score history timeline.
+
+### Changed
+
+- **Score history layout is more compact and easier to scan.** The rule history score view now shows Overall on the left with Meta and Quality as two compact lines on the right.
+
+- **Core page shells are aligned to the Systems layout.** Rule Health, Promotion, Sigma, Threat Landscape, and Heatmap now use a consistent header structure with actions aligned in the top-right action cluster.
+
+- **Rule Health sorting is expanded for analyst workflow.** Sort options now include criticality, score, and validation date ordering.
+
+### Fixed
+
+- **Rule history no longer repeats the reason text.** Edit history now shows what changed separately from the operator-entered reason.
+
+- **Sigma rule author prefill now includes the current operator.** Author values are normalized as comma-separated entries so converted Sigma rules carry both source and operator attribution cleanly.
+
+- **Edit validation now flags missing change reason near Save.** When reason is required but missing, the form now surfaces a clear message next to the Save button and opens the section that needs attention.
+
 ## [5.0.2] - 2026-07-01
 
 ### Added

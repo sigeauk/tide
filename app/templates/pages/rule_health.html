@@ -6,11 +6,59 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1 class="page-title-hero">
-        Rule Health
-    </h1>
-    <p class="page-subtitle">Assess the quality and validation status of your detection rules.</p>
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">
+            Rule Health
+        </h1>
+        <p class="page-subtitle">Assess the quality and validation status of your detection rules.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+        <div id="sync-status"></div>
+        <div class="btn-group" style="position:relative;display:flex;align-items:stretch;height:38px;">
+            <button
+                class="btn btn-primary sync-btn"
+                hx-post="/api/rules/sync"
+                hx-target="#sync-status"
+                hx-swap="outerHTML"
+                hx-disabled-elt="this"
+                style="border-top-right-radius:0;border-bottom-right-radius:0;height:100%;">
+                <span class="sync-default">
+                    {{ icon('refresh-cw', '16') }}
+                    <span>Sync</span>
+                </span>
+            </button>
+            <button
+                class="btn btn-primary sync-btn"
+                onclick="event.stopPropagation(); var dd=this.nextElementSibling; dd.style.display = dd.style.display==='none' ? 'block' : 'none';"
+                style="border-top-left-radius:0;border-bottom-left-radius:0;border-left:1px solid rgba(255,255,255,0.2);padding:0 0.4rem;height:100%;"
+                type="button">
+                {{ icon('chevron-down', '14') }}
+            </button>
+            <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-surface-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
+                <button
+                    class="btn btn-secondary"
+                    style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
+                    hx-post="/api/rules/sync?force_mapping=true"
+                    hx-target="#sync-status"
+                    hx-swap="outerHTML"
+                    hx-disabled-elt="this"
+                    onclick="this.closest('.sync-dropdown').style.display='none';">
+                    {{ icon('database', '14') }}
+                    <span style="margin-left:0.4rem;">Sync with Mappings</span>
+                </button>
+            </div>
+        </div>
+        <button
+            class="btn btn-success"
+            hx-get="/api/rules/create-form"
+            hx-target="#modal-container"
+            hx-swap="innerHTML"
+            style="height:38px;">
+            {{ icon('plus', '16') }}
+            <span>Create Rule</span>
+        </button>
+    </div>
 </div>
 
 <!-- Metrics Row -->
@@ -36,7 +84,7 @@
             hx-trigger="keyup changed delay:300ms"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='space'], [name='enabled'], [name='sort_by']">
+            hx-include="[name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
     </div>
     
     <div class="filter-group">
@@ -48,7 +96,7 @@
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='enabled'], [name='sort_by']">
+            hx-include="[name='search'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
             <option value="">All SIEMs</option>
             {% for space in spaces %}
             <option value="{{ space }}">{{ space_labels.get(space, space | capitalize) }}</option>
@@ -65,7 +113,7 @@
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='sort_by']">
+            hx-include="[name='search'], [name='space'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
             <option value="">All</option>
             <option value="true">Enabled</option>
             <option value="false">Disabled</option>
@@ -73,71 +121,67 @@
     </div>
     
     <div class="filter-group">
-        <label class="form-label">Sort By</label>
+        <label class="form-label">Score</label>
         <select 
-            name="sort_by" 
+            name="sort_score" 
             class="form-input form-select"
             hx-get="/api/rules"
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='enabled']">
-            <option value="score_asc">Score (Low → High)</option>
-            <option value="score_desc">Score (High → Low)</option>
-            <option value="name_asc">Name (A → Z)</option>
-            <option value="validated_desc">Validated (Newest)</option>
-            <option value="validated_asc">Validated (Oldest)</option>
+            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
+            <option value="desc">High → Low</option>
+            <option value="asc">Low → High</option>
+            <option value="">Off</option>
         </select>
     </div>
-    
+
     <div class="filter-group">
-        <label class="form-label">&nbsp;</label>
-        <div style="display: flex; align-items: center; gap: 0.75rem;">
-            <div id="sync-status"></div>
-            <div class="btn-group" style="position:relative;display:flex;align-items:stretch;height:38px;">
-                <button 
-                    class="btn btn-primary sync-btn"
-                    hx-post="/api/rules/sync"
-                    hx-target="#sync-status"
-                    hx-swap="outerHTML"
-                    hx-disabled-elt="this"
-                    style="border-top-right-radius:0;border-bottom-right-radius:0;height:100%;">
-                    <span class="sync-default">
-                        {{ icon('refresh-cw', '16') }}
-                        <span>Sync</span>
-                    </span>
-                </button>
-                <button 
-                    class="btn btn-primary sync-btn"
-                    onclick="event.stopPropagation(); var dd=this.nextElementSibling; dd.style.display = dd.style.display==='none' ? 'block' : 'none';"
-                    style="border-top-left-radius:0;border-bottom-left-radius:0;border-left:1px solid rgba(255,255,255,0.2);padding:0 0.4rem;height:100%;"
-                    type="button">
-                    {{ icon('chevron-down', '14') }}
-                </button>
-                <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-surface-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
-                    <button 
-                        class="btn btn-secondary"
-                        style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
-                        hx-post="/api/rules/sync?force_mapping=true"
-                        hx-target="#sync-status"
-                        hx-swap="outerHTML"
-                        hx-disabled-elt="this"
-                        onclick="this.closest('.sync-dropdown').style.display='none';">
-                        {{ icon('database', '14') }}
-                        <span style="margin-left:0.4rem;">Sync with Mappings</span>
-                    </button>
-                </div>
-            </div>
-            <button 
-                class="btn btn-success"
-                hx-get="/api/rules/create-form"
-                hx-target="#modal-container"
-                hx-swap="innerHTML"
-                style="height:100%;">
-                {{ icon('plus', '16') }}
-                <span>Create Rule</span>
-            </button>
-        </div>
+        <label class="form-label">Criticality</label>
+        <select 
+            name="sort_criticality" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_validated'], [name='sort_name']">
+            <option value="">Off</option>
+            <option value="desc">High → Low</option>
+            <option value="asc">Low → High</option>
+        </select>
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label">Validate</label>
+        <select 
+            name="sort_validated" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_name']">
+            <option value="">Off</option>
+            <option value="desc">Newest → Oldest</option>
+            <option value="asc">Oldest → Newest</option>
+        </select>
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label">Name</label>
+        <select 
+            name="sort_name" 
+            class="form-input form-select"
+            hx-get="/api/rules"
+            hx-trigger="change"
+            hx-target="#rules-grid"
+            hx-swap="innerHTML"
+            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated']">
+            <option value="">Off</option>
+            <option value="asc">A → Z</option>
+            <option value="desc">Z → A</option>
+        </select>
     </div>
 </div>
 
@@ -145,7 +189,7 @@
 <div id="rules-grid"
      hx-get="/api/rules"
      hx-trigger="load, refreshRules from:body"
-     hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_by']"
+    hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']"
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading rules\u2026") }}

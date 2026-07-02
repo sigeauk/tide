@@ -175,6 +175,11 @@ class RuleFilters(BaseModel):
     min_score: Optional[int] = None
     max_score: Optional[int] = None
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc
+    # Independent multi-sort selectors ("asc" / "desc" / "").
+    sort_score: str = ""
+    sort_criticality: str = ""
+    sort_validated: str = ""
+    sort_name: str = ""
     page: int = 1
     page_size: int = 24
     # Composite (siem_id, space) allow-list — the ONLY safe tenant-scoping

@@ -6,15 +6,26 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="page-header">
-    <h1 class="page-title-hero">
-        Threat Landscape
-    </h1>
-    <p class="page-subtitle">
-        Actors observed in your <strong>Elastic detections</strong> joined to the curated MITRE baseline
-        (table <code>threat_actors</code>). Separate from the <a href="/cti/actors">CTI Actors</a> surface,
-        which lists actors imported from CTI feeds.
-    </p>
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">
+            Threat Landscape
+        </h1>
+        <p class="page-subtitle">
+            Actors observed in your <strong>Elastic detections</strong> joined to the curated MITRE baseline
+            (table <code>threat_actors</code>). Separate from the <a href="/cti/actors">CTI Actors</a> surface,
+            which lists actors imported from CTI feeds.
+        </p>
+    </div>
+    <div style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
+        <button
+            class="btn btn-primary"
+            hx-post="/api/threats/sync"
+            hx-target="#toast-container"
+            hx-swap="beforeend">
+            {{ icon_text('refresh-cw', 'Sync Threats', '16') }}
+        </button>
+    </div>
 </div>
 
 <!-- Metrics Row -->
@@ -95,16 +106,6 @@
         </select>
     </div>
     
-    <div class="filter-group">
-        <label class="form-label">&nbsp;</label>
-        <button 
-            class="btn btn-primary"
-            hx-post="/api/threats/sync"
-            hx-target="#toast-container"
-            hx-swap="beforeend">
-            {{ icon_text('refresh-cw', 'Sync Threats', '16') }}
-        </button>
-    </div>
 </div>
 
 <!-- Threats Grid - Load on page load via HTMX -->

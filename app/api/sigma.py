@@ -129,13 +129,34 @@ def convert_rule(
     prefill_payload = ""
     try:
         sigma_rule = yaml.safe_load(yaml_content) or {}
+        raw_author = sigma_rule.get("author") or ""
+        author_parts: list[str] = []
+        if isinstance(raw_author, list):
+            author_parts.extend(str(a).strip() for a in raw_author if str(a).strip())
+        else:
+            author_parts.extend(
+                str(a).strip() for a in str(raw_author).split(",") if str(a).strip()
+            )
+        current_user = str(getattr(user, "username", "") or "").strip()
+        if current_user:
+            author_parts.append(current_user)
+        # Preserve order while deduplicating.
+        deduped_authors: list[str] = []
+        seen_authors: set[str] = set()
+        for author in author_parts:
+            key = author.lower()
+            if key in seen_authors:
+                continue
+            seen_authors.add(key)
+            deduped_authors.append(author)
+
         prefill_payload = quote(json.dumps({
             "name": str(sigma_rule.get("title") or "").strip(),
             "description": str(sigma_rule.get("description") or "").strip(),
             "query": raw_query or result,
             "language": "kuery" if backend == "elasticsearch" else backend,
             "severity": str(sigma_rule.get("level") or "medium").strip().lower(),
-            "author": sigma_rule.get("author") or "",
+            "author": ", ".join(deduped_authors),
             "tags": sigma_rule.get("tags") or [],
             "mitre_ids": sigma.extract_mitre_techniques(sigma_rule),
             "note": str(sigma_rule.get("description") or "").strip(),

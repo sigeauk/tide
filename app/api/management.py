@@ -1539,6 +1539,7 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     siem_id = str(form.get("siem_id", "")).strip()
     environment_role = str(form.get("environment_role", "production")).strip()
     space = str(form.get("space", "")).strip() or "default"
+    default_index = str(form.get("default_index", "")).strip()
     if not siem_id:
         return HTMLResponse("")
     if environment_role not in ("production", "staging"):
@@ -1580,7 +1581,13 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
         # Persist the canonical id to keep client_siem_map normalized.
         space = matched
 
-    db.link_client_siem(client_id, siem_id, environment_role=environment_role, space=space)
+    db.link_client_siem(
+        client_id,
+        siem_id,
+        environment_role=environment_role,
+        space=space,
+        default_index=default_index,
+    )
     logger.info(f"SIEM {siem_id} linked to client {client_id} as {environment_role} by {user.username}")
     # Push existing rules from the shared cache into this tenant's DB.
     # Without this the tenant's ``detection_rules`` table stays empty until
@@ -1595,6 +1602,41 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
     except Exception as exc:
         logger.warning(f"rule redistribution after SIEM link failed: {exc}")
     return _render_client_siems_partial(client_id, db, toast="SIEM linked successfully.")
+
+
+@router.post("/clients/{client_id}/siems/{siem_id}/default-index", response_class=HTMLResponse)
+async def update_client_siem_default_index(
+    request: Request,
+    client_id: str,
+    siem_id: str,
+    db: DbDep,
+    user: RequireAdmin,
+):
+    """Persist a default index pattern for one linked (client, siem, role) row."""
+    form = await request.form()
+    environment_role = str(form.get("environment_role", "")).strip().lower()
+    default_index = str(form.get("default_index", "")).strip()
+
+    if environment_role not in ("production", "staging"):
+        return _render_client_siems_partial(client_id, db, toast="Invalid environment role.")
+
+    updated = db.update_client_siem_default_index(
+        client_id=client_id,
+        siem_id=siem_id,
+        environment_role=environment_role,
+        default_index=default_index,
+    )
+    if not updated:
+        return _render_client_siems_partial(client_id, db, toast="Linked SIEM row not found.")
+
+    logger.info(
+        "Default index updated for client=%s siem=%s role=%s by %s",
+        client_id,
+        siem_id,
+        environment_role,
+        user.username,
+    )
+    return _render_client_siems_partial(client_id, db, toast="Default index saved.")
 
 
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)

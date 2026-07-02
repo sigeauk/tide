@@ -122,7 +122,7 @@ Children are indented, slightly muted, icon-free.
         {% endif %}
 
         <!-- ── CTI ── -->
-        {% if not user or user.can_read('page:cti') %}
+        {% if not user or user.can_read('page:cti') or user.can_read('page:cti_indicators') or user.can_read('page:cti_actors') or user.can_read('page:cti_reports') %}
         <div class="nav-group" id="nav-group-cti">
             <button class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-cti')" data-tooltip="CTI">
                 <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -132,15 +132,21 @@ Children are indented, slightly muted, icon-free.
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
             <div class="nav-group__items">
+                {% if not user or user.can_read('page:cti_indicators') %}
                 <a href="/cti/indicators" class="nav-child {% if active_page == 'cti' and active_sub == 'indicators' %}active{% endif %}">
                     <span class="nav-label">Indicators</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:cti_actors') %}
                 <a href="/cti/actors" class="nav-child {% if active_page == 'cti' and active_sub == 'actors' %}active{% endif %}">
                     <span class="nav-label">Actors</span>
                 </a>
+                {% endif %}
+                {% if not user or user.can_read('page:cti_reports') %}
                 <a href="/cti/reports" class="nav-child {% if active_page == 'cti' and active_sub == 'reports' %}active{% endif %}">
                     <span class="nav-label">Reports</span>
                 </a>
+                {% endif %}
             </div>
         </div>
         {% endif %}
