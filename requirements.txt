@@ -29,6 +29,7 @@ apscheduler>=3.10.0
 # --- Integrations ---
 requests>=2.32.4
 python-dotenv>=1.0.0
+elastic-apm[starlette]>=6.23.0
 
 # --- Sigma/MITRE ---
 pysigma>=0.11.0

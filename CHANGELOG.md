@@ -4,7 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.0.3] - Unreleased
+
+
+## [5.0.4] - Unreleased
+
+### Added
+
+- **Optional Elastic APM instrumentation for TIDE.** Operators can now enable Elastic APM tracing with environment-based configuration, while standalone deployments keep it disabled by default.
+
+- **Air-gapped APM defaults are now explicit.** The deployment templates now include APM settings with `ELASTIC_APM_CENTRAL_CONFIG=false` so the agent does not poll Kibana for remote config.
+- **TIDE APM endpoint now defaults to container-reachable Fleet intake.** Default APM wiring now uses the internal `fleet:8200` address so telemetry from `tide-app` works without host-loopback overrides.
+
+## [5.0.3] - 2026-07-02
 
 ### Added
 

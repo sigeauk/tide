@@ -101,6 +101,14 @@ class Settings(BaseSettings):
     # --- OPENCTI ---
     opencti_url: str = Field(default="http://opencti:8080", alias="OPENCTI_URL")
     opencti_token: str = Field(default="", alias="OPENCTI_TOKEN")
+
+    # --- ELASTIC APM ---
+    elastic_apm_enabled: bool = Field(default=False, alias="ELASTIC_APM_ENABLED")
+    elastic_apm_service_name: str = Field(default="TIDE", alias="ELASTIC_APM_SERVICE_NAME")
+    elastic_apm_server_url: str = Field(default="http://localhost:8200", alias="ELASTIC_APM_SERVER_URL")
+    elastic_apm_secret_token: str = Field(default="", alias="ELASTIC_APM_SECRET_TOKEN")
+    elastic_apm_api_key: str = Field(default="", alias="ELASTIC_APM_API_KEY")
+    elastic_apm_central_config: bool = Field(default=False, alias="ELASTIC_APM_CENTRAL_CONFIG")
     
     # --- SSL / TLS ---
     ssl_verify: bool = Field(default=True, alias="SSL_VERIFY")

@@ -15,6 +15,13 @@ import logging
 import os
 import time
 
+try:
+    import elasticapm
+    from elasticapm.contrib.starlette import ElasticAPM
+except Exception:  # pragma: no cover
+    elasticapm = None
+    ElasticAPM = None
+
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
 from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api
@@ -442,6 +449,12 @@ async def lifespan(app: FastAPI):
         await cti_scheduler.stop()
     except Exception as exc:  # pragma: no cover
         logger.warning(f"CTI scheduler stop failed: {exc}")
+    try:
+        apm_client = getattr(app.state, "apm_client", None)
+        if apm_client:
+            apm_client.close()
+    except Exception as exc:  # pragma: no cover
+        logger.warning(f"Elastic APM client close failed: {exc}")
     # 4.1.0 P3 — close all pooled DuckDB connections so the file locks
     # are released cleanly before uvicorn exits.
     try:
@@ -2182,6 +2195,36 @@ def create_app() -> FastAPI:
         else:
             # idle
             return HTMLResponse('<div id="sync-status"></div>')
+
+    # Add APM middleware last so it is index 0 at runtime and captures the
+    # full request lifecycle across all existing middleware/handlers.
+    if settings.elastic_apm_enabled:
+        if ElasticAPM is None or elasticapm is None:
+            logger.warning("Elastic APM enabled but elasticapm package is unavailable; continuing without APM")
+        elif not settings.elastic_apm_server_url:
+            logger.warning("Elastic APM enabled but ELASTIC_APM_SERVER_URL is empty; continuing without APM")
+        else:
+            apm_config = {
+                "SERVICE_NAME": settings.elastic_apm_service_name,
+                "SERVER_URL": settings.elastic_apm_server_url,
+                "ENABLED": settings.elastic_apm_enabled,
+                "CENTRAL_CONFIG": settings.elastic_apm_central_config,
+                "ENVIRONMENT": "production",
+            }
+            if settings.elastic_apm_secret_token:
+                apm_config["SECRET_TOKEN"] = settings.elastic_apm_secret_token
+            if settings.elastic_apm_api_key:
+                apm_config["API_KEY"] = settings.elastic_apm_api_key
+            app.state.apm_client = elasticapm.Client(apm_config)
+            app.add_middleware(ElasticAPM, client=app.state.apm_client)
+            logger.info(
+                "Elastic APM middleware enabled (service=%s, server=%s, central_config=%s)",
+                settings.elastic_apm_service_name,
+                settings.elastic_apm_server_url,
+                settings.elastic_apm_central_config,
+            )
+    else:
+        logger.info("Elastic APM disabled (ELASTIC_APM_ENABLED=false)")
     
     return app
 

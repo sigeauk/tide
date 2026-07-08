@@ -3,6 +3,7 @@ services:
   tide-app:
     image: sigeauk/tide:${TIDE_VERSION}
     container_name: tide-app
+    hostname: TIDE
     env_file:
       - .env
     environment:
@@ -12,6 +13,13 @@ services:
       - VALIDATION_FILE=/app/data/checkedRule.json
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      - ELASTIC_APM_SERVICE_NAME=${ELASTIC_APM_SERVICE_NAME:-TIDE}
+      - ELASTIC_APM_ENVIRONMENT=${ELASTIC_APM_ENVIRONMENT:-production}
+      - ELASTIC_APM_SERVER_URL=${ELASTIC_APM_SERVER_URL:-http://fleet:8200}
+      - ELASTIC_APM_SECRET_TOKEN=${ELASTIC_APM_SECRET_TOKEN:-}
+      - ELASTIC_APM_API_KEY=${ELASTIC_APM_API_KEY:-}
+      - ELASTIC_APM_ENABLED=${ELASTIC_APM_ENABLED:-true}
+      - ELASTIC_APM_CENTRAL_CONFIG=${ELASTIC_APM_CENTRAL_CONFIG:-false}
       # Bootstrap admin created on first run (no existing users). Change before deploy.
       - BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME:-admin}
       - BOOTSTRAP_ADMIN_PASSWORD=${BOOTSTRAP_ADMIN_PASSWORD:-TIDEadmin}
