@@ -16,7 +16,7 @@
     <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
         <div id="sync-status"></div>
         <div class="btn-group" style="position:relative;display:flex;align-items:stretch;height:38px;">
-            <button
+            <button name="Sync"
                 class="btn btn-primary sync-btn"
                 hx-post="/api/rules/sync"
                 hx-target="#sync-status"
@@ -28,7 +28,7 @@
                     <span>Sync</span>
                 </span>
             </button>
-            <button
+            <button  name="Toggle Sync Options"
                 class="btn btn-primary sync-btn"
                 onclick="event.stopPropagation(); var dd=this.nextElementSibling; dd.style.display = dd.style.display==='none' ? 'block' : 'none';"
                 style="border-top-left-radius:0;border-bottom-left-radius:0;border-left:1px solid rgba(255,255,255,0.2);padding:0 0.4rem;height:100%;"
@@ -36,7 +36,7 @@
                 {{ icon('chevron-down', '14') }}
             </button>
             <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-surface-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
-                <button
+                <button name="Sync with Mappings"
                     class="btn btn-secondary"
                     style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
                     hx-post="/api/rules/sync?force_mapping=true"
@@ -49,7 +49,7 @@
                 </button>
             </div>
         </div>
-        <button
+        <button name="Create Rule"
             class="btn btn-success"
             hx-get="/api/rules/create-form"
             hx-target="#modal-container"
@@ -62,7 +62,7 @@
 </div>
 
 <!-- Metrics Row -->
-<div class="metrics-grid" id="metrics-container"
+<div name="Open Metrics" class="metrics-grid" id="metrics-container"
      hx-get="/api/rules/metrics"
      hx-trigger="refreshRules from:body"
      hx-swap="innerHTML">

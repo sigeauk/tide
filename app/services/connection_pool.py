@@ -42,6 +42,8 @@ _MIGRATION_LOCK = threading.Lock()
 
 import duckdb
 
+from app.services.apm import capture_duckdb_span
+
 logger = logging.getLogger(__name__)
 
 # Sizing — Plan §3 (8 × 2). Tunable via env vars for benchmarking but the
@@ -62,6 +64,44 @@ class _Slot:
     def __init__(self) -> None:
         self.queue: Queue = Queue(maxsize=MAX_PER_TENANT)
         self.lock = threading.Lock()
+
+
+class _InstrumentedDuckDBConnection:
+    """Proxy that preserves DuckDB chaining while capturing query spans."""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+
+    def execute(self, *args, **kwargs):
+        statement = args[0] if args else kwargs.get("query", "")
+        with capture_duckdb_span(statement):
+            self._conn.execute(*args, **kwargs)
+        return self
+
+    def executemany(self, *args, **kwargs):
+        statement = args[0] if args else kwargs.get("query", "")
+        with capture_duckdb_span(statement):
+            self._conn.executemany(*args, **kwargs)
+        return self
+
+    def sql(self, *args, **kwargs):
+        statement = args[0] if args else kwargs.get("query", "")
+        with capture_duckdb_span(statement):
+            return self._conn.sql(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        exit_method = getattr(self._conn, "__exit__", None)
+        if exit_method is None:
+            return False
+        return exit_method(exc_type, exc, tb)
 
 
 class ConnectionPool:
@@ -161,7 +201,7 @@ class ConnectionPool:
 
         poisoned = False
         try:
-            yield conn
+            yield _InstrumentedDuckDBConnection(conn)
         except Exception:
             poisoned = True
             raise

@@ -6,7 +6,7 @@
 {% block content %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
     <div style="min-width:0;">
-        <p style="margin:0 0 0.25rem 0;"><a href="/cti/reports" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Reports</span></a></p>
+        <p style="margin:0 0 0.25rem 0;"><a name="Back to Reports" href="/cti/reports" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Reports</span></a></p>
         <h1 class="page-title-hero">{{ icon('file-text','24') }} {{ report.name or 'Untitled report' }}</h1>
         <p class="page-subtitle">
             {% if report.published %}<span>{{ icon('calendar','12') }} {{ report.published }}</span>{% endif %}
@@ -83,7 +83,7 @@
             <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;flex-wrap:wrap;">
                 <strong>{{ att.name }}</strong>
                 <span class="badge badge-secondary" style="font-size:0.7rem;">{{ att.mime_type }}</span>
-                <a href="/cti/reports/{{ report.id }}/attachments/{{ att.index }}"
+                <a  name="Open in new tab" href="/cti/reports/{{ report.id }}/attachments/{{ att.index }}"
                    class="btn btn-ghost btn-sm" target="_blank" rel="noopener">
                     {{ icon_text('download','Open in new tab','14') }}
                 </a>
@@ -116,7 +116,7 @@
         {% for ref in report.external_references %}
             <li style="margin-bottom:0.5rem;">
                 {% if ref.url %}
-                    <a href="{{ ref.url }}" target="_blank" rel="noopener noreferrer">{{ ref.source_name or ref.url }}</a>
+                    <a   name="Navigation Item" href="{{ ref.url }}" target="_blank" rel="noopener noreferrer">{{ ref.source_name or ref.url }}</a>
                 {% else %}
                     <strong>{{ ref.source_name or '—' }}</strong>
                 {% endif %}
@@ -148,7 +148,7 @@
         <tbody>
         {% for i in report.related_indicators %}
             <tr>
-                <td><a href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
+                <td><a  name="Indicators" href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
                 <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
                 <td>{{ (i.tlp or '—')|upper }}</td>
                 <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
@@ -173,7 +173,7 @@
         <tbody>
         {% for a in report.related_actors %}
             <tr>
-                <td><a href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
+                <td><a  name="Actors" href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
                 <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span></td>
                 <td>{{ a.origin or '—' }}</td>
             </tr>

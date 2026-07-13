@@ -6,14 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 
 
-## [5.0.4] - Unreleased
+## [5.0.4] - 2026-07-13
 
 ### Added
 
 - **Optional Elastic APM instrumentation for TIDE.** Operators can now enable Elastic APM tracing with environment-based configuration, while standalone deployments keep it disabled by default.
+- **DuckDB spans, tenant labels, and browser RUM tracing.** Query-heavy DuckDB work is now broken out as database spans, active tenant transactions carry tenant labels for Kibana filtering, and the browser shell loads the local Elastic RUM agent for HTMX-driven request tracing.
 
 - **Air-gapped APM defaults are now explicit.** The deployment templates now include APM settings with `ELASTIC_APM_CENTRAL_CONFIG=false` so the agent does not poll Kibana for remote config.
 - **TIDE APM endpoint now defaults to container-reachable Fleet intake.** Default APM wiring now uses the internal `fleet:8200` address so telemetry from `tide-app` works without host-loopback overrides.
+- **RUM environment now maps from configuration correctly.** Frontend APM initialization now resolves the configured `ELASTIC_APM_ENVIRONMENT` value instead of always falling back when rendering templates.
+
+### Fixed
+
+- **HTMX page navigation now lands in Kibana UX with page-load metrics.** Browser-side APM now preserves UX-compatible `page-load` telemetry for HTMX route changes, and the regression test verifies both the browser intake request and the indexed RUM document shape in Elasticsearch.
 
 ## [5.0.3] - 2026-07-02
 

@@ -103,7 +103,7 @@
         <p class="page-subtitle">Convert Sigma detection rules into SIEM-specific queries for deployment.</p>
     </div>
     <div style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
-        <button
+        <button name="Create Rule"
             class="btn btn-success"
             hx-get="/api/rules/create-form"
             hx-target="#modal-container"
@@ -119,7 +119,7 @@
 <div class="sigma-header-row">
     <div class="sigma-select-group">
         <label>Target</label>
-        <select id="backend-select" class="sigma-select">
+        <select name="Backend Select" id="backend-select" class="sigma-select">
             {% for key, label in backends.items() %}
             <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
@@ -128,7 +128,7 @@
     
     <div class="sigma-select-group">
         <label>Format</label>
-        <select id="format-select" class="sigma-select">
+        <select name="Format Select" id="format-select" class="sigma-select">
             {% for key, label in formats.items() %}
             <option value="{{ key }}">{{ label }}</option>
             {% endfor %}
@@ -137,7 +137,7 @@
     
     <div class="sigma-select-group">
         <label>Pipeline</label>
-        <select id="pipeline-select" class="sigma-select" style="min-width: 180px;">
+        <select name="Pipeline Select" id="pipeline-select" class="sigma-select" style="min-width: 180px;">
             {% for key, label in pipelines.items() %}
             <option value="{{ key }}">{{ label }}</option>
             {% endfor %}
@@ -146,13 +146,13 @@
 
     <div class="sigma-select-group" style="position:relative;">
         <label title="Custom pipelines — click to toggle, applied in selection order">Custom Pipelines</label>
-        <button type="button" id="pipeline-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._togglePipelineDropdown()">
+        <button name="None selected" type="button" id="pipeline-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._togglePipelineDropdown()">
             <span id="pipeline-dropdown-label">None selected</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div id="pipeline-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:2000;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
             {% for pl in pipeline_files %}
-            <button type="button" class="pipeline-option" data-value="{{ pl.filename }}">
+            <button   name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ pl.filename }}">
                 <span class="pipeline-option-check">&#10003;</span>
                 <span class="pipeline-option-name">{{ pl.display }}</span>
                 <span class="pipeline-option-badge"></span>
@@ -163,13 +163,13 @@
 
     <div class="sigma-select-group" style="position:relative;">
         <label title="Template postprocessing pipelines — click to toggle">Templates</label>
-        <button type="button" id="template-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._toggleTemplateDropdown()">
+        <button name="None selected" type="button" id="template-dropdown-btn" class="sigma-select" style="min-width:180px;text-align:left;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" onclick="window._toggleTemplateDropdown()">
             <span id="template-dropdown-label">None selected</span>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         </button>
         <div id="template-multiselect" class="pipeline-multiselect" style="display:none;position:absolute;top:100%;left:0;z-index:2000;margin-top:2px;min-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
             {% for tpl in template_files %}
-            <button type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
+            <button   name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
                 <span class="pipeline-option-check">&#10003;</span>
                 <span class="pipeline-option-name">{{ tpl.display }}</span>
                 <span class="pipeline-option-badge"></span>
@@ -255,7 +255,7 @@
         
         <!-- Panel Body: Code Area -->
         <div class="sigma-panel-body">
-            <form id="convert-form" hx-post="/api/sigma/convert" hx-target="#sigma-convert-response" hx-swap="innerHTML" class="sigma-form-body">
+            <form name="Submit Convert" id="convert-form" hx-post="/api/sigma/convert" hx-target="#sigma-convert-response" hx-swap="innerHTML" class="sigma-form-body">
                 <div class="code-editor-container">
                     <textarea 
                         id="yaml-editor" 
@@ -289,16 +289,16 @@ level: medium"></textarea>
         
         <!-- Left Footer: Action Buttons -->
         <div class="sigma-panel-footer">
-            <button type="submit" form="convert-form" class="btn btn-primary btn-sm">
+            <button  name="Convert" type="submit" form="convert-form" class="btn btn-primary btn-sm">
                 {{ icon_text('refresh-cw', 'Convert', '14') }}
             </button>
-            <button type="button" class="btn btn-secondary btn-sm" 
+            <button name="Submit Validate" type="button" class="btn btn-secondary btn-sm" 
                     hx-post="/api/sigma/validate"
                     hx-target="#validation-result"
                     hx-include="#yaml-editor">
                 {{ icon_text('check-circle', 'Validate', '14') }}
             </button>
-            <button type="button" class="btn btn-secondary btn-sm" onclick="clearYamlEditor()">
+            <button  name="Clear" type="button" class="btn btn-secondary btn-sm" onclick="clearYamlEditor()">
                 {{ icon_text('trash-2', 'Clear', '14') }}
             </button>
         </div>
@@ -328,12 +328,12 @@ level: medium"></textarea>
         
         <!-- Right Footer: Deploy Controls (Single Line, Right-Aligned) -->
         <div class="sigma-panel-footer footer-right" id="deploy-footer">
-            <form id="deploy-form" hx-post="/api/sigma/deploy" hx-target="#deploy-result" hx-swap="innerHTML" class="sigma-deploy-form">
+            <form name="Submit Deploy" id="deploy-form" hx-post="/api/sigma/deploy" hx-target="#deploy-result" hx-swap="innerHTML" class="sigma-deploy-form">
                 <input type="hidden" name="yaml_content" id="deploy-yaml">
                 <input type="hidden" name="raw_query" id="deploy-query">
                 <input type="hidden" name="siem_id" id="deploy-siem-id">
                 
-                <button type="button" class="btn btn-secondary btn-sm" onclick="downloadQuery()">
+                <button  name="Download" type="button" class="btn btn-secondary btn-sm" onclick="downloadQuery()">
                     {{ icon_text('download', 'Download', '14') }}
                 </button>
                 
@@ -369,7 +369,7 @@ level: medium"></textarea>
                     <span>Enable</span>
                 </label>
                 
-                <button type="submit" class="btn btn-primary btn-sm" onclick="prepareDeployForm()">
+                <button  name="Deploy" type="submit" class="btn btn-primary btn-sm" onclick="prepareDeployForm()">
                     {{ icon_text('rocket', 'Deploy', '14') }}
                 </button>
             </form>

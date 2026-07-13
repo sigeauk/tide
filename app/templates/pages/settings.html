@@ -9,7 +9,7 @@
     <p class="page-subtitle">
         Manage your profile, password and personal API keys.
         Tenant, SIEM, logging, Sigma asset and classification administration now live in
-        <a href="/management" style="color:var(--color-primary);">Management</a>.
+        <a name="Management" href="/management" style="color:var(--color-primary);">Management</a>.
     </p>
 </div>
 
@@ -29,19 +29,19 @@
             <div class="preferences-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem;">
                 <div class="overview-section" style="margin: 0;">
                     <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Update Email</h4>
-                    <form hx-post="/api/settings/profile/email" hx-swap="none"
+                    <form name="Submit Email" hx-post="/api/settings/profile/email" hx-swap="none"
                           style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
                         <input type="email" name="email" class="form-input" required
                                value="{{ user.email or '' }}" placeholder="name@example.com">
                         <div>
-                            <button type="submit" class="btn btn-primary btn-sm">Save Email</button>
+                            <button name="Save Email" type="submit" class="btn btn-primary btn-sm">Save Email</button>
                         </div>
                     </form>
                 </div>
 
                 <div class="overview-section" style="margin: 0;">
                     <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Change Password</h4>
-                    <form hx-post="/api/settings/profile/password" hx-swap="none"
+                    <form name="Submit Password" hx-post="/api/settings/profile/password" hx-swap="none"
                           style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
                         <input type="password" name="current_password" class="form-input" required minlength="8"
                                placeholder="Current password" autocomplete="current-password">
@@ -50,7 +50,7 @@
                         <input type="password" name="confirm_password" class="form-input" required minlength="8"
                                placeholder="Confirm new password" autocomplete="new-password">
                         <div>
-                            <button type="submit" class="btn btn-primary btn-sm">Update Password</button>
+                            <button name="Update Password" type="submit" class="btn btn-primary btn-sm">Update Password</button>
                         </div>
                     </form>
                 </div>
@@ -130,17 +130,17 @@
             </details>
 
             <!-- Create key form -->
-            <form hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
+            <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
                   hx-on::after-request="if(event.detail.successful){this.reset();}"
                   style="display:flex;gap:0.5rem;align-items:center;margin:1rem 0;flex-wrap:wrap;">
                 <input type="text" name="api_key_label" class="form-input" placeholder="Key label (e.g. SIEM integration)" required
                        style="min-width:220px;max-width:320px;font-size:0.85rem;">
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
+                <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
             </form>
 
             <!-- Key list (HTMX loaded) -->
             <div id="api-key-section">
-                <div id="api-key-list"
+                <div name="Open Keys" id="api-key-list"
                      hx-get="/api/settings/api-keys"
                      hx-trigger="load"
                      hx-swap="innerHTML">

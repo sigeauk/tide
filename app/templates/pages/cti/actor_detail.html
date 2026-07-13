@@ -6,7 +6,7 @@
 {% block content %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
     <div>
-        <p style="margin:0 0 0.25rem 0;"><a href="/cti/actors" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Actors</span></a></p>
+        <p style="margin:0 0 0.25rem 0;"><a name="Back to Actors" href="/cti/actors" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Actors</span></a></p>
         <h1 class="page-title-hero">{{ icon('users','24') }} {{ actor.name }}</h1>
         <p class="page-subtitle">
             <span class="badge badge-secondary" style="font-size:0.7rem;">{{ actor.stix_type }}</span>
@@ -85,7 +85,7 @@
         <tbody>
         {% for i in actor.related_indicators %}
             <tr>
-                <td><a href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
+                <td><a  name="Indicators" href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
                 <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
                 <td>{{ (i.tlp or '—')|upper }}</td>
                 <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
@@ -110,7 +110,7 @@
         <tbody>
         {% for r in actor.related_reports %}
             <tr>
-                <td><a href="/cti/reports/{{ r.id }}">{{ r.name or 'Untitled report' }}</a></td>
+                <td><a  name="Reports" href="/cti/reports/{{ r.id }}">{{ r.name or 'Untitled report' }}</a></td>
                 <td>{{ r.published or '—' }}</td>
             </tr>
         {% endfor %}

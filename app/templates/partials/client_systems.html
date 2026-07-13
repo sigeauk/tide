@@ -3,12 +3,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div class="client-section-toggle" onclick="var b=document.getElementById('systems-body');var c=document.getElementById('systems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Systems Edit" class="client-section-toggle" onclick="var b=document.getElementById('systems-body');var c=document.getElementById('systems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
     <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Systems</h2>
     <span class="badge badge-neutral" style="font-size:0.68rem;">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
-    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
-        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-systems-modal').style.display='flex'">
+    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button  name="Open Edit Systems Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-systems-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -23,7 +23,7 @@
     {% set sys = summary.system %}
     <div class="client-list-item client-list-item--{% if summary.worst_status == 'red' %}danger{% elif summary.worst_status == 'amber' %}warning{% else %}active{% endif %}">
         <div class="client-list-item__body">
-            <a href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
+            <a  name="Systems" href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
             {% if sys.classification %}
             <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
             {% endif %}
@@ -48,7 +48,7 @@
     {% for sys in client_systems %}
     <div class="client-list-item client-list-item--active">
         <div class="client-list-item__body">
-            <a href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
+            <a  name="Systems" href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
             {% if sys.classification %}
             <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
             {% endif %}

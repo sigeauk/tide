@@ -38,7 +38,7 @@ Parameters:
 
 {% set size_class = 'mitre-' ~ size %}
 
-<span 
+<span  name="Open Technique Details" 
     class="mitre-pill {{ status_class }} {{ size_class }}"
     {% if clickable %}
     hx-get="/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
@@ -78,7 +78,7 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
             {{ mitre_pill(mid, covered=true, clickable=clickable, size=size, search_filter=search_filter) }}
         {% else %}
             {# No coverage data - render neutral pill #}
-            <span 
+            <span name="Open Technique Details" 
                 class="mitre-pill mitre-neutral mitre-{{ size }}"
                 {% if clickable %}
                 hx-get="/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"

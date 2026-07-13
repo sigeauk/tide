@@ -8,7 +8,7 @@
         Rule modal opens with prefilled values.
     </div>
     {% if prefill_payload %}
-    <button type="button"
+    <button name="Open Create Form" type="button"
             class="btn btn-primary btn-sm"
             hx-get="/api/rules/create-form?prefill={{ prefill_payload }}"
             hx-target="#modal-container"
@@ -19,7 +19,7 @@
 </div>
 
 <!-- Store raw query for deployment (original NDJSON) -->
-<input type="hidden" id="raw-query-store" value="{{ raw_query | e }}">
+<input name="Raw Query Store" type="hidden" id="raw-query-store" value="{{ raw_query | e }}">
 
 <script>
 // Auto-open the shared rule modal with the converted Sigma payload.

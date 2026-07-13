@@ -21,7 +21,7 @@
 
             {# Report button #}
             <div style="margin-left:auto;">
-                <button class="btn btn-secondary btn-sm"
+                <button name="Export Report" class="btn btn-secondary btn-sm"
                         onclick="openExportModal()"
                         title="Generate CVE audit report"
                         style="display:flex;align-items:center;gap:0.375rem;">
@@ -127,7 +127,7 @@
             <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
                 Export CVE Audit Report
             </h3>
-            <button onclick="closeExportModal()"
+            <button name="Close Export Modal" onclick="closeExportModal()"
                     style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
                            font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
                     title="Close">&#x2715;</button>
@@ -136,7 +136,7 @@
             <label style="display:block; font-size:0.75rem; font-weight:600;
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
-            <select id="modal-format"
+            <select name="PDF Markdown" id="modal-format"
                     style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
                            border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
                            background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
@@ -149,7 +149,7 @@
             <label style="display:block; font-size:0.75rem; font-weight:600;
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
-            <select id="modal-classification"
+            <select name="Modal Classification" id="modal-classification"
                     style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
                            border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
                            background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
@@ -160,9 +160,9 @@
             </select>
         </div>
         <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
-            <button onclick="closeExportModal()" class="btn btn-secondary"
+            <button name="Cancel" onclick="closeExportModal()" class="btn btn-secondary"
                     style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
-            <button onclick="confirmExport()" class="btn btn-primary"
+            <button name="Download" onclick="confirmExport()" class="btn btn-primary"
                     style="font-size:0.85rem; padding:0.45rem 1.25rem;">Download</button>
         </div>
     </div>

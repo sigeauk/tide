@@ -21,7 +21,7 @@
             <div style="font-size:0.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
                 {{ icon('file-code','13') }}
                 {% if rule_info.rule_id %}
-                <span style="cursor:pointer;color:var(--color-text);text-decoration:underline;text-decoration-style:dotted;"
+                <span name="Open Detail" style="cursor:pointer;color:var(--color-text);text-decoration:underline;text-decoration-style:dotted;"
                       hx-get="/api/rules/{{ rule_info.rule_id }}/detail?space={{ rule_info.space | default('default') }}"
                       hx-target="#modal-container"
                       hx-swap="innerHTML"
@@ -36,7 +36,7 @@
                 {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
             </div>
         </div>
-        <button class="btn btn-danger btn-sm"
+        <button name="Delete Detections" class="btn btn-danger btn-sm"
                 hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
                 hx-target="#step-detection-section"
                 hx-swap="innerHTML"
@@ -61,7 +61,7 @@
                 {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
             </div>
         </div>
-        <button class="btn btn-danger btn-sm"
+        <button name="Delete Detections" class="btn btn-danger btn-sm"
                 hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
                 hx-target="#step-detection-section"
                 hx-swap="innerHTML"
@@ -86,7 +86,7 @@
                 <span style="font-size:0.68rem;color:var(--color-text-muted);">Potential — convert &amp; deploy to activate</span>
             </div>
         </div>
-        <button class="btn btn-danger btn-sm"
+        <button name="Delete Detections" class="btn btn-danger btn-sm"
                 hx-delete="/api/baselines/tactics/detections/{{ d.id }}?step_id={{ step.id }}"
                 hx-target="#step-detection-section"
                 hx-swap="innerHTML"
@@ -108,21 +108,21 @@
 <div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
         {# ── + Add SIEM Rule (green) ───────────────────────────── #}
-        <button class="btn btn-sm" id="add-siem-det-btn"
+        <button name="+ Add SIEM Rule" class="btn btn-sm" id="add-siem-det-btn"
                 style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
                 onclick="this.style.display='none';var p=document.getElementById('add-siem-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('siem-rule-search'),'load');">
             {{ icon('shield-check','14') }} + Add SIEM Rule
         </button>
 
         {# ── + Add Manual Rule (blue) ──────────────────────────── #}
-        <button class="btn btn-sm" id="add-manual-det-btn"
+        <button name="+ Add Manual Rule" class="btn btn-sm" id="add-manual-det-btn"
                 style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
                 onclick="this.style.display='none';document.getElementById('add-manual-det-panel').style.display='flex';">
             {{ icon('edit-3','14') }} + Add Manual Rule
         </button>
 
         {# ── + Add Sigma Rule (amber) ──────────────────────────── #}
-        <button class="btn btn-sm" id="add-sigma-det-btn"
+        <button name="+ Add Sigma Rule" class="btn btn-sm" id="add-sigma-det-btn"
                 style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
                 onclick="this.style.display='none';var p=document.getElementById('add-sigma-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('sigma-rule-search'),'load');">
             {{ icon('zap','14') }} + Add Sigma Rule
@@ -139,7 +139,7 @@
                    hx-target="#siem-rule-results"
                    hx-swap="innerHTML"
                    name="q">
-            <button type="button" class="btn btn-secondary btn-sm"
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                     onclick="document.getElementById('add-siem-det-panel').style.display='none';document.getElementById('add-siem-det-btn').style.display='inline-flex';">
                 Cancel
             </button>
@@ -147,7 +147,7 @@
         <div id="siem-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
             <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
         </div>
-        <form id="add-siem-det-form"
+        <form name="Submit Detections" id="add-siem-det-form"
               hx-post="/api/baselines/tactics/{{ step.id }}/detections"
               hx-target="#step-detection-section"
               hx-swap="innerHTML">
@@ -159,7 +159,7 @@
 
     {# ── Manual Rule input panel (blue) ────────────────────────── #}
     <div id="add-manual-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
-        <form hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+        <form name="Submit Detections" hx-post="/api/baselines/tactics/{{ step.id }}/detections"
               hx-target="#step-detection-section"
               hx-swap="innerHTML"
               style="display:flex;flex-direction:column;gap:0.5rem;">
@@ -167,8 +167,8 @@
             <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
             <input type="hidden" name="source" value="manual">
             <div style="display:flex;gap:0.5rem;">
-                <button type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
-                <button type="button" class="btn btn-secondary btn-sm"
+                <button name="Save" type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+                <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                         onclick="this.closest('div[id]').style.display='none';document.getElementById('add-manual-det-btn').style.display='inline-flex';">
                     Cancel
                 </button>
@@ -186,7 +186,7 @@
                    hx-target="#sigma-rule-results"
                    hx-swap="innerHTML"
                    name="q">
-            <button type="button" class="btn btn-secondary btn-sm"
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                     onclick="document.getElementById('add-sigma-det-panel').style.display='none';document.getElementById('add-sigma-det-btn').style.display='inline-flex';">
                 Cancel
             </button>
@@ -194,7 +194,7 @@
         <div id="sigma-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
             <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
         </div>
-        <form id="add-sigma-det-form"
+        <form name="Submit Detections" id="add-sigma-det-form"
               hx-post="/api/baselines/tactics/{{ step.id }}/detections"
               hx-target="#step-detection-section"
               hx-swap="innerHTML">

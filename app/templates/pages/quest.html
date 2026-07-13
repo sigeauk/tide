@@ -57,7 +57,7 @@
       </div>
       {% for t in items %}
         {% set is_current = t.technique_id == current.technique_id %}
-        <a href="/quest/{{ quest.id }}/technique/{{ t.technique_id }}"
+        <a name="●" href="/quest/{{ quest.id }}/technique/{{ t.technique_id }}"
            title="{{ t.technique_id }} · {{ t.technique_name }}{% if t.detection_count %} ({{ t.detection_count }} rule{{ 's' if t.detection_count != 1 }}){% endif %}"
            style="text-decoration:none;font-size:0.7rem;font-family:monospace;padding:0.25rem 0.4rem;border-radius:0.25rem;
                   display:flex;align-items:center;gap:0.3rem;justify-content:space-between;
@@ -147,17 +147,17 @@
     </div>
 
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem;">
-      <button class="btn btn-sm" id="qst-siem-btn"
+      <button name="+ SIEM rule" class="btn btn-sm" id="qst-siem-btn"
               style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
               onclick="this.style.display='none';var p=document.getElementById('qst-siem-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-siem-search'),'load');">
         {{ icon('shield-check','14') }} + SIEM rule
       </button>
-      <button class="btn btn-sm" id="qst-manual-btn"
+      <button name="+ Manual rule" class="btn btn-sm" id="qst-manual-btn"
               style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
               onclick="this.style.display='none';document.getElementById('qst-manual-panel').style.display='flex';">
         {{ icon('edit-3','14') }} + Manual rule
       </button>
-      <button class="btn btn-sm" id="qst-sigma-btn"
+      <button name="+ Sigma rule" class="btn btn-sm" id="qst-sigma-btn"
               style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
               onclick="this.style.display='none';var p=document.getElementById('qst-sigma-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-sigma-search'),'load');">
         {{ icon('zap','14') }} + Sigma rule
@@ -172,13 +172,13 @@
                hx-get="/api/baselines/tactics/{{ current.step_id }}/siem-rules"
                hx-trigger="input changed delay:300ms, load"
                hx-target="#qst-siem-results" hx-swap="innerHTML" name="q">
-        <button type="button" class="btn btn-secondary btn-sm"
+        <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('qst-siem-panel').style.display='none';document.getElementById('qst-siem-btn').style.display='inline-flex';">Cancel</button>
       </div>
       <div id="qst-siem-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
         <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
       </div>
-      <form id="qst-siem-form"
+      <form name="Submit Detections" id="qst-siem-form"
             hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}">
@@ -191,7 +191,7 @@
 
     {# Manual rule input panel #}
     <div id="qst-manual-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
-      <form hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
+      <form name="Submit Detections" hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}"
             style="display:flex;flex-direction:column;gap:0.5rem;">
@@ -200,8 +200,8 @@
         <input type="hidden" name="source" value="manual">
         <input type="hidden" name="system_id" value="{{ quest.system_id }}">
         <div style="display:flex;gap:0.5rem;">
-          <button type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
-          <button type="button" class="btn btn-secondary btn-sm"
+          <button name="Save" type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+          <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                   onclick="document.getElementById('qst-manual-panel').style.display='none';document.getElementById('qst-manual-btn').style.display='inline-flex';">Cancel</button>
         </div>
       </form>
@@ -215,13 +215,13 @@
                hx-get="/api/baselines/tactics/{{ current.step_id }}/sigma-rules"
                hx-trigger="input changed delay:300ms, load"
                hx-target="#qst-sigma-results" hx-swap="innerHTML" name="q">
-        <button type="button" class="btn btn-secondary btn-sm"
+        <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('qst-sigma-panel').style.display='none';document.getElementById('qst-sigma-btn').style.display='inline-flex';">Cancel</button>
       </div>
       <div id="qst-sigma-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
         <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
       </div>
-      <form id="qst-sigma-form"
+      <form name="Submit Detections" id="qst-sigma-form"
             hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}">
@@ -250,20 +250,20 @@
   {# ── Navigation footer ────────────────────────────────────── #}
   <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.75rem 1rem;background:var(--color-bg-elevated,#1c2128);border:1px solid var(--color-border,#30363d);border-radius:0.5rem;">
     {% if prev_tech %}
-      <a href="/quest/{{ quest.id }}/technique/{{ prev_tech }}" class="btn btn-secondary btn-sm">← Previous</a>
+      <a name="← Previous" href="/quest/{{ quest.id }}/technique/{{ prev_tech }}" class="btn btn-secondary btn-sm">← Previous</a>
     {% else %}
-      <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+      <button name="← Previous" class="btn btn-secondary btn-sm" disabled>← Previous</button>
     {% endif %}
 
     {% if current_covered %}
       {# Already covered — primary action is Next, not Mark covered. #}
       {% if next_tech %}
-        <a href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-sm"
+        <a name="Next →" href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-sm"
            style="background:var(--color-info,#2f81f7);color:#fff;display:inline-flex;align-items:center;gap:0.3rem;">
           Next → {{ next_tech }}
         </a>
       {% else %}
-        <button class="btn btn-success btn-sm"
+        <button name="Finish quest" class="btn btn-success btn-sm"
                 hx-post="/api/quest/{{ quest.id }}/complete/{{ current.technique_id }}"
                 hx-swap="none"
                 style="display:inline-flex;align-items:center;gap:0.3rem;">
@@ -271,7 +271,7 @@
         </button>
       {% endif %}
     {% else %}
-      <button class="btn btn-success btn-sm"
+      <button name="Mark covered next" class="btn btn-success btn-sm"
               hx-post="/api/quest/{{ quest.id }}/complete/{{ current.technique_id }}"
               hx-swap="none"
               title="Mark this technique covered (e.g. risk accepted) and advance"
@@ -279,7 +279,7 @@
         {{ icon('check','12') }} Mark covered &amp; next
       </button>
       {% if next_tech %}
-        <a href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-secondary btn-sm">
+        <a name="Skip →" href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-secondary btn-sm">
           Skip →
         </a>
       {% endif %}
@@ -287,10 +287,10 @@
 
     <span style="flex:1;"></span>
 
-    <a href="/baselines/{{ quest.baseline_id }}" class="btn btn-link btn-sm">
+    <a name="View baseline" href="/baselines/{{ quest.baseline_id }}" class="btn btn-link btn-sm">
       View baseline
     </a>
-    <button class="btn btn-link btn-sm"
+    <button name="End quest" class="btn btn-link btn-sm"
             hx-post="/api/quest/{{ quest.id }}/end"
             hx-swap="none"
             hx-confirm="End this coverage quest? Updates you've made persist on the baseline.">

@@ -11,6 +11,25 @@
     <!-- HTMX Core + Head Support Extension (bundled locally for air-gapped/standalone) -->
     <script defer src="/static/js/htmx.min.js?v={{ cache_bust | default('0') }}"></script>
     <script defer src="/static/js/vendor/head-support.min.js?v={{ cache_bust | default('0') }}"></script>
+
+    {% if env.elastic_apm_enabled %}
+    <script>
+    window.TIDE_APM_RUM_CONFIG = {
+        serviceName: {{ (env.elastic_apm_service_name ~ '-web') | tojson }},
+        serviceVersion: {{ env.tide_version | tojson }},
+        serverUrl: window.location.origin + '/apm',
+        environment: {{ env.elastic_apm_environment | default('production') | tojson }},
+        instrument: true,
+        distributedTracing: true,
+        distributedTracingOrigins: [window.location.origin],
+        active: true,
+        breakdownMetrics: true,
+        logLevel: 'warn'
+    };
+    </script>
+    <script defer src="/static/js/vendor/elastic-apm-rum.umd.min.js?v={{ cache_bust | default('0') }}"></script>
+    <script defer src="/static/js/vendor/apm-rum-init.js?v={{ cache_bust | default('0') }}"></script>
+    {% endif %}
     
     <!-- TIDE Application JavaScript — content-hashed bundle (4.1.0 P4) -->
     <script defer src="{{ asset('app.js') }}"></script>
@@ -20,7 +39,7 @@
     
     {% block head %}{% endblock %}
 </head>
-<body hx-boost="true" hx-ext="head-support">
+<body   name="Breadcrumb" hx-boost="true" hx-ext="head-support">
     <!-- App Layout Container -->
     <div class="app-layout{% if not user %} no-sidebar{% endif %}">
         <!-- Sidebar -->

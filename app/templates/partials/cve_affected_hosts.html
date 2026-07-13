@@ -23,7 +23,7 @@
 
     <!-- Search bar -->
     <div style="margin-bottom:0.75rem;">
-        <input id="affected-search" class="form-input" type="search" placeholder="Search by hostname or IP…"
+        <input name="Affected Search" id="affected-search" class="form-input" type="search" placeholder="Search by hostname or IP…"
                oninput="filterAffectedDevices()" style="max-width:320px;font-size:0.85rem;">
         <span id="affected-search-count" style="font-size:0.8rem;color:var(--color-text-muted);margin-left:0.5rem;"></span>
     </div>
@@ -38,7 +38,7 @@
     <div class="card card-padded-sm card-mb-sm">
         <!-- System header -->
         <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.75rem;flex-wrap:wrap;">
-            <a href="/systems/{{ grp.system_id }}" style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
+            <a  name="Systems" href="/systems/{{ grp.system_id }}" style="font-weight:600;font-size:0.92rem;color:var(--color-primary);text-decoration:none;display:flex;align-items:center;gap:0.3rem;">
                 {{ icon('layers','14') }} {{ grp.system_name }}
             </a>
             <span class="badge badge-neutral" style="font-size:0.72rem;">{{ grp.hosts | length }} host{{ 's' if grp.hosts | length != 1 }}</span>
@@ -70,7 +70,7 @@
                 {% for det in ns_applied_all.items %}
                 <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
                     {{ icon('check','10') }} {{ det.note[:30] if det.note else det.rule_ref[:30] if det.rule_ref else 'Rule' }}
-                    <button class="btn btn-danger btn-sm"
+                    <button name="Delete Apply System" class="btn btn-danger btn-sm"
                             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}/apply-system/{{ grp.system_id }}"
                             hx-target="#cve-affected-section"
                             hx-swap="innerHTML"
@@ -81,19 +81,19 @@
                 </span>
                 {% endfor %}
                 {% if ns_unapplied.items %}
-                <form style="display:inline-flex;align-items:center;gap:0.3rem;"
+                <form name="Submit Apply" style="display:inline-flex;align-items:center;gap:0.3rem;"
                       hx-post="/api/inventory/cve/{{ cve_id }}/detect/__DET_ID__/apply"
                       hx-target="#cve-affected-section"
                       hx-swap="innerHTML"
                       onsubmit="var sel=this.querySelector('select');if(!sel.value){event.preventDefault();return;}this.action=this.getAttribute('hx-post').replace('__DET_ID__',sel.value);this.setAttribute('hx-post',this.action);">
                     <input type="hidden" name="system_id" value="{{ grp.system_id }}">
-                    <select class="form-input" style="font-size:0.72rem;padding:0.15rem 0.4rem;max-width:200px;">
+                    <select name="Apply rule…" class="form-input" style="font-size:0.72rem;padding:0.15rem 0.4rem;max-width:200px;">
                         <option value="">Apply rule…</option>
                         {% for det in ns_unapplied.items %}
                         <option value="{{ det.id }}">{{ det.note[:35] if det.note else det.rule_ref[:35] if det.rule_ref else 'Rule' }}</option>
                         {% endfor %}
                     </select>
-                    <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.68rem;padding:0.15rem 0.4rem;">
+                    <button name="Apply" type="submit" class="btn btn-sm btn-primary" style="font-size:0.68rem;padding:0.15rem 0.4rem;">
                         {{ icon('shield-check','10') }} Apply
                     </button>
                 </form>
@@ -106,7 +106,7 @@
         <div class="host-card-grid">
             {% for h in grp.hosts %}
             <div class="host-card aff-host-card--{{ h.coverage_status }}" style="min-height:140px;"
-                 data-aff-name="{{ h.name | lower }}" data-aff-ip="{{ (h.ip_address or '') | lower }}">
+                 data-aff- name="Blind Spot Monitored At Risk" data-aff-ip="{{ (h.ip_address or '') | lower }}">
                 <!-- Traffic light badge -->
                 <div class="host-card__badge">
                     {% if h.coverage_status == 'grey' %}
@@ -124,7 +124,7 @@
                 {% if bs.host_id == h.host_id %}
                 <div style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;margin-top:0.15rem;">
                     {{ icon('info','10') }} {{ bs.reason }}
-                    <button class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                    <button name="Delete Blind Spots" class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
                             hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=cve&entity_id={{ cve_id }}"
                             hx-target="#cve-affected-section" hx-swap="innerHTML"
                             hx-confirm="Remove blind spot for {{ h.name }}?">{{ icon('x','9') }}</button>
@@ -134,7 +134,7 @@
                 {% endif %}
 
                 <!-- Host name -->
-                <a href="/hosts/{{ h.host_id }}" class="host-card__title">
+                <a  name="Hosts" href="/hosts/{{ h.host_id }}" class="host-card__title">
                     {{ icon('server','14') }} {{ h.name }}
                 </a>
 
@@ -166,7 +166,7 @@
                     {% set ns_shown_dets.ids = ns_shown_dets.ids + [det.id] %}
                     <span class="badge badge-success" style="font-size:0.62rem;display:inline-flex;align-items:center;gap:0.2rem;margin-bottom:0.2rem;">
                         {{ icon('check','9') }} {{ det.note[:20] if det.note else det.rule_ref[:20] if det.rule_ref else 'Rule' }}
-                        <button class="btn btn-danger btn-sm"
+                        <button name="Delete Applied Detection" class="btn btn-danger btn-sm"
                                 hx-delete="/api/inventory/applied-detection/{{ ad.id }}?cve_id={{ cve_id }}"
                                 hx-target="#cve-affected-section"
                                 hx-swap="innerHTML"
@@ -190,19 +190,19 @@
                       {% endif %}
                     {% endfor %}
                     {% if ns_host_unapplied.items %}
-                    <form style="display:flex;align-items:center;gap:0.25rem;margin-top:0.25rem;"
+                    <form name="Submit Apply" style="display:flex;align-items:center;gap:0.25rem;margin-top:0.25rem;"
                           hx-post="/api/inventory/cve/{{ cve_id }}/detect/__DET_ID__/apply"
                           hx-target="#cve-affected-section"
                           hx-swap="innerHTML"
                           onsubmit="var sel=this.querySelector('select');if(!sel.value){event.preventDefault();return;}this.action=this.getAttribute('hx-post').replace('__DET_ID__',sel.value);this.setAttribute('hx-post',this.action);">
                         <input type="hidden" name="host_id" value="{{ h.host_id }}">
-                        <select class="form-input" style="font-size:0.65rem;padding:0.1rem 0.3rem;max-width:140px;">
+                        <select name="Apply…" class="form-input" style="font-size:0.65rem;padding:0.1rem 0.3rem;max-width:140px;">
                             <option value="">Apply…</option>
                             {% for det in ns_host_unapplied.items %}
                             <option value="{{ det.id }}">{{ det.note[:25] if det.note else det.rule_ref[:25] if det.rule_ref else 'Rule' }}</option>
                             {% endfor %}
                         </select>
-                        <button type="submit" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:0.1rem 0.3rem;">
+                        <button   name="Apply Detection" type="submit" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:0.1rem 0.3rem;">
                             {{ icon('shield-check','9') }}
                         </button>
                     </form>
@@ -214,7 +214,7 @@
                 {# Log Blind Spot button — only for red (at-risk) hosts without existing blind spot #}
                 {% if h.coverage_status == 'red' %}
                 <div style="border-top:1px dashed var(--color-border-muted);padding-top:0.35rem;margin-top:0.35rem;">
-                    <button class="btn btn-sm" style="font-size:0.65rem;padding:0.15rem 0.4rem;color:var(--color-text-muted);border-color:var(--color-border-muted);"
+                    <button name="Log Blind Spot" class="btn btn-sm" style="font-size:0.65rem;padding:0.15rem 0.4rem;color:var(--color-text-muted);border-color:var(--color-border-muted);"
                             onclick="openBlindSpotModal('cve','{{ cve_id }}','{{ h.system_id }}','{{ h.host_id }}','{{ h.name }}')">
                         {{ icon('eye-off','10') }} Log Blind Spot
                     </button>
@@ -232,7 +232,7 @@
     <h2 class="section-title">Affected Devices</h2>
     <div class="aff-host-grid">
         {% for h in cve.affected_hosts %}
-        <a href="/hosts/{{ h.host_id }}" class="aff-host-card aff-host-card--{{ h.coverage_status }}">
+        <a  name="Hosts" href="/hosts/{{ h.host_id }}" class="aff-host-card aff-host-card--{{ h.coverage_status }}">
             <div class="aff-host-card__name">{{ icon('server','13') }} {{ h.name }}</div>
             <div class="aff-host-card__system">{{ icon('layers','10') }} {{ h.system_name }}</div>
         </a>
@@ -288,19 +288,19 @@ function openBlindSpotModal(entityType, entityId, systemId, hostId, hostName) {
 </script>
 
 <!-- Blind Spot Modal -->
-<div id="blind-spot-modal" class="modal-overlay" style="display:none;"
+<div name="Blind Spot Modal" id="blind-spot-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('blind-spot-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
             Documenting a known blind spot for <strong id="bs-modal-target"></strong>.
             This will change the host status to <span class="badge badge-grey" style="font-size:0.7rem;">Grey</span> (accepted risk).
         </p>
-        <form hx-post="/api/blind-spots"
+        <form name="Submit Blind Spots" hx-post="/api/blind-spots"
               hx-target="#cve-affected-section"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('blind-spot-modal').style.display='none'"
@@ -315,9 +315,9 @@ function openBlindSpotModal(entityType, entityId, systemId, hostId, hostName) {
                           placeholder="Why can't this host be monitored? e.g. Legacy OS, no agent support, vendor appliance…"></textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('blind-spot-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Log Blind Spot</button>
+                <button name="Log Blind Spot" type="submit" class="btn btn-primary">Log Blind Spot</button>
             </div>
         </form>
     </div>

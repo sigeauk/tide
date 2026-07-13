@@ -12,7 +12,7 @@
 <div style="margin-bottom:0.75rem;display:flex;align-items:center;justify-content:space-between;">
     <span style="font-size:0.85rem;color:var(--color-text-muted);">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} across {{ ns_groups.names | length }} baseline{{ 's' if ns_groups.names | length != 1 }}</span>
     <div style="display:flex;gap:0.5rem;align-items:center;">
-        <input id="audit-search" type="text" class="form-input" placeholder="Search label, baseline…"
+        <input name="Audit Search" id="audit-search" type="text" class="form-input" placeholder="Search label, baseline…"
                style="font-size:0.8rem;padding:0.3rem 0.6rem;max-width:200px;"
                oninput="filterAuditGroups(this.value)">
     </div>
@@ -25,7 +25,7 @@
 
 <div class="card audit-group" data-baseline="{{ bl_name | lower }}" style="padding:0;margin-bottom:0.75rem;overflow:hidden;">
     {# --- Collapsed header: baseline name + most recent snapshot stats --- #}
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;cursor:pointer;"
+    <div  name="snapshot" style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;cursor:pointer;"
          onclick="var b=document.getElementById('audit-grp-{{ loop.index }}');var c=document.getElementById('audit-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='flex';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
             {{ icon('clipboard-list','14') }}
@@ -72,7 +72,7 @@
                     <span style="color:var(--color-danger);font-weight:600;">{{ snap.count_red }}</span>
                     <span style="color:var(--color-muted);font-weight:600;">{{ snap.count_grey }}</span>
                 </span>
-                <button class="btn btn-danger btn-sm"
+                <button name="Delete Snapshots" class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/snapshots/{{ snap.id }}?system_id={{ system_id }}"
                         hx-target="#audit-history-content"
                         hx-swap="innerHTML"

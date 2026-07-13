@@ -51,17 +51,17 @@
     {% endif %}
 
     <div style="display:flex;gap:0.4rem;margin-top:0.5rem;flex-wrap:wrap;">
-      <button class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
+      <button  name="Close Modal" class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
               onclick="document.getElementById('det-display-{{ row_id }}').style.display='none';
                        document.getElementById('det-edit-{{ row_id }}').style.display='flex';">
         Edit
       </button>
-      <button class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
+      <button name="Add Rule" class="btn btn-secondary btn-sm" style="font-size:0.74rem;"
               onclick="document.getElementById('det-edit-{{ row_id }}').style.display='none';
                        document.getElementById('det-add-rule-{{ row_id }}').style.display='flex';">
         {{ icon('plus','11') }} Add Rule
       </button>
-      <button class="btn btn-danger btn-sm" style="font-size:0.74rem;"
+      <button name="Remove" class="btn btn-danger btn-sm" style="font-size:0.74rem;"
               hx-delete="/api/inventory/cve/{{ cve_id }}/detect?system_id={{ sys_id | urlencode }}"
               hx-target="#detection-section-inner"
               hx-swap="outerHTML"
@@ -71,7 +71,7 @@
     </div>
 
     {# ── Edit form (hidden by default, replaces entire detection) ── #}
-    <form id="det-edit-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
+    <form name="Submit Detect" id="det-edit-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
           padding:0.6rem;border-radius:var(--radius-sm);background:var(--color-surface,rgba(0,0,0,.04));"
           hx-post="/api/inventory/cve/{{ cve_id }}/detect"
           hx-target="#detection-section-inner"
@@ -98,15 +98,15 @@
       <input class="form-input" name="note" value="{{ det.note or '' }}"
              placeholder="Notes (optional)…" style="font-size:0.78rem;">
       <div style="display:flex;gap:0.4rem;">
-        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('save','12') }} Save</button>
-        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        <button name="Save" type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('save','12') }} Save</button>
+        <button name="Cancel" type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
                 onclick="document.getElementById('det-edit-{{ row_id }}').style.display='none';
                          document.getElementById('det-display-{{ row_id }}').style.display='';">Cancel</button>
       </div>
     </form>
 
     {# ── Add Rule form (hidden by default, appends to existing rule_ref) ── #}
-    <form id="det-add-rule-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
+    <form name="Submit Append Rule" id="det-add-rule-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.5rem;
           padding:0.6rem;border-radius:var(--radius-sm);background:var(--color-surface,rgba(0,0,0,.04));"
           hx-post="/api/inventory/cve/{{ cve_id }}/detect/append-rule"
           hx-target="#detection-section-inner"
@@ -128,8 +128,8 @@
       {% endif %}
       <input class="form-input" name="new_rule_ref" placeholder="Rule ID or reference…" style="font-size:0.78rem;" required>
       <div style="display:flex;gap:0.4rem;">
-        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('plus','12') }} Add</button>
-        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        <button name="Add" type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">{{ icon('plus','12') }} Add</button>
+        <button name="Cancel" type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
                 onclick="document.getElementById('det-add-rule-{{ row_id }}').style.display='none';">Cancel</button>
       </div>
     </form>
@@ -139,11 +139,11 @@
   {# ── No detection: show Mark as Detected button + form ── #}
   <span class="badge badge-neutral" style="font-size:0.76rem;color:var(--color-muted);">No detection</span>
   <div style="margin-top:0.4rem;" id="det-add-{{ row_id }}">
-    <button class="btn btn-sm btn-secondary" style="font-size:0.76rem;"
+    <button name="Mark as Detected" class="btn btn-sm btn-secondary" style="font-size:0.76rem;"
             onclick="this.style.display='none';document.getElementById('det-form-{{ row_id }}').style.display='flex';">
       {{ icon('plus','12') }} Mark as Detected
     </button>
-    <form id="det-form-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.35rem;"
+    <form name="Submit Detect" id="det-form-{{ row_id }}" style="display:none;flex-direction:column;gap:0.35rem;margin-top:0.35rem;"
           hx-post="/api/inventory/cve/{{ cve_id }}/detect"
           hx-target="#detection-section-inner"
           hx-swap="outerHTML">
@@ -164,8 +164,8 @@
       <input class="form-input" name="rule_ref" placeholder="Rule ID(s), comma-separated …" style="font-size:0.78rem;">
       <input class="form-input" name="note" placeholder="Notes (optional)…" style="font-size:0.78rem;">
       <div style="display:flex;gap:0.4rem;">
-        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">Save</button>
-        <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
+        <button name="Save" type="submit" class="btn btn-primary btn-sm" style="font-size:0.78rem;">Save</button>
+        <button name="Cancel" type="button" class="btn btn-secondary btn-sm" style="font-size:0.78rem;"
                 onclick="document.getElementById('det-form-{{ row_id }}').style.display='none';
                          this.closest('[id^=det-add-]').querySelector('button:first-child').style.display='inline-flex';">Cancel</button>
       </div>

@@ -14,7 +14,7 @@
         <p class="login-subtitle">Threat Intelligence Detection Engineering</p>
 
         <!-- Local Login Form -->
-        <form class="local-login-form" hx-post="/auth/local-login" hx-target="#login-error" hx-swap="innerHTML">
+        <form name="Submit Local Login" class="local-login-form" hx-post="/auth/local-login" hx-target="#login-error" hx-swap="innerHTML">
             <input type="hidden" name="next" value="{{ next }}">
             <div class="form-group">
                 <label class="form-label" for="username">Username</label>
@@ -25,7 +25,7 @@
                 <input type="password" id="password" name="password" class="form-input" placeholder="Enter password" required autocomplete="current-password">
             </div>
             <div id="login-error"></div>
-            <button type="submit" class="btn btn-primary btn-login" style="width:100%">
+            <button  name="Sign In" type="submit" class="btn btn-primary btn-login" style="width:100%">
                 {{ icon_text('log-in', 'Sign In', '20') }}
             </button>
         </form>
@@ -34,7 +34,7 @@
             <span>or</span>
         </div>
         
-        <a href="/auth/login{% if next %}?next={{ next }}{% endif %}" class="btn btn-secondary btn-login" hx-boost="false" style="width:100%; text-align:center;">
+        <a  name="Sign in with SSO" href="/auth/login{% if next %}?next={{ next }}{% endif %}" class="btn btn-secondary btn-login" hx-boost="false" style="width:100%; text-align:center;">
             {{ icon_text('shield', 'Sign in with SSO', '20') }}
         </a>
         

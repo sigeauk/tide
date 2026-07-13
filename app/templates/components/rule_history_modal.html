@@ -1,5 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
-<div class="modal-overlay" data-history-modal onclick="if(event.target===this)this.remove()">
+<div   name="Dismiss Rule History Modal" class="modal-overlay" data-history-modal onclick="if(event.target===this)this.remove()">
     <div class="modal-content modal-lg">
         <style>
             .history-meta {
@@ -286,7 +286,7 @@
         </style>
         <div class="modal-header">
             <h2>{{ icon_text('clock', 'Rule History') }} {{ rule.name }}</h2>
-            <button class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
+            <button  name="Close Modal" class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
         </div>
 
         <div class="modal-body">
@@ -296,15 +296,15 @@
             </div>
 
             <div class="history-tabbar" role="tablist" aria-label="Rule history views">
-                <button type="button" class="history-tab is-active" data-history-tab="table">Table</button>
-                <button type="button" class="history-tab" data-history-tab="activity">Activity</button>
-                <button type="button" class="history-tab" data-history-tab="scores">Scores</button>
+                <button name="Table" type="button" class="history-tab is-active" data-history-tab="table">Table</button>
+                <button name="Activity" type="button" class="history-tab" data-history-tab="activity">Activity</button>
+                <button name="Scores" type="button" class="history-tab" data-history-tab="scores">Scores</button>
             </div>
 
             <div class="detail-section">
                 <div class="detail-section-head">
                     <h3>{{ icon_text('clock', 'Rule History') }}</h3>
-                    <button
+                    <button name="Open Edit Form"
                         class="btn btn-primary btn-sm"
                         hx-get="/api/rules/{{ rule.rule_id }}/edit-form?space={{ space }}{% if siem_id %}&siem_id={{ siem_id }}{% endif %}"
                         hx-target="#modal-container"
@@ -317,7 +317,7 @@
                     <div class="history-filter-row">
                         <div>
                             <label for="history-user-filter">User</label>
-                            <select id="history-user-filter">
+                            <select name="All" id="history-user-filter">
                                 <option value="">All</option>
                                 {% for username in history_users %}
                                 <option value="{{ username }}">{{ username }}</option>
@@ -326,7 +326,7 @@
                         </div>
                         <div>
                             <label for="history-action-filter">Action</label>
-                            <select id="history-action-filter">
+                            <select  name="History Filter Tabs" id="history-action-filter">
                                 <option value="">All</option>
                                 <option value="created">Created</option>
                                 <option value="enabled">Enabled</option>
@@ -338,7 +338,7 @@
                         </div>
                         <div>
                             <label for="history-sort-filter">Date/Time</label>
-                            <select id="history-sort-filter">
+                            <select name="New to old Old to new" id="history-sort-filter">
                                 <option value="desc" selected>New to old</option>
                                 <option value="asc">Old to new</option>
                             </select>

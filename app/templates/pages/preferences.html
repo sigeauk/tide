@@ -31,11 +31,11 @@
                     <span class="preference-desc">Choose between light and dark mode</span>
                 </div>
                 <div class="theme-toggle-group">
-                    <button class="theme-btn" id="theme-dark" onclick="setTheme('dark')">
+                    <button name="Dark" class="theme-btn" id="theme-dark" onclick="setTheme('dark')">
                         <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                         Dark
                     </button>
-                    <button class="theme-btn" id="theme-light" onclick="setTheme('light')">
+                    <button name="Light" class="theme-btn" id="theme-light" onclick="setTheme('light')">
                         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
                         Light
                     </button>
@@ -48,7 +48,7 @@
                     <span class="preference-desc">Customize the primary accent hue (0-360)</span>
                 </div>
                 <div class="hue-picker">
-                    <input type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" oninput="previewHue(this.value)">
+                    <input name="240" type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" oninput="previewHue(this.value)">
                     <span class="hue-value" id="hue-value">240</span>
                 </div>
             </div>
@@ -72,7 +72,7 @@
                     <span class="preference-desc">Show toast notifications on sync completion</span>
                 </div>
                 <label class="toggle-switch">
-                    <input type="checkbox" id="notify-sync" checked onchange="savePref('notify-sync', this.checked)">
+                    <input name="Notify Sync" type="checkbox" id="notify-sync" checked onchange="savePref('notify-sync', this.checked)">
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -83,7 +83,7 @@
                     <span class="preference-desc">Alert when rules need revalidation</span>
                 </div>
                 <label class="toggle-switch">
-                    <input type="checkbox" id="notify-validation" checked onchange="savePref('notify-validation', this.checked)">
+                    <input name="Notify Validation" type="checkbox" id="notify-validation" checked onchange="savePref('notify-validation', this.checked)">
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -108,7 +108,7 @@
                     <span class="preference-label">Cards Per Row</span>
                     <span class="preference-desc">Default grid layout for rule cards</span>
                 </div>
-                <select class="form-select" id="cards-per-row" onchange="savePref('cards-per-row', this.value)">
+                <select name="2 Cards 3 Cards 4 Cards" class="form-select" id="cards-per-row" onchange="savePref('cards-per-row', this.value)">
                     <option value="2">2 Cards</option>
                     <option value="3" selected>3 Cards</option>
                     <option value="4">4 Cards</option>
@@ -120,7 +120,7 @@
                     <span class="preference-label">Default Page Size</span>
                     <span class="preference-desc">Items shown per page</span>
                 </div>
-                <select class="form-select" id="page-size" onchange="savePref('page-size', this.value)">
+                <select name="12 24 48" class="form-select" id="page-size" onchange="savePref('page-size', this.value)">
                     <option value="12">12</option>
                     <option value="24" selected>24</option>
                     <option value="48">48</option>

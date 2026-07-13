@@ -125,21 +125,21 @@
             </span>
         </div>
         <div class="promo-actions">
-            <button 
+            <button name="Open History Modal" 
                 class="btn btn-secondary btn-sm"
                 hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
                 hx-target="#modal-container"
                 hx-swap="innerHTML">
                 {{ icon_text('clock', 'History', '14') }}
             </button>
-            <button 
+            <button name="Open Detail" 
                 class="btn btn-secondary btn-sm"
                 hx-get="/api/promotion/{{ rule.rule_id }}/detail{% if rule.siem_id %}?siem_id={{ rule.siem_id }}{% endif %}"
                 hx-target="#modal-container"
                 hx-swap="innerHTML">
                 {{ icon_text('clipboard-list', 'Details', '14') }}
             </button>
-            <button 
+            <button  name="Promote" 
                 class="btn btn-primary btn-sm"
                 onclick="showPromoteConfirm('{{ rule.rule_id }}', '{{ rule.name | replace("'", "\\'") | replace('"', '\\"') }}', '{{ rule.siem_id | default('') }}')">
                 {{ icon_text('arrow-up-right', 'Promote', '14') }}

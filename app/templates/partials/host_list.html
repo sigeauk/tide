@@ -25,19 +25,19 @@
 
 <!-- Search bar + filters + sorting -->
 <div style="margin-bottom:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-    <input id="host-search" class="form-input" type="search" placeholder="Search by name, IP, OS or package…"
+    <input name="Host Search" id="host-search" class="form-input" type="search" placeholder="Search by name, IP, OS or package…"
            oninput="filterHosts()" style="max-width:320px;font-size:0.85rem;">
-    <select id="host-cve-filter" class="form-input" style="max-width:180px;font-size:0.82rem;" onchange="filterHosts()">
+    <select name="Vulnerability Status CVE Found Clean" id="host-cve-filter" class="form-input" style="max-width:180px;font-size:0.82rem;" onchange="filterHosts()">
         <option value="all">Vulnerability Status</option>
         <option value="cve">CVE Found</option>
         <option value="clean">Clean</option>
     </select>
-    <select id="host-sort" class="form-input" style="max-width:160px;font-size:0.82rem;" onchange="sortHosts()">
+    <select name="Sort: Name Sort: CVE Count Sort: Status" id="host-sort" class="form-input" style="max-width:160px;font-size:0.82rem;" onchange="sortHosts()">
         <option value="name">Sort: Name</option>
         <option value="vuln">Sort: CVE Count</option>
         <option value="status">Sort: Status</option>
     </select>
-    <button id="host-sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleHostSortDir()" title="Toggle sort direction">
+    <button name="▲" id="host-sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleHostSortDir()" title="Toggle sort direction">
         <span id="host-sort-dir-icon">▲</span>
     </button>
     <span id="host-search-count" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
@@ -49,7 +49,7 @@
     {# RAG status: 0=green, 1=amber, 2=red #}
     {% if hs.vuln_count == 0 %}{% set rag = 0 %}{% elif hs.detected_count >= hs.vuln_count %}{% set rag = 1 %}{% else %}{% set rag = 2 %}{% endif %}
     <div class="host-card"
-         data-name="{{ h.name | lower }}"
+            data-name="{{ (h.name or '') | lower }}"
          data-ip="{{ (h.ip_address or '') | lower }}"
          data-os="{{ h.os or '' | lower }}"
          data-cve="{{ 'cve' if hs.vuln_count > 0 else 'clean' }}"
@@ -66,7 +66,7 @@
             <span class="badge badge-danger" style="font-size:0.7rem;">{{ hs.vuln_count }} CVE{{ 's' if hs.vuln_count != 1 }} — At Risk</span>
             {% endif %}
         </div>
-        <a href="/hosts/{{ h.id }}" class="host-card__title">
+        <a  name="Hosts" href="/hosts/{{ h.id }}" class="host-card__title">
             {{ icon('server', '14') }} {{ h.name }}
         </a>
 
@@ -97,7 +97,7 @@
             </span>
             <span class="badge badge-neutral" style="font-size:0.69rem;">{{ h.source }}</span>
             <div class="host-card__footer-actions">
-                <button class="btn btn-danger btn-sm"
+                <button name="Delete Hosts" class="btn btn-danger btn-sm"
                         hx-delete="/api/inventory/hosts/{{ h.id }}?system_id={{ system_id }}"
                         hx-confirm="Delete device '{{ h.name }}' and all its packages?"
                         hx-target="#hosts-section"

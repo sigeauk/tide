@@ -24,7 +24,7 @@
     <tr style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06));
                {% if vuln.known_ransomware %}background:rgba(var(--color-danger-rgb,220,38,38),.04);{% endif %}">
         <td style="padding:0.5rem 0.75rem;white-space:nowrap;font-weight:600;">
-            <a href="/cve/{{ vuln.cve_id }}"
+            <a  name="Cve" href="/cve/{{ vuln.cve_id }}"
                style="color:var(--color-accent,hsl(220,85%,55%));text-decoration:none;">
                 {{ vuln.cve_id }}
             </a>

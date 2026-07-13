@@ -9,11 +9,11 @@
         <h1 class="page-title-hero">CTI Actors</h1>
         <p class="page-subtitle">
             Actors imported from configured CTI feeds (table <code>cti_actors</code>).
-            Separate from <a href="/threats">Threat Landscape</a>, which shows actors observed in your Elastic detections.
+            Separate from <a name="Threat Landscape" href="/threats">Threat Landscape</a>, which shows actors observed in your Elastic detections.
         </p>
     </div>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-        <button type="button" class="btn btn-primary btn-sm"
+        <button name="Submit Sync" type="button" class="btn btn-primary btn-sm"
                 hx-post="/cti/actors/sync"
                 hx-target="#cti-sync-result"
                 hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync actors','14') }}</button>
@@ -94,7 +94,7 @@
     </div>
     <div class="filter-group">
         <label class="form-label">&nbsp;</label>
-        <button type="submit" class="btn btn-primary">Apply</button>
+        <button name="Apply" type="submit" class="btn btn-primary">Apply</button>
     </div>
 </form>
 
@@ -111,7 +111,7 @@
     </div>
     <div class="cve-list" style="padding:0.75rem 1rem;">
     {% for a in actors %}
-    <div class="cve-card-item cve-card-item--unaffected"
+    <div  name="IS TA" class="cve-card-item cve-card-item--unaffected"
          style="cursor:pointer;"
          onclick="window.location='/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}'">
         <div class="cve-card-item__id" style="min-width:240px;">
@@ -120,13 +120,13 @@
                   style="font-size:0.65rem;text-transform:uppercase;letter-spacing:0.04em;">
                 {% if a.stix_type == 'intrusion-set' %}IS{% else %}TA{% endif %}
             </span>
-            <a href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}"
+            <a  name="Actors" href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}"
                style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
                onclick="event.stopPropagation();">
                 {{ a.name }}
             </a>
         </div>
-        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+        <div  name="aka +" class="cve-card-item__body" onclick="event.stopPropagation();">
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
                 <span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span>
                 {% if a.origin %}<span style="margin-left:0.5rem;">{{ icon('globe','12') }} {{ a.origin }}</span>{% endif %}
@@ -155,12 +155,12 @@
 <div class="pagination" style="margin-top:1rem;">
     {% set qbase = '&search=' ~ search ~ '&stix_type=' ~ selected_stix_type ~ '&origin=' ~ selected_origin ~ '&source=' ~ selected_source %}
     {% if page > 1 %}
-        <a class="btn btn-secondary"
+        <a name="← Prev" class="btn btn-secondary"
            href="/cti/actors?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
     {% endif %}
     <span style="margin:0 0.75rem;">Page {{ page }}</span>
     {% if actors|length == page_size %}
-        <a class="btn btn-secondary"
+        <a name="Next →" class="btn btn-secondary"
            href="/cti/actors?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
     {% endif %}
 </div>

@@ -16,23 +16,23 @@
     <span class="quest-tray__step{% if quest.baseline_name %} is-done{% endif %}">
       Baseline
       {% if quest.baseline_name %}
-        <a href="/baselines/{{ quest.baseline_id }}"><strong>{{ quest.baseline_name }}</strong></a>
+        <a  name="Baselines" href="/baselines/{{ quest.baseline_id }}"><strong>{{ quest.baseline_name }}</strong></a>
       {% endif %}
     </span>
     <span class="quest-tray__sep">›</span>
     <span class="quest-tray__step{% if quest.system_name %} is-done{% endif %}">
       System
       {% if quest.system_name %}
-        <a href="/systems/{{ quest.system_id }}"><strong>{{ quest.system_name }}</strong></a>
+        <a  name="Systems" href="/systems/{{ quest.system_id }}"><strong>{{ quest.system_name }}</strong></a>
       {% endif %}
     </span>
     <span class="quest-tray__sep">›</span>
     <span class="quest-tray__step{% if quest.current_technique_id %} is-active{% endif %}">
       Cover
       {% if quest.current_technique_id %}
-        <a href="/quest/{{ quest.id }}"><strong>{{ quest.current_technique_id }}</strong></a>
+        <a  name="Quest" href="/quest/{{ quest.id }}"><strong>{{ quest.current_technique_id }}</strong></a>
       {% else %}
-        <a href="/quest/{{ quest.id }}">resume</a>
+        <a name="resume" href="/quest/{{ quest.id }}">resume</a>
       {% endif %}
     </span>
     {% set done = quest.covered_count if quest.covered_count is defined else (quest.completed_technique_ids or []) | length %}
@@ -46,7 +46,7 @@
     {% endif %}
   </div>
   <div class="quest-tray__actions">
-    <button class="btn btn-link btn-sm"
+    <button name="End quest" class="btn btn-link btn-sm"
             hx-post="/api/quest/{{ quest.id }}/end"
             hx-confirm="End this coverage quest? Updates you've made will persist on the baseline.">End quest</button>
   </div>

@@ -13,12 +13,12 @@
         </h1>
         <p class="page-subtitle">
             Actors observed in your <strong>Elastic detections</strong> joined to the curated MITRE baseline
-            (table <code>threat_actors</code>). Separate from the <a href="/cti/actors">CTI Actors</a> surface,
+            (table <code>threat_actors</code>). Separate from the <a name="CTI Actors" href="/cti/actors">CTI Actors</a> surface,
             which lists actors imported from CTI feeds.
         </p>
     </div>
     <div style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
-        <button
+        <button name="Submit Sync"
             class="btn btn-primary"
             hx-post="/api/threats/sync"
             hx-target="#toast-container"
@@ -109,7 +109,7 @@
 </div>
 
 <!-- Threats Grid - Load on page load via HTMX -->
-<div id="threats-grid"
+<div name="Open Threats" id="threats-grid"
      hx-get="/api/threats"
      hx-trigger="load, refreshThreats from:body"
      hx-swap="innerHTML">
@@ -140,13 +140,13 @@
                 </svg>
                 Create Assurance Baseline
             </h3>
-            <button onclick="closeActorBaselineModal()"
+            <button name="Close Actor Baseline Modal" onclick="closeActorBaselineModal()"
                     style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
                            font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
                     title="Close">&#x2715;</button>
         </div>
 
-        <form method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
+        <form   name="Generate Baseline Form" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <input type="hidden" id="actor-bl-actors" name="actor_names" value="">
             <div style="margin-bottom:1rem;">
                 <label style="display:block; font-size:0.75rem; font-weight:600;
@@ -174,9 +174,9 @@
                                  resize:vertical; box-sizing:border-box;"></textarea>
             </div>
             <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
-                <button type="button" onclick="closeActorBaselineModal()" class="btn btn-secondary"
+                <button name="Cancel" type="button" onclick="closeActorBaselineModal()" class="btn btn-secondary"
                         style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
-                <button type="submit" class="btn btn-primary"
+                <button name="Generate Baseline" type="submit" class="btn btn-primary"
                         style="font-size:0.85rem; padding:0.45rem 1.25rem;">Generate Baseline</button>
             </div>
         </form>

@@ -13,7 +13,7 @@
 <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;padding:0.75rem 1rem;border-bottom:var(--border-card);">
     {% if systems %}
     <div class="filter-multi" style="position:relative;">
-        <button class="form-input" style="max-width:220px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
+        <button name="All Systems ▾" class="form-input" style="max-width:220px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
                 onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
             {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span style="margin-left:auto;">▾</span>
         </button>
@@ -21,46 +21,46 @@
              style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem;">
             {% for s in systems %}
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;white-space:nowrap;">
-                <input type="checkbox" class="sys-filter-cb" value="{{ s.id }}" onchange="filterCveCards()" checked> {{ s.name }}
+                <input   name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" onchange="filterCveCards()" checked> {{ s.name }}
             </label>
             {% endfor %}
             <hr style="margin:0.3rem 0;border-color:var(--color-border);">
             <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
-                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
-                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+                <a name="c.checked=true);filterCveCards();&quot;>All" href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
+                <a name="c.checked=false);filterCveCards();&quot;>None" href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
             </div>
         </div>
     </div>
     {% endif %}
 
     <div class="filter-multi" style="position:relative;">
-        <button class="form-input" style="max-width:200px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
+        <button name="All Coverage ▾" class="form-input" style="max-width:200px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
                 onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
             {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span style="margin-left:auto;">▾</span>
         </button>
         <div class="filter-multi__dropdown hidden" id="cov-filter-dropdown"
              style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:180px;box-shadow:var(--shadow);margin-top:0.25rem;">
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input type="checkbox" class="cov-filter-cb" value="detected" onchange="filterCveCards()" checked> Has Rules
+                <input name="detected" type="checkbox" class="cov-filter-cb" value="detected" onchange="filterCveCards()" checked> Has Rules
             </label>
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input type="checkbox" class="cov-filter-cb" value="nocover" onchange="filterCveCards()" checked> No Rules
+                <input name="nocover" type="checkbox" class="cov-filter-cb" value="nocover" onchange="filterCveCards()" checked> No Rules
             </label>
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input type="checkbox" class="cov-filter-cb" value="available" onchange="filterCveCards()" checked> Available
+                <input name="available" type="checkbox" class="cov-filter-cb" value="available" onchange="filterCveCards()" checked> Available
             </label>
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input type="checkbox" class="cov-filter-cb" value="unaffected" onchange="filterCveCards()" checked> Unaffected
+                <input name="unaffected" type="checkbox" class="cov-filter-cb" value="unaffected" onchange="filterCveCards()" checked> Unaffected
             </label>
             <hr style="margin:0.3rem 0;border-color:var(--color-border);">
             <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
-                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
-                <a href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+                <a name="c.checked=true);filterCveCards();&quot;>All" href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
+                <a name="c.checked=false);filterCveCards();&quot;>None" href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
             </div>
         </div>
     </div>
 
-    <select id="sort-field" class="form-input" style="max-width:160px;font-size:0.82rem;"
+    <select  name="CVE Sort Selector" id="sort-field" class="form-input" style="max-width:160px;font-size:0.82rem;"
             onchange="sortCveCards()">
         <option value="cve_id">Sort: CVE ID</option>
         <option value="name">Sort: Vulnerability</option>
@@ -70,7 +70,7 @@
         <option value="matched">Sort: Matched first</option>
     </select>
 
-    <button id="sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleSortDir()" title="Toggle sort direction">
+    <button name="▼" id="sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleSortDir()" title="Toggle sort direction">
         <span id="sort-dir-icon">▼</span>
     </button>
 
@@ -128,14 +128,14 @@
      data-systems="{{ ns.sys_ids | join(',') }}"
      data-coverage="{{ coverage_status }}"
      data-cve-id="{{ cve.cve_id }}"
-     data-name="{{ cve.vulnerability_name }}"
+    data-name="{{ cve.cve_id | lower }}"
      data-vendor="{{ cve.vendor_project }}"
      data-date-added="{{ cve.date_added }}"
      data-due-date="{{ cve.due_date }}">
 
     {# Left: CVE ID #}
     <div class="cve-card-item__id">
-        <a href="/cve/{{ cve.cve_id }}"
+        <a  name="Cve" href="/cve/{{ cve.cve_id }}"
            class="{% if coverage_status == 'detected' %}cve-detected{% elif coverage_status == 'partial' %}cve-partial{% elif matched %}cve-matched{% else %}cve-unmatched{% endif %}">
             {{ cve.cve_id }}
         </a>

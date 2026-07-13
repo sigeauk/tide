@@ -31,18 +31,18 @@
     </summary>
     <div class="mgmt-section__body">
         <div class="settings-tabs settings-tabs--inline">
-            <button class="settings-tab {% if tu_tab == 'clients' %}active{% endif %}"
+            <button name="Clients" class="settings-tab {% if tu_tab == 'clients' %}active{% endif %}"
                     hx-get="/api/management/tab/clients" hx-target="#management-content" hx-swap="innerHTML"
                     onclick="activateMgmtTab(this,'clients')">
                 {{ icon('users', '16') }} Clients
             </button>
-            <button class="settings-tab {% if tu_tab == 'users' %}active{% endif %}"
+            <button name="Users" class="settings-tab {% if tu_tab == 'users' %}active{% endif %}"
                     hx-get="/api/management/tab/users" hx-target="#management-content" hx-swap="innerHTML"
                     onclick="activateMgmtTab(this,'users')">
                 {{ icon('user', '16') }} Users
             </button>
         </div>
-        <div class="settings-panel active" id="management-content"
+        <div name="Open Tab" class="settings-panel active" id="management-content"
              hx-get="/api/management/tab/{{ tu_tab }}"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -73,7 +73,7 @@
                 <span class="mgmt-subsection__title">SIEMs</span>
                 <span class="mgmt-subsection__hint">Elastic, Splunk, Sentinel</span>
             </summary>
-            <div id="mgmt-sub-siems" class="mgmt-subsection__body"
+            <div name="Open Siems" id="mgmt-sub-siems" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/siems" hx-trigger="load" hx-swap="innerHTML">
                 <div class="text-secondary" style="padding:1rem;">Loading SIEMs…</div>
             </div>
@@ -102,7 +102,7 @@
                 <span class="mgmt-subsection__title">Connectors</span>
                 <span class="mgmt-subsection__hint">Multi-vendor CTI framework (OpenCTI, Mandiant, CrowdStrike…)</span>
             </summary>
-            <div id="mgmt-sub-connectors" class="mgmt-subsection__body"
+            <div name="Open Connectors" id="mgmt-sub-connectors" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/connectors" hx-trigger="load" hx-swap="innerHTML">
                 <div class="text-secondary" style="padding:1rem;">Loading Connectors…</div>
             </div>
@@ -122,7 +122,7 @@
                 <span class="mgmt-subsection__title">GitLab</span>
                 <span class="mgmt-subsection__hint">Report publishing destinations</span>
             </summary>
-            <div id="mgmt-sub-gitlab" class="mgmt-subsection__body"
+            <div name="Open Gitlab" id="mgmt-sub-gitlab" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/gitlab" hx-trigger="load" hx-swap="innerHTML">
                 <div class="text-secondary" style="padding:1rem;">Loading GitLab…</div>
             </div>
@@ -134,7 +134,7 @@
                 <span class="mgmt-subsection__title">Keycloak</span>
                 <span class="mgmt-subsection__hint">SSO identity provider (global)</span>
             </summary>
-            <div id="mgmt-sub-keycloak" class="mgmt-subsection__body"
+            <div name="Open Keycloak" id="mgmt-sub-keycloak" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/keycloak" hx-trigger="load" hx-swap="innerHTML">
                 <div class="text-secondary" style="padding:1rem;">Loading Keycloak…</div>
             </div>
@@ -175,20 +175,20 @@
                             <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
                         </div>
                         <div style="display:flex;gap:0.35rem;">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="pipelineNew()" style="flex:1;">
+                            <button name="+ New Pipeline" type="button" class="btn btn-secondary btn-sm" onclick="pipelineNew()" style="flex:1;">
                                 + New Pipeline
                             </button>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadPipelineList()" title="Refresh" style="padding:0 0.6rem;">
+                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm" onclick="loadPipelineList()" title="Refresh" style="padding:0 0.6rem;">
                                 &#8635;
                             </button>
                         </div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:0.5rem;">
                         <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <input type="text" id="pipeline-name-input" class="form-input"
+                            <input name="Pipeline Name Input" type="text" id="pipeline-name-input" class="form-input"
                                    placeholder="pipeline-name" style="flex:1;min-width:0;font-size:0.85rem;">
-                            <button type="button" class="btn btn-primary btn-sm" onclick="pipelineSave()">Save</button>
-                            <button type="button" class="btn btn-danger btn-sm" id="pipeline-delete-btn"
+                            <button name="Save" type="button" class="btn btn-primary btn-sm" onclick="pipelineSave()">Save</button>
+                            <button name="Delete" type="button" class="btn btn-danger btn-sm" id="pipeline-delete-btn"
                                     onclick="pipelineDelete()" style="display:none;">Delete</button>
                         </div>
                         <textarea id="pipeline-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
@@ -196,7 +196,7 @@
                              style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
                             <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
                             <span id="pipeline-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
-                            <button type="button" class="btn btn-secondary btn-sm"
+                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm"
                                     onclick="openSigmaAssignModal('pipeline')"
                                     style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
                                 Assign tenants…
@@ -223,20 +223,20 @@
                             <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
                         </div>
                         <div style="display:flex;gap:0.35rem;">
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="templateNew()" style="flex:1;">
+                            <button name="+ New Template" type="button" class="btn btn-secondary btn-sm" onclick="templateNew()" style="flex:1;">
                                 + New Template
                             </button>
-                            <button type="button" class="btn btn-secondary btn-sm" onclick="loadTemplateList()" title="Refresh" style="padding:0 0.6rem;">
+                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm" onclick="loadTemplateList()" title="Refresh" style="padding:0 0.6rem;">
                                 &#8635;
                             </button>
                         </div>
                     </div>
                     <div style="display:flex;flex-direction:column;gap:0.5rem;">
                         <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <input type="text" id="template-name-input" class="form-input"
+                            <input name="Template Name Input" type="text" id="template-name-input" class="form-input"
                                    placeholder="template-name" style="flex:1;min-width:0;font-size:0.85rem;">
-                            <button type="button" class="btn btn-primary btn-sm" onclick="templateSave()">Save</button>
-                            <button type="button" class="btn btn-danger btn-sm" id="template-delete-btn"
+                            <button name="Save" type="button" class="btn btn-primary btn-sm" onclick="templateSave()">Save</button>
+                            <button name="Delete" type="button" class="btn btn-danger btn-sm" id="template-delete-btn"
                                     onclick="templateDelete()" style="display:none;">Delete</button>
                         </div>
                         <textarea id="template-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
@@ -244,7 +244,7 @@
                              style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
                             <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
                             <span id="template-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
-                            <button type="button" class="btn btn-secondary btn-sm"
+                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm"
                                     onclick="openSigmaAssignModal('template')"
                                     style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
                                 Assign tenants…
@@ -259,12 +259,12 @@
 </details>
 
 <!-- Tenant assignment modal for sigma assets -->
-<div class="modal-overlay" id="sigma-assign-modal" style="display:none;"
+<div name="Sigma Assign Modal" class="modal-overlay" id="sigma-assign-modal" style="display:none;"
      onclick="if(event.target===this) closeSigmaAssignModal()">
     <div class="modal" style="max-width:420px;">
         <div class="modal-header">
             <h3 id="sigma-assign-title">Assign tenants</h3>
-            <button class="modal-close" onclick="closeSigmaAssignModal()">&times;</button>
+            <button  name="Close Modal" class="modal-close" onclick="closeSigmaAssignModal()">&times;</button>
         </div>
         <div class="modal-body">
             <p class="text-secondary" style="font-size:0.82rem;margin-bottom:0.75rem;">
@@ -279,8 +279,8 @@
             <div id="sigma-assign-error" class="text-danger" style="font-size:0.78rem;margin-top:0.5rem;min-height:1em;"></div>
         </div>
         <div class="modal-footer">
-            <button type="button" class="btn btn-secondary btn-sm" onclick="closeSigmaAssignModal()">Cancel</button>
-            <button type="button" class="btn btn-primary btn-sm" onclick="saveSigmaAssignment()">Save assignment</button>
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm" onclick="closeSigmaAssignModal()">Cancel</button>
+            <button name="Save assignment" type="button" class="btn btn-primary btn-sm" onclick="saveSigmaAssignment()">Save assignment</button>
         </div>
     </div>
 </div>
@@ -298,17 +298,17 @@
             (<code style="color:var(--color-primary);">active_client_id</code> cookie).
         </p>
 
-        <form hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
+        <form name="Submit Classifications" hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
               hx-on::after-request="if(event.detail.successful){this.reset();}"
               style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
             <input type="text" name="name" class="form-input" placeholder="Classification name" required
                    style="min-width:160px;max-width:220px;font-size:0.85rem;">
             <input type="color" name="color" value="#6b7280" title="Pick a colour"
                    style="width:36px;height:36px;border:var(--border-card);border-radius:var(--radius-sm);cursor:pointer;padding:2px;">
-            <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Add</button>
+            <button name="Add" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Add</button>
         </form>
 
-        <div id="clf-list"
+        <div name="Open Classifications" id="clf-list"
              hx-get="/api/inventory/classifications"
              hx-trigger="load"
              hx-swap="innerHTML">
@@ -329,7 +329,7 @@
         <span class="mgmt-section__title">Query</span>
         <span class="mgmt-section__hint">Read-only DuckDB diagnostics (super-admin)</span>
     </summary>
-    <div class="mgmt-section__body"
+    <div name="Open Query" class="mgmt-section__body"
          hx-get="/api/management/tab/query"
          hx-trigger="load"
          hx-swap="innerHTML">
@@ -339,24 +339,24 @@
 {% endif %}
 
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
-<div class="modal-overlay" id="client-modal" style="display:none;"
+<div name="Client Modal" class="modal-overlay" id="client-modal" style="display:none;"
      onclick="if(event.target===this) closeClientModal()">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="client-modal-title">New Client</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeClientModal()">&#x2715;</button>
         </div>
         <form id="client-form" onsubmit="return submitClientForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="client-form-id" value="">
+            <input name="Client Form Id" type="hidden" id="client-form-id" value="">
             <div>
                 <label for="client-form-name" class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="client-form-name" class="form-input" required maxlength="100" placeholder="Acme Corp">
+                <input name="Client Form Name" type="text" id="client-form-name" class="form-input" required maxlength="100" placeholder="Acme Corp">
             </div>
             <div>
                 <label for="client-form-slug" class="form-label">Slug</label>
-                <input type="text" id="client-form-slug" class="form-input" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
+                <input name="Client Form Slug" type="text" id="client-form-slug" class="form-input" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
                 <span class="text-secondary" style="font-size:0.75rem;">Lowercase letters, numbers, hyphens only.</span>
             </div>
             <div>
@@ -364,25 +364,25 @@
                 <textarea id="client-form-desc" class="form-input" rows="3" placeholder="Optional description..."></textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
+                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancel</button>
+                <button name="Create" type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
             </div>
         </form>
     </div>
 </div>
 
 <!-- ── Create / Edit SIEM Modal ───────────────────────────────────── -->
-<div class="modal-overlay" id="siem-modal" style="display:none;"
+<div name="Siem Modal" class="modal-overlay" id="siem-modal" style="display:none;"
      onclick="if(event.target===this) closeSiemModal()">
     <div class="modal-content modal-sm" style="max-width:560px;">
         <div class="modal-header">
             <h3 class="modal-title" id="siem-modal-title">New SIEM</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeSiemModal()">&#x2715;</button>
         </div>
         <form id="siem-form" onsubmit="return submitSiemForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="siem-form-id" value="">
+            <input name="Siem Form Id" type="hidden" id="siem-form-id" value="">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                 <div>
                     <label for="siem-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
@@ -421,11 +421,11 @@
                 <div style="display:flex;flex-direction:column;gap:1rem;">
                     <div>
                         <label class="form-label">Splunk URL</label>
-                        <input type="text" id="siem-form-splunk-url" class="form-input" placeholder="https://splunk.example.com:8089">
+                        <input name="Siem Form Splunk Url" type="text" id="siem-form-splunk-url" class="form-input" placeholder="https://splunk.example.com:8089">
                     </div>
                     <div>
                         <label class="form-label">API Token</label>
-                        <input type="password" id="siem-form-splunk-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                        <input name="Siem Form Splunk Token" type="password" id="siem-form-splunk-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
                 </div>
             </div>
@@ -435,22 +435,22 @@
                 <div style="display:flex;flex-direction:column;gap:1rem;">
                     <div>
                         <label class="form-label">Sentinel URL</label>
-                        <input type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
+                        <input name="Siem Form Sentinel Url" type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
                     </div>
                     <div>
                         <label class="form-label">API Token</label>
-                        <input type="password" id="siem-form-sentinel-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
+                        <input name="Siem Form Sentinel Token" type="password" id="siem-form-sentinel-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
                 </div>
             </div>
 
             <div id="siem-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testSiemConnection()"
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testSiemConnection()"
                         id="siem-test-btn">Test Connection</button>
                 <div style="display:flex;gap:0.5rem;">
-                    <button type="button" class="btn btn-secondary" onclick="closeSiemModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeSiemModal()">Cancel</button>
+                    <button name="Create" type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
                 </div>
             </div>
         </form>
@@ -458,33 +458,33 @@
 </div>
 
 <!-- ── Create / Edit OpenCTI Modal ───────────────────────────────── -->
-<div class="modal-overlay" id="opencti-modal" style="display:none;"
+<div name="Opencti Modal" class="modal-overlay" id="opencti-modal" style="display:none;"
      onclick="if(event.target===this) closeOpenCTIModal()">
     <div class="modal-content modal-sm" style="max-width:500px;">
         <div class="modal-header">
             <h3 class="modal-title" id="opencti-modal-title">New OpenCTI Instance</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeOpenCTIModal()">&#x2715;</button>
         </div>
         <form id="opencti-form" onsubmit="return submitOpenCTIForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="opencti-form-id" value="">
+            <input name="Opencti Form Id" type="hidden" id="opencti-form-id" value="">
             <div>
                 <label for="opencti-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="opencti-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
+                <input name="Opencti Form Label" type="text" id="opencti-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
             </div>
             <div>
                 <label for="opencti-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
+                <input name="Opencti Form Url" type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
             </div>
             <div>
                 <label for="opencti-form-token" class="form-label">API Token</label>
-                <input type="password" id="opencti-form-token" class="form-input"
+                <input name="Opencti Form Token" type="password" id="opencti-form-token" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             <div>
                 <label for="opencti-form-kind" class="form-label">Kind</label>
-                <select id="opencti-form-kind" class="form-input">
+                <select  name="CTI Source Row" id="opencti-form-kind" class="form-input">
                     <option value="actors">actors &mdash; legacy intrusion-set sync</option>
                     <option value="cti">CTI &mdash; STIX bundle pull into per-tenant CTI DB</option>
                     <option value="both">both &mdash; actors + CTI</option>
@@ -496,11 +496,11 @@
             </div>
             <div id="opencti-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testOpenCTIConnection()"
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testOpenCTIConnection()"
                         id="opencti-test-btn">Test Connection</button>
                 <div style="display:flex;gap:0.5rem;">
-                    <button type="button" class="btn btn-secondary" onclick="closeOpenCTIModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeOpenCTIModal()">Cancel</button>
+                    <button name="Create" type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
                 </div>
             </div>
         </form>
@@ -508,86 +508,86 @@
 </div>
 
 <!-- ── Create / Edit GitLab Modal ─────────────────────────────────── -->
-<div class="modal-overlay" id="gitlab-modal" style="display:none;"
+<div name="Gitlab Modal" class="modal-overlay" id="gitlab-modal" style="display:none;"
      onclick="if(event.target===this) closeGitLabModal()">
     <div class="modal-content modal-sm" style="max-width:500px;">
         <div class="modal-header">
             <h3 class="modal-title" id="gitlab-modal-title">New GitLab Instance</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeGitLabModal()">&#x2715;</button>
         </div>
         <form id="gitlab-form" onsubmit="return submitGitLabForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="gitlab-form-id" value="">
+            <input name="Gitlab Form Id" type="hidden" id="gitlab-form-id" value="">
             <div>
                 <label for="gitlab-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="gitlab-form-label" class="form-input" required maxlength="200" placeholder="Internal GitLab">
+                <input name="Gitlab Form Label" type="text" id="gitlab-form-label" class="form-input" required maxlength="200" placeholder="Internal GitLab">
             </div>
             <div>
                 <label for="gitlab-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
+                <input name="Gitlab Form Url" type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
             </div>
             <div>
                 <label for="gitlab-form-token" class="form-label">Access Token</label>
-                <input type="password" id="gitlab-form-token" class="form-input"
+                <input name="Gitlab Form Token" type="password" id="gitlab-form-token" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             <div>
                 <label for="gitlab-form-group" class="form-label">Default Group / Namespace</label>
-                <input type="text" id="gitlab-form-group" class="form-input" maxlength="200"
+                <input name="Gitlab Form Group" type="text" id="gitlab-form-group" class="form-input" maxlength="200"
                        placeholder="security-team">
                 <span class="text-secondary" style="font-size:0.75rem;">GitLab group where reports will be pushed.</span>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary" onclick="closeGitLabModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
+                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeGitLabModal()">Cancel</button>
+                <button name="Create" type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
             </div>
         </form>
     </div>
 </div>
 
 <!-- ── Create / Edit Keycloak Modal ─────────────────────────────────── -->
-<div class="modal-overlay" id="keycloak-modal" style="display:none;"
+<div name="Keycloak Modal" class="modal-overlay" id="keycloak-modal" style="display:none;"
      onclick="if(event.target===this) closeKeycloakModal()">
     <div class="modal-content modal-sm" style="max-width:500px;">
         <div class="modal-header">
             <h3 class="modal-title" id="keycloak-modal-title">New Keycloak Instance</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeKeycloakModal()">&#x2715;</button>
         </div>
         <form id="keycloak-form" onsubmit="return submitKeycloakForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="keycloak-form-id" value="">
+            <input name="Keycloak Form Id" type="hidden" id="keycloak-form-id" value="">
             <div>
                 <label for="keycloak-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="keycloak-form-label" class="form-input" required maxlength="200" placeholder="Corporate SSO">
+                <input name="Keycloak Form Label" type="text" id="keycloak-form-label" class="form-input" required maxlength="200" placeholder="Corporate SSO">
             </div>
             <div>
                 <label for="keycloak-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="keycloak-form-url" class="form-input" required placeholder="https://keycloak.example.com">
+                <input name="Keycloak Form Url" type="text" id="keycloak-form-url" class="form-input" required placeholder="https://keycloak.example.com">
             </div>
             <div>
                 <label for="keycloak-form-realm" class="form-label">Realm</label>
-                <input type="text" id="keycloak-form-realm" class="form-input" placeholder="master" value="master">
+                <input name="master" type="text" id="keycloak-form-realm" class="form-input" placeholder="master" value="master">
                 <span class="text-secondary" style="font-size:0.75rem;">The Keycloak realm name (default: master).</span>
             </div>
             <div>
                 <label for="keycloak-form-client-id" class="form-label">Client ID</label>
-                <input type="text" id="keycloak-form-client-id" class="form-input"
+                <input name="Keycloak Form Client Id" type="text" id="keycloak-form-client-id" class="form-input"
                        placeholder="Leave blank to keep existing">
             </div>
             <div>
                 <label for="keycloak-form-client-secret" class="form-label">Client Secret</label>
-                <input type="password" id="keycloak-form-client-secret" class="form-input"
+                <input name="Keycloak Form Client Secret" type="password" id="keycloak-form-client-secret" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             <div id="keycloak-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button type="button" class="btn btn-secondary btn-sm" onclick="testKeycloakConnection()"
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testKeycloakConnection()"
                         id="keycloak-test-btn">Test Connection</button>
                 <div style="display:flex;gap:0.5rem;">
-                    <button type="button" class="btn btn-secondary" onclick="closeKeycloakModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeKeycloakModal()">Cancel</button>
+                    <button name="Create" type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
                 </div>
             </div>
         </form>
@@ -595,20 +595,20 @@
 </div>
 
 <!-- ── Create / Edit Connector Modal (multi-vendor CTI framework) ─── -->
-<div class="modal-overlay" id="connector-modal" style="display:none;"
+<div name="Connector Modal" class="modal-overlay" id="connector-modal" style="display:none;"
      onclick="if(event.target===this) closeConnectorModal()">
     <div class="modal-content modal-sm" style="max-width:560px;">
         <div class="modal-header">
             <h3 class="modal-title" id="connector-modal-title">New Connector</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="closeConnectorModal()">&#x2715;</button>
         </div>
         <form id="connector-form" onsubmit="return submitConnectorForm(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
-            <input type="hidden" id="connector-form-id" value="">
+            <input name="Connector Form Id" type="hidden" id="connector-form-id" value="">
             <div>
                 <label for="connector-form-vendor" class="form-label">Vendor <span style="color:var(--color-danger)">*</span></label>
-                <select id="connector-form-vendor" class="form-input"
+                <select name="Connector Form Vendor" id="connector-form-vendor" class="form-input"
                         onchange="onConnectorVendorChange()" required>
                     <!-- options injected by showCreateConnectorModal() -->
                 </select>
@@ -616,7 +616,7 @@
             </div>
             <div>
                 <label for="connector-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="connector-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
+                <input name="Connector Form Label" type="text" id="connector-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
             </div>
             {# 5.0.0 — the per-connector Kind dropdown was retired with the
                legacy OpenCTI GraphQL fetcher. Every TAXII vendor now pulls
@@ -627,7 +627,7 @@
             </div>
             <div>
                 <label for="connector-form-interval" class="form-label">Auto-sync interval</label>
-                <select id="connector-form-interval" class="form-input">
+                <select  name="Sync Schedule Selector" id="connector-form-interval" class="form-input">
                     <option value="">Off &mdash; sync only when an operator clicks Sync</option>
                     <option value="15">Every 15 minutes</option>
                     <option value="60">Every hour</option>
@@ -642,20 +642,20 @@
                     Stored secrets are kept encrypted server-side.
                 </span>
                 <div style="display:flex;gap:0.5rem;">
-                    <button type="button" class="btn btn-secondary" onclick="closeConnectorModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="connector-form-submit">Create</button>
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeConnectorModal()">Cancel</button>
+                    <button name="Create" type="submit" class="btn btn-primary" id="connector-form-submit">Create</button>
                 </div>
             </div>
         </form>
     </div>
 </div>
 
-<div class="modal-overlay" id="connector-import-modal" style="display:none;"
+<div name="Connector Import Modal" class="modal-overlay" id="connector-import-modal" style="display:none;"
      onclick="if(event.target===this) closeImportConnectorModal()">
     <div class="modal-content modal-sm" style="max-width:640px;">
         <div class="modal-header">
             <h3 class="modal-title">Import Connectors</h3>
-            <button type="button" class="modal-close" aria-label="Close"
+            <button  name="Close Modal" type="button" class="modal-close" aria-label="Close"
                     onclick="closeImportConnectorModal()">&#x2715;</button>
         </div>
         <form id="connector-import-form" onsubmit="return submitImportConnectorForm(event)">
@@ -685,8 +685,8 @@
             </div>
             <div id="connector-import-result" style="margin-top:0.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
-                <button type="button" class="btn btn-secondary" onclick="closeImportConnectorModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary">Import</button>
+                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeImportConnectorModal()">Cancel</button>
+                <button name="Import" type="submit" class="btn btn-primary">Import</button>
             </div>
         </form>
     </div>
@@ -1178,7 +1178,7 @@ window.loadPipelineList = function() {
             list.innerHTML = pipelines.map(function(pl) {
                 var active = _pipelineCurrentFile === pl.filename;
                 var safeFile = encodeURIComponent(pl.filename);
-                return '<button type="button" class="pipeline-list-item" data-file="' + safeFile + '" '
+                return '<button name="' + pl.display + '" type="button" class="pipeline-list-item" data-file="' + safeFile + '" '
                     + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
                     + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
                     + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
@@ -1257,7 +1257,7 @@ window.loadTemplateList = function() {
             list.innerHTML = templates.map(function(tpl) {
                 var active = _templateCurrentFile === tpl.filename;
                 var safeFile = encodeURIComponent(tpl.filename);
-                return '<button type="button" class="template-list-item" data-file="' + safeFile + '" '
+                return '<button name="' + tpl.display + '" type="button" class="template-list-item" data-file="' + safeFile + '" '
                     + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
                     + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
                     + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
@@ -1410,7 +1410,7 @@ window.openSigmaAssignModal = function(assetType) {
         box.innerHTML = clients.map(function(c) {
             var checked = assignedIds.has(c.id) ? 'checked' : '';
             return '<label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.82rem;">'
-                 + '<input type="checkbox" value="' + c.id + '" ' + checked + '> '
+                 + '<input name="' + c.id + '" type="checkbox" value="' + c.id + '" ' + checked + '> '
                  + (c.name || c.id) + '</label>';
         }).join('');
     }).catch(function(err) {

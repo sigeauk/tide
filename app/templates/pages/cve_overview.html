@@ -10,7 +10,7 @@
         <p class="page-subtitle">All CISA CVE entries — matched entries shown first.</p>
     </div>
     <div class="action-menu" style="flex-shrink:0;margin-left:auto;">
-        <button class="btn btn-secondary btn-sm action-menu__trigger">
+        <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
             {{ icon('more-vertical', '14') }} Actions
         </button>
         <div class="action-menu__dropdown">
@@ -21,8 +21,8 @@
                 {{ icon('globe', '14') }} Upload MITRE Map
             </label>
         </div>
-        <input id="cisa-kev-upload" type="file" accept=".json" style="display:none">
-        <input id="mitre-map-upload" type="file" accept=".json" style="display:none">
+        <input name="Cisa Kev Upload" id="cisa-kev-upload" type="file" accept=".json" style="display:none">
+        <input name="Mitre Map Upload" id="mitre-map-upload" type="file" accept=".json" style="display:none">
         <span id="upload-status" style="font-size:0.8rem;color:var(--color-muted);display:inline-flex;align-items:center;gap:0.35rem;"></span>
     </div>
 </div>
@@ -63,18 +63,18 @@
 
 <!-- Filter bar -->
 <div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center;">
-    <input id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
+    <input name="Kev Search" id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
            class="form-input" style="max-width:320px;font-size:0.85rem;"
            oninput="filterTable(this.value)">
     <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer;">
-        <input type="checkbox" id="filter-matched" onchange="filterTable(document.getElementById('kev-search').value)">
+        <input name="Filter Matched" type="checkbox" id="filter-matched" onchange="filterTable(document.getElementById('kev-search').value)">
         Show matched only
     </label>
 </div>
 
 <!-- Table -->
 <div class="card card-flush">
-    <div id="cve-table-container"
+    <div name="Open Cve Overview Partial" id="cve-table-container"
          hx-get="/api/inventory/cve-overview-partial"
          hx-trigger="load"
          hx-swap="innerHTML">

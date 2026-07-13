@@ -10,7 +10,7 @@
 
 <div class="pagination">
     {% if page > 1 %}
-    <button 
+    <button name="← Previous" 
         class="btn btn-secondary btn-sm"
         hx-get="/api/rules?page={{ page - 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
         hx-target="#rules-grid"
@@ -18,7 +18,7 @@
         ← Previous
     </button>
     {% else %}
-    <button class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    <button name="← Previous" class="btn btn-secondary btn-sm" disabled>← Previous</button>
     {% endif %}
     
     <span class="pagination-info">
@@ -26,7 +26,7 @@
     </span>
     
     {% if page < total_pages %}
-    <button 
+    <button name="Next →" 
         class="btn btn-secondary btn-sm"
         hx-get="/api/rules?page={{ page + 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
         hx-target="#rules-grid"
@@ -34,7 +34,7 @@
         Next →
     </button>
     {% else %}
-    <button class="btn btn-secondary btn-sm" disabled>Next →</button>
+    <button name="Next →" class="btn btn-secondary btn-sm" disabled>Next →</button>
     {% endif %}
 </div>
 
@@ -49,7 +49,7 @@
             Sync detection rules from Elastic Security to see them here.
         {% endif %}
     </p>
-    <button 
+    <button name="Submit Sync" 
         class="btn btn-primary mt-md"
         hx-post="/api/rules/sync"
         hx-target="#toast-container"

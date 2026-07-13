@@ -8,7 +8,7 @@
 <div class="card card-flush">
     <div class="cve-list" style="padding:0.75rem 1rem;">
     {% for bl in baselines %}
-    <div class="cve-card-item {% if bl.worst_status == 'red' %}cve-card-item--nocover{% elif bl.worst_status == 'amber' %}cve-card-item--detected{% else %}cve-card-item--unaffected{% endif %}"
+    <div   name="Baseline List Item" class="cve-card-item {% if bl.worst_status == 'red' %}cve-card-item--nocover{% elif bl.worst_status == 'amber' %}cve-card-item--detected{% else %}cve-card-item--unaffected{% endif %}"
          style="cursor:pointer;" onclick="window.location='/baselines/{{ bl.id }}'">
 
         {# Left: RAG dot + name #}
@@ -20,7 +20,7 @@
                 {% else %}background:var(--color-border);{% endif %}"
                 title="{% if bl.worst_status == 'red' %}Not covered{% elif bl.worst_status == 'amber' %}Blind spots{% elif bl.worst_status == 'green' %}Fully covered{% else %}Not applied{% endif %}">
             </span>
-            <a href="/baselines/{{ bl.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;
+            <a  name="Baselines" href="/baselines/{{ bl.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;
                 {% if bl.worst_status == 'red' %}color:var(--color-danger);
                 {% elif bl.worst_status == 'amber' %}color:var(--color-warning);
                 {% elif bl.worst_status == 'green' %}color:var(--color-success);
@@ -31,17 +31,17 @@
         </div>
 
         {# Body: description with markdown + Read More toggle #}
-        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+        <div  name="Read more" class="cve-card-item__body" onclick="event.stopPropagation();">
             {% if bl.description %}
             <div class="cve-card-item__desc md-content" id="bl-desc-short-{{ bl.id }}">
                 {{ bl.description[:120] }}{% if bl.description | length > 120 %}&hellip;
-                <a href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-short-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-full-{{ bl.id }}').style.display='';">Read more</a>
+                <a name="Read more" href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-short-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-full-{{ bl.id }}').style.display='';">Read more</a>
                 {% endif %}
             </div>
             {% if bl.description | length > 120 %}
             <div class="cve-card-item__desc md-content" id="bl-desc-full-{{ bl.id }}" style="display:none;">
                 {{ bl.description | md }}
-                <a href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-full-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-short-{{ bl.id }}').style.display='';">Show less</a>
+                <a name="Show less" href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-full-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-short-{{ bl.id }}').style.display='';">Show less</a>
             </div>
             {% endif %}
             {% else %}

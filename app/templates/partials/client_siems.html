@@ -3,12 +3,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div class="client-section-toggle" onclick="var b=document.getElementById('siems-body');var c=document.getElementById('siems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Linked SIEMs Edit" class="client-section-toggle" onclick="var b=document.getElementById('siems-body');var c=document.getElementById('siems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('server', '14') }}</span>
     <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Linked SIEMs</h2>
     <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_siems | length }}</span>
-    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
-        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-siems-modal').style.display='flex'">
+    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button  name="Open Edit Siems Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-siems-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -43,7 +43,7 @@
                 <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
             </span>
             {% endif %}
-            <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/default-index"
+            <form name="Submit Default Index" hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/default-index"
                   hx-target="#client-siems-section"
                   hx-swap="innerHTML"
                   style="display:flex;gap:0.4rem;align-items:center;margin-top:0.35rem;">
@@ -54,7 +54,7 @@
                        style="max-width:20rem;height:30px;padding:0.35rem 0.55rem;font-size:0.78rem;"
                        placeholder="Default index (e.g. logs-*)"
                        value="{{ s.default_index or '' }}">
-                <button type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;">
+                <button name="Save" type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;">
                     {{ icon('save', '12') }} Save
                 </button>
             </form>
@@ -75,7 +75,7 @@
    show the inherited default so operators can see what they'd revert
    to. #}
 <hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
-<form hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
+<form name="Submit Validation Thresholds" hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
       hx-target="#client-siems-section" hx-swap="innerHTML"
       style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;padding:0 0.25rem;">
     <div style="flex:0 0 auto;min-width:10rem;">
@@ -103,15 +103,15 @@
         {% for severity in ['low', 'medium', 'high', 'critical'] %}
         <div style="min-width:0;">
             <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} amber</label>
-            <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
+            <input type="number" min="1" name="amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
         </div>
         <div style="min-width:0;">
             <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} expired</label>
-            <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
+            <input type="number" min="1" name="expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
         </div>
         {% endfor %}
     </div>
-    <button type="submit" class="btn btn-primary btn-sm">Save thresholds</button>
+    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm">Save thresholds</button>
     <span style="flex-basis:100%;color:var(--color-text-muted);font-size:0.72rem;">
         Leave blank to inherit the global default. Criticality mode stores overrides per severity.
     </span>
@@ -119,12 +119,12 @@
 </div>
 
 <!-- Edit SIEMs Modal -->
-<div id="edit-siems-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Siems Modal" id="edit-siems-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage SIEMs — {{ client.name }}</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-siems-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -136,7 +136,7 @@
                     {% for s in client_siems %}
                     <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
                         <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.environment_role }}</span></span>
-                        <button class="btn btn-ghost btn-sm text-danger"
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?environment_role={{ s.environment_role }}"
                                 hx-target="#client-siems-section" hx-swap="innerHTML"
                                 hx-confirm="Unlink '{{ s.label }}' ({{ s.environment_role }}) from this client?"
@@ -151,7 +151,7 @@
             <!-- Add SIEM form -->
             {% if available_siems is defined and available_siems %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/siems"
+            <form name="Submit Siems" hx-post="/api/management/clients/{{ client.id }}/siems"
                   hx-target="#client-siems-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-siems-modal').style.display='none'">
@@ -200,11 +200,11 @@
                     </label>
                     <input type="text" name="default_index" class="form-input" placeholder="logs-*">
                 </div>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
+                <button name="Link SIEM" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
             </form>
             {% endif %}
             <div style="display:flex;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary btn-sm"
+                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
                         onclick="document.getElementById('edit-siems-modal').style.display='none'">Close</button>
             </div>
         </div>

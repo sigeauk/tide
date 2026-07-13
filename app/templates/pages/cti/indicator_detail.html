@@ -7,7 +7,7 @@
 {% set tlp_v = (indicator.tlp or 'unlabelled')|lower %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
     <div style="min-width:0;">
-        <p style="margin:0 0 0.25rem 0;"><a href="/cti/indicators" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Indicators</span></a></p>
+        <p style="margin:0 0 0.25rem 0;"><a name="Back to Indicators" href="/cti/indicators" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Indicators</span></a></p>
         <h1 class="page-title-hero" style="word-break:break-all;">{{ icon('crosshair','24') }} {{ indicator.observable_value }}</h1>
         <p class="page-subtitle">
             <span class="badge badge-secondary" style="font-size:0.7rem;">{{ indicator.pattern_type or '—' }}</span>
@@ -84,7 +84,7 @@
         <tbody>
         {% for a in indicator.related_actors %}
             <tr>
-                <td><a href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
+                <td><a  name="Actors" href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
                 <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span></td>
                 <td>{{ a.origin or '—' }}</td>
             </tr>
@@ -107,7 +107,7 @@
         <tbody>
         {% for r in indicator.related_reports %}
             <tr>
-                <td><a href="/cti/reports/{{ r.id }}">{{ r.name or 'Untitled report' }}</a></td>
+                <td><a  name="Reports" href="/cti/reports/{{ r.id }}">{{ r.name or 'Untitled report' }}</a></td>
                 <td>{{ r.published or '—' }}</td>
             </tr>
         {% endfor %}

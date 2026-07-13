@@ -38,7 +38,7 @@
 {% set tactic_slug = tactic | lower | replace(' ', '-') %}
 <div class="card card-padded card-mb-sm">
     <!-- Kill chain phase header (collapsible) -->
-    <div style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
+    <div  name="technique" style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
          onclick="var b=document.getElementById('bl-phase-{{ loop.index }}');var c=document.getElementById('bl-phase-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
             {{ icon('crosshair','14') }}
@@ -90,13 +90,13 @@
       {% set _ = cov_json.append('{"sid":"' ~ c.system_id ~ '","n":"' ~ c.system_name ~ '","s":"' ~ c.status ~ '"}') %}
     {% endfor %}
 
-    <div class="tech-card tech-card--{{ worst }}"
+    <div   name="Open Technique Card" class="tech-card tech-card--{{ worst }}"
          data-step-id="{{ step.id }}"
          data-coverage='[{{ cov_json | join(",") }}]'
          onclick="window.location='/baselines/{{ baseline.id }}/tactics/{{ step.id }}'">
         <div class="tech-card__body">
             <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <a href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
+                <a  name="Tactics" href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
                    class="tech-card__title tech-card__title--{{ worst }}"
                    onclick="event.stopPropagation();">{{ step.title }}</a>
                 {% if step.techniques %}

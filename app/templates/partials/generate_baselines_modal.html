@@ -1,9 +1,9 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/tech_icons.html" import tech_icon, bucket_icon %}
-<div class="modal-content" onclick="event.stopPropagation()">
+<div  name="Generate Detection Baselines" class="modal-content" onclick="event.stopPropagation()">
     <div class="modal-header">
         <h3 class="modal-title" style="color:var(--color-primary);">{{ icon('zap','16') }} Generate Detection Baselines</h3>
-        <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+        <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                 onclick="document.getElementById('generate-baselines-modal').style.display='none'">&#x2715;</button>
     </div>
     <p style="font-size:0.85rem;color:var(--color-text-muted);margin:0 0 1rem;">
@@ -11,7 +11,7 @@
         from <strong>{{ rule_count }}</strong> indexed Sigma rules and apply them to <strong>{{ system_name }}</strong>.
     </p>
 
-    <form id="gen-baselines-form"
+    <form name="Submit Generate Preview" id="gen-baselines-form"
           hx-post="/api/baselines/generate-preview"
           hx-target="#gen-preview-area"
           hx-swap="innerHTML"
@@ -55,9 +55,9 @@
                 </svg>
                 Scanning rules…
             </span>
-            <button type="button" class="btn btn-secondary"
+            <button name="Cancel" type="button" class="btn btn-secondary"
                     onclick="document.getElementById('generate-baselines-modal').style.display='none'">Cancel</button>
-            <button type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.35rem;">
+            <button name="Preview" type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.35rem;">
                 {{ icon('search','14') }} Preview
             </button>
         </div>

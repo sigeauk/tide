@@ -37,7 +37,7 @@
             </div>
 
             <!-- System name -->
-            <a href="/systems/{{ sys.system_id }}" class="host-card__title">
+            <a  name="Systems" href="/systems/{{ sys.system_id }}" class="host-card__title">
                 {{ icon('layers','14') }} {{ sys.system_name }}
             </a>
 
@@ -54,7 +54,7 @@
                 {% for ad in sys.applied_dets %}
                 <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
                     {{ icon('check','10') }} {{ ad.label[:30] }}
-                    <button class="btn btn-danger btn-sm"
+                    <button name="Delete Apply System" class="btn btn-danger btn-sm"
                             hx-delete="/api/baselines/tactics/{{ step_id }}/detections/{{ ad.id }}/apply-system/{{ sys.system_id }}"
                             hx-target="#step-affected-section"
                             hx-swap="innerHTML"
@@ -70,10 +70,10 @@
             <!-- Apply detection / override dropdown (consolidated) -->
             {% set has_opts = sys.unapplied_dets or sys.status != 'green' %}
             {% if has_opts %}
-            <div style="margin-top:0.35rem;" onclick="event.stopPropagation();">
+            <div  name="Select action… Known Gap Mark N/A" style="margin-top:0.35rem;" onclick="event.stopPropagation();">
                 <input type="hidden" name="system_id" value="{{ sys.system_id }}">
                 <select class="form-input step-action-select" style="font-size:0.72rem;padding:0.15rem 0.4rem;max-width:220px;"
-                        data-step-form="{{ step_id }}" data-sys-id="{{ sys.system_id }}" data-sys-name="{{ sys.system_name }}"
+                        data-step-form="{{ step_id }}" data-sys-id="{{ sys.system_id }}" data-sys- name="Select action… Known Gap Mark N/A"
                         onchange="handleStepAction(this);">
                     <option value="">Select action…</option>
                     {% if sys.unapplied_dets %}
@@ -99,7 +99,7 @@
                 {{ icon('info','10') }} {{ sys.blind_spot_reason }}
                 {% for bs in blind_spots %}
                 {% if bs.system_id == sys.system_id %}
-                <button class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                <button name="Delete Blind Spots" class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
                         hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=tactic&entity_id={{ step_id }}"
                         hx-target="#step-affected-section" hx-swap="innerHTML"
                         hx-confirm="Remove this status override for {{ sys.system_name }}?">{{ icon('x','9') }}</button>
@@ -118,19 +118,19 @@
 </div>
 
 <!-- Step Override Modal (Known Gap / N/A) -->
-<div id="step-bs-modal" class="modal-overlay" style="display:none;"
+<div name="Step Bs Modal" id="step-bs-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="step-bs-modal-title">{{ icon('alert-triangle','16') }} Known Gap</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('step-bs-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
             <span id="step-bs-description"></span> for <strong id="step-bs-target"></strong>.
             Status will change to <span id="step-bs-badge"></span>.
         </p>
-        <form method="post" hx-post="/api/blind-spots"
+        <form name="Submit Blind Spots" method="post" hx-post="/api/blind-spots"
               hx-target="#step-affected-section"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('step-bs-modal').style.display='none'"
@@ -145,9 +145,9 @@
                           placeholder="" id="step-bs-reason"></textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('step-bs-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="step-bs-submit">Known Gap</button>
+                <button name="Known Gap" type="submit" class="btn btn-primary" id="step-bs-submit">Known Gap</button>
             </div>
         </form>
     </div>

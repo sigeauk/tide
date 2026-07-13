@@ -2,7 +2,7 @@
 <!-- Heatmap Matrix Partial - CSS Grid MITRE ATT&CK Matrix -->
 
 <!-- OOB Swap for Metrics Cards - only show when actors are selected -->
-<div id="heatmap-metrics" class="metrics-grid" hx-swap-oob="outerHTML">
+<div name="Heatmap Metrics" id="heatmap-metrics" class="metrics-grid" hx-swap-oob="outerHTML">
 {% if data.selected_actors %}
 {% include "partials/heatmap_metrics.html" %}
 {% endif %}

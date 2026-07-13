@@ -1,6 +1,6 @@
 {# Global detection mark form. In-scope: cve_id, technique_rules #}
 {% from "macros/icons.html" import icon %}
-<form id="global-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+<form name="Submit Detect" id="global-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
       hx-post="/api/inventory/cve/{{ cve_id }}/detect"
       hx-target="#detection-section-inner"
       hx-swap="outerHTML">
@@ -19,8 +19,8 @@
   <input class="form-input" name="rule_ref" placeholder="Rule ID / reference (optional)…">
   <input class="form-input" name="note" placeholder="Notes (optional)…">
   <div style="display:flex;gap:0.5rem;">
-    <button type="submit" class="btn btn-primary btn-sm">Save</button>
-    <button type="button" class="btn btn-secondary btn-sm"
+    <button name="Save" type="submit" class="btn btn-primary btn-sm">Save</button>
+    <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
             onclick="document.getElementById('global-det-form').style.display='none';document.getElementById('global-det-btn').style.display='inline-flex';">
       Cancel
     </button>

@@ -11,7 +11,7 @@
             <span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:{{ clf.color }};flex-shrink:0;"></span>
             <span style="font-size:0.85rem;font-weight:600;">{{ clf.name }}</span>
         </div>
-        <button class="btn btn-danger btn-sm"
+        <button name="Delete Classifications" class="btn btn-danger btn-sm"
                 hx-delete="/api/inventory/classifications/{{ clf.id }}"
                 hx-target="#clf-list"
                 hx-swap="innerHTML"

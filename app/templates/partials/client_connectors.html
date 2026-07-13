@@ -8,12 +8,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div class="client-section-toggle" onclick="var b=document.getElementById('connectors-body');var c=document.getElementById('connectors-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Linked CTI Connectors Edit" class="client-section-toggle" onclick="var b=document.getElementById('connectors-body');var c=document.getElementById('connectors-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('link', '14') }}</span>
     <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Linked CTI Connectors</h2>
     <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_connectors | length }}</span>
-    <div style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
-        <button class="btn btn-info btn-sm" onclick="document.getElementById('edit-connectors-modal').style.display='flex'">
+    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+        <button  name="Open Edit Connectors Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-connectors-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -53,7 +53,7 @@
     <p style="margin-top:0.75rem;">No CTI connectors linked to this client yet.</p>
     <p style="font-size:0.8rem;">
         Register connectors in
-        <a href="/management?tab=connectors" style="color:var(--color-primary);">Management &rsaquo; Connectors</a>,
+        <a name="Management Connectors" href="/management?tab=connectors" style="color:var(--color-primary);">Management &rsaquo; Connectors</a>,
         then link them here.
     </p>
 </div>
@@ -61,12 +61,12 @@
 </div>
 
 <!-- Edit Connectors Modal -->
-<div id="edit-connectors-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Connectors Modal" id="edit-connectors-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage CTI Connectors &mdash; {{ client.name }}</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-connectors-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -79,7 +79,7 @@
                         <span>{{ c.label or '(unnamed)' }}
                             <span class="badge badge-muted" style="font-size:0.65rem;">{{ c.vendor_label or c.vendor }}</span>
                         </span>
-                        <button class="btn btn-ghost btn-sm text-danger"
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/connectors/{{ c.id }}"
                                 hx-target="#client-connectors-section" hx-swap="innerHTML"
                                 hx-confirm="Unlink '{{ c.label }}' from this client?"
@@ -94,7 +94,7 @@
             {% endif %}
             {% if available_connectors %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/connectors"
+            <form name="Submit Connectors" hx-post="/api/management/clients/{{ client.id }}/connectors"
                   hx-target="#client-connectors-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-connectors-modal').style.display='none'">
@@ -105,19 +105,19 @@
                     <option value="{{ c.id }}">{{ c.label or '(unnamed)' }} &mdash; {{ c.vendor_label or c.vendor }}</option>
                     {% endfor %}
                 </select>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link Connector</button>
+                <button name="Link Connector" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link Connector</button>
             </form>
             {% else %}
             <p style="color:var(--color-text-muted);font-size:0.85rem;text-align:center;">
                 All registered connectors are already linked to this client, or none have been
                 registered yet.
                 Register connectors in the
-                <a href="/management?tab=connectors" style="color:var(--color-primary);">Connectors</a>
+                <a name="Connectors" href="/management?tab=connectors" style="color:var(--color-primary);">Connectors</a>
                 tab.
             </p>
             {% endif %}
             <div style="display:flex;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary btn-sm"
+                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
                         onclick="document.getElementById('edit-connectors-modal').style.display='none'">Close</button>
             </div>
         </div>

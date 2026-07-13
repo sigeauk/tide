@@ -61,7 +61,7 @@
             </span>
         </td>
         <td style="padding:0.4rem 0.5rem;text-align:right;">
-            <button class="btn btn-ghost btn-sm"
+            <button name="Delete Software" class="btn btn-ghost btn-sm"
                     style="color:var(--color-danger);padding:0.2rem 0.4rem;"
                     hx-delete="/api/inventory/software/{{ sw.id }}?system_id={{ system_id }}"
                     hx-confirm="Remove '{{ sw.name }}'?"

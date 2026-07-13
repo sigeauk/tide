@@ -39,7 +39,7 @@
 
             {# Edit button #}
             <div style="margin-left:auto;">
-                <button class="btn btn-secondary btn-sm"
+                <button name="Edit Technique" class="btn btn-secondary btn-sm"
                         onclick="document.getElementById('edit-tactic-modal').style.display='flex'"
                         style="display:flex;align-items:center;gap:0.375rem;">
                     {{ icon('pencil','14') }} Edit Technique
@@ -92,7 +92,7 @@
             {% include "partials/tactic_mitre_section.html" %}
         </div>
         <!-- Detection Rules -->
-        <div class="card card-padded" id="step-detection-section"
+        <div name="Open Detections" class="card card-padded" id="step-detection-section"
              hx-get="/api/baselines/tactics/{{ tactic.id }}/detections"
              hx-trigger="stepUpdated from:body"
              hx-swap="innerHTML">
@@ -101,7 +101,7 @@
     </div>
 
     <!-- Affected Systems -->
-    <div id="step-affected-section"
+    <div name="Open Affected Systems" id="step-affected-section"
          hx-get="/api/baselines/tactics/{{ tactic.id }}/affected-systems"
          hx-trigger="stepUpdated from:body"
          hx-swap="innerHTML">
@@ -112,7 +112,7 @@
     {% set sigma_dets = step.detections | selectattr('source', 'equalto', 'sigma') | list %}
     {% if sigma_dets and backends is defined %}
     <div class="card card-padded" style="margin-top:1.5rem;" id="sigma-convert-section">
-        <div style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;"
+        <div  name="Sigma Convert & Deploy" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;"
              onclick="var b=document.getElementById('tc-body'),c=document.getElementById('tc-chevron');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(0)';if(!window._tcEditorReady){window._tcInitDeferred();}}else{b.style.display='none';c.style.transform='rotate(-90deg)';}">
             <svg id="tc-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="transition:transform .2s;transform:rotate(-90deg);flex-shrink:0;"><polyline points="6 9 12 15 18 9"/></svg>
             <h2 class="section-title" style="color:var(--color-warning);margin:0;">{{ icon('zap','16') }} Sigma Convert & Deploy</h2>
@@ -126,7 +126,7 @@
         {% if sigma_rule_ids | length > 1 %}
         <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);background:rgba(234,179,8,.06);">
             <label style="font-size:0.75rem;font-weight:600;color:var(--color-warning);white-space:nowrap;">{{ icon('zap','13') }} Sigma Rule</label>
-            <select id="tc-sigma-rule-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;flex:1;"
+            <select name="Tc Sigma Rule Select" id="tc-sigma-rule-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;flex:1;"
                     onchange="tcLoadSigmaRule(this.value);">
                 {% for rid in sigma_rule_ids %}
                 <option value="{{ rid }}">{{ sigma_rule_map.get(rid, rid) }}</option>
@@ -139,7 +139,7 @@
         <div style="display:flex;flex-wrap:wrap;gap:0.75rem;margin-bottom:1rem;">
             <div style="display:flex;flex-direction:column;gap:0.2rem;">
                 <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Target</label>
-                <select id="tc-backend-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
+                <select name="Tc Backend Select" id="tc-backend-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
                     {% for key, label in backends.items() %}
                     <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
                     {% endfor %}
@@ -147,7 +147,7 @@
             </div>
             <div style="display:flex;flex-direction:column;gap:0.2rem;">
                 <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Format</label>
-                <select id="tc-format-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
+                <select name="Tc Format Select" id="tc-format-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;">
                     {% for key, label in formats.items() %}
                     <option value="{{ key }}">{{ label }}</option>
                     {% endfor %}
@@ -155,7 +155,7 @@
             </div>
             <div style="display:flex;flex-direction:column;gap:0.2rem;">
                 <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Pipeline</label>
-                <select id="tc-pipeline-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                <select name="Tc Pipeline Select" id="tc-pipeline-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
                     {% for key, label in pipelines.items() %}
                     <option value="{{ key }}">{{ label }}</option>
                     {% endfor %}
@@ -164,7 +164,7 @@
             {% if pipeline_files is defined and pipeline_files %}
             <div style="display:flex;flex-direction:column;gap:0.2rem;position:relative;">
                 <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Custom Pipeline</label>
-                <select id="tc-pipeline-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                <select name="None" id="tc-pipeline-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
                     <option value="">None</option>
                     {% for pl in pipeline_files %}
                     <option value="{{ pl.filename }}">{{ pl.display }}</option>
@@ -175,7 +175,7 @@
             {% if template_files is defined and template_files %}
             <div style="display:flex;flex-direction:column;gap:0.2rem;position:relative;">
                 <label style="font-size:0.7rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;">Template</label>
-                <select id="tc-template-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
+                <select name="None" id="tc-template-file-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;min-width:160px;">
                     <option value="">None</option>
                     {% for tpl in template_files %}
                     <option value="{{ tpl.filename }}">{{ tpl.display }}</option>
@@ -190,7 +190,7 @@
                 <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
                     {{ icon('file-text','13') }} rule.yml
                 </div>
-                <form id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-convert-response" hx-swap="innerHTML">
+                <form name="Submit Convert" id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-convert-response" hx-swap="innerHTML">
                     <textarea id="tc-yaml-editor" name="yaml_content" style="width:100%;min-height:280px;font-family:monospace;font-size:0.8rem;background:var(--color-bg);color:var(--color-text);border:none;padding:0.5rem;resize:vertical;" spellcheck="false"></textarea>
                     <input type="hidden" id="tc-form-backend" name="backend" value="elasticsearch">
                     <input type="hidden" id="tc-form-pipeline" name="pipeline" value="none">
@@ -200,16 +200,16 @@
                 </form>
                 <div id="tc-validation-result"></div>
                 <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
-                    <button type="submit" form="tc-convert-form" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
+                    <button  name="Convert" type="submit" form="tc-convert-form" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
                         {{ icon_text('refresh-cw', 'Convert', '12') }}
                     </button>
-                    <button type="button" class="btn btn-secondary btn-sm" style="font-size:0.75rem;"
+                    <button name="Submit Validate" type="button" class="btn btn-secondary btn-sm" style="font-size:0.75rem;"
                             hx-post="/api/sigma/validate" hx-target="#tc-validation-result" hx-include="#tc-yaml-editor">
                         {{ icon_text('check-circle', 'Validate', '12') }}
                     </button>
                 </div>
                 <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;align-items:center;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
-                    <form id="tc-deploy-form" hx-post="/api/sigma/deploy" hx-target="#tc-deploy-result" hx-swap="innerHTML" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+                    <form name="Submit Deploy" id="tc-deploy-form" hx-post="/api/sigma/deploy" hx-target="#tc-deploy-result" hx-swap="innerHTML" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
                         <input type="hidden" name="yaml_content" id="tc-deploy-yaml">
                         <input type="hidden" name="raw_query" id="tc-deploy-query">
                         <input type="hidden" name="pipeline_file" id="tc-deploy-pipeline-file">
@@ -224,7 +224,7 @@
                         <label style="font-size:0.72rem;display:flex;align-items:center;gap:0.25rem;">
                             <input type="checkbox" name="enabled" value="true"> Enable
                         </label>
-                        <button type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;" onclick="tcPrepareDeploy()">
+                        <button  name="Deploy" type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;" onclick="tcPrepareDeploy()">
                             {{ icon_text('rocket', 'Deploy', '12') }}
                         </button>
                         {% else %}
@@ -393,15 +393,15 @@
 <div id="slide-panel-container"></div>
 
 <!-- Edit Tactic Modal -->
-<div id="edit-tactic-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Tactic Modal" id="edit-tactic-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('pencil','16') }} Edit Technique</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-tactic-modal').style.display='none'">&#x2715;</button>
         </div>
-        <form hx-put="/api/baselines/tactics/{{ tactic.id }}"
+        <form name="Update Tactics" hx-put="/api/baselines/tactics/{{ tactic.id }}"
               hx-target="body" hx-push-url="true"
               hx-on::after-request="document.getElementById('edit-tactic-modal').style.display='none'"
               style="display:flex;flex-direction:column;gap:0.75rem;">
@@ -423,16 +423,16 @@
                 <textarea name="description" class="form-input" rows="2">{{ tactic.description or '' }}</textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-danger btn-sm"
+                <button name="Delete" type="button" class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/tactics/{{ tactic.id }}?playbook_id={{ baseline.id }}"
                         hx-target="body" hx-push-url="/baselines/{{ baseline.id }}"
                         hx-confirm="Delete this technique and all its mappings?"
                         style="margin-right:auto;">
                     {{ icon('trash-2', '14') }} Delete
                 </button>
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('edit-tactic-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Save</button>
+                <button name="Save" type="submit" class="btn btn-primary">Save</button>
             </div>
         </form>
     </div>

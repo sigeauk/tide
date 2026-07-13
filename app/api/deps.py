@@ -13,6 +13,7 @@ from app.services.auth import AuthService, get_auth_service
 from app.services.tenant_manager import (
     resolve_tenant_db_path, set_tenant_context, clear_tenant_context,
 )
+from app.services.apm import set_transaction_labels
 from app.models.auth import User
 
 import logging
@@ -254,6 +255,12 @@ async def get_active_client(
 
     # Stash on request state for downstream use
     request.state.client_id = client_id
+
+    set_transaction_labels(
+        tenant_id=client_id,
+        client_id=client_id,
+        user_id=str(user.id) if user else None,
+    )
 
     # Set tenant DB context as early as possible so any DB calls made during
     # roles/permissions refresh below use the correct tenant connection.

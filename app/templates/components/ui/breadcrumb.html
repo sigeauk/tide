@@ -17,7 +17,7 @@
         {% for label, href in trail %}
             <li class="breadcrumb__item{% if loop.last %} breadcrumb__item--current{% endif %}">
                 {% if href and not loop.last %}
-                    <a class="breadcrumb__link" href="{{ href }}">{{ label }}</a>
+                    <a   name="Breadcrumb Link" class="breadcrumb__link" href="{{ href }}">{{ label }}</a>
                 {% else %}
                     <span aria-current="page">{{ label }}</span>
                 {% endif %}

@@ -14,7 +14,7 @@
     </div>
     <div style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;">
         <div id="sync-status"></div>
-        <button type="button" class="btn btn-primary btn-sm"
+        <button name="Sync Elastic" type="button" class="btn btn-primary btn-sm"
                 hx-post="/api/sync/elastic"
                 hx-target="#sync-status"
                 hx-swap="outerHTML">
@@ -100,7 +100,7 @@
         <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
             <p class="metric-value" style="font-size:1rem;">—</p>
             <p class="metric-label">No baseline data</p>
-            <p class="metric-sub"><a href="/baselines">Go to Baselines →</a></p>
+            <p class="metric-sub"><a name="Go to Baselines →" href="/baselines">Go to Baselines →</a></p>
         </div>
         {% endif %}
     </div>
@@ -199,7 +199,7 @@
         <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
             <p class="metric-value" style="font-size:1rem;">—</p>
             <p class="metric-label">No inventory data</p>
-            <p class="metric-sub"><a href="/systems">Go to Systems →</a></p>
+            <p class="metric-sub"><a name="Go to Systems →" href="/systems">Go to Systems →</a></p>
         </div>
         {% endif %}
     </div>
@@ -216,7 +216,7 @@
         <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
             <p class="metric-value" style="font-size:1rem;">—</p>
             <p class="metric-label">No CVE data</p>
-            <p class="metric-sub"><a href="/cve-overview">Import CVE →</a></p>
+            <p class="metric-sub"><a name="Import CVE →" href="/cve-overview">Import CVE →</a></p>
         </div>
         {% endif %}
     </div>

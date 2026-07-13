@@ -1,10 +1,10 @@
 {% from "macros/icons.html" import icon, icon_text %}
 <!-- Test Rule Result Popup -->
-<div class="modal-overlay" onclick="this.remove()">
-    <div class="modal-content modal-sm" onclick="event.stopPropagation()" style="max-width: 700px;">
+<div  name="Test Results: ... Close" class="modal-overlay" onclick="this.remove()">
+    <div  name="Test Results: ... Close" class="modal-content modal-sm" onclick="event.stopPropagation()" style="max-width: 700px;">
         <div class="modal-header">
             <h2 class="modal-title">Test Results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
-            <button class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').remove()">
+            <button  name="Close Modal" class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').remove()">
                 {{ icon('x','12') }} Close
             </button>
         </div>

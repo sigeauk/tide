@@ -10,7 +10,7 @@
         <p class="page-subtitle">STIX reports from configured CTI sources.</p>
     </div>
     <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
-        <button type="button" class="btn btn-primary btn-sm"
+        <button name="Submit Sync" type="button" class="btn btn-primary btn-sm"
                 hx-post="/cti/reports/sync"
                 hx-target="#cti-sync-result"
                 hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync reports','14') }}</button>
@@ -82,7 +82,7 @@
     </div>
     <div class="filter-group">
         <label class="form-label">&nbsp;</label>
-        <button type="submit" class="btn btn-primary">Apply</button>
+        <button name="Apply" type="submit" class="btn btn-primary">Apply</button>
     </div>
 </form>
 
@@ -98,16 +98,16 @@
     </div>
     <div class="cve-list" style="padding:0.75rem 1rem;">
     {% for r in reports %}
-    <div class="cve-card-item cve-card-item--unaffected"
+    <div   name="Open Report Card" class="cve-card-item cve-card-item--unaffected"
          style="cursor:pointer;" onclick="window.location='/cti/reports/{{ r.id }}'">
         <div class="cve-card-item__id" style="min-width:240px;">
             {{ icon('file-text','14') }}
-            <a href="/cti/reports/{{ r.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
+            <a  name="Reports" href="/cti/reports/{{ r.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
                onclick="event.stopPropagation();">
                 {{ r.name or 'Untitled report' }}
             </a>
         </div>
-        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+        <div  name="Report Labels" class="cve-card-item__body" onclick="event.stopPropagation();">
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
                 {% if r.labels %}
                 {% for lbl in r.labels[:5] %}
@@ -139,12 +139,12 @@
 <div class="pagination" style="margin-top:1rem;">
     {% set qbase = '&search=' ~ search ~ '&source=' ~ selected_source ~ '&label=' ~ selected_label %}
     {% if page > 1 %}
-        <a class="btn btn-secondary"
+        <a name="← Prev" class="btn btn-secondary"
            href="/cti/reports?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
     {% endif %}
     <span style="margin:0 0.75rem;">Page {{ page }}</span>
     {% if reports|length == page_size %}
-        <a class="btn btn-secondary"
+        <a name="Next →" class="btn btn-secondary"
            href="/cti/reports?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
     {% endif %}
 </div>

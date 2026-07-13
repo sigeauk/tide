@@ -3,8 +3,8 @@
 Rule Detail Modal Component
 Shows full rule information including query, field mappings, and scores.
 -->
-<div class="modal-overlay" onclick="this.remove()">
-    <div class="modal-content" onclick="event.stopPropagation()" style="max-width: 800px;">
+<div name="Dismiss Rule Detail Modal" class="modal-overlay" onclick="this.remove()">
+    <div name="Rule Detail Modal Content" class="modal-content" onclick="event.stopPropagation()" style="max-width: 800px;">
         <div class="modal-header">
             <h2 class="modal-title">{{ rule.name }}</h2>
             <div style="display: flex; gap: 0.5rem; align-items: center;">
@@ -17,7 +17,7 @@ Shows full rule information including query, field mappings, and scores.
                 {% else %}
                     {% set kibana_rule_url = _kb ~ '/s/' ~ space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
                 {% endif %}
-                <a href="{{ kibana_rule_url }}"
+                <a name="Open in Kibana" href="{{ kibana_rule_url }}"
                    target="_blank"
                    rel="noopener noreferrer"
                    class="btn btn-secondary btn-sm"
@@ -25,7 +25,7 @@ Shows full rule information including query, field mappings, and scores.
                     {{ icon_text('shield-check', 'Kibana', '14') }}
                 </a>
                 {% endif %}
-                <button 
+                <button  name="Close Modal" 
                     class="btn btn-secondary btn-sm" 
                     onclick="this.closest('.modal-overlay').remove()">
                     {{ icon('x','12') }} Close
@@ -167,7 +167,7 @@ Shows full rule information including query, field mappings, and scores.
                         <span class="text-danger">Never</span>
                     {% endif %}
                 </div>
-                <button class="btn btn-primary btn-sm"
+                <button name="Validate Now" class="btn btn-primary btn-sm"
                         hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"
@@ -181,7 +181,7 @@ Shows full rule information including query, field mappings, and scores.
                     <option value="7d">7d</option>
                     <option value="30d">30d</option>
                 </select>
-                <button class="btn btn-secondary btn-sm"
+                <button name="Test Rule" class="btn btn-secondary btn-sm"
                         hx-post="/api/rules/{{ rule.rule_id }}/test?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
                         hx-target="#modal-container"
                         hx-swap="innerHTML"

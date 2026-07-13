@@ -12,7 +12,7 @@
 <div class="rules-list-container">
     {% if rules %}
         {% for rule in rules %}
-        <button class="rule-item-btn" onclick="loadRuleYaml('{{ rule.id }}')">
+        <button name="Open Sigma Rule" class="rule-item-btn" onclick="loadRuleYaml('{{ rule.id }}')">
             <span class="rule-item-title" title="{{ rule.title }}">
                 {{ rule.title[:45] }}{% if rule.title|length > 45 %}...{% endif %}
             </span>

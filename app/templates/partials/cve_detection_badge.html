@@ -29,7 +29,7 @@
         {{ det.source }}
       </div>
     </div>
-    <button class="btn btn-danger btn-sm"
+    <button name="Delete Detect" class="btn btn-danger btn-sm"
             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}"
             hx-target="#detection-section-inner"
             hx-swap="outerHTML"
@@ -49,11 +49,11 @@
 
 <!-- Add Detection Form -->
 <div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
-  <button class="btn btn-sm btn-secondary" id="add-det-btn"
+  <button name="Add Detection Rule" class="btn btn-sm btn-secondary" id="add-det-btn"
           onclick="this.style.display='none';document.getElementById('add-det-form').style.display='flex';">
     {{ icon('plus','14') }} Add Detection Rule
   </button>
-  <form id="add-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+  <form name="Submit Detect" id="add-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
         hx-post="/api/inventory/cve/{{ cve_id }}/detect"
         hx-target="#detection-section-inner"
         hx-swap="outerHTML"
@@ -82,8 +82,8 @@
     <input type="hidden" name="source" value="manual">
 
     <div style="display:flex;gap:0.5rem;">
-      <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
-      <button type="button" class="btn btn-secondary btn-sm"
+      <button name="Save" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
+      <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
               onclick="this.closest('form').style.display='none';document.getElementById('add-det-btn').style.display='inline-flex';">
         Cancel
       </button>

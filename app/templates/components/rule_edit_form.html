@@ -1,13 +1,13 @@
 {% from "macros/icons.html" import icon, icon_text %}
-<div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+<div   name="Dismiss Modal Overlay" class="modal-overlay" onclick="if(event.target===this)this.remove()">
     <div class="modal-content modal-md">
         <div class="modal-header">
             <h2>{{ icon_text('edit', 'Edit Rule') }} {{ rule.name }}</h2>
-            <button class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
+            <button  name="Close Modal" class="modal-close" onclick="document.getElementById('modal-container').innerHTML=''">{{ icon('x', '20') }}</button>
         </div>
 
         <div class="modal-body">
-            <form
+            <form name="Submit Edit"
                 hx-post="/api/rules/{{ rule.rule_id }}/edit?space={{ space }}{% if siem_id %}&siem_id={{ siem_id }}{% endif %}"
                 hx-target="#modal-container"
                 hx-swap="innerHTML"
@@ -35,8 +35,8 @@
                 </div>
 
                 <div class="form-actions" style="justify-content:flex-end; margin-top: 1rem;">
-                    <button type="button" class="btn btn-secondary" onclick="document.getElementById('modal-container').innerHTML=''">Cancel</button>
-                    <button type="submit" class="btn btn-primary">{{ icon_text('save', 'Save Changes', '14') }}</button>
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="document.getElementById('modal-container').innerHTML=''">Cancel</button>
+                    <button  name="Save Changes" type="submit" class="btn btn-primary">{{ icon_text('save', 'Save Changes', '14') }}</button>
                 </div>
             </form>
         </div>

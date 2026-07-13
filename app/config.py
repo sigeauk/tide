@@ -105,6 +105,7 @@ class Settings(BaseSettings):
     # --- ELASTIC APM ---
     elastic_apm_enabled: bool = Field(default=False, alias="ELASTIC_APM_ENABLED")
     elastic_apm_service_name: str = Field(default="TIDE", alias="ELASTIC_APM_SERVICE_NAME")
+    elastic_apm_environment: str = Field(default="production", alias="ELASTIC_APM_ENVIRONMENT")
     elastic_apm_server_url: str = Field(default="http://localhost:8200", alias="ELASTIC_APM_SERVER_URL")
     elastic_apm_secret_token: str = Field(default="", alias="ELASTIC_APM_SECRET_TOKEN")
     elastic_apm_api_key: str = Field(default="", alias="ELASTIC_APM_API_KEY")

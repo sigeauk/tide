@@ -12,7 +12,7 @@
     <div class="card" style="margin-bottom: 1.5rem;">
         <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap;">
             <span class="text-secondary">{{ clients | length }} client{{ 's' if clients | length != 1 else '' }} configured</span>
-            <button class="btn btn-primary" onclick="showCreateClientModal()">
+            <button name="New Client" class="btn btn-primary" onclick="showCreateClientModal()">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 New Client
             </button>
@@ -32,11 +32,11 @@
                     {% endif %}
                 </div>
                 <div class="client-card__actions">
-                    <button class="btn btn-ghost btn-sm" onclick="editClient('{{ client.id }}', '{{ client.name }}', '{{ client.description or '' }}')" title="Edit">
+                    <button  name="Edit Client" class="btn btn-ghost btn-sm" onclick="editClient('{{ client.id }}', '{{ client.name }}', '{{ client.description or '' }}')" title="Edit">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
                     </button>
                     {% if not client.is_default %}
-                    <button class="btn btn-ghost btn-sm text-danger" onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')" title="Delete">
+                    <button name="Delete" class="btn btn-ghost btn-sm text-danger" onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')" title="Delete">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                     </button>
                     {% endif %}
@@ -86,18 +86,18 @@
 </div>
 
 <!-- Create / Edit Modal -->
-<div class="modal-overlay" id="client-modal" style="display:none;" onclick="if(event.target===this) closeClientModal()">
+<div name="Client Modal" class="modal-overlay" id="client-modal" style="display:none;" onclick="if(event.target===this) closeClientModal()">
     <div class="modal-content card" style="max-width: 480px; width: 100%;">
         <h2 id="client-modal-title">New Client</h2>
         <form id="client-form" onsubmit="return submitClientForm(event)">
-            <input type="hidden" id="client-form-id" value="">
+            <input name="Client Form Id" type="hidden" id="client-form-id" value="">
             <div class="form-group" style="margin-bottom: 1rem;">
                 <label for="client-form-name" class="form-label">Name</label>
-                <input type="text" id="client-form-name" class="form-control" required maxlength="100" placeholder="Acme Corp">
+                <input name="Client Form Name" type="text" id="client-form-name" class="form-control" required maxlength="100" placeholder="Acme Corp">
             </div>
             <div class="form-group" style="margin-bottom: 1rem;">
                 <label for="client-form-slug" class="form-label">Slug</label>
-                <input type="text" id="client-form-slug" class="form-control" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
+                <input name="Client Form Slug" type="text" id="client-form-slug" class="form-control" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
                 <span class="text-secondary" style="font-size: 0.75rem;">Lowercase letters, numbers, hyphens only. Auto-generated if blank.</span>
             </div>
             <div class="form-group" style="margin-bottom: 1.5rem;">
@@ -105,8 +105,8 @@
                 <textarea id="client-form-desc" class="form-control" rows="3" placeholder="Optional description..."></textarea>
             </div>
             <div style="display: flex; gap: 0.75rem; justify-content: flex-end;">
-                <button type="button" class="btn btn-ghost" onclick="closeClientModal()">Cancel</button>
-                <button type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
+                <button name="Cancel" type="button" class="btn btn-ghost" onclick="closeClientModal()">Cancel</button>
+                <button name="Create" type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
             </div>
         </form>
     </div>

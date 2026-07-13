@@ -15,7 +15,7 @@
         {# Check connection / per-tenant counts were retired here in
            5.0.x — connector connectivity now lives on the Management →
            Connectors hub (one place to test, one place to fix). #}
-        <button type="button" class="btn btn-primary btn-sm"
+        <button name="Submit Sync" type="button" class="btn btn-primary btn-sm"
                 hx-post="/cti/indicators/sync"
                 hx-target="#cti-sync-result"
                 hx-swap="innerHTML">{{ icon_text('refresh-cw','Sync indicators','14') }}</button>
@@ -81,7 +81,7 @@
     </div>
     <div class="filter-group">
         <label class="form-label">&nbsp;</label>
-        <button type="submit" class="btn btn-primary">Apply</button>
+        <button name="Apply" type="submit" class="btn btn-primary">Apply</button>
     </div>
 </form>
 
@@ -101,19 +101,19 @@
     {% set tlp_cls = 'cve-card-item--nocover' if tlp_v == 'red'
                     else ('cve-card-item--detected' if tlp_v == 'amber'
                     else 'cve-card-item--unaffected') %}
-    <div class="cve-card-item {{ tlp_cls }}"
+    <div   name="Open Indicator Card" class="cve-card-item {{ tlp_cls }}"
          style="cursor:pointer;" onclick="window.location='/cti/indicators/{{ ind.id }}'">
         <div class="cve-card-item__id" style="min-width:240px;">
             {# 5.0.0 — leading TLP dot removed; the TLP value is already
                surfaced via the per-row card class colouring + the TLP
                filter dropdown above, so the standalone circle added
                only visual noise. #}
-            <a href="/cti/indicators/{{ ind.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;"
+            <a  name="Indicators" href="/cti/indicators/{{ ind.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;"
                onclick="event.stopPropagation();">
                 {{ ind.observable_value }}
             </a>
         </div>
-        <div class="cve-card-item__body" onclick="event.stopPropagation();">
+        <div  name="confidence TTP" class="cve-card-item__body" onclick="event.stopPropagation();">
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
                 <span class="badge badge-secondary" style="font-size:0.7rem;">{{ ind.pattern_type or '—' }}</span>
                 {% if ind.confidence is not none %}
@@ -148,12 +148,12 @@
 <div class="pagination" style="margin-top:1rem;">
     {% set qbase = '&search=' ~ search ~ '&pattern_type=' ~ selected_pattern_type ~ '&tlp=' ~ selected_tlp ~ '&source=' ~ selected_source %}
     {% if page > 1 %}
-        <a class="btn btn-secondary"
+        <a name="← Prev" class="btn btn-secondary"
            href="/cti/indicators?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
     {% endif %}
     <span style="margin:0 0.75rem;">Page {{ page }}</span>
     {% if indicators|length == page_size %}
-        <a class="btn btn-secondary"
+        <a name="Next →" class="btn btn-secondary"
            href="/cti/indicators?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
     {% endif %}
 </div>

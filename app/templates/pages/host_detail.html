@@ -29,11 +29,11 @@
                 </h2>
             </div>
             <!-- Package search bar -->
-            <input id="pkg-search" class="form-input" type="search"
+            <input name="Pkg Search" id="pkg-search" class="form-input" type="search"
                    placeholder="Search packages…"
                    oninput="filterPackages()"
                    style="width:100%;font-size:0.85rem;margin-bottom:0.5rem;">
-            <input type="hidden" id="pkg-cve-link" value="on">
+            <input name="on" type="hidden" id="pkg-cve-link" value="on">
             <div class="card card-padded-sm" id="software-section">
                 {% include "partials/host_software.html" %}
             </div>
@@ -46,7 +46,7 @@
                     {{ icon('alert-triangle', '18') }} CVE Matches
                 </h2>
                 {% if vulns %}
-                <a href="/cve-overview" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
+                <a name="View All" href="/cve-overview" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
                     View All {{ icon('external-link', '12') }}
                 </a>
                 {% endif %}
@@ -138,15 +138,15 @@ function filterCvesByVisiblePackages() {
 </div><!-- /container -->
 
 <!-- ── Edit Device Modal ────────────────────────────────────────────── -->
-<div id="edit-host-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Host Modal" id="edit-host-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('edit-2','16') }} Edit Device</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-host-modal').style.display='none'">&#x2715;</button>
         </div>
-        <form hx-put="/api/inventory/hosts/{{ host.id }}"
+        <form name="Update Hosts" hx-put="/api/inventory/hosts/{{ host.id }}"
               hx-target="#host-header"
               hx-swap="outerHTML"
               hx-on::after-request="document.getElementById('edit-host-modal').style.display='none'"
@@ -176,22 +176,22 @@ function filterCvesByVisiblePackages() {
                 </div>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('edit-host-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">{{ icon('save','14') }} Save Changes</button>
+                <button name="Save Changes" type="submit" class="btn btn-primary">{{ icon('save','14') }} Save Changes</button>
             </div>
         </form>
     </div>
 </div>
 
 <!-- ── Add Package Modal ─────────────────────────────────────────── -->
-<div id="add-sw-modal" class="modal-overlay" style="display:none;"
+<div name="Add Sw Modal" id="add-sw-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this)this.style.display='none'">
     <div class="modal-content modal-sm">
         <h3 style="margin:0 0 1rem;font-size:1.1rem;font-weight:600;">
             Add Package — {{ host.name }}
         </h3>
-        <form hx-post="/api/inventory/hosts/{{ host.id }}/software"
+        <form name="Submit Software" hx-post="/api/inventory/hosts/{{ host.id }}/software"
               hx-target="#software-section"
               hx-swap="innerHTML"
               hx-on::after-request="document.getElementById('add-sw-modal').style.display='none';this.reset()"
@@ -215,9 +215,9 @@ function filterCvesByVisiblePackages() {
                 <input class="form-input" name="cpe" placeholder="cpe:2.3:a:apache:http_server:2.4.51:*:*:*:*:*:*:*">
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.5rem;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('add-sw-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Add Package</button>
+                <button name="Add Package" type="submit" class="btn btn-primary">Add Package</button>
             </div>
         </form>
     </div>

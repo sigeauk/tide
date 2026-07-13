@@ -6,7 +6,7 @@
     {% for rule in rules %}
     <div class="rule-item">
         <div class="rule-header">
-            <span class="rule-name"
+            <span name="Open Detail" class="rule-name"
                   style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;"
                   hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
                   hx-target="#modal-container"

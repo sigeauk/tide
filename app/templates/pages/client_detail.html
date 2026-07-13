@@ -7,7 +7,7 @@
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
     <div>
         <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
-            <a href="/management?tab=clients" style="color:var(--color-muted);font-size:0.85rem;">&larr; Clients</a>
+            <a name="Clients" href="/management?tab=clients" style="color:var(--color-muted);font-size:0.85rem;">&larr; Clients</a>
         </div>
         <h1 class="page-title-hero">{{ client.name }}</h1>
         <span class="system-card__classification" style="margin-top:0.25rem;">{{ client.slug }}</span>
@@ -16,11 +16,11 @@
         </p>
     </div>
     <div style="display:flex;gap:0.5rem;flex-shrink:0;align-items:flex-start;padding-top:0.5rem;">
-        <button class="btn btn-secondary btn-sm" onclick="openEditClientModal()">
+        <button  name="Edit Client" class="btn btn-secondary btn-sm" onclick="openEditClientModal()">
             {{ icon('edit-2', '14') }} Edit
         </button>
         {% if not client.is_default %}
-        <button class="btn btn-danger btn-sm"
+        <button name="Delete" class="btn btn-danger btn-sm"
                 onclick="confirmDeleteClient('{{ client.id }}', '{{ client.name }}')">
             {{ icon('trash-2', '14') }} Delete
         </button>
@@ -99,12 +99,12 @@
 </div>
 
 <!-- Edit Systems Modal -->
-<div id="edit-systems-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Systems Modal" id="edit-systems-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Systems — {{ client.name }}</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-systems-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -117,12 +117,12 @@
                     <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
                         <span>{{ sys.name }}{% if sys.classification %} <span class="badge badge-muted" style="font-size:0.6rem;">{{ sys.classification }}</span>{% endif %}</span>
                         <div style="display:flex;gap:0.25rem;">
-                            <button class="btn btn-ghost btn-sm"
+                            <button name="Move" class="btn btn-ghost btn-sm"
                                     onclick="document.getElementById('edit-systems-modal').style.display='none';openMoveSystemModal('{{ sys.id }}', '{{ sys.name }}')"
                                     style="padding:0.15rem 0.35rem;font-size:0.75rem;">
                                 {{ icon('arrow-right-left', '12') }} Move
                             </button>
-                            <button class="btn btn-ghost btn-sm text-danger"
+                            <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                     hx-delete="/api/management/clients/{{ client.id }}/systems/{{ sys.id }}"
                                     hx-target="#client-systems-section" hx-swap="innerHTML"
                                     hx-confirm="Remove '{{ sys.name }}' from this client?"
@@ -138,7 +138,7 @@
             <!-- Add system -->
             {% if available_systems %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/systems"
+            <form name="Submit Systems" hx-post="/api/management/clients/{{ client.id }}/systems"
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
@@ -149,13 +149,13 @@
                     <option value="{{ sys.id }}">{{ sys.name }}{% if sys.classification %} ({{ sys.classification }}){% endif %}</option>
                     {% endfor %}
                 </select>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add System</button>
+                <button name="Add System" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add System</button>
             </form>
             {% endif %}
             <!-- Move from another client -->
             {% if all_clients %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/move-from"
+            <form name="Submit Move From" hx-post="/api/management/clients/{{ client.id }}/move-from"
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
@@ -176,11 +176,11 @@
                     <input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);">
                     Also move associated baselines
                 </label>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
+                <button name="Move Here" type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
             </form>
             {% endif %}
             <div style="display:flex;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary btn-sm"
+                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
                         onclick="document.getElementById('edit-systems-modal').style.display='none'">Close</button>
             </div>
         </div>
@@ -188,15 +188,15 @@
 </div>
 
 <!-- Move System Modal (outside HTMX swap zone) -->
-<div id="move-system-modal" class="modal-overlay" style="display:none;"
+<div name="Move System Modal" id="move-system-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Move System to Another Client</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('move-system-modal').style.display='none'">&#x2715;</button>
         </div>
-        <form hx-post="/api/management/clients/{{ client.id }}/move-system"
+        <form name="Submit Move System" hx-post="/api/management/clients/{{ client.id }}/move-system"
               hx-target="#client-systems-section" hx-swap="innerHTML"
               style="display:flex;flex-direction:column;gap:1rem;"
               hx-on::before-request="if(event.detail.elt===this) document.getElementById('move-system-modal').style.display='none'">
@@ -228,21 +228,21 @@
                 </label>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('move-system-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move System</button>
+                <button name="Move System" type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move System</button>
             </div>
         </form>
     </div>
 </div>
 
 <!-- Edit Baselines Modal -->
-<div id="edit-baselines-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Baselines Modal" id="edit-baselines-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Baselines — {{ client.name }}</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-baselines-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -254,7 +254,7 @@
                     {% for bl in client_baselines %}
                     <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
                         <span>{{ bl.name }}</span>
-                        <button class="btn btn-ghost btn-sm text-danger"
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/baselines/{{ bl.id }}"
                                 hx-target="#client-baselines-section" hx-swap="innerHTML"
                                 hx-confirm="Remove '{{ bl.name }}' from this client?"
@@ -269,7 +269,7 @@
             <!-- Add baseline -->
             {% if available_baselines %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/baselines"
+            <form name="Submit Baselines" hx-post="/api/management/clients/{{ client.id }}/baselines"
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
@@ -280,13 +280,13 @@
                     <option value="{{ bl.id }}">{{ bl.name }}</option>
                     {% endfor %}
                 </select>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add Baseline</button>
+                <button name="Add Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Add Baseline</button>
             </form>
             {% endif %}
             <!-- Clone from another client -->
             {% if all_clients %}
             <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
-            <form hx-post="/api/management/clients/{{ client.id }}/clone-baseline"
+            <form name="Submit Clone Baseline" hx-post="/api/management/clients/{{ client.id }}/clone-baseline"
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   style="display:flex;flex-direction:column;gap:0.75rem;"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
@@ -303,11 +303,11 @@
                 <select name="baseline_id" id="edit-clone-baseline-select" class="form-input" required>
                     <option value="" disabled selected>Select a source client first&hellip;</option>
                 </select>
-                <button type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone Baseline</button>
+                <button name="Clone Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone Baseline</button>
             </form>
             {% endif %}
             <div style="display:flex;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary btn-sm"
+                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
                         onclick="document.getElementById('edit-baselines-modal').style.display='none'">Close</button>
             </div>
         </div>
@@ -315,24 +315,24 @@
 </div>
 
 <!-- Edit Client Modal -->
-<div id="edit-client-modal" class="modal-overlay" style="display:none;"
+<div name="Edit Client Modal" id="edit-client-modal" class="modal-overlay" style="display:none;"
      onclick="if(event.target===this) this.style.display='none'">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Edit Client</h3>
-            <button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
                     onclick="document.getElementById('edit-client-modal').style.display='none'">&#x2715;</button>
         </div>
         <form id="edit-client-form" onsubmit="return submitEditClient(event)"
               style="display:flex;flex-direction:column;gap:1rem;">
             <div>
                 <label for="edit-client-name" class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
-                <input type="text" id="edit-client-name" class="form-input" required maxlength="100"
+                <input name="Edit Client Name" type="text" id="edit-client-name" class="form-input" required maxlength="100"
                        value="{{ client.name }}">
             </div>
             <div>
                 <label class="form-label">Slug</label>
-                <input type="text" class="form-input" value="{{ client.slug }}" disabled
+                <input  name="Slug Input" type="text" class="form-input" value="{{ client.slug }}" disabled
                        style="opacity:0.6;">
             </div>
             <div>
@@ -340,9 +340,9 @@
                 <textarea id="edit-client-desc" class="form-input" rows="3">{{ client.description or '' }}</textarea>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button type="button" class="btn btn-secondary"
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         onclick="document.getElementById('edit-client-modal').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-primary">Save</button>
+                <button name="Save" type="submit" class="btn btn-primary">Save</button>
             </div>
         </form>
     </div>
@@ -350,7 +350,7 @@
 
 <!-- Role Templates (per-tenant permissions matrix) -->
 <div class="card card-padded card-mb" id="client-role-templates-card">
-    <div class="client-section-toggle"
+    <div  name="Role Templates Per-tenant" class="client-section-toggle"
          onclick="var b=document.getElementById('role-templates-body');var c=document.getElementById('role-templates-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
         <span class="client-list-item__icon">{% from "macros/icons.html" import icon %}{{ icon('lock', '14') }}</span>
         <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Role Templates</h2>
@@ -364,7 +364,7 @@
             Changes apply only to this tenant; users assigned the same role in another
             client will continue to use that client's template. ADMIN always has full access.
         </p>
-        <div id="client-role-templates"
+        <div name="Open Permissions" id="client-role-templates"
              hx-get="/api/management/clients/{{ client.id }}/permissions"
              hx-trigger="load"
              hx-swap="innerHTML">

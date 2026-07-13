@@ -1,5 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
-<div class="modal-overlay" onclick="if(event.target === this) this.remove()">
+<div   name="Dismiss Rule Form Modal" class="modal-overlay" onclick="if(event.target === this) this.remove()">
   <div class="modal-content rule-form-modal" style="max-width: 860px;">
     <style>
       .rule-form-modal .rule-accordion {
@@ -116,12 +116,12 @@
           {{ icon_text('plus-circle', modal_title) }}
         {% endif %}
       </h2>
-      <button type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()" title="Close">
+      <button name="✕" type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()" title="Close">
         <span style="font-size: 1.25rem; line-height: 1;">✕</span>
       </button>
     </div>
 
-    <form hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form">
+    <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form">
       <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
       <div class="rule-accordion-stack" style="display:flex; flex-direction:column; gap:0.75rem;">
         <details class="rule-accordion" open>
@@ -214,7 +214,7 @@
               <label>MITRE ATT&CK Techniques</label>
               <input type="hidden" id="rule-mitre-values" name="mitre_ids" value="{{ form_values.mitre_ids | join(', ') }}">
               <div id="mitre-builder" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
-              <button type="button" class="btn btn-secondary btn-sm" id="mitre-add-btn" style="margin-top:0.4rem;">{{ icon_text('plus-circle', 'Add technique', '14') }}</button>
+              <button name="Mitre Add Btn" type="button" class="btn btn-secondary btn-sm" id="mitre-add-btn" style="margin-top:0.4rem;">{{ icon_text('plus-circle', 'Add technique', '14') }}</button>
               <div class="rule-help">Choose a tactic first, then a technique. Add multiple pairs as needed.</div>
               {% if selected_tactics %}
                 <div class="rule-chip-row" aria-label="Selected MITRE tactics">
@@ -275,14 +275,14 @@
         <div id="rule-form-popup"
              style="display:none;align-self:center;margin-right:auto;padding:0.45rem 0.65rem;border-radius:8px;border:1px solid color-mix(in srgb, var(--color-danger) 55%, var(--color-border));background:color-mix(in srgb, var(--color-danger) 12%, var(--color-bg-surface));color:var(--color-danger);font-size:0.8rem;font-weight:600;">
         </div>
-        <button type="submit" class="btn btn-primary">
+        <button   name="Submit Rule Form" type="submit" class="btn btn-primary">
           {% if mode == 'edit' %}
             {{ icon_text('save', submit_label, '14') }}
           {% else %}
             {{ icon_text('plus-circle', submit_label, '14') }}
           {% endif %}
         </button>
-        <button type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+        <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
       </div>
     </form>
   </div>
