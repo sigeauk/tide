@@ -118,7 +118,7 @@
             <div class="actor-select-dropdown" id="source-dropdown">
                 <div class="actor-checkbox-list" id="source-checkbox-list">
                     {% for raw, label in sources %}
-                    <label class="actor-checkbox-item" data-name="{{ (actor.name or '') | lower }}">
+                    <label class="actor-checkbox-item" data-name="{{ (label or '') | lower }}">
                         <input
                             type="checkbox"
                             name="source_filter"

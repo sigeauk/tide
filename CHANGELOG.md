@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.6] - TBD
+
+### Fixed
+- **Home page layout** Increase logo size and centered, removed the title.
+- **Heatmap page now loads reliably.** Opening Heatmap no longer returns a 500 error when rendering the source filter list.
 
 ## [5.0.5] - 2026-07-13
 
@@ -986,7 +991,7 @@ This is a major release introducing full Cyber Threat Intelligence (CTI) ingest 
 
 ## [3.0.2] - 2026-03-01
 
-## Fixed
+### Fixed
 - **Kibana icon:** added the `shield-check` as the kibana icon. 
 
 ## [3.0.1] - 2026-03-01
@@ -1223,13 +1228,13 @@ This release represents a complete rewrite of the application frontend and backe
 ### Changed
 - Updated `sync.py` and `release.py` scripts
 
-## [1.2.3]
+## [1.2.3] - 2026-01-24
 
 ### Changed
 - Updated README
     - Removed icons
 
-## [1.2.2]
+## [1.2.2] - 2026-01-23
 
 ### Added
 - Add description to each page. 
@@ -1237,7 +1242,7 @@ This release represents a complete rewrite of the application frontend and backe
 ### Fixed
 - Title uniformity
 
-## [1.2.0]
+## [1.2.0] - 2026-01-22
 
 ### Added
 - Search for Threat actors by aliases
@@ -1246,7 +1251,7 @@ This release represents a complete rewrite of the application frontend and backe
 - Author not displaying on some cards
 - Pills on rule health now full width
 
-## [1.1.6]
+## [1.1.6] - 2026-01-21
 
 ### Fixed
 - Author not displaying on some cards
