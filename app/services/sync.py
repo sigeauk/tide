@@ -261,7 +261,7 @@ def _distribute_rules_to_tenants():
     return
 
 
-def run_mitre_sync():
+def run_mitre_sync(client_id: str | None = None):
     """Run the MITRE + OpenCTI threat-actor sync.
 
     Returns a structured dict (4.1.7 Phase C) with stable keys so the API
@@ -271,7 +271,7 @@ def run_mitre_sync():
     ``{ "status": "success"|"partial"|"failed",
         "total": int,                 # mitre_count + octi_count
         "mitre_count": int,           # actors loaded from local STIX files
-        "octi_count": int,            # actors loaded from OpenCTI instances
+        "octi_count": int,            # actors loaded from linked CTI connectors
         "mitre_files": int,           # *-attack.json files processed (>=0)
         "warnings": [str, ...],       # non-fatal: missing dir, empty source, etc
         "errors":   [str, ...],       # fatal-per-instance OpenCTI / STIX failures
@@ -370,17 +370,78 @@ def run_mitre_sync():
             result["mitre_files"] = mitre_files
             logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors across {mitre_files} file(s).")
 
-            # --- Phase 2: OpenCTI GraphQL actor sync (retired in 5.0.0) ---
-            # The legacy ``cti_helper.get_threat_landscape`` GraphQL pull
-            # has been removed. Threat-actor TTP coverage is now
-            # projected from STIX 2.1 data at CTI ingest time
-            # (``cti_ingest._project_actors_to_threat_landscape``), so
-            # the /threats and /heatmap pages always reflect whatever
-            # is in the per-tenant CTI database without an out-of-band
-            # GraphQL round trip. ``octi_count`` is kept as a stable
-            # response field at zero so existing dashboards / scripts
-            # that read it don't break.
+            # --- Phase 2: linked OpenCTI intrusion-set refresh (GraphQL) ---
+            # Threat Landscape only needs actor/intrusion-set coverage, not a
+            # full CTI object backfill. Running TAXII connector fetchers here
+            # can page through hundreds of thousands of objects and cause
+            # operator-facing timeout pain. Keep this path lightweight by
+            # using the historical intrusion-set GraphQL pull.
             octi_actors = 0
+            opencti_runs = 0
+            if client_id:
+                try:
+                    from urllib.parse import urlsplit, urlunsplit
+                    from app.database import save_threat_data
+
+                    def _graphql_from_taxii_root(taxii_root: str) -> str:
+                        root = (taxii_root or "").strip()
+                        if not root:
+                            return ""
+                        parts = urlsplit(root)
+                        path = parts.path or "/"
+                        marker = "/taxii2/"
+                        if marker in path:
+                            path = path.split(marker, 1)[0] or "/"
+                        if not path.endswith("/"):
+                            path += "/"
+                        base = urlunsplit((parts.scheme, parts.netloc, path.rstrip("/"), "", ""))
+                        return base.rstrip("/")
+
+                    for connector in db.list_cti_connectors(only_active=True) or []:
+                        vendor_name = str(connector.get("vendor") or "").strip().lower()
+                        if vendor_name != "opencti_taxii":
+                            continue
+
+                        linked_clients = db.get_cti_connector_clients(connector.get("id")) or []
+                        if not any(c.get("id") == client_id for c in linked_clients):
+                            continue
+
+                        cfg = connector.get("config") or {}
+                        token = (cfg.get("token") or "").strip()
+                        graphql_base = _graphql_from_taxii_root(cfg.get("taxii_root") or "")
+                        if not (graphql_base and token):
+                            result["warnings"].append(
+                                f"OpenCTI connector '{connector.get('label') or connector.get('id')}' "
+                                "is missing taxii_root or token."
+                            )
+                            continue
+
+                        opencti_runs += 1
+                        try:
+                            df_octi = cti_helper.get_threat_landscape(graphql_base, token)
+                            if df_octi is None or df_octi.empty:
+                                result["warnings"].append(
+                                    f"OpenCTI connector '{connector.get('label') or connector.get('id')}' returned no intrusion sets."
+                                )
+                                continue
+                            octi_actors += int(save_threat_data(df_octi) or 0)
+                        except Exception as exc:
+                            result["errors"].append(
+                                f"OpenCTI connector '{connector.get('label') or connector.get('id')}' intrusion-set sync failed: {exc}"
+                            )
+
+                    if opencti_runs == 0:
+                        result["warnings"].append(
+                            "No active OpenCTI connector linked to the active client."
+                        )
+                except Exception as exc:
+                    result["errors"].append(
+                        f"OpenCTI intrusion-set sync phase failed: {exc}"
+                    )
+            else:
+                result["warnings"].append(
+                    "Threat sync ran without active client context; skipped OpenCTI intrusion-set refresh."
+                )
 
             result["octi_count"] = octi_actors
             total = mitre_actors + octi_actors

@@ -382,7 +382,7 @@ _BOOTSTRAP_DDL: tuple[str, ...] = (
 # run on a fresh v2 file too.
 _ALTER_DDL: tuple[str, ...] = (
     "ALTER TABLE cti_egress_targets ADD COLUMN IF NOT EXISTS "
-    "kind VARCHAR NOT NULL DEFAULT 'elastic'",
+    "kind VARCHAR DEFAULT 'elastic'",
     "ALTER TABLE cti_egress_targets ADD COLUMN IF NOT EXISTS "
     "folder_path VARCHAR",
     "ALTER TABLE cti_egress_targets ADD COLUMN IF NOT EXISTS "
@@ -429,6 +429,26 @@ def _apply_schema(conn: duckdb.DuckDBPyConnection) -> None:
             conn.execute(stmt)
         except Exception as exc:  # pragma: no cover - older DuckDB fallbacks
             logger.debug("cti_database: ALTER skipped (%s): %s", stmt, exc)
+
+    # 5.0.6 hotfix: some long-lived tenant CTI files report schema v6 but
+    # still miss ``cti_egress_targets.kind`` because older DuckDB builds can
+    # reject ADD COLUMN with NOT NULL on populated tables. Keep this repair
+    # idempotent and permissive so every startup can heal drift safely.
+    try:
+        conn.execute(
+            "ALTER TABLE cti_egress_targets "
+            "ADD COLUMN IF NOT EXISTS kind VARCHAR"
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("cti_database: egress kind column repair skipped: %s", exc)
+    try:
+        conn.execute(
+            "UPDATE cti_egress_targets "
+            "SET kind = 'elastic' "
+            "WHERE kind IS NULL OR TRIM(kind) = ''"
+        )
+    except Exception as exc:  # pragma: no cover
+        logger.debug("cti_database: egress kind backfill skipped: %s", exc)
 
     current = conn.execute(
         "SELECT MAX(version) FROM cti_schema_version"

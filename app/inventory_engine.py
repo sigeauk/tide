@@ -3709,17 +3709,17 @@ def create_baseline_snapshot(
 
 
 def create_all_baseline_snapshots(
-    system_id: str, label: str, captured_by: str, captured_at=None,
+    system_id: str, label: str, captured_by: str, captured_at=None, client_id: str = None,
 ) -> List[Dict]:
     """Snapshot all baselines applied to a system with a shared timestamp."""
     from datetime import datetime as _dt
 
     ts = captured_at or _dt.utcnow()
-    all_baselines = get_system_baselines(system_id)
+    all_baselines = get_system_baselines(system_id, client_id=client_id)
     results = []
     for bl in all_baselines:
         snap = create_baseline_snapshot(
-            system_id, bl["playbook_id"], label, captured_by, captured_at=ts,
+            system_id, bl["playbook_id"], label, captured_by, captured_at=ts, client_id=client_id,
         )
         if snap:
             results.append(snap)

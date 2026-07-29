@@ -4,11 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.0.6] - TBD
+## [5.0.6] - 2026-07-29
 
 ### Fixed
 - **Home page layout** Increase logo size and centered, removed the title.
 - **Heatmap page now loads reliably.** Opening Heatmap no longer returns a 500 error when rendering the source filter list.
+- **System Details baseline snapshots now complete successfully.** Taking an all-baselines snapshot no longer fails with a 500 error.
+- **Client CTI connector panels now load reliably after upgrades.** Tenant CTI databases now self-repair missing egress target type metadata on startup, so linked connector and CTI target sections no longer fail on older tenant data files.
+- **Threat Landscape sync now refreshes linked CTI connectors for the active tenant.** Clicking Sync on Threat Landscape now runs MITRE plus the tenant's active linked CTI connectors (including OpenCTI TAXII), so actor coverage updates correctly on upgraded customer environments.
+- **Threat Landscape sync no longer times out on long CTI pulls.** Sync now runs as a background job with live polling, so large tenant connector refreshes complete without returning reverse-proxy 504 errors.
+- **Threat Landscape sync now targets OpenCTI intrusion sets only.** The Sync action now uses a lightweight OpenCTI GraphQL intrusion-set refresh for linked OpenCTI connectors instead of running full connector backfills, reducing runtime and avoiding long, clumsy CTI paging during threat coverage updates.
+- **Disabled APM no longer emits stray warning logs.** When `ELASTIC_APM_ENABLED=false`, TIDE now skips APM label and span helper calls entirely so Elastic APM library warnings do not appear without an active transaction.
 
 ## [5.0.5] - 2026-07-13
 

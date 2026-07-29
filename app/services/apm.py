@@ -5,12 +5,23 @@ from __future__ import annotations
 from contextlib import contextmanager, nullcontext
 import logging
 
+from app.config import get_settings
+
 try:
     import elasticapm
 except Exception:  # pragma: no cover
     elasticapm = None
 
 logger = logging.getLogger(__name__)
+
+
+def _apm_enabled() -> bool:
+    if elasticapm is None:
+        return False
+    try:
+        return bool(get_settings().elastic_apm_enabled)
+    except Exception:  # pragma: no cover
+        return False
 
 
 def _summarize_sql(statement: str) -> str:
@@ -26,7 +37,7 @@ def _summarize_sql(statement: str) -> str:
 @contextmanager
 def capture_duckdb_span(statement: str):
     """Capture a DuckDB query span when APM is enabled."""
-    if elasticapm is None:
+    if not _apm_enabled():
         yield
         return
     try:
@@ -45,7 +56,7 @@ def capture_duckdb_span(statement: str):
 
 def set_transaction_labels(**labels):
     """Attach transaction labels when APM is available."""
-    if elasticapm is None:
+    if not _apm_enabled():
         return
     clean_labels = {key: value for key, value in labels.items() if value is not None}
     if not clean_labels:

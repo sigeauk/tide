@@ -4,9 +4,10 @@ API routes for Threat Landscape page.
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
-from typing import Optional, List
+from typing import Optional, List, Any
 from dataclasses import dataclass
 import re
+import json
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 
@@ -15,6 +16,59 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/threats", tags=["threats"])
+
+
+def _build_threat_sync_toast(result: Any) -> tuple[str, str]:
+    """Return ``(toast_class, message)`` for a threat sync result payload."""
+    if isinstance(result, int):
+        result = {
+            "status": "success" if result > 0 else ("failed" if result < 0 else "partial"),
+            "total": max(result, 0),
+            "mitre_count": 0,
+            "octi_count": 0,
+            "warnings": [],
+            "errors": [],
+            "error": None,
+        }
+
+    status = (result or {}).get("status", "failed")
+    total = int((result or {}).get("total", 0) or 0)
+    mitre = int((result or {}).get("mitre_count", 0) or 0)
+    octi = int((result or {}).get("octi_count", 0) or 0)
+    errs = (result or {}).get("errors", []) or []
+    warns = (result or {}).get("warnings", []) or []
+
+    if status == "success":
+        toast_class = "toast-success"
+        msg = (f"Synced {total} threat actors "
+               f"({mitre} MITRE + {octi} CTI connector actors).")
+        if warns:
+            msg += f" {len(warns)} warning(s) - see logs."
+        return toast_class, msg
+
+    if status == "partial":
+        toast_class = "toast-warning"
+        first = errs[0] if errs else "see logs"
+        more = f" (+{len(errs) - 1} more)" if len(errs) > 1 else ""
+        msg = (
+            f"Partial sync: {total} actors loaded ({mitre} MITRE + {octi} "
+            f"CTI connector actors) but {len(errs)} source(s) failed. First error: "
+            f"{first}{more}"
+        )
+        return toast_class, msg
+
+    toast_class = "toast-error"
+    top = (result or {}).get("error")
+    if top:
+        msg = f"MITRE sync failed: {top}"
+    elif errs:
+        msg = f"MITRE sync failed: {errs[0]}"
+    else:
+        msg = (
+            "No threat data found. Check /opt/repos/mitre and linked "
+            "CTI connectors in Management."
+        )
+    return toast_class, msg
 
 # --- ISO COUNTRY MAPPING (for flag SVGs) ---
 ISO_MAP = {
@@ -252,76 +306,80 @@ async def sync_threats(
     request: Request,
     db: DbDep,
     user: RequireUser,
+    client_id: ActiveClient,
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
 ):
-    """Trigger a sync of threat intel from MITRE ATT&CK files and OpenCTI.
+    """Trigger a background Threat Landscape sync and return a polling badge.
 
-    Consumes the structured result dict from ``run_mitre_sync`` (4.1.7
-    Phase C) so the toast distinguishes full success, partial success
-    (some sources failed but others loaded), and total failure. Errors and
-    warnings are summarised inline and the full list is in the app log.
+    The previous implementation waited for the full sync in-request, which
+    can exceed reverse-proxy timeouts on large CTI connector pulls and return
+    504 even when the backend work continues. This endpoint now mirrors the
+    connector sync job pattern: submit quickly, poll job status via HTMX.
     """
-    import asyncio
-    import html as _html
     from app.services.sync import run_mitre_sync
+    from app.services import cti_jobs
 
-    try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, run_mitre_sync)
-    except Exception as e:
+    job_id = cti_jobs.submit(
+        kind="threat-sync",
+        runner=lambda: run_mitre_sync(client_id),
+        label="Threat Landscape",
+        client_id=client_id,
+    )
+
+    return HTMLResponse(
+        f'<span id="threat-sync-job-{job_id}" class="badge badge-info" '
+        f'hx-get="/api/threats/sync/jobs/{job_id}" '
+        f'hx-trigger="every 2s" '
+        f'hx-swap="outerHTML">Sync running...</span>'
+    )
+
+
+@router.get("/sync/jobs/{job_id}", response_class=HTMLResponse)
+def sync_threats_job_status(job_id: str, user: RequireUser):
+    """HTMX polling target for Threat Landscape sync jobs."""
+    import html as _html
+    from app.services import cti_jobs
+
+    target_id = f"threat-sync-job-{_html.escape(job_id)}"
+    job = cti_jobs.get(job_id)
+    if job is None:
         return HTMLResponse(
-            f'<div class="toast toast-error" onclick="this.remove()">'
-            f'Sync error: {_html.escape(str(e))}'
-            f'</div>'
+            '<div class="toast toast-warning" onclick="this.remove()">'
+            'Threat sync job is no longer tracked. Please run Sync again.</div>'
         )
 
-    # Backward-compat: legacy code paths that called run_mitre_sync and
-    # got an int still work; only the toast renderer needs the dict.
-    if isinstance(result, int):
+    status = job.get("status")
+    if status in (cti_jobs.JOB_STATUS_PENDING, cti_jobs.JOB_STATUS_RUNNING):
+        return HTMLResponse(
+            f'<span id="{target_id}" class="badge badge-info" '
+            f'hx-get="/api/threats/sync/jobs/{job_id}" '
+            f'hx-trigger="every 2s" '
+            f'hx-swap="outerHTML">Sync running...</span>'
+        )
+
+    if status == cti_jobs.JOB_STATUS_SUCCESS:
+        result = job.get("summary") or {}
+    else:
         result = {
-            "status": "success" if result > 0 else ("failed" if result < 0 else "partial"),
-            "total": max(result, 0), "mitre_count": 0, "octi_count": 0,
-            "warnings": [], "errors": [], "error": None,
+            "status": "failed",
+            "error": job.get("error") or "Unknown job failure",
+            "errors": [job.get("error") or "Unknown job failure"],
+            "warnings": [],
+            "total": 0,
+            "mitre_count": 0,
+            "octi_count": 0,
         }
 
-    status = result.get("status", "failed")
-    total = result.get("total", 0)
-    mitre = result.get("mitre_count", 0)
-    octi = result.get("octi_count", 0)
-    errs = result.get("errors", []) or []
-    warns = result.get("warnings", []) or []
-
-    if status == "success":
-        toast_class = "toast-success"
-        msg = (f"Synced {total} threat actors "
-               f"({mitre} MITRE + {octi} OpenCTI).")
-        if warns:
-            msg += f" {len(warns)} warning(s) \u2014 see logs."
-    elif status == "partial":
-        toast_class = "toast-warning"
-        first = errs[0] if errs else "see logs"
-        more = f" (+{len(errs) - 1} more)" if len(errs) > 1 else ""
-        msg = (
-            f"Partial sync: {total} actors loaded ({mitre} MITRE + {octi} "
-            f"OpenCTI) but {len(errs)} source(s) failed. First error: "
-            f"{first}{more}"
-        )
-    else:
-        toast_class = "toast-error"
-        top = result.get("error")
-        if top:
-            msg = f"MITRE sync failed: {top}"
-        elif errs:
-            msg = f"MITRE sync failed: {errs[0]}"
-        else:
-            msg = (
-                "No threat data found. Check /opt/repos/mitre and any "
-                "linked OpenCTI instances in Management."
-            )
+    toast_class, msg = _build_threat_sync_toast(result)
+    headers = {}
+    sync_status = (result or {}).get("status")
+    if sync_status in ("success", "partial"):
+        headers["HX-Trigger"] = json.dumps({"refreshThreats": True})
 
     return HTMLResponse(
         f'<div class="toast {toast_class}" onclick="this.remove()">'
         f'{_html.escape(msg)}'
-        f'</div>'
+        f'</div>',
+        headers=headers,
     )
