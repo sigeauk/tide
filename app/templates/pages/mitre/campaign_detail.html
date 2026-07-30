@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}{{ campaign.id }} - MITRE Campaign | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ campaign.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/campaigns">Back to Campaigns</a>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1rem;align-items:flex-start;">
+    <div style="flex:1 1 520px;min-width:280px;">
+        <h2 class="section-title">Description</h2>
+        <div class="md-content" style="margin-top:0.5rem;">{{ (campaign.description or 'No description available.') | md }}</div>
+    </div>
+
+    <aside class="card card-padded" style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
+        <h2 class="section-title">Details</h2>
+        <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+            <div><strong>ID:</strong> {{ campaign.id }}</div>
+            <div><strong>First Seen:</strong> {{ campaign.first_seen[:10] if campaign.first_seen else 'N/A' }}</div>
+            <div><strong>Last Seen:</strong> {{ campaign.last_seen[:10] if campaign.last_seen else 'N/A' }}</div>
+        </div>
+    </aside>
+</div>
+
+{% if campaign.groups %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Groups</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for group in campaign.groups %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ group.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ group.url }}">{{ group.name }}</a></div>
+                {% if group.description %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ group.description | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if campaign.techniques %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Techniques Used</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for technique in campaign.techniques %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ technique.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                {% if technique.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.use | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if campaign.software %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Software Used</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for item in campaign.software %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ item.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ item.url }}">{{ item.name }}</a></div>
+                <div class="cve-card-item__meta"><span>{{ item.software_type }}</span></div>
+                {% if item.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ item.use | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

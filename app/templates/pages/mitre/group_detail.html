@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+
+{% block title %}{{ group.id }} - MITRE Group | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ group.id }} - {{ group.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/groups">Back to Groups</a>
+</div>
+
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Description</h2>
+    <div class="md-content" style="margin-top:0.5rem;">{{ (group.description or 'No description available.') | md }}</div>
+    {% if group.aliases %}
+    <p style="margin-top:0.5rem;"><strong>Aliases:</strong> {{ group.aliases }}</p>
+    {% endif %}
+</section>
+
+{% if group.techniques %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Techniques Used By This Group</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for technique in group.techniques %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ technique.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.use | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if group.campaigns %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Campaigns</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for campaign in group.campaigns %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ campaign.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ campaign.url }}">{{ campaign.name }}</a></div>
+                {% if campaign.description %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ campaign.description | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if group.software %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Software</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for software in group.software %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ software.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ software.url }}">{{ software.name }}</a></div>
+                <div class="cve-card-item__meta"><span>{{ software.software_type }}</span></div>
+                {% if software.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ software.use | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if group.tactics %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Tactics</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for tactic in group.tactics %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ tactic.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ tactic.url }}">{{ tactic.name }}</a></div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if group.mitigations %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Mitigations</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for mitigation in group.mitigations %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ mitigation.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ mitigation.url }}">{{ mitigation.name }}</a></div>
+                {% if mitigation.description %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ mitigation.description | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

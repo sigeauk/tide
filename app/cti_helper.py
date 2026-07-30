@@ -5,6 +5,14 @@ import pandas as pd
 import re
 from log import log_info, log_error, log_debug
 
+MITRE_REF_SOURCES = {
+    "mitre-attack",
+    "mitre-attack-mobile",
+    "mitre-attack-ics",
+    "mitre-mobile-attack",
+    "mitre-ics-attack",
+}
+
 # --- ISO COUNTRY MAPPING ---
 ISO_MAP = {
     "RU": "ru", "RUSSIA": "ru", "RUSSIAN": "ru", "USSR": "ru",
@@ -47,6 +55,26 @@ def get_iso_code(text):
         if re.search(pattern, text_search):
             return ISO_MAP[keyword]
     return None
+
+
+def _mitre_external_id(stix_obj, prefix):
+    """Return first MITRE external_id that starts with prefix."""
+    for ref in stix_obj.get("external_references", []) or []:
+        source_name = (ref.get("source_name") or "").lower()
+        external_id = (ref.get("external_id") or "").strip().upper()
+        if source_name in MITRE_REF_SOURCES and external_id.startswith(prefix):
+            return external_id
+    return None
+
+
+def _mitre_ref_url(stix_obj):
+    """Return first MITRE URL from external references."""
+    for ref in stix_obj.get("external_references", []) or []:
+        source_name = (ref.get("source_name") or "").lower()
+        url = (ref.get("url") or "").strip()
+        if source_name in MITRE_REF_SOURCES and url:
+            return url
+    return ""
 
 # --- MITRE / STIX FETCHERS ---
 
@@ -172,33 +200,292 @@ def process_mitre_definitions(bundle_data):
     Extracts technique definitions. 
     Maintains RAW slug format (e.g. 'defense-evasion') so UI maps work correctly.
     """
-    definitions = []
-    if not bundle_data or 'objects' not in bundle_data:
+    knowledge = process_mitre_knowledge(bundle_data)
+    techniques = knowledge.get("techniques", pd.DataFrame())
+    if techniques.empty:
         return pd.DataFrame()
-        
-    for obj in bundle_data['objects']:
-        if obj.get('type') == 'attack-pattern':
-            mitre_id = ""
-            for ext_ref in obj.get('external_references', []):
-                if ext_ref.get('source_name') == 'mitre-attack':
-                    mitre_id = ext_ref.get('external_id')
-                    break
-            
-            if mitre_id:
-                # Get raw tactic slug (e.g., 'defense-evasion')
-                # We do NOT convert to Title Case here, because heatmap.py expects the slug.
-                raw_tactic = 'unknown'
-                if obj.get('kill_chain_phases'):
-                    raw_tactic = obj.get('kill_chain_phases')[0].get('phase_name', 'unknown')
+    return techniques[["technique_id", "technique_name", "tactic", "url"]].copy()
 
-                definitions.append({
-                    "technique_id": mitre_id,
-                    "technique_name": obj.get('name'),
-                    "tactic": raw_tactic, 
-                    "url": f"https://attack.mitre.org/techniques/{mitre_id}"
-                })
-                
-    return pd.DataFrame(definitions)
+
+def process_mitre_knowledge(bundle_data, source_name="unknown"):
+    """Extract MITRE entities and edges required for offline ATT&CK pages."""
+    if not bundle_data or "objects" not in bundle_data:
+        return {
+            "techniques": pd.DataFrame(),
+            "tactics": pd.DataFrame(),
+            "groups": pd.DataFrame(),
+            "mitigations": pd.DataFrame(),
+            "software": pd.DataFrame(),
+            "campaigns": pd.DataFrame(),
+            "group_techniques": pd.DataFrame(),
+            "group_software": pd.DataFrame(),
+            "technique_tactics": pd.DataFrame(),
+            "technique_mitigations": pd.DataFrame(),
+            "software_techniques": pd.DataFrame(),
+            "campaign_techniques": pd.DataFrame(),
+            "campaign_software": pd.DataFrame(),
+            "campaign_groups": pd.DataFrame(),
+        }
+
+    domain = str(source_name or "unknown").strip().lower()
+    objects = bundle_data.get("objects") or []
+
+    tactics_by_stix = {}
+    tactics_by_shortname = {}
+    techniques_by_stix = {}
+    groups_by_stix = {}
+    mitigations_by_stix = {}
+    software_by_stix = {}
+    campaigns_by_stix = {}
+    relationships = []
+
+    for obj in objects:
+        obj_type = obj.get("type")
+        obj_id = obj.get("id")
+        if not obj_id:
+            continue
+        if obj.get("revoked") is True or obj.get("x_mitre_deprecated") is True:
+            continue
+
+        if obj_type == "x-mitre-tactic":
+            tactic_id = _mitre_external_id(obj, "TA")
+            shortname = (obj.get("x_mitre_shortname") or "").strip().lower()
+            if tactic_id:
+                tactic_row = {
+                    "stix_id": obj_id,
+                    "tactic_id": tactic_id,
+                    "name": obj.get("name") or tactic_id,
+                    "shortname": shortname,
+                    "description": obj.get("description") or "",
+                    "domain": domain,
+                    "url": f"/mitre/tactic?id={tactic_id}",
+                }
+                tactics_by_stix[obj_id] = tactic_row
+                if shortname:
+                    tactics_by_shortname[shortname] = tactic_row
+
+        elif obj_type == "attack-pattern":
+            technique_id = _mitre_external_id(obj, "T")
+            if technique_id:
+                kill_chain_phases = [
+                    (phase.get("phase_name") or "").strip().lower()
+                    for phase in (obj.get("kill_chain_phases") or [])
+                    if (phase.get("kill_chain_name") or "").strip().lower() == "mitre-attack"
+                ]
+                techniques_by_stix[obj_id] = {
+                    "stix_id": obj_id,
+                    "technique_id": technique_id,
+                    "technique_name": obj.get("name") or technique_id,
+                    "description": obj.get("description") or "",
+                    "is_subtechnique": bool(obj.get("x_mitre_is_subtechnique", False)),
+                    "kill_chain_phases": kill_chain_phases,
+                    "domain": domain,
+                    "url": f"/mitre/technique/{technique_id}",
+                }
+
+        elif obj_type == "intrusion-set":
+            group_id = _mitre_external_id(obj, "G")
+            if group_id:
+                groups_by_stix[obj_id] = {
+                    "stix_id": obj_id,
+                    "group_id": group_id,
+                    "name": obj.get("name") or group_id,
+                    "aliases": ", ".join(obj.get("aliases", []) or []),
+                    "description": obj.get("description") or "",
+                    "domain": domain,
+                    "url": f"/mitre/groups/{group_id}",
+                }
+
+        elif obj_type == "course-of-action":
+            mitigation_id = _mitre_external_id(obj, "M")
+            if mitigation_id:
+                mitigations_by_stix[obj_id] = {
+                    "stix_id": obj_id,
+                    "mitigation_id": mitigation_id,
+                    "name": obj.get("name") or mitigation_id,
+                    "description": obj.get("description") or "",
+                    "domain": domain,
+                    "url": _mitre_ref_url(obj),
+                }
+
+        elif obj_type in {"malware", "tool"}:
+            software_id = _mitre_external_id(obj, "S")
+            if software_id:
+                software_by_stix[obj_id] = {
+                    "stix_id": obj_id,
+                    "software_id": software_id,
+                    "name": obj.get("name") or software_id,
+                    "description": obj.get("description") or "",
+                    "software_type": str(obj_type or "").upper(),
+                    "platforms": ", ".join(obj.get("x_mitre_platforms", []) or []),
+                    "domain": domain,
+                    "url": f"/mitre/software/{software_id}",
+                }
+
+        elif obj_type == "campaign":
+            campaign_id = _mitre_external_id(obj, "C")
+            if campaign_id:
+                campaigns_by_stix[obj_id] = {
+                    "stix_id": obj_id,
+                    "campaign_id": campaign_id,
+                    "name": obj.get("name") or campaign_id,
+                    "description": obj.get("description") or "",
+                    "first_seen": (obj.get("first_seen") or ""),
+                    "last_seen": (obj.get("last_seen") or ""),
+                    "domain": domain,
+                    "url": f"/mitre/campaigns/{campaign_id}",
+                }
+
+        elif obj_type == "relationship":
+            relationships.append(obj)
+
+    technique_tactics = []
+    for technique in techniques_by_stix.values():
+        for shortname in technique.get("kill_chain_phases", []):
+            tactic = tactics_by_shortname.get(shortname)
+            if not tactic:
+                continue
+            technique_tactics.append({
+                "technique_stix_id": technique["stix_id"],
+                "tactic_stix_id": tactic["stix_id"],
+                "technique_id": technique["technique_id"],
+                "tactic_id": tactic["tactic_id"],
+                "domain": domain,
+            })
+
+    group_techniques = []
+    group_software = []
+    technique_mitigations = []
+    software_techniques = []
+    campaign_techniques = []
+    campaign_software = []
+    campaign_groups = []
+    group_associations = []
+    for rel in relationships:
+        rel_type = (rel.get("relationship_type") or "").strip().lower()
+        source_ref = rel.get("source_ref")
+        target_ref = rel.get("target_ref")
+        rel_desc = (rel.get("description") or "").strip()
+        if rel_type == "uses" and source_ref in groups_by_stix and target_ref in techniques_by_stix:
+            group = groups_by_stix[source_ref]
+            technique = techniques_by_stix[target_ref]
+            group_techniques.append({
+                "group_stix_id": group["stix_id"],
+                "technique_stix_id": technique["stix_id"],
+                "group_id": group["group_id"],
+                "technique_id": technique["technique_id"],
+                "domain": domain,
+                "use_description": rel_desc,
+            })
+        elif rel_type == "uses" and source_ref in groups_by_stix and target_ref in software_by_stix:
+            group = groups_by_stix[source_ref]
+            software = software_by_stix[target_ref]
+            group_software.append({
+                "group_stix_id": group["stix_id"],
+                "software_stix_id": software["stix_id"],
+                "group_id": group["group_id"],
+                "software_id": software["software_id"],
+                "domain": domain,
+                "use_description": rel_desc,
+            })
+        elif rel_type == "mitigates" and source_ref in mitigations_by_stix and target_ref in techniques_by_stix:
+            mitigation = mitigations_by_stix[source_ref]
+            technique = techniques_by_stix[target_ref]
+            technique_mitigations.append({
+                "technique_stix_id": technique["stix_id"],
+                "mitigation_stix_id": mitigation["stix_id"],
+                "technique_id": technique["technique_id"],
+                "mitigation_id": mitigation["mitigation_id"],
+                "domain": domain,
+            })
+        elif rel_type == "uses" and source_ref in software_by_stix and target_ref in techniques_by_stix:
+            software = software_by_stix[source_ref]
+            technique = techniques_by_stix[target_ref]
+            software_techniques.append({
+                "software_stix_id": software["stix_id"],
+                "technique_stix_id": technique["stix_id"],
+                "software_id": software["software_id"],
+                "technique_id": technique["technique_id"],
+                "domain": domain,
+                "use_description": rel_desc,
+            })
+        elif rel_type == "uses" and source_ref in campaigns_by_stix and target_ref in techniques_by_stix:
+            campaign = campaigns_by_stix[source_ref]
+            technique = techniques_by_stix[target_ref]
+            campaign_techniques.append({
+                "campaign_stix_id": campaign["stix_id"],
+                "technique_stix_id": technique["stix_id"],
+                "campaign_id": campaign["campaign_id"],
+                "technique_id": technique["technique_id"],
+                "domain": domain,
+                "use_description": rel_desc,
+            })
+        elif rel_type == "uses" and source_ref in campaigns_by_stix and target_ref in software_by_stix:
+            campaign = campaigns_by_stix[source_ref]
+            software = software_by_stix[target_ref]
+            campaign_software.append({
+                "campaign_stix_id": campaign["stix_id"],
+                "software_stix_id": software["stix_id"],
+                "campaign_id": campaign["campaign_id"],
+                "software_id": software["software_id"],
+                "domain": domain,
+                "use_description": rel_desc,
+            })
+        elif rel_type in {"attributed-to", "uses"} and source_ref in campaigns_by_stix and target_ref in groups_by_stix:
+            campaign = campaigns_by_stix[source_ref]
+            group = groups_by_stix[target_ref]
+            campaign_groups.append({
+                "campaign_stix_id": campaign["stix_id"],
+                "group_stix_id": group["stix_id"],
+                "campaign_id": campaign["campaign_id"],
+                "group_id": group["group_id"],
+                "domain": domain,
+                "description": rel_desc,
+            })
+        elif rel_type in {"related-to", "attributed-to"} and source_ref in groups_by_stix and target_ref in groups_by_stix:
+            src_group = groups_by_stix[source_ref]
+            dst_group = groups_by_stix[target_ref]
+            group_associations.append({
+                "group_stix_id": src_group["stix_id"],
+                "associated_group_stix_id": dst_group["stix_id"],
+                "group_id": src_group["group_id"],
+                "associated_group_id": dst_group["group_id"],
+                "domain": domain,
+                "description": rel_desc,
+            })
+
+    techniques_rows = []
+    for technique in techniques_by_stix.values():
+        tactics = technique.get("kill_chain_phases") or []
+        primary_tactic = tactics[0] if tactics else "unknown"
+        techniques_rows.append({
+            "stix_id": technique["stix_id"],
+            "technique_id": technique["technique_id"],
+            "technique_name": technique["technique_name"],
+            "description": technique["description"],
+            "is_subtechnique": technique["is_subtechnique"],
+            "tactic": primary_tactic,
+            "domain": domain,
+            "url": technique["url"],
+        })
+
+    return {
+        "techniques": pd.DataFrame(techniques_rows),
+        "tactics": pd.DataFrame(list(tactics_by_stix.values())),
+        "groups": pd.DataFrame(list(groups_by_stix.values())),
+        "mitigations": pd.DataFrame(list(mitigations_by_stix.values())),
+        "software": pd.DataFrame(list(software_by_stix.values())),
+        "campaigns": pd.DataFrame(list(campaigns_by_stix.values())),
+        "group_techniques": pd.DataFrame(group_techniques),
+        "group_software": pd.DataFrame(group_software),
+        "technique_tactics": pd.DataFrame(technique_tactics),
+        "technique_mitigations": pd.DataFrame(technique_mitigations),
+        "software_techniques": pd.DataFrame(software_techniques),
+        "campaign_techniques": pd.DataFrame(campaign_techniques),
+        "campaign_software": pd.DataFrame(campaign_software),
+        "campaign_groups": pd.DataFrame(campaign_groups),
+        "group_associations": pd.DataFrame(group_associations),
+    }
 
 def get_threat_landscape(api_url, api_token):
     """

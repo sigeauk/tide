@@ -19,20 +19,20 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 MITRE_TACTIC_MAP = {
-    "Reconnaissance": {"id": "TA0043", "reference": "https://attack.mitre.org/tactics/TA0043/"},
-    "Resource Development": {"id": "TA0042", "reference": "https://attack.mitre.org/tactics/TA0042/"},
-    "Initial Access": {"id": "TA0001", "reference": "https://attack.mitre.org/tactics/TA0001/"},
-    "Execution": {"id": "TA0002", "reference": "https://attack.mitre.org/tactics/TA0002/"},
-    "Persistence": {"id": "TA0003", "reference": "https://attack.mitre.org/tactics/TA0003/"},
-    "Privilege Escalation": {"id": "TA0004", "reference": "https://attack.mitre.org/tactics/TA0004/"},
-    "Defense Evasion": {"id": "TA0005", "reference": "https://attack.mitre.org/tactics/TA0005/"},
-    "Credential Access": {"id": "TA0006", "reference": "https://attack.mitre.org/tactics/TA0006/"},
-    "Discovery": {"id": "TA0007", "reference": "https://attack.mitre.org/tactics/TA0007/"},
-    "Lateral Movement": {"id": "TA0008", "reference": "https://attack.mitre.org/tactics/TA0008/"},
-    "Collection": {"id": "TA0009", "reference": "https://attack.mitre.org/tactics/TA0009/"},
-    "Exfiltration": {"id": "TA0010", "reference": "https://attack.mitre.org/tactics/TA0010/"},
-    "Command And Control": {"id": "TA0011", "reference": "https://attack.mitre.org/tactics/TA0011/"},
-    "Impact": {"id": "TA0040", "reference": "https://attack.mitre.org/tactics/TA0040/"},
+    "Reconnaissance": {"id": "TA0043", "reference": "/mitre/tactic?id=TA0043"},
+    "Resource Development": {"id": "TA0042", "reference": "/mitre/tactic?id=TA0042"},
+    "Initial Access": {"id": "TA0001", "reference": "/mitre/tactic?id=TA0001"},
+    "Execution": {"id": "TA0002", "reference": "/mitre/tactic?id=TA0002"},
+    "Persistence": {"id": "TA0003", "reference": "/mitre/tactic?id=TA0003"},
+    "Privilege Escalation": {"id": "TA0004", "reference": "/mitre/tactic?id=TA0004"},
+    "Defense Evasion": {"id": "TA0005", "reference": "/mitre/tactic?id=TA0005"},
+    "Credential Access": {"id": "TA0006", "reference": "/mitre/tactic?id=TA0006"},
+    "Discovery": {"id": "TA0007", "reference": "/mitre/tactic?id=TA0007"},
+    "Lateral Movement": {"id": "TA0008", "reference": "/mitre/tactic?id=TA0008"},
+    "Collection": {"id": "TA0009", "reference": "/mitre/tactic?id=TA0009"},
+    "Exfiltration": {"id": "TA0010", "reference": "/mitre/tactic?id=TA0010"},
+    "Command And Control": {"id": "TA0011", "reference": "/mitre/tactic?id=TA0011"},
+    "Impact": {"id": "TA0040", "reference": "/mitre/tactic?id=TA0040"},
 }
 
 

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tactic.id }} - MITRE Tactic | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ tactic.id }} - {{ tactic.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/tactic">Back to Tactics</a>
+</div>
+
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Description</h2>
+    <div class="md-content" style="margin-top:0.5rem;">{{ (tactic.description or 'No description available.') | md }}</div>
+</section>
+
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Techniques</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for technique in tactic.techniques %}
+        {% if technique.is_subtechnique %}
+        <div class="cve-card-item cve-card-item--available" style="margin-left:1.2rem;border-left-width:4px;">
+        {% else %}
+        <div class="cve-card-item cve-card-item--available">
+        {% endif %}
+            <div class="cve-card-item__id">
+                <a href="{{ technique.url }}">{{ technique.id }}</a>
+                {% if technique.is_subtechnique %}<span class="text-muted">Sub-technique</span>{% endif %}
+                {% if technique.parent_id %}<span class="text-muted">of {{ technique.parent_id }}</span>{% endif %}
+            </div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}

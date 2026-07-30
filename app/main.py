@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api, mitre as mitre_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -204,6 +204,22 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
+
+    # Build-time style MITRE KB refresh: load local ATT&CK files once on
+    # startup when source files change. This is intentionally decoupled from
+    # runtime threat sync actions.
+    try:
+        from app.services.mitre_kb import load_mitre_kb_from_files
+        mitre_state = load_mitre_kb_from_files(force=False)
+        logger.info(
+            "MITRE KB startup load: updated=%s files=%s errors=%s reason=%s",
+            mitre_state.get("updated"),
+            mitre_state.get("processed_files"),
+            len(mitre_state.get("errors") or []),
+            mitre_state.get("reason"),
+        )
+    except Exception as _mitre_exc:
+        logger.error("MITRE KB startup load failed: %s", _mitre_exc, exc_info=True)
 
     # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
     # ``cti_connectors`` has been retired. It was useful for the 4.1.20
@@ -619,6 +635,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/sigma": "page:sigma",
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
+        "/mitre": "page:threats",
         "/cti/indicators": "page:cti_indicators",
         "/cti/actors": "page:cti_actors",
         "/cti/reports": "page:cti_reports",
@@ -1130,12 +1147,35 @@ def create_app() -> FastAPI:
 
     # --- Markdown filter for description fields ---
     import markdown as _md_lib
+    import re as _re
 
     def md_filter(text: str) -> Markup:
         """Convert Markdown text to safe HTML."""
         if not text:
             return Markup("")
         html = _md_lib.markdown(str(text), extensions=["extra", "nl2br", "sane_lists"])
+
+        def _rewrite_attack_href(match) -> str:
+            kind = (match.group(1) or "").lower()
+            raw_id = (match.group(2) or "").strip("/")
+            route_map = {
+                "techniques": "technique",
+                "groups": "groups",
+                "tactics": "tactic",
+                "software": "software",
+                "campaigns": "campaigns",
+                "mitigations": "mitigations",
+            }
+            route = route_map.get(kind, kind)
+            if kind == "techniques":
+                raw_id = raw_id.replace("/", ".")
+            return f'href="/mitre/{route}/{raw_id.upper()}"'
+
+        html = _re.sub(
+            r'href=["\']https?://attack\.mitre\.org/(techniques|groups|tactics|software|campaigns|mitigations)/([^"\'#?]+)[^"\']*["\']',
+            _rewrite_attack_href,
+            html,
+        )
         return Markup(html)
 
     templates.env.filters["md"] = md_filter
@@ -1328,6 +1368,7 @@ def create_app() -> FastAPI:
     app.include_router(management_api.router)
     app.include_router(quest_api.router)
     app.include_router(cti_api.router)
+    app.include_router(mitre_api.router)
     
     # --- HEALTH CHECK ---
     
@@ -1741,6 +1782,314 @@ def create_app() -> FastAPI:
                 "sources": sources,
                 "last_sync_time": get_last_sync_time(),
             }
+        )
+
+    @app.get("/mitre", response_class=HTMLResponse)
+    def mitre_index_page(request: Request, user: CurrentUser, db: DbDep):
+        return RedirectResponse(url="/mitre/tactic", status_code=307)
+
+    @app.get("/mitre/tactic", response_class=HTMLResponse)
+    def mitre_tactics_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        tactics = db.list_mitre_tactics(domain="enterprise")
+        return render_template(
+            "pages/mitre/tactic.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "tactic",
+                "tactics": tactics,
+            },
+        )
+
+    @app.get("/mitre/tactic/{tactic_id}", response_class=HTMLResponse)
+    def mitre_tactic_detail_page(
+        request: Request,
+        tactic_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_tactic_detail(tactic_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Tactic Not Found",
+                    "message": f"No MITRE tactic found for {tactic_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/tactic_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "tactic",
+                "tactic": detail,
+            },
+        )
+
+    @app.get("/mitre/technique", response_class=HTMLResponse)
+    def mitre_techniques_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        q: str = "",
+        tactic: str = "",
+    ):
+        techniques = db.list_mitre_techniques(
+            search=q or None,
+            tactic_id=tactic or None,
+            domain="enterprise",
+        )
+        return render_template(
+            "pages/mitre/techniques.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "technique",
+                "techniques": techniques,
+                "tactic_filter": tactic,
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/technique/{technique_id}", response_class=HTMLResponse)
+    def mitre_technique_detail_page(
+        request: Request,
+        technique_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_technique_detail(technique_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Technique Not Found",
+                    "message": f"No MITRE technique found for {technique_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/technique_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "technique",
+                "technique": detail,
+            },
+        )
+
+    @app.get("/mitre/groups", response_class=HTMLResponse)
+    def mitre_groups_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        q: str = "",
+    ):
+        groups = db.list_mitre_groups(search=q or None, domain="enterprise")
+        return render_template(
+            "pages/mitre/groups.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "groups",
+                "groups": groups,
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/groups/{group_id}", response_class=HTMLResponse)
+    def mitre_group_detail_page(
+        request: Request,
+        group_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_group_detail(group_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Group Not Found",
+                    "message": f"No MITRE group found for {group_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/group_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "groups",
+                "group": detail,
+            },
+        )
+
+    @app.get("/mitre/software", response_class=HTMLResponse)
+    def mitre_software_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        q: str = "",
+    ):
+        software = db.list_mitre_software(search=q or None, domain="enterprise")
+        return render_template(
+            "pages/mitre/software.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "software",
+                "software": software,
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/software/{software_id}", response_class=HTMLResponse)
+    def mitre_software_detail_page(
+        request: Request,
+        software_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_software_detail(software_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Software Not Found",
+                    "message": f"No MITRE software found for {software_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/software_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "software",
+                "software": detail,
+            },
+        )
+
+    @app.get("/mitre/campaigns", response_class=HTMLResponse)
+    def mitre_campaigns_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        q: str = "",
+    ):
+        campaigns = db.list_mitre_campaigns(search=q or None, domain="enterprise")
+        return render_template(
+            "pages/mitre/campaigns.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "campaigns",
+                "campaigns": campaigns,
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/campaigns/{campaign_id}", response_class=HTMLResponse)
+    def mitre_campaign_detail_page(
+        request: Request,
+        campaign_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_campaign_detail(campaign_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Campaign Not Found",
+                    "message": f"No MITRE campaign found for {campaign_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/campaign_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "campaigns",
+                "campaign": detail,
+            },
+        )
+
+    @app.get("/mitre/mitigations", response_class=HTMLResponse)
+    def mitre_mitigations_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        q: str = "",
+    ):
+        mitigations = db.list_mitre_mitigations(search=q or None, domain="enterprise")
+        return render_template(
+            "pages/mitre/mitigations.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "mitigations",
+                "mitigations": mitigations,
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/mitigations/{mitigation_id}", response_class=HTMLResponse)
+    def mitre_mitigation_detail_page(
+        request: Request,
+        mitigation_id: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_mitre_mitigation_detail(mitigation_id, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "title": "Mitigation Not Found",
+                    "message": f"No MITRE mitigation found for {mitigation_id}.",
+                },
+            )
+        return render_template(
+            "pages/mitre/mitigation_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "mitigations",
+                "mitigation": detail,
+            },
         )
     
     @app.get("/promotion", response_class=HTMLResponse)

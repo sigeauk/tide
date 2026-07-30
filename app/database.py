@@ -430,13 +430,14 @@ def save_mitre_definitions(df):
     if df.empty: return
     conn = get_connection(read_only=False)
     try:
+        _ensure_mitre_kb_schema(conn)
         df.columns = [c.lower().strip() for c in df.columns]
         
         # --- CRITICAL FIX 1: Map helper columns to DB columns ---
         renames = {'technique_id': 'id', 'technique_name': 'name'}
         df.rename(columns=renames, inplace=True)
         
-        target_cols = ['id', 'name', 'tactic', 'url']
+        target_cols = ['id', 'name', 'tactic', 'url', 'stix_id', 'description', 'is_subtechnique', 'domain']
         df_final = ensure_columns(df, target_cols)
         
         conn.register('mitre_source', df_final)
@@ -447,10 +448,335 @@ def save_mitre_definitions(df):
             SELECT id, name, tactic, url FROM mitre_source
             ON CONFLICT (id) DO UPDATE SET 
                 name = EXCLUDED.name,
-                tactic = EXCLUDED.tactic 
+                tactic = EXCLUDED.tactic,
+                url = EXCLUDED.url
         """)
     except Exception as e:
         log_error(f"Save MITRE Defs Failed: {e}")
+    finally:
+        conn.close()
+
+
+def _ensure_mitre_kb_schema(conn):
+    """Create offline MITRE KB tables used by /mitre pages."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_tactics (
+            stix_id VARCHAR PRIMARY KEY,
+            tactic_id VARCHAR,
+            name VARCHAR,
+            shortname VARCHAR,
+            description VARCHAR,
+            domain VARCHAR,
+            url VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_groups (
+            stix_id VARCHAR PRIMARY KEY,
+            group_id VARCHAR,
+            name VARCHAR,
+            aliases VARCHAR,
+            description VARCHAR,
+            domain VARCHAR,
+            url VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_mitigations (
+            stix_id VARCHAR PRIMARY KEY,
+            mitigation_id VARCHAR,
+            name VARCHAR,
+            description VARCHAR,
+            domain VARCHAR,
+            url VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_software (
+            stix_id VARCHAR PRIMARY KEY,
+            software_id VARCHAR,
+            name VARCHAR,
+            description VARCHAR,
+            software_type VARCHAR,
+            platforms VARCHAR,
+            domain VARCHAR,
+            url VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_campaigns (
+            stix_id VARCHAR PRIMARY KEY,
+            campaign_id VARCHAR,
+            name VARCHAR,
+            description VARCHAR,
+            first_seen VARCHAR,
+            last_seen VARCHAR,
+            domain VARCHAR,
+            url VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_group_techniques (
+            group_stix_id VARCHAR,
+            technique_stix_id VARCHAR,
+            group_id VARCHAR,
+            technique_id VARCHAR,
+            domain VARCHAR,
+            use_description VARCHAR,
+            PRIMARY KEY (group_stix_id, technique_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_technique_tactics (
+            technique_stix_id VARCHAR,
+            tactic_stix_id VARCHAR,
+            technique_id VARCHAR,
+            tactic_id VARCHAR,
+            domain VARCHAR,
+            PRIMARY KEY (technique_stix_id, tactic_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_technique_mitigations (
+            technique_stix_id VARCHAR,
+            mitigation_stix_id VARCHAR,
+            technique_id VARCHAR,
+            mitigation_id VARCHAR,
+            domain VARCHAR,
+            PRIMARY KEY (technique_stix_id, mitigation_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_group_associations (
+            group_stix_id VARCHAR,
+            associated_group_stix_id VARCHAR,
+            group_id VARCHAR,
+            associated_group_id VARCHAR,
+            domain VARCHAR,
+            description VARCHAR,
+            PRIMARY KEY (group_stix_id, associated_group_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_group_software (
+            group_stix_id VARCHAR,
+            software_stix_id VARCHAR,
+            group_id VARCHAR,
+            software_id VARCHAR,
+            domain VARCHAR,
+            use_description VARCHAR,
+            PRIMARY KEY (group_stix_id, software_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_software_techniques (
+            software_stix_id VARCHAR,
+            technique_stix_id VARCHAR,
+            software_id VARCHAR,
+            technique_id VARCHAR,
+            domain VARCHAR,
+            use_description VARCHAR,
+            PRIMARY KEY (software_stix_id, technique_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_campaign_techniques (
+            campaign_stix_id VARCHAR,
+            technique_stix_id VARCHAR,
+            campaign_id VARCHAR,
+            technique_id VARCHAR,
+            domain VARCHAR,
+            use_description VARCHAR,
+            PRIMARY KEY (campaign_stix_id, technique_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_campaign_software (
+            campaign_stix_id VARCHAR,
+            software_stix_id VARCHAR,
+            campaign_id VARCHAR,
+            software_id VARCHAR,
+            domain VARCHAR,
+            use_description VARCHAR,
+            PRIMARY KEY (campaign_stix_id, software_stix_id, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_campaign_groups (
+            campaign_stix_id VARCHAR,
+            group_stix_id VARCHAR,
+            campaign_id VARCHAR,
+            group_id VARCHAR,
+            domain VARCHAR,
+            description VARCHAR,
+            PRIMARY KEY (campaign_stix_id, group_stix_id, domain)
+        )
+    """)
+
+    cols = {c[0] for c in conn.execute("DESCRIBE mitre_techniques").fetchall()}
+    if "stix_id" not in cols:
+        conn.execute("ALTER TABLE mitre_techniques ADD COLUMN stix_id VARCHAR")
+    if "description" not in cols:
+        conn.execute("ALTER TABLE mitre_techniques ADD COLUMN description VARCHAR")
+    if "is_subtechnique" not in cols:
+        conn.execute("ALTER TABLE mitre_techniques ADD COLUMN is_subtechnique BOOLEAN")
+    if "domain" not in cols:
+        conn.execute("ALTER TABLE mitre_techniques ADD COLUMN domain VARCHAR")
+
+    gt_cols = {c[0] for c in conn.execute("DESCRIBE mitre_group_techniques").fetchall()}
+    if "use_description" not in gt_cols:
+        conn.execute("ALTER TABLE mitre_group_techniques ADD COLUMN use_description VARCHAR")
+
+
+def _save_table_from_df(conn, table_name, df, columns):
+    if df is None or df.empty:
+        return
+    source_name = f"src_{table_name}"
+    clean = df.copy()
+    clean.columns = [c.lower().strip() for c in clean.columns]
+    clean = ensure_columns(clean, columns)
+    clean = clean.drop_duplicates(subset=columns)
+    conn.register(source_name, clean)
+    col_clause = ", ".join(columns)
+    conn.execute(
+        f"INSERT INTO {table_name} ({col_clause}) SELECT {col_clause} FROM {source_name}"
+    )
+
+
+def save_mitre_knowledge(knowledge, domain):
+    """Persist parsed MITRE STIX entities and relationships for offline ATT&CK pages."""
+    if not isinstance(knowledge, dict):
+        return
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_mitre_kb_schema(conn)
+        domain_value = (domain or "unknown").strip().lower()
+
+        conn.execute("DELETE FROM mitre_technique_mitigations WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_campaign_software WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_campaign_techniques WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_campaign_groups WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_software_techniques WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_group_software WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_group_associations WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_group_techniques WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_technique_tactics WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_campaigns WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_software WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_mitigations WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_groups WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_tactics WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM mitre_techniques WHERE LOWER(domain) = ?", [domain_value])
+
+        techniques_df = knowledge.get("techniques")
+        if techniques_df is not None and not techniques_df.empty:
+            techniques_df = techniques_df.copy()
+            techniques_df.rename(
+                columns={
+                    "technique_id": "id",
+                    "technique_name": "name",
+                },
+                inplace=True,
+            )
+            techniques_df["id"] = techniques_df["id"].astype(str).str.strip().str.upper()
+            # ``mitre_techniques`` is keyed by technique ID. Some ATT&CK
+            # bundles include multiple STIX rows that resolve to the same
+            # external technique ID, so collapse to one row per ID.
+            techniques_df = techniques_df.drop_duplicates(subset=["id"], keep="first")
+            _save_table_from_df(
+                conn,
+                "mitre_techniques",
+                techniques_df,
+                ["id", "name", "tactic", "url", "stix_id", "description", "is_subtechnique", "domain"],
+            )
+
+        _save_table_from_df(
+            conn,
+            "mitre_tactics",
+            knowledge.get("tactics"),
+            ["stix_id", "tactic_id", "name", "shortname", "description", "domain", "url"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_groups",
+            knowledge.get("groups"),
+            ["stix_id", "group_id", "name", "aliases", "description", "domain", "url"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_mitigations",
+            knowledge.get("mitigations"),
+            ["stix_id", "mitigation_id", "name", "description", "domain", "url"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_software",
+            knowledge.get("software"),
+            ["stix_id", "software_id", "name", "description", "software_type", "platforms", "domain", "url"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_campaigns",
+            knowledge.get("campaigns"),
+            ["stix_id", "campaign_id", "name", "description", "first_seen", "last_seen", "domain", "url"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_group_techniques",
+            knowledge.get("group_techniques"),
+            ["group_stix_id", "technique_stix_id", "group_id", "technique_id", "domain", "use_description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_technique_tactics",
+            knowledge.get("technique_tactics"),
+            ["technique_stix_id", "tactic_stix_id", "technique_id", "tactic_id", "domain"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_technique_mitigations",
+            knowledge.get("technique_mitigations"),
+            ["technique_stix_id", "mitigation_stix_id", "technique_id", "mitigation_id", "domain"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_group_associations",
+            knowledge.get("group_associations"),
+            ["group_stix_id", "associated_group_stix_id", "group_id", "associated_group_id", "domain", "description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_group_software",
+            knowledge.get("group_software"),
+            ["group_stix_id", "software_stix_id", "group_id", "software_id", "domain", "use_description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_software_techniques",
+            knowledge.get("software_techniques"),
+            ["software_stix_id", "technique_stix_id", "software_id", "technique_id", "domain", "use_description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_campaign_techniques",
+            knowledge.get("campaign_techniques"),
+            ["campaign_stix_id", "technique_stix_id", "campaign_id", "technique_id", "domain", "use_description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_campaign_software",
+            knowledge.get("campaign_software"),
+            ["campaign_stix_id", "software_stix_id", "campaign_id", "software_id", "domain", "use_description"],
+        )
+        _save_table_from_df(
+            conn,
+            "mitre_campaign_groups",
+            knowledge.get("campaign_groups"),
+            ["campaign_stix_id", "group_stix_id", "campaign_id", "group_id", "domain", "description"],
+        )
+    except Exception as e:
+        log_error(f"Save MITRE knowledge failed: {e}")
+        raise
     finally:
         conn.close()
 

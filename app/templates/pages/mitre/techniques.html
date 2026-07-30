@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}MITRE Techniques | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">Enterprise Techniques</h1>
+        <p class="page-subtitle">Techniques represent how an adversary achieves a tactical goal by performing an action.</p>
+    </div>
+    <div class="text-muted" style="padding-top:0.5rem;">Techniques: {{ techniques | length }}</div>
+</div>
+
+<form method="get" action="/mitre/technique" class="filters-bar" style="margin-top:1rem;">
+    <div class="filter-group grow">
+        <label class="form-label">Search Techniques</label>
+        <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, or description">
+    </div>
+    <div class="filter-group" style="align-self:flex-end;">
+        <button class="btn btn-primary" type="submit">Apply</button>
+    </div>
+</form>
+
+<div class="cve-list" style="margin-top:0.75rem;">
+    {% for technique in techniques %}
+    {% if technique.is_subtechnique %}
+    <div class="cve-card-item cve-card-item--available" style="margin-left:1.2rem;border-left-width:4px;">
+    {% else %}
+    <div class="cve-card-item cve-card-item--available">
+    {% endif %}
+        <div class="cve-card-item__id">
+            <a href="{{ technique.url }}">{{ technique.id }}</a>
+            {% if technique.is_subtechnique %}<span class="text-muted">Sub-technique</span>{% endif %}
+            {% if technique.parent_id %}<span class="text-muted">of {{ technique.parent_id }}</span>{% endif %}
+        </div>
+        <div class="cve-card-item__body">
+            <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
+            {% if technique.tactic %}<div class="cve-card-item__meta"><span>{{ technique.tactic }}</span></div>{% endif %}
+        </div>
+        <div class="cve-card-item__right">
+            <div class="cve-card-item__meta"><span>{{ technique.group_count }} groups</span><span>{{ technique.mitigation_count }} mitigations</span></div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

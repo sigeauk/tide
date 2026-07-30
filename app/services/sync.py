@@ -352,10 +352,6 @@ def run_mitre_sync(client_id: str | None = None):
                             count = save_threat_data(df_actors)
                             mitre_actors += count
                             logger.info(f"   Loaded {count} actors from {short_name}")
-                        df_defs = cti_helper.process_mitre_definitions(json_data)
-                        if not df_defs.empty:
-                            from app.database import save_mitre_definitions
-                            save_mitre_definitions(df_defs)
                         mitre_files += 1
                     except Exception as exc:
                         msg = f"MITRE source '{short_name}' failed: {exc}"

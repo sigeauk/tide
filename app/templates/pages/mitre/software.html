@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}MITRE Software | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">Software</h1>
+        <p class="page-subtitle">Malware and tools extracted from local ATT&CK JSON, linked to techniques and groups.</p>
+    </div>
+    <div class="text-muted" style="padding-top:0.5rem;">Software: {{ software | length }}</div>
+</div>
+
+<form method="get" action="/mitre/software" class="filters-bar" style="margin-top:1rem;">
+    <div class="filter-group grow">
+        <label class="form-label">Search Software</label>
+        <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, type, platform, description">
+    </div>
+    <div class="filter-group" style="align-self:flex-end;">
+        <button class="btn btn-primary" type="submit">Apply</button>
+    </div>
+</form>
+
+<div class="cve-list" style="margin-top:0.75rem;">
+    {% for item in software %}
+    <div class="cve-card-item cve-card-item--available">
+        <div class="cve-card-item__id">{{ item.id }}</div>
+        <div class="cve-card-item__body">
+            <div class="cve-card-item__name"><a href="{{ item.url }}">{{ item.name }}</a></div>
+            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ item.description | md }}</div>
+            <div class="cve-card-item__meta"><span>{{ item.software_type }}</span>{% if item.platforms %}<span>{{ item.platforms }}</span>{% endif %}</div>
+        </div>
+        <div class="cve-card-item__right">
+            <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

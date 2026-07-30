@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}{{ mitigation.id }} - MITRE Mitigation | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ mitigation.id }} - {{ mitigation.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/mitigations">Back to Mitigations</a>
+</div>
+
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Description</h2>
+    <div class="md-content" style="margin-top:0.5rem;">{{ (mitigation.description or 'No description available.') | md }}</div>
+    {% if mitigation.reference %}<p style="margin-top:0.75rem;"><a href="{{ mitigation.reference }}" target="_blank" rel="noopener noreferrer">Source Reference</a></p>{% endif %}
+</section>
+
+{% if mitigation.techniques %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Techniques Addressed</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for technique in mitigation.techniques %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ technique.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

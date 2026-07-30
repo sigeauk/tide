@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}MITRE Campaigns | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">Campaigns</h1>
+        <p class="page-subtitle">Campaign objects from local ATT&CK JSON with timeline and relationship context.</p>
+    </div>
+    <div class="text-muted" style="padding-top:0.5rem;">Campaigns: {{ campaigns | length }}</div>
+</div>
+
+<form method="get" action="/mitre/campaigns" class="filters-bar" style="margin-top:1rem;">
+    <div class="filter-group grow">
+        <label class="form-label">Search Campaigns</label>
+        <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, description">
+    </div>
+    <div class="filter-group" style="align-self:flex-end;">
+        <button class="btn btn-primary" type="submit">Apply</button>
+    </div>
+</form>
+
+<div class="cve-list" style="margin-top:0.75rem;">
+    {% for campaign in campaigns %}
+    <div class="cve-card-item cve-card-item--available">
+        <div class="cve-card-item__id">{{ campaign.id }}</div>
+        <div class="cve-card-item__body">
+            <div class="cve-card-item__name"><a href="{{ campaign.url }}">{{ campaign.name }}</a></div>
+            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ campaign.description | md }}</div>
+            <div class="cve-card-item__meta">
+                {% if campaign.first_seen %}<span>First seen: {{ campaign.first_seen[:10] }}</span>{% endif %}
+                {% if campaign.last_seen %}<span>Last seen: {{ campaign.last_seen[:10] }}</span>{% endif %}
+            </div>
+        </div>
+        <div class="cve-card-item__right">
+            <div class="cve-card-item__meta"><span>{{ campaign.group_count }} groups</span><span>{{ campaign.technique_count }} techniques</span></div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

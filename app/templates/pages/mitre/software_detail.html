@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+
+{% block title %}{{ software.id }} - MITRE Software | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ software.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/software">Back to Software</a>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1rem;align-items:flex-start;">
+    <div style="flex:1 1 520px;min-width:280px;">
+        <h2 class="section-title">Description</h2>
+        <div class="md-content" style="margin-top:0.5rem;">{{ (software.description or 'No description available.') | md }}</div>
+    </div>
+
+    <aside class="card card-padded" style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
+        <h2 class="section-title">Details</h2>
+        <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+            <div><strong>ID:</strong> {{ software.id }}</div>
+            <div><strong>Type:</strong> {{ software.software_type or 'UNKNOWN' }}</div>
+            <div><strong>Platforms:</strong> {{ software.platforms or 'N/A' }}</div>
+        </div>
+    </aside>
+</div>
+
+{% if software.techniques %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Techniques Used</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for technique in software.techniques %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ technique.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                {% if technique.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.use | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if software.groups %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Groups That Use This Software</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for group in software.groups %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ group.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ group.url }}">{{ group.name }}</a></div>
+                {% if group.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ group.use | md }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

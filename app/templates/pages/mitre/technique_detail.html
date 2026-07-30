@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+
+{% block title %}{{ technique.id }} - MITRE Technique | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">{{ technique.id }} - {{ technique.name }}</h1>
+    </div>
+    <a class="btn btn-secondary" href="/mitre/technique">Back to Techniques</a>
+</div>
+
+<div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1rem;align-items:flex-start;">
+    <div style="flex:1 1 520px;min-width:280px;">
+        <h2 class="section-title">Description</h2>
+        <div class="md-content" style="margin-top:0.5rem;">{{ (technique.description or 'No description available.') | md }}</div>
+    </div>
+
+    <aside class="card card-padded" style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
+        <h2 class="section-title">Details</h2>
+        <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+            <div><strong>ID:</strong> {{ technique.id }}</div>
+            {% if technique.parent_technique %}
+            <div>
+                <strong>Parent Technique:</strong>
+                <a href="{{ technique.parent_technique.url }}">{{ technique.parent_technique.id }}</a>
+            </div>
+            {% endif %}
+            {% if technique.subtechniques %}
+            <div>
+                <strong>Sub-techniques:</strong>
+                {% for child in technique.subtechniques %}
+                <a href="{{ child.url }}">{{ child.id }}</a>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if technique.tactics %}
+            <div>
+                <strong>Tactics:</strong>
+                {% for tactic in technique.tactics %}
+                <a href="{{ tactic.url }}">{{ tactic.name }}</a>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </aside>
+</div>
+
+{% if technique.subtechniques %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Sub-techniques</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for child in technique.subtechniques %}
+        <div class="cve-card-item cve-card-item--available" style="margin-left:1rem;border-left-width:4px;">
+            <div class="cve-card-item__id">{{ child.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ child.url }}">{{ child.name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ child.description | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if technique.mitigations %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Mitigations For This Technique</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for mitigation in technique.mitigations %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ mitigation.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ mitigation.url }}">{{ mitigation.name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ mitigation.description | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if technique.procedure_examples %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Procedure Examples</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for example in technique.procedure_examples %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ example.group_id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ example.url }}">{{ example.group_name }}</a></div>
+                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ example.use | md }}</div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+
+{% if technique.groups %}
+<section style="margin-top:1rem;">
+    <h2 class="section-title">Groups Using This Technique</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        {% for group in technique.groups %}
+        <div class="cve-card-item cve-card-item--available">
+            <div class="cve-card-item__id">{{ group.id }}</div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name"><a href="{{ group.url }}">{{ group.name }}</a></div>
+                {% if group.aliases %}<div class="cve-card-item__meta">{{ group.aliases }}</div>{% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{% endif %}
+{% endblock %}

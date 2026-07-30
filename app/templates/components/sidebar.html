@@ -121,6 +121,39 @@ Children are indented, slightly muted, icon-free.
         </div>
         {% endif %}
 
+        <!-- ── MITRE ── -->
+        {% if not user or user.can_read('page:threats') %}
+        <div class="nav-group" id="nav-group-mitre">
+            <button name="MITRE" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-mitre')" data-tooltip="MITRE">
+                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 3 3 7.5 12 12l9-4.5L12 3z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5 12 21l9-4.5"/>
+                </svg>
+                <span class="nav-label">MITRE</span>
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="nav-group__items">
+                <a name="MITRE Tactics" href="/mitre/tactic" class="nav-child {% if active_page == 'mitre' and active_sub == 'tactic' %}active{% endif %}">
+                    <span class="nav-label">Tactics</span>
+                </a>
+                <a name="MITRE Techniques" href="/mitre/technique" class="nav-child {% if active_page == 'mitre' and active_sub == 'technique' %}active{% endif %}">
+                    <span class="nav-label">Techniques</span>
+                </a>
+                <a name="MITRE Groups" href="/mitre/groups" class="nav-child {% if active_page == 'mitre' and active_sub == 'groups' %}active{% endif %}">
+                    <span class="nav-label">Groups</span>
+                </a>
+                <a name="MITRE Software" href="/mitre/software" class="nav-child {% if active_page == 'mitre' and active_sub == 'software' %}active{% endif %}">
+                    <span class="nav-label">Software</span>
+                </a>
+                <a name="MITRE Campaigns" href="/mitre/campaigns" class="nav-child {% if active_page == 'mitre' and active_sub == 'campaigns' %}active{% endif %}">
+                    <span class="nav-label">Campaigns</span>
+                </a>
+                <a name="MITRE Mitigations" href="/mitre/mitigations" class="nav-child {% if active_page == 'mitre' and active_sub == 'mitigations' %}active{% endif %}">
+                    <span class="nav-label">Mitigations</span>
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- ── CTI ── -->
         {% if not user or user.can_read('page:cti') or user.can_read('page:cti_indicators') or user.can_read('page:cti_actors') or user.can_read('page:cti_reports') %}
         <div class="nav-group" id="nav-group-cti">
@@ -221,7 +254,7 @@ function toggleNavGroup(id) {
 }
 // Restore collapsed state on load
 document.addEventListener('DOMContentLoaded', function() {
-    ['nav-group-risk','nav-group-rules','nav-group-threats'].forEach(function(id) {
+    ['nav-group-risk','nav-group-rules','nav-group-threats','nav-group-mitre'].forEach(function(id) {
         try {
             var saved = localStorage.getItem('nav_' + id);
             if (saved === '1') {

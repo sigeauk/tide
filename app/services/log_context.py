@@ -58,6 +58,7 @@ _TENANT_OPTIONAL_PREFIXES = (
     "/login",
     "/logout",
     "/health",
+    "/mitre",           # standalone ATT&CK KB pages use shared MITRE tables
     "/api/system/",       # /api/system/migration-status
     "/api/external/",     # external sharing API resolves tenant from API key
     "/api/clients",       # listing + switching tenants is pre-tenant

@@ -280,7 +280,7 @@ def get_technique_detail(
         id=ttp_upper,
         name=name,
         tactic=raw_tactic,
-        url=f"https://attack.mitre.org/techniques/{ttp_upper.replace('.', '/')}"
+        url=f"/mitre/technique/{ttp_upper}"
     )
     
     templates = request.app.state.templates

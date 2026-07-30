@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+
+{% block title %}MITRE Tactics | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">Enterprise Tactics</h1>
+        <p class="page-subtitle">Tactics represent the why of an ATT&CK technique or sub-technique. This list is served from local ATT&CK data.</p>
+    </div>
+    <div class="text-muted" style="padding-top:0.5rem;">Enterprise Tactics: {{ tactics | length }}</div>
+</div>
+
+<div class="cve-list" style="margin-top:0.75rem;">
+    {% for item in tactics %}
+    <a class="cve-card-item cve-card-item--available" href="{{ item.url }}">
+        <div class="cve-card-item__id">
+            <span>{{ item.id }}</span>
+            {% if item.shortname %}<span class="text-muted">{{ item.shortname }}</span>{% endif %}
+        </div>
+        <div class="cve-card-item__body">
+            <div class="cve-card-item__name">{{ item.name }}</div>
+            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ item.description | md }}</div>
+        </div>
+        <div class="cve-card-item__right">
+            <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

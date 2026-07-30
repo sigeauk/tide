@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}MITRE Knowledge Base | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div>
+        <h1 class="page-title-hero">MITRE ATT&CK Knowledge Base</h1>
+        <p class="page-subtitle">
+            Offline ATT&CK catalog for air-gapped analysis. Browse tactics, techniques, and groups with linked relationship tables.
+        </p>
+    </div>
+    <div style="display:flex;gap:0.6rem;flex-wrap:wrap;">
+        <a class="btn btn-secondary" href="/mitre/tactic">Tactics</a>
+        <a class="btn btn-secondary" href="/mitre/technique">Techniques</a>
+        <a class="btn btn-secondary" href="/mitre/groups">Groups</a>
+        <a class="btn btn-secondary" href="/mitre/software">Software</a>
+        <a class="btn btn-secondary" href="/mitre/campaigns">Campaigns</a>
+        <a class="btn btn-secondary" href="/mitre/mitigations">Mitigations</a>
+    </div>
+</div>
+
+<div class="metrics-grid" style="margin-top:1rem;">
+    <div class="metric-card">
+        <div class="metric-label">Tactics</div>
+        <div class="metric-value">{{ overview.tactics or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Techniques</div>
+        <div class="metric-value">{{ overview.techniques or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Groups</div>
+        <div class="metric-value">{{ overview.groups or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Mitigations</div>
+        <div class="metric-value">{{ overview.mitigations or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Software</div>
+        <div class="metric-value">{{ overview.software or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Campaigns</div>
+        <div class="metric-value">{{ overview.campaigns or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Group-Technique Edges</div>
+        <div class="metric-value">{{ overview.group_techniques or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Technique-Mitigation Edges</div>
+        <div class="metric-value">{{ overview.technique_mitigations or 0 }}</div>
+    </div>
+</div>
+
+<div class="card card-padded" style="margin-top:1rem;">
+    <h2 class="section-title">Quick Navigation</h2>
+    <div class="cve-list" style="margin-top:0.75rem;">
+        <a class="cve-card-item" href="/mitre/tactic">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Tactics</div>
+                <div class="cve-card-item__meta">ATT&CK tactic metadata and linked technique inventory.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/technique">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Techniques</div>
+                <div class="cve-card-item__meta">Technique descriptions with related groups and mitigations.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/groups">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Groups</div>
+                <div class="cve-card-item__meta">Intrusion-set profiles and techniques used by each group.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/software">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Software</div>
+                <div class="cve-card-item__meta">Malware and tool software with related techniques and groups.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/campaigns">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Campaigns</div>
+                <div class="cve-card-item__meta">Campaign timelines with related groups, techniques, and software.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/mitigations">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">Mitigations</div>
+                <div class="cve-card-item__meta">Courses of action linked to ATT&CK techniques.</div>
+            </div>
+        </a>
+    </div>
+</div>
+{% endblock %}

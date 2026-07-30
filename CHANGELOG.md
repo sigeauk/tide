@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.7] - 2026-07-30
+
+### Added
+- **Offline MITRE ATT&CK knowledge base in TIDE.** TIDE now provides a standalone `/mitre` experience for air-gapped operations with dedicated Tactics, Techniques, and Groups pages plus linked detail pages.
+- **Six-page MITRE expansion released as one feature bundle.** Added dedicated list and detail pages for Software, Campaigns, and Mitigations so operators can investigate malware/tools, campaigns, and courses of action directly in TIDE.
+- **End-to-end relationship navigation across MITRE entities.** Operators can now move directly between groups, campaigns, tactics, techniques, software, and mitigations through in-page relationship sections and detail links.
+- **MITRE relationship sections expanded for analyst workflow.** Group detail now includes campaigns, software, tactics, techniques, and mitigations, and technique detail mitigations now open mitigation detail pages.
+- **ATT&CK hyperlinks now resolve internally.** ATT&CK links in descriptions now open the corresponding `/mitre/...` pages (including sub-techniques, software, campaigns, and mitigations) instead of sending analysts to external sites.
+- **MITRE data remains build-time and local-only.** All MITRE pages are populated from bundled ATT&CK JSON during startup/rebuild, with source-change detection, and are not dependent on runtime internet access.
+
 ## [5.0.6] - 2026-07-29
 
 ### Fixed

@@ -1094,13 +1094,13 @@ def build_detection_rule_dict(
             "tactic": {
                 "id": tactic['id'],
                 "name": tactic['name'],
-                "reference": f"https://attack.mitre.org/tactics/{tactic['id']}/",
+                "reference": f"/mitre/tactic?id={tactic['id']}",
             },
             "technique": [
                 {
                     "id": tid,
                     "name": tid,
-                    "reference": f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/",
+                    "reference": f"/mitre/technique/{tid}",
                 }
                 for tid in techniques_found
             ],
@@ -1114,11 +1114,11 @@ def build_detection_rule_dict(
                 "framework": "MITRE ATT&CK",
                 "tactic": {
                     "id": "TA0002", "name": "Execution",
-                    "reference": "https://attack.mitre.org/tactics/TA0002/",
+                    "reference": "/mitre/tactic?id=TA0002",
                 },
                 "technique": [{
                     "id": tid, "name": tid,
-                    "reference": f"https://attack.mitre.org/techniques/{tid.replace('.', '/')}/",
+                    "reference": f"/mitre/technique/{tid}",
                 }],
             })
 

@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 55
+SCHEMA_VERSION = 58
 
 
 def _scope_predicate(
@@ -2492,6 +2492,236 @@ class DatabaseService:
             logger.info(
                 "Migration 53: created rule_lifecycle_history table "
                 "for audit trail tracking."
+            )
+
+        # Migration 56: offline MITRE knowledge-base tables for air-gapped ATT&CK pages.
+        if current_version < 56:
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_tactics (
+                        stix_id VARCHAR PRIMARY KEY,
+                        tactic_id VARCHAR,
+                        name VARCHAR,
+                        shortname VARCHAR,
+                        description VARCHAR,
+                        domain VARCHAR,
+                        url VARCHAR
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_groups (
+                        stix_id VARCHAR PRIMARY KEY,
+                        group_id VARCHAR,
+                        name VARCHAR,
+                        aliases VARCHAR,
+                        description VARCHAR,
+                        domain VARCHAR,
+                        url VARCHAR
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_mitigations (
+                        stix_id VARCHAR PRIMARY KEY,
+                        mitigation_id VARCHAR,
+                        name VARCHAR,
+                        description VARCHAR,
+                        domain VARCHAR,
+                        url VARCHAR
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_group_techniques (
+                        group_stix_id VARCHAR,
+                        technique_stix_id VARCHAR,
+                        group_id VARCHAR,
+                        technique_id VARCHAR,
+                        domain VARCHAR,
+                        PRIMARY KEY (group_stix_id, technique_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_technique_tactics (
+                        technique_stix_id VARCHAR,
+                        tactic_stix_id VARCHAR,
+                        technique_id VARCHAR,
+                        tactic_id VARCHAR,
+                        domain VARCHAR,
+                        PRIMARY KEY (technique_stix_id, tactic_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_technique_mitigations (
+                        technique_stix_id VARCHAR,
+                        mitigation_stix_id VARCHAR,
+                        technique_id VARCHAR,
+                        mitigation_id VARCHAR,
+                        domain VARCHAR,
+                        PRIMARY KEY (technique_stix_id, mitigation_stix_id, domain)
+                    )
+                    """
+                )
+
+                technique_cols = {
+                    r[1] for r in conn.execute("PRAGMA table_info('mitre_techniques')").fetchall()
+                }
+                if "stix_id" not in technique_cols:
+                    conn.execute("ALTER TABLE mitre_techniques ADD COLUMN stix_id VARCHAR")
+                if "description" not in technique_cols:
+                    conn.execute("ALTER TABLE mitre_techniques ADD COLUMN description VARCHAR")
+                if "is_subtechnique" not in technique_cols:
+                    conn.execute("ALTER TABLE mitre_techniques ADD COLUMN is_subtechnique BOOLEAN")
+                if "domain" not in technique_cols:
+                    conn.execute("ALTER TABLE mitre_techniques ADD COLUMN domain VARCHAR")
+            except Exception as exc:
+                logger.error(f"Migration 56 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 56)
+            logger.info(
+                "Migration 56: created offline MITRE KB entity and relationship tables."
+            )
+
+        # Migration 57: add ATT&CK-like relationship detail columns for group pages.
+        if current_version < 57:
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_group_associations (
+                        group_stix_id VARCHAR,
+                        associated_group_stix_id VARCHAR,
+                        group_id VARCHAR,
+                        associated_group_id VARCHAR,
+                        domain VARCHAR,
+                        description VARCHAR,
+                        PRIMARY KEY (group_stix_id, associated_group_stix_id, domain)
+                    )
+                    """
+                )
+                gt_cols = {
+                    r[1] for r in conn.execute("PRAGMA table_info('mitre_group_techniques')").fetchall()
+                }
+                if "use_description" not in gt_cols:
+                    conn.execute("ALTER TABLE mitre_group_techniques ADD COLUMN use_description VARCHAR")
+            except Exception as exc:
+                logger.error(f"Migration 57 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 57)
+            logger.info(
+                "Migration 57: added MITRE group association table and use_description column."
+            )
+
+        # Migration 58: add MITRE software/campaign entities and relationship tables.
+        if current_version < 58:
+            try:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_software (
+                        stix_id VARCHAR PRIMARY KEY,
+                        software_id VARCHAR,
+                        name VARCHAR,
+                        description VARCHAR,
+                        software_type VARCHAR,
+                        platforms VARCHAR,
+                        domain VARCHAR,
+                        url VARCHAR
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_campaigns (
+                        stix_id VARCHAR PRIMARY KEY,
+                        campaign_id VARCHAR,
+                        name VARCHAR,
+                        description VARCHAR,
+                        first_seen VARCHAR,
+                        last_seen VARCHAR,
+                        domain VARCHAR,
+                        url VARCHAR
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_group_software (
+                        group_stix_id VARCHAR,
+                        software_stix_id VARCHAR,
+                        group_id VARCHAR,
+                        software_id VARCHAR,
+                        domain VARCHAR,
+                        use_description VARCHAR,
+                        PRIMARY KEY (group_stix_id, software_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_software_techniques (
+                        software_stix_id VARCHAR,
+                        technique_stix_id VARCHAR,
+                        software_id VARCHAR,
+                        technique_id VARCHAR,
+                        domain VARCHAR,
+                        use_description VARCHAR,
+                        PRIMARY KEY (software_stix_id, technique_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_campaign_techniques (
+                        campaign_stix_id VARCHAR,
+                        technique_stix_id VARCHAR,
+                        campaign_id VARCHAR,
+                        technique_id VARCHAR,
+                        domain VARCHAR,
+                        use_description VARCHAR,
+                        PRIMARY KEY (campaign_stix_id, technique_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_campaign_software (
+                        campaign_stix_id VARCHAR,
+                        software_stix_id VARCHAR,
+                        campaign_id VARCHAR,
+                        software_id VARCHAR,
+                        domain VARCHAR,
+                        use_description VARCHAR,
+                        PRIMARY KEY (campaign_stix_id, software_stix_id, domain)
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mitre_campaign_groups (
+                        campaign_stix_id VARCHAR,
+                        group_stix_id VARCHAR,
+                        campaign_id VARCHAR,
+                        group_id VARCHAR,
+                        domain VARCHAR,
+                        description VARCHAR,
+                        PRIMARY KEY (campaign_stix_id, group_stix_id, domain)
+                    )
+                    """
+                )
+            except Exception as exc:
+                logger.error(f"Migration 58 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 58)
+            logger.info(
+                "Migration 58: added MITRE software/campaign tables and relationship edges."
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -5248,6 +5478,883 @@ class DatabaseService:
             }
             for row in rows
         ]
+
+    def get_mitre_overview(self) -> Dict[str, int]:
+        """Return high-level offline MITRE KB counts."""
+        with self.get_connection() as conn:
+            return {
+                "tactics": int(conn.execute("SELECT COUNT(*) FROM mitre_tactics").fetchone()[0]),
+                "techniques": int(conn.execute("SELECT COUNT(*) FROM mitre_techniques").fetchone()[0]),
+                "groups": int(conn.execute("SELECT COUNT(*) FROM mitre_groups").fetchone()[0]),
+                "mitigations": int(conn.execute("SELECT COUNT(*) FROM mitre_mitigations").fetchone()[0]),
+                "software": int(conn.execute("SELECT COUNT(*) FROM mitre_software").fetchone()[0]),
+                "campaigns": int(conn.execute("SELECT COUNT(*) FROM mitre_campaigns").fetchone()[0]),
+                "group_techniques": int(conn.execute("SELECT COUNT(*) FROM mitre_group_techniques").fetchone()[0]),
+                "technique_mitigations": int(conn.execute("SELECT COUNT(*) FROM mitre_technique_mitigations").fetchone()[0]),
+                "group_associations": int(conn.execute("SELECT COUNT(*) FROM mitre_group_associations").fetchone()[0]),
+                "group_software": int(conn.execute("SELECT COUNT(*) FROM mitre_group_software").fetchone()[0]),
+                "software_techniques": int(conn.execute("SELECT COUNT(*) FROM mitre_software_techniques").fetchone()[0]),
+                "campaign_techniques": int(conn.execute("SELECT COUNT(*) FROM mitre_campaign_techniques").fetchone()[0]),
+                "campaign_software": int(conn.execute("SELECT COUNT(*) FROM mitre_campaign_software").fetchone()[0]),
+                "campaign_groups": int(conn.execute("SELECT COUNT(*) FROM mitre_campaign_groups").fetchone()[0]),
+            }
+
+    def list_mitre_tactics(self, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List tactics with rollup counts for techniques and groups."""
+        order_clause = "CASE t.tactic_id "
+        for index, tactic_id in enumerate([
+            "TA0043", "TA0042", "TA0001", "TA0002", "TA0003", "TA0004",
+            "TA0005", "TA0112", "TA0006", "TA0007", "TA0008", "TA0009",
+            "TA0011", "TA0010", "TA0040",
+        ]):
+            order_clause += f"WHEN '{tactic_id}' THEN {index} "
+        order_clause += "ELSE 999 END"
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    t.tactic_id,
+                    COALESCE(t.name, t.tactic_id) AS name,
+                    t.shortname,
+                    t.description,
+                    COUNT(DISTINCT tt.technique_id) AS technique_count,
+                    COUNT(DISTINCT gt.group_id) AS group_count
+                FROM mitre_tactics t
+                LEFT JOIN mitre_technique_tactics tt ON tt.tactic_stix_id = t.stix_id
+                LEFT JOIN mitre_group_techniques gt ON gt.technique_stix_id = tt.technique_stix_id
+                WHERE LOWER(t.domain) = LOWER(?)
+                GROUP BY t.tactic_id, name, t.shortname, t.description
+                ORDER BY {order_clause}, name
+                """,
+                [domain],
+            ).fetchall()
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "shortname": r[2] or "",
+                "description": r[3] or "",
+                "technique_count": int(r[4] or 0),
+                "group_count": int(r[5] or 0),
+                "url": f"/mitre/tactic/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_tactic_detail(self, tactic_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one tactic and its related techniques/groups."""
+        tid = (tactic_id or "").strip().upper()
+        if not tid:
+            return {}
+        with self.get_connection() as conn:
+            tactic_row = conn.execute(
+                """
+                SELECT tactic_id, COALESCE(name, tactic_id), shortname, description
+                FROM mitre_tactics
+                WHERE UPPER(tactic_id) = ? AND LOWER(domain) = LOWER(?)
+                ORDER BY domain
+                LIMIT 1
+                """,
+                [tid, domain],
+            ).fetchone()
+            if not tactic_row:
+                return {}
+
+            techniques = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), mt.is_subtechnique
+                FROM mitre_technique_tactics mtt
+                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mtt.technique_stix_id
+                WHERE UPPER(t.tactic_id) = ? AND LOWER(t.domain) = LOWER(?)
+                ORDER BY mt.id
+                """,
+                [tid, domain],
+            ).fetchall()
+
+            groups = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, mg.name
+                FROM mitre_group_techniques mgt
+                JOIN mitre_technique_tactics mtt
+                  ON mtt.technique_stix_id = mgt.technique_stix_id
+                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                                WHERE UPPER(t.tactic_id) = ? AND LOWER(t.domain) = LOWER(?)
+                ORDER BY mg.name
+                """,
+                                [tid, domain],
+            ).fetchall()
+
+        return {
+            "id": tactic_row[0],
+            "name": tactic_row[1],
+            "shortname": tactic_row[2] or "",
+            "description": tactic_row[3] or "",
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "is_subtechnique": bool(r[3]),
+                    "parent_id": (r[0].split(".", 1)[0] if bool(r[3]) and "." in (r[0] or "") else ""),
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+            ],
+            "groups": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "url": f"/mitre/groups/{r[0]}",
+                }
+                for r in groups
+            ],
+        }
+
+    def list_mitre_techniques(self, search: Optional[str] = None, tactic_id: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List MITRE techniques with optional free-text and tactic filter."""
+        domain_sql = (domain or "enterprise").replace("'", "''").lower()
+        where = [f"LOWER(mt.domain) = '{domain_sql}'"]
+        params: list = []
+        if search:
+            like = f"%{search}%"
+            where.append("(LOWER(mt.id) LIKE LOWER(?) OR LOWER(mt.name) LIKE LOWER(?) OR LOWER(COALESCE(mt.description, '')) LIKE LOWER(?))")
+            params.extend([like, like, like])
+        if tactic_id:
+            where.append("EXISTS (SELECT 1 FROM mitre_technique_tactics mtt JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id WHERE mtt.technique_stix_id = mt.stix_id AND UPPER(t.tactic_id) = ?)")
+            params.append((tactic_id or "").upper())
+
+        where_clause = f"WHERE {' AND '.join(where)}" if where else ""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    mt.id,
+                    mt.name,
+                    COALESCE(mt.description, '') AS description,
+                    mt.is_subtechnique,
+                    COALESCE(string_agg(DISTINCT NULLIF(tshort.shortname, ''), ', '), '') AS tactic_shortname,
+                    COUNT(DISTINCT mgt.group_stix_id) AS group_count,
+                    COUNT(DISTINCT mtm.mitigation_stix_id) AS mitigation_count
+                FROM mitre_techniques mt
+                LEFT JOIN mitre_technique_tactics mtt ON mtt.technique_stix_id = mt.stix_id
+                LEFT JOIN mitre_tactics tshort ON tshort.stix_id = mtt.tactic_stix_id AND LOWER(tshort.domain) = '{domain_sql}'
+                LEFT JOIN mitre_group_techniques mgt ON mgt.technique_stix_id = mt.stix_id
+                LEFT JOIN mitre_technique_mitigations mtm ON mtm.technique_stix_id = mt.stix_id
+                {where_clause}
+                GROUP BY mt.id, mt.name, mt.description, mt.is_subtechnique
+                ORDER BY mt.id
+                """,
+                params,
+            ).fetchall()
+
+        if search:
+            needle = search.strip().upper()
+
+            def _rank(row: tuple) -> tuple:
+                row_id = (row[0] or "").upper()
+                row_name = (row[1] or "").lower()
+                row_desc = (row[2] or "").lower()
+                if row_id == needle:
+                    return (0, row_id)
+                if row_id.startswith(needle):
+                    return (1, row_id)
+                if needle.lower() in row_name:
+                    return (2, row_id)
+                if needle.lower() in row_desc:
+                    return (3, row_id)
+                return (9, row_id)
+
+            rows = sorted(rows, key=_rank)
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "description": r[2],
+                "is_subtechnique": bool(r[3]),
+                "parent_id": (r[0].split(".", 1)[0] if bool(r[3]) and "." in (r[0] or "") else ""),
+                "tactic": r[4] or "",
+                "group_count": int(r[5] or 0),
+                "mitigation_count": int(r[6] or 0),
+                "url": f"/mitre/technique/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_technique_detail(self, technique_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one technique plus its tactics, groups, and mitigations."""
+        tid = (technique_id or "").strip().upper()
+        if not tid:
+            return {}
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, name, COALESCE(description, ''), COALESCE(tactic, ''), is_subtechnique
+                FROM mitre_techniques
+                WHERE UPPER(id) = ? AND LOWER(domain) = LOWER(?)
+                LIMIT 1
+                """,
+                [tid, domain],
+            ).fetchone()
+            if not row:
+                return {}
+
+            parent_technique = None
+            if bool(row[4]) and "." in (row[0] or ""):
+                parent_id = row[0].split(".", 1)[0]
+                parent_row = conn.execute(
+                    """
+                    SELECT id, name
+                    FROM mitre_techniques
+                    WHERE UPPER(id) = ? AND LOWER(domain) = LOWER(?)
+                    LIMIT 1
+                    """,
+                    [parent_id, domain],
+                ).fetchone()
+                if parent_row:
+                    parent_technique = {
+                        "id": parent_row[0],
+                        "name": parent_row[1],
+                        "url": f"/mitre/technique/{parent_row[0]}",
+                    }
+
+            subtechniques = conn.execute(
+                """
+                SELECT id, name, COALESCE(description, '')
+                FROM mitre_techniques
+                WHERE UPPER(id) LIKE ? AND LOWER(domain) = LOWER(?) AND is_subtechnique = TRUE
+                ORDER BY id
+                """,
+                [f"{tid}.%", domain],
+            ).fetchall()
+
+            tactics = conn.execute(
+                """
+                SELECT DISTINCT t.tactic_id, COALESCE(t.name, t.tactic_id)
+                FROM mitre_technique_tactics mtt
+                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mtt.technique_stix_id
+                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                ORDER BY t.tactic_id
+                """,
+                [tid, domain],
+            ).fetchall()
+
+            groups = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mg.aliases, '')
+                FROM mitre_group_techniques mgt
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
+                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                ORDER BY mg.name
+                """,
+                [tid, domain],
+            ).fetchall()
+
+            mitigations = conn.execute(
+                """
+                SELECT DISTINCT mm.mitigation_id, mm.name, COALESCE(mm.description, ''), COALESCE(mm.url, '')
+                FROM mitre_technique_mitigations mtm
+                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mtm.technique_stix_id
+                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                ORDER BY mm.mitigation_id
+                """,
+                [tid, domain],
+            ).fetchall()
+
+            procedure_examples = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mgt.use_description, '')
+                FROM mitre_group_techniques mgt
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
+                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                ORDER BY mg.name
+                """,
+                [tid, domain],
+            ).fetchall()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "tactic": row[3],
+            "is_subtechnique": bool(row[4]),
+            "parent_technique": parent_technique,
+            "url": f"/mitre/technique/{row[0]}",
+            "tactics": [
+                {"id": r[0], "name": r[1], "url": f"/mitre/tactic/{r[0]}"}
+                for r in tactics
+            ],
+            "subtechniques": [
+                {"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/technique/{r[0]}"}
+                for r in subtechniques
+            ],
+            "groups": [
+                {"id": r[0], "name": r[1], "aliases": r[2], "url": f"/mitre/groups/{r[0]}"}
+                for r in groups
+            ],
+            "mitigations": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "reference": r[3],
+                    "url": f"/mitre/mitigations/{r[0]}",
+                }
+                for r in mitigations
+            ],
+            "procedure_examples": [
+                {"group_id": r[0], "group_name": r[1], "use": r[2], "url": f"/mitre/groups/{r[0]}"}
+                for r in procedure_examples
+            ],
+        }
+
+    def list_mitre_groups(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List MITRE intrusion-set groups for the offline KB."""
+        params: list = [domain]
+        where_clause = "WHERE LOWER(mg.domain) = LOWER(?)"
+        if search:
+            like = f"%{search}%"
+            where_clause += " AND (LOWER(mg.group_id) LIKE LOWER(?) OR LOWER(mg.name) LIKE LOWER(?) OR LOWER(COALESCE(mg.aliases, '')) LIKE LOWER(?))"
+            params.extend([like, like, like])
+
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    mg.group_id,
+                    mg.name,
+                    COALESCE(mg.aliases, '') AS aliases,
+                    COALESCE(mg.description, '') AS group_description,
+                    COUNT(DISTINCT mgt.technique_stix_id) AS technique_count,
+                    COUNT(DISTINCT mga.associated_group_stix_id) AS associated_count
+                FROM mitre_groups mg
+                LEFT JOIN mitre_group_techniques mgt ON mgt.group_stix_id = mg.stix_id
+                LEFT JOIN mitre_group_associations mga ON mga.group_stix_id = mg.stix_id
+                {where_clause}
+                GROUP BY mg.group_id, mg.name, mg.aliases, mg.description
+                ORDER BY mg.name
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "aliases": r[2],
+                "description": r[3],
+                "technique_count": int(r[4] or 0),
+                "associated_count": int(r[5] or 0),
+                "url": f"/mitre/groups/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_group_detail(self, group_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one group plus ATT&CK techniques it uses."""
+        gid = (group_id or "").strip().upper()
+        if not gid:
+            return {}
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT group_id, name, COALESCE(aliases, ''), COALESCE(description, '')
+                FROM mitre_groups
+                WHERE UPPER(group_id) = ? AND LOWER(domain) = LOWER(?)
+                LIMIT 1
+                """,
+                [gid, domain],
+            ).fetchone()
+            if not row:
+                return {}
+
+            techniques = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), COALESCE(mt.tactic, ''), COALESCE(mgt.use_description, '')
+                FROM mitre_group_techniques mgt
+                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                ORDER BY mt.id
+                """,
+                [gid, domain],
+            ).fetchall()
+
+            associated = conn.execute(
+                """
+                SELECT DISTINCT g2.group_id, g2.name, COALESCE(mga.description, '')
+                FROM mitre_group_associations mga
+                JOIN mitre_groups g1 ON g1.stix_id = mga.group_stix_id
+                JOIN mitre_groups g2 ON g2.stix_id = mga.associated_group_stix_id
+                WHERE UPPER(g1.group_id) = ? AND LOWER(g1.domain) = LOWER(?)
+                ORDER BY g2.name
+                """,
+                [gid, domain],
+            ).fetchall()
+
+            campaigns = conn.execute(
+                """
+                SELECT DISTINCT mc.campaign_id, mc.name, COALESCE(mcg.description, '')
+                FROM mitre_campaign_groups mcg
+                JOIN mitre_groups mg ON mg.stix_id = mcg.group_stix_id
+                JOIN mitre_campaigns mc ON mc.stix_id = mcg.campaign_stix_id
+                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                ORDER BY mc.name
+                """,
+                [gid, domain],
+            ).fetchall()
+
+            software = conn.execute(
+                """
+                SELECT DISTINCT ms.software_id, ms.name, COALESCE(ms.software_type, ''), COALESCE(mgs.use_description, '')
+                FROM mitre_group_software mgs
+                JOIN mitre_groups mg ON mg.stix_id = mgs.group_stix_id
+                JOIN mitre_software ms ON ms.stix_id = mgs.software_stix_id
+                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                ORDER BY ms.name
+                """,
+                [gid, domain],
+            ).fetchall()
+
+            tactics = conn.execute(
+                """
+                SELECT DISTINCT t.tactic_id, COALESCE(t.name, t.tactic_id)
+                FROM mitre_group_techniques mgt
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                JOIN mitre_technique_tactics mtt ON mtt.technique_stix_id = mgt.technique_stix_id
+                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
+                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                ORDER BY t.tactic_id
+                """,
+                [gid, domain],
+            ).fetchall()
+
+            mitigations = conn.execute(
+                """
+                SELECT DISTINCT mm.mitigation_id, mm.name, COALESCE(mm.description, '')
+                FROM mitre_group_techniques mgt
+                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
+                JOIN mitre_technique_mitigations mtm ON mtm.technique_stix_id = mgt.technique_stix_id
+                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
+                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                ORDER BY mm.mitigation_id
+                """,
+                [gid, domain],
+            ).fetchall()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "aliases": row[2],
+            "description": row[3],
+            "url": f"/mitre/groups/{row[0]}",
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "tactic": r[3],
+                    "use": r[4],
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+            ],
+            "associated_groups": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/groups/{r[0]}",
+                }
+                for r in associated
+            ],
+            "campaigns": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/campaigns/{r[0]}",
+                }
+                for r in campaigns
+            ],
+            "software": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "software_type": r[2],
+                    "use": r[3],
+                    "url": f"/mitre/software/{r[0]}",
+                }
+                for r in software
+            ],
+            "tactics": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "url": f"/mitre/tactic/{r[0]}",
+                }
+                for r in tactics
+            ],
+            "mitigations": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/mitigations/{r[0]}",
+                }
+                for r in mitigations
+            ],
+        }
+
+    def list_mitre_software(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List MITRE software (malware/tool) for offline ATT&CK pages."""
+        params: list = [domain]
+        where_clause = "WHERE LOWER(ms.domain) = LOWER(?)"
+        if search:
+            like = f"%{search}%"
+            where_clause += " AND (LOWER(ms.software_id) LIKE LOWER(?) OR LOWER(ms.name) LIKE LOWER(?) OR LOWER(COALESCE(ms.software_type, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.platforms, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.description, '')) LIKE LOWER(?))"
+            params.extend([like, like, like, like, like])
+
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    ms.software_id,
+                    ms.name,
+                    COALESCE(ms.description, '') AS description,
+                    COALESCE(ms.software_type, '') AS software_type,
+                    COALESCE(ms.platforms, '') AS platforms,
+                    COUNT(DISTINCT mst.technique_stix_id) AS technique_count,
+                    COUNT(DISTINCT mgs.group_stix_id) AS group_count
+                FROM mitre_software ms
+                LEFT JOIN mitre_software_techniques mst ON mst.software_stix_id = ms.stix_id
+                LEFT JOIN mitre_group_software mgs ON mgs.software_stix_id = ms.stix_id
+                {where_clause}
+                GROUP BY ms.software_id, ms.name, ms.description, ms.software_type, ms.platforms
+                ORDER BY ms.name
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "description": r[2],
+                "software_type": r[3],
+                "platforms": r[4],
+                "technique_count": int(r[5] or 0),
+                "group_count": int(r[6] or 0),
+                "url": f"/mitre/software/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_software_detail(self, software_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one software object plus related techniques and groups."""
+        sid = (software_id or "").strip().upper()
+        if not sid:
+            return {}
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT software_id, name, COALESCE(description, ''), COALESCE(software_type, ''), COALESCE(platforms, '')
+                FROM mitre_software
+                WHERE UPPER(software_id) = ? AND LOWER(domain) = LOWER(?)
+                LIMIT 1
+                """,
+                [sid, domain],
+            ).fetchone()
+            if not row:
+                return {}
+
+            techniques = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), COALESCE(mst.use_description, '')
+                FROM mitre_software_techniques mst
+                JOIN mitre_software ms ON ms.stix_id = mst.software_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mst.technique_stix_id
+                WHERE UPPER(ms.software_id) = ? AND LOWER(ms.domain) = LOWER(?)
+                ORDER BY mt.id
+                """,
+                [sid, domain],
+            ).fetchall()
+
+            groups = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mgs.use_description, '')
+                FROM mitre_group_software mgs
+                JOIN mitre_software ms ON ms.stix_id = mgs.software_stix_id
+                JOIN mitre_groups mg ON mg.stix_id = mgs.group_stix_id
+                WHERE UPPER(ms.software_id) = ? AND LOWER(ms.domain) = LOWER(?)
+                ORDER BY mg.name
+                """,
+                [sid, domain],
+            ).fetchall()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "software_type": row[3],
+            "platforms": row[4],
+            "url": f"/mitre/software/{row[0]}",
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "use": r[3],
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+            ],
+            "groups": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "use": r[2],
+                    "url": f"/mitre/groups/{r[0]}",
+                }
+                for r in groups
+            ],
+        }
+
+    def list_mitre_campaigns(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List MITRE campaign objects for offline ATT&CK pages."""
+        params: list = [domain]
+        where_clause = "WHERE LOWER(mc.domain) = LOWER(?)"
+        if search:
+            like = f"%{search}%"
+            where_clause += " AND (LOWER(mc.campaign_id) LIKE LOWER(?) OR LOWER(mc.name) LIKE LOWER(?) OR LOWER(COALESCE(mc.description, '')) LIKE LOWER(?))"
+            params.extend([like, like, like])
+
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    mc.campaign_id,
+                    mc.name,
+                    COALESCE(mc.description, '') AS description,
+                    COALESCE(mc.first_seen, '') AS first_seen,
+                    COALESCE(mc.last_seen, '') AS last_seen,
+                    COUNT(DISTINCT mcg.group_stix_id) AS group_count,
+                    COUNT(DISTINCT mct.technique_stix_id) AS technique_count
+                FROM mitre_campaigns mc
+                LEFT JOIN mitre_campaign_groups mcg ON mcg.campaign_stix_id = mc.stix_id
+                LEFT JOIN mitre_campaign_techniques mct ON mct.campaign_stix_id = mc.stix_id
+                {where_clause}
+                GROUP BY mc.campaign_id, mc.name, mc.description, mc.first_seen, mc.last_seen
+                ORDER BY mc.name
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "description": r[2],
+                "first_seen": r[3],
+                "last_seen": r[4],
+                "group_count": int(r[5] or 0),
+                "technique_count": int(r[6] or 0),
+                "url": f"/mitre/campaigns/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_campaign_detail(self, campaign_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one campaign plus related groups, techniques, and software."""
+        cid = (campaign_id or "").strip().upper()
+        if not cid:
+            return {}
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT campaign_id, name, COALESCE(description, ''), COALESCE(first_seen, ''), COALESCE(last_seen, '')
+                FROM mitre_campaigns
+                WHERE UPPER(campaign_id) = ? AND LOWER(domain) = LOWER(?)
+                LIMIT 1
+                """,
+                [cid, domain],
+            ).fetchone()
+            if not row:
+                return {}
+
+            groups = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mcg.description, '')
+                FROM mitre_campaign_groups mcg
+                JOIN mitre_campaigns mc ON mc.stix_id = mcg.campaign_stix_id
+                JOIN mitre_groups mg ON mg.stix_id = mcg.group_stix_id
+                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
+                ORDER BY mg.name
+                """,
+                [cid, domain],
+            ).fetchall()
+
+            techniques = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(mct.use_description, '')
+                FROM mitre_campaign_techniques mct
+                JOIN mitre_campaigns mc ON mc.stix_id = mct.campaign_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mct.technique_stix_id
+                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
+                ORDER BY mt.id
+                """,
+                [cid, domain],
+            ).fetchall()
+
+            software = conn.execute(
+                """
+                SELECT DISTINCT ms.software_id, ms.name, COALESCE(ms.software_type, ''), COALESCE(mcs.use_description, '')
+                FROM mitre_campaign_software mcs
+                JOIN mitre_campaigns mc ON mc.stix_id = mcs.campaign_stix_id
+                JOIN mitre_software ms ON ms.stix_id = mcs.software_stix_id
+                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
+                ORDER BY ms.name
+                """,
+                [cid, domain],
+            ).fetchall()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "first_seen": row[3],
+            "last_seen": row[4],
+            "url": f"/mitre/campaigns/{row[0]}",
+            "groups": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/groups/{r[0]}",
+                }
+                for r in groups
+            ],
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "use": r[2],
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+            ],
+            "software": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "software_type": r[2],
+                    "use": r[3],
+                    "url": f"/mitre/software/{r[0]}",
+                }
+                for r in software
+            ],
+        }
+
+    def list_mitre_mitigations(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        """List MITRE mitigations and linked technique counts."""
+        params: list = [domain]
+        where_clause = "WHERE LOWER(mm.domain) = LOWER(?)"
+        if search:
+            like = f"%{search}%"
+            where_clause += " AND (LOWER(mm.mitigation_id) LIKE LOWER(?) OR LOWER(mm.name) LIKE LOWER(?) OR LOWER(COALESCE(mm.description, '')) LIKE LOWER(?))"
+            params.extend([like, like, like])
+
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    mm.mitigation_id,
+                    mm.name,
+                    COALESCE(mm.description, '') AS description,
+                    COUNT(DISTINCT mtm.technique_stix_id) AS technique_count
+                FROM mitre_mitigations mm
+                LEFT JOIN mitre_technique_mitigations mtm ON mtm.mitigation_stix_id = mm.stix_id
+                {where_clause}
+                GROUP BY mm.mitigation_id, mm.name, mm.description
+                ORDER BY mm.mitigation_id
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "id": r[0],
+                "name": r[1],
+                "description": r[2],
+                "technique_count": int(r[3] or 0),
+                "url": f"/mitre/mitigations/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_mitre_mitigation_detail(self, mitigation_id: str, domain: str = "enterprise") -> Dict[str, Any]:
+        """Return one mitigation plus linked techniques."""
+        mid = (mitigation_id or "").strip().upper()
+        if not mid:
+            return {}
+
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT mitigation_id, name, COALESCE(description, ''), COALESCE(url, '')
+                FROM mitre_mitigations
+                WHERE UPPER(mitigation_id) = ? AND LOWER(domain) = LOWER(?)
+                LIMIT 1
+                """,
+                [mid, domain],
+            ).fetchone()
+            if not row:
+                return {}
+
+            techniques = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, '')
+                FROM mitre_technique_mitigations mtm
+                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
+                JOIN mitre_techniques mt ON mt.stix_id = mtm.technique_stix_id
+                WHERE UPPER(mm.mitigation_id) = ? AND LOWER(mm.domain) = LOWER(?)
+                ORDER BY mt.id
+                """,
+                [mid, domain],
+            ).fetchall()
+
+        return {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "reference": row[3],
+            "url": f"/mitre/mitigations/{row[0]}",
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+            ],
+        }
     
     def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True,
                                 search: str = None, client_id: str = None,
