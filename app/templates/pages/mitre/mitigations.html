@@ -8,13 +8,28 @@
         <h1 class="page-title-hero">Mitigations</h1>
         <p class="page-subtitle">Courses of action from ATT&CK with linked techniques.</p>
     </div>
-    <div class="text-muted" style="padding-top:0.5rem;">Mitigations: {{ mitigations | length }}</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;padding-top:0.5rem;">
+        {% if source_domain != 'all' %}
+        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+        {% else %}
+        <span class="text-muted">All sources</span>
+        {% endif %}
+        <div class="text-muted">Mitigations: {{ mitigations | length }}</div>
+    </div>
 </div>
 
 <form method="get" action="/mitre/mitigations" class="filters-bar" style="margin-top:1rem;">
     <div class="filter-group grow">
         <label class="form-label">Search Mitigations</label>
         <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, description">
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select class="form-input form-select" name="src">
+            {% for value, label in source_options %}
+            <option value="{{ value }}" {% if source_domain == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
     </div>
     <div class="filter-group" style="align-self:flex-end;">
         <button class="btn btn-primary" type="submit">Apply</button>
@@ -23,8 +38,19 @@
 
 <div class="cve-list" style="margin-top:0.75rem;">
     {% for mitigation in mitigations %}
+    {% set mitigation_src = (mitigation.sources[0] if mitigation.sources else source_domain) %}
     <div class="cve-card-item cve-card-item--available">
-        <div class="cve-card-item__id">{{ mitigation.id }}</div>
+        <div class="cve-card-item__id">
+            {{ mitigation.id }}
+            {% if mitigation.sources %}
+            {% for src in mitigation.sources %}
+            {% set src_meta = source_meta.get(src, {}) %}
+            <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+            {% endfor %}
+            {% else %}
+            <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+            {% endif %}
+        </div>
         <div class="cve-card-item__body">
             <div class="cve-card-item__name"><a href="{{ mitigation.url }}">{{ mitigation.name }}</a></div>
             <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ mitigation.description | md }}</div>

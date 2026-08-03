@@ -5,6 +5,7 @@ FastAPI Application Entry Point.
 """
 
 from contextlib import asynccontextmanager
+from typing import Optional
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,6 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 import os
 import time
+from urllib.parse import urlencode
 
 try:
     import elasticapm
@@ -1786,15 +1788,179 @@ def create_app() -> FastAPI:
 
     @app.get("/mitre", response_class=HTMLResponse)
     def mitre_index_page(request: Request, user: CurrentUser, db: DbDep):
-        return RedirectResponse(url="/mitre/tactic", status_code=307)
+        return RedirectResponse(url="/mitre/tactic?src=all", status_code=307)
+
+    _MITRE_SOURCE_META = {
+        "all": {
+            "label": "All MITRE ATT&CK Sources",
+            "code": "ALL",
+            "pill_class": "src-opencti",
+        },
+        "enterprise": {
+            "label": "MITRE ATT&CK Enterprise",
+            "code": "ENT",
+            "pill_class": "src-enterprise",
+        },
+        "mobile": {
+            "label": "MITRE ATT&CK Mobile",
+            "code": "MOB",
+            "pill_class": "src-mobile",
+        },
+        "ics": {
+            "label": "MITRE ATT&CK ICS",
+            "code": "ICS",
+            "pill_class": "src-ics",
+        },
+        "pre": {
+            "label": "MITRE ATT&CK PRE",
+            "code": "PRE",
+            "pill_class": "src-pre",
+        },
+    }
+
+    _MITRE_SOURCE_ORDER = ["enterprise", "ics", "mobile", "pre"]
+
+    def _resolve_mitre_source(src: str) -> tuple[str, dict]:
+        key = (src or "all").strip().lower()
+        if key not in _MITRE_SOURCE_META:
+            key = "all"
+        return key, _MITRE_SOURCE_META[key]
+
+    def _mitre_source_context(src: str) -> dict:
+        key, meta = _resolve_mitre_source(src)
+        return {
+            "source_domain": key,
+            "source_label": meta["label"],
+            "source_code": meta["code"],
+            "source_pill_class": meta["pill_class"],
+            "source_meta": _MITRE_SOURCE_META,
+            "source_order": _MITRE_SOURCE_ORDER,
+            "source_options": [
+                ("all", "All"),
+                ("enterprise", "Enterprise"),
+                ("mobile", "Mobile"),
+                ("ics", "ICS"),
+                ("pre", "PRE"),
+            ],
+        }
+
+    def _resolve_active_client_for_mitre(request: Request, user: CurrentUser, db: DbDep) -> str:
+        cid = request.cookies.get("active_client_id")
+        if not cid and user:
+            with db.get_shared_connection() as conn:
+                row = conn.execute(
+                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
+                    [user.id],
+                ).fetchone()
+                if row:
+                    cid = row[0]
+        if not cid:
+            cid = db.get_default_client_id()
+        return cid
+
+    def _get_mitre_coverage(db: DbDep, cid: str) -> tuple[set, dict]:
+        try:
+            from app.services.tenant_manager import tenant_context_for
+            if cid:
+                with tenant_context_for(cid):
+                    return (
+                        db.get_all_covered_ttps(client_id=cid),
+                        db.get_ttp_rule_counts(client_id=cid),
+                    )
+            return (
+                db.get_all_covered_ttps(client_id=cid),
+                db.get_ttp_rule_counts(client_id=cid),
+            )
+        except Exception:
+            return set(), {}
+
+    def _resolve_mitre_detail(db: DbDep, kind: str, object_id: str, src: str) -> tuple[str, dict | None]:
+        getters = {
+            "tactic": db.get_mitre_tactic_detail,
+            "technique": db.get_mitre_technique_detail,
+            "group": db.get_mitre_group_detail,
+            "software": db.get_mitre_software_detail,
+            "campaign": db.get_mitre_campaign_detail,
+            "mitigation": db.get_mitre_mitigation_detail,
+        }
+        getter = getters.get(kind)
+        if getter is None:
+            return src, None
+
+        detail = getter(object_id, domain=src)
+        if detail:
+            return src, detail
+
+        for candidate in ("enterprise", "mobile", "ics", "pre"):
+            if candidate == src:
+                continue
+            candidate_detail = getter(object_id, domain=candidate)
+            if candidate_detail:
+                return candidate, candidate_detail
+
+        return src, None
 
     @app.get("/mitre/tactic", response_class=HTMLResponse)
     def mitre_tactics_page(
         request: Request,
         user: CurrentUser,
         db: DbDep,
+        src: str = "all",
     ):
-        tactics = db.list_mitre_tactics(domain="enterprise")
+        src, _ = _resolve_mitre_source(src)
+        tactics = db.list_mitre_tactics(domain=src)
+        tactic_groups = []
+        if src == "all":
+            source_sequence = ["enterprise", "mobile", "ics", "pre"]
+            grouped: dict[str, dict] = {}
+            by_source = {s: db.list_mitre_tactics(domain=s) for s in source_sequence}
+            for source in source_sequence:
+                for tactic in by_source[source]:
+                    key = (tactic.get("name") or tactic.get("id") or "").strip().lower()
+                    if not key:
+                        continue
+                    if key not in grouped:
+                        grouped[key] = {
+                            "id": tactic.get("id"),
+                            "name": tactic.get("name") or tactic.get("id"),
+                            "shortname": tactic.get("shortname") or "",
+                            "description": tactic.get("description") or "",
+                            "url": tactic.get("url"),
+                            "technique_count": 0,
+                            "group_count": 0,
+                            "sources": [],
+                            "source_rows": [],
+                        }
+                    g = grouped[key]
+                    g["technique_count"] += int(tactic.get("technique_count") or 0)
+                    g["group_count"] += int(tactic.get("group_count") or 0)
+                    g["sources"].append(source)
+                    g["source_rows"].append({
+                        "source": source,
+                        "id": tactic.get("id"),
+                        "name": tactic.get("name") or tactic.get("id"),
+                        "shortname": tactic.get("shortname") or "",
+                        "description": tactic.get("description") or "",
+                        "technique_count": int(tactic.get("technique_count") or 0),
+                        "group_count": int(tactic.get("group_count") or 0),
+                        "url": tactic.get("url"),
+                    })
+
+            source_rank = {"enterprise": 0, "mobile": 1, "ics": 2, "pre": 3}
+            by_id = {str(t.get("id") or "").upper(): t for t in tactics}
+            for group in grouped.values():
+                group["sources"] = [
+                    s for s in source_sequence if s in set(group["sources"])
+                ]
+                group["source_rows"].sort(key=lambda r: source_rank.get(r["source"], 9))
+                first_id = str(group.get("id") or "").upper()
+                if first_id and first_id in by_id:
+                    group["sort_index"] = tactics.index(by_id[first_id])
+                else:
+                    group["sort_index"] = 999
+
+            tactic_groups = sorted(grouped.values(), key=lambda g: (g.get("sort_index", 999), g.get("name") or ""))
+        src_ctx = _mitre_source_context(src)
         return render_template(
             "pages/mitre/tactic.html",
             request,
@@ -1803,6 +1969,8 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "tactic",
                 "tactics": tactics,
+                "tactic_groups": tactic_groups,
+                **src_ctx,
             },
         )
 
@@ -1812,8 +1980,11 @@ def create_app() -> FastAPI:
         tactic_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_tactic_detail(tactic_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/tactic/{tactic_id}", status_code=307)
+        detail = db.get_mitre_tactic_detail(tactic_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -1825,16 +1996,8 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE tactic found for {tactic_id}.",
                 },
             )
-        return render_template(
-            "pages/mitre/tactic_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "tactic",
-                "tactic": detail,
-            },
-        )
+        query = urlencode({"tactic": detail["id"]})
+        return RedirectResponse(url=f"/mitre/technique?{query}", status_code=307)
 
     @app.get("/mitre/technique", response_class=HTMLResponse)
     def mitre_techniques_page(
@@ -1843,12 +2006,22 @@ def create_app() -> FastAPI:
         db: DbDep,
         q: str = "",
         tactic: str = "",
+        src: str = "all",
     ):
+        src, _ = _resolve_mitre_source(src)
         techniques = db.list_mitre_techniques(
             search=q or None,
             tactic_id=tactic or None,
-            domain="enterprise",
+            domain=src,
         )
+        selected_tactic = None
+        if tactic:
+            selected_tactic = db.get_mitre_tactic_detail(tactic, domain=src)
+
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context(src)
+
         return render_template(
             "pages/mitre/techniques.html",
             request,
@@ -1857,8 +2030,12 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "technique",
                 "techniques": techniques,
+                "selected_tactic": selected_tactic,
                 "tactic_filter": tactic,
                 "query": q,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
 
@@ -1868,8 +2045,13 @@ def create_app() -> FastAPI:
         technique_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_technique_detail(technique_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/technique/{technique_id}", status_code=307)
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+
+        detail = db.get_mitre_technique_detail(technique_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -1881,6 +2063,10 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE technique found for {technique_id}.",
                 },
             )
+
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context("all")
+
         return render_template(
             "pages/mitre/technique_detail.html",
             request,
@@ -1889,6 +2075,9 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "technique",
                 "technique": detail,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
 
@@ -1898,8 +2087,11 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
+        src: str = "all",
     ):
-        groups = db.list_mitre_groups(search=q or None, domain="enterprise")
+        src, _ = _resolve_mitre_source(src)
+        groups = db.list_mitre_groups(search=q or None, domain=src)
+        src_ctx = _mitre_source_context(src)
         return render_template(
             "pages/mitre/groups.html",
             request,
@@ -1909,6 +2101,7 @@ def create_app() -> FastAPI:
                 "active_sub": "groups",
                 "groups": groups,
                 "query": q,
+                **src_ctx,
             },
         )
 
@@ -1918,8 +2111,13 @@ def create_app() -> FastAPI:
         group_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_group_detail(group_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/groups/{group_id}", status_code=307)
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+
+        detail = db.get_mitre_group_detail(group_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -1931,6 +2129,10 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE group found for {group_id}.",
                 },
             )
+
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context("all")
+
         return render_template(
             "pages/mitre/group_detail.html",
             request,
@@ -1939,6 +2141,9 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "groups",
                 "group": detail,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
 
@@ -1948,8 +2153,11 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
+        src: str = "all",
     ):
-        software = db.list_mitre_software(search=q or None, domain="enterprise")
+        src, _ = _resolve_mitre_source(src)
+        software = db.list_mitre_software(search=q or None, domain=src)
+        src_ctx = _mitre_source_context(src)
         return render_template(
             "pages/mitre/software.html",
             request,
@@ -1959,6 +2167,7 @@ def create_app() -> FastAPI:
                 "active_sub": "software",
                 "software": software,
                 "query": q,
+                **src_ctx,
             },
         )
 
@@ -1968,8 +2177,13 @@ def create_app() -> FastAPI:
         software_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_software_detail(software_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/software/{software_id}", status_code=307)
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+
+        detail = db.get_mitre_software_detail(software_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -1981,6 +2195,10 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE software found for {software_id}.",
                 },
             )
+
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context("all")
+
         return render_template(
             "pages/mitre/software_detail.html",
             request,
@@ -1989,6 +2207,9 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "software",
                 "software": detail,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
 
@@ -1998,8 +2219,11 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
+        src: str = "all",
     ):
-        campaigns = db.list_mitre_campaigns(search=q or None, domain="enterprise")
+        src, _ = _resolve_mitre_source(src)
+        campaigns = db.list_mitre_campaigns(search=q or None, domain=src)
+        src_ctx = _mitre_source_context(src)
         return render_template(
             "pages/mitre/campaigns.html",
             request,
@@ -2009,6 +2233,7 @@ def create_app() -> FastAPI:
                 "active_sub": "campaigns",
                 "campaigns": campaigns,
                 "query": q,
+                **src_ctx,
             },
         )
 
@@ -2018,8 +2243,13 @@ def create_app() -> FastAPI:
         campaign_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_campaign_detail(campaign_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/campaigns/{campaign_id}", status_code=307)
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+
+        detail = db.get_mitre_campaign_detail(campaign_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -2031,6 +2261,10 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE campaign found for {campaign_id}.",
                 },
             )
+
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context("all")
+
         return render_template(
             "pages/mitre/campaign_detail.html",
             request,
@@ -2039,6 +2273,9 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "campaigns",
                 "campaign": detail,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
 
@@ -2048,8 +2285,11 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
+        src: str = "all",
     ):
-        mitigations = db.list_mitre_mitigations(search=q or None, domain="enterprise")
+        src, _ = _resolve_mitre_source(src)
+        mitigations = db.list_mitre_mitigations(search=q or None, domain=src)
+        src_ctx = _mitre_source_context(src)
         return render_template(
             "pages/mitre/mitigations.html",
             request,
@@ -2059,6 +2299,7 @@ def create_app() -> FastAPI:
                 "active_sub": "mitigations",
                 "mitigations": mitigations,
                 "query": q,
+                **src_ctx,
             },
         )
 
@@ -2068,8 +2309,13 @@ def create_app() -> FastAPI:
         mitigation_id: str,
         user: CurrentUser,
         db: DbDep,
+        src: Optional[str] = None,
     ):
-        detail = db.get_mitre_mitigation_detail(mitigation_id, domain="enterprise")
+        if src is not None:
+            return RedirectResponse(url=f"/mitre/mitigations/{mitigation_id}", status_code=307)
+        _cid = _resolve_active_client_for_mitre(request, user, db)
+
+        detail = db.get_mitre_mitigation_detail(mitigation_id, domain="all")
         if not detail:
             return render_template(
                 "pages/placeholder.html",
@@ -2081,6 +2327,10 @@ def create_app() -> FastAPI:
                     "message": f"No MITRE mitigation found for {mitigation_id}.",
                 },
             )
+
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        src_ctx = _mitre_source_context("all")
+
         return render_template(
             "pages/mitre/mitigation_detail.html",
             request,
@@ -2089,6 +2339,9 @@ def create_app() -> FastAPI:
                 "active_page": "mitre",
                 "active_sub": "mitigations",
                 "mitigation": detail,
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
+                **src_ctx,
             },
         )
     

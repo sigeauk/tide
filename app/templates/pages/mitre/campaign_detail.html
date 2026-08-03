@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/mitre_pill.html" import mitre_pill %}
 
 {% block title %}{{ campaign.id }} - MITRE Campaign | TIDE{% endblock %}
 
@@ -10,71 +11,153 @@
     <a class="btn btn-secondary" href="/mitre/campaigns">Back to Campaigns</a>
 </div>
 
+<div id="mitre-campaign-detail" data-collapse-scope="mitre-campaign-detail" style="margin-top:0.75rem;">
 <div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1rem;align-items:flex-start;">
     <div style="flex:1 1 520px;min-width:280px;">
         <h2 class="section-title">Description</h2>
         <div class="md-content" style="margin-top:0.5rem;">{{ (campaign.description or 'No description available.') | md }}</div>
     </div>
 
-    <aside class="card card-padded" style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
-        <h2 class="section-title">Details</h2>
-        <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
-            <div><strong>ID:</strong> {{ campaign.id }}</div>
-            <div><strong>First Seen:</strong> {{ campaign.first_seen[:10] if campaign.first_seen else 'N/A' }}</div>
-            <div><strong>Last Seen:</strong> {{ campaign.last_seen[:10] if campaign.last_seen else 'N/A' }}</div>
+    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
+        <aside class="card card-padded">
+            <h2 class="section-title">Details</h2>
+            {% set src_counts = namespace(enterprise=0, ics=0, mobile=0, pre=0) %}
+            {% for item in campaign.groups %}
+            {% for src in item.sources or [] %}
+            {% if src == 'enterprise' %}{% set src_counts.enterprise = src_counts.enterprise + 1 %}{% endif %}
+            {% if src == 'ics' %}{% set src_counts.ics = src_counts.ics + 1 %}{% endif %}
+            {% if src == 'mobile' %}{% set src_counts.mobile = src_counts.mobile + 1 %}{% endif %}
+            {% if src == 'pre' %}{% set src_counts.pre = src_counts.pre + 1 %}{% endif %}
+            {% endfor %}
+            {% endfor %}
+            {% for item in campaign.techniques %}
+            {% for src in item.sources or [] %}
+            {% if src == 'enterprise' %}{% set src_counts.enterprise = src_counts.enterprise + 1 %}{% endif %}
+            {% if src == 'ics' %}{% set src_counts.ics = src_counts.ics + 1 %}{% endif %}
+            {% if src == 'mobile' %}{% set src_counts.mobile = src_counts.mobile + 1 %}{% endif %}
+            {% if src == 'pre' %}{% set src_counts.pre = src_counts.pre + 1 %}{% endif %}
+            {% endfor %}
+            {% endfor %}
+            {% for item in campaign.software %}
+            {% for src in item.sources or [] %}
+            {% if src == 'enterprise' %}{% set src_counts.enterprise = src_counts.enterprise + 1 %}{% endif %}
+            {% if src == 'ics' %}{% set src_counts.ics = src_counts.ics + 1 %}{% endif %}
+            {% if src == 'mobile' %}{% set src_counts.mobile = src_counts.mobile + 1 %}{% endif %}
+            {% if src == 'pre' %}{% set src_counts.pre = src_counts.pre + 1 %}{% endif %}
+            {% endfor %}
+            {% endfor %}
+            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                <div><strong>ID:</strong> {{ campaign.id }}</div>
+                <div>
+                    <strong>Source:</strong>
+                    <span class="source-pill-row">
+                        {% set entity_sources = campaign.sources or [] %}
+                        {% if 'enterprise' in entity_sources %}<span class="source-pill source-pill--count src-enterprise" title="MITRE ATT&CK Enterprise">ENT {{ src_counts.enterprise }}</span>{% endif %}
+                        {% if 'ics' in entity_sources %}<span class="source-pill source-pill--count src-ics" title="MITRE ATT&CK ICS">ICS {{ src_counts.ics }}</span>{% endif %}
+                        {% if 'mobile' in entity_sources %}<span class="source-pill source-pill--count src-mobile" title="MITRE ATT&CK Mobile">MOB {{ src_counts.mobile }}</span>{% endif %}
+                        {% if 'pre' in entity_sources %}<span class="source-pill source-pill--count src-pre" title="MITRE ATT&CK PRE">PRE {{ src_counts.pre }}</span>{% endif %}
+                        {% if not entity_sources %}<span class="source-pill source-pill--count {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }} 0</span>{% endif %}
+                    </span>
+                </div>
+                <div><strong>First Seen:</strong> {{ campaign.first_seen[:10] if campaign.first_seen else 'N/A' }}</div>
+                <div><strong>Last Seen:</strong> {{ campaign.last_seen[:10] if campaign.last_seen else 'N/A' }}</div>
+                {% set related_total = (campaign.groups | length) + (campaign.techniques | length) + (campaign.software | length) %}
+                <div><strong>Related Entities:</strong> {{ related_total }}</div>
+            </div>
+        </aside>
+        <div style="display:flex;justify-content:flex-end;gap:0.5rem;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllRememberedCollapsibles('#mitre-campaign-detail', true)">Expand all</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllRememberedCollapsibles('#mitre-campaign-detail', false)">Collapse all</button>
         </div>
-    </aside>
+    </div>
 </div>
 
 {% if campaign.groups %}
-<section style="margin-top:1rem;">
-    <h2 class="section-title">Groups</h2>
-    <div class="cve-list" style="margin-top:0.75rem;">
+<details class="card card-padded" data-collapse-key="mitre-campaign-{{ campaign.id }}-groups" style="margin-top:1rem;">
+    <summary class="section-title" style="cursor:pointer;">Groups</summary>
+    <div class="cve-list" style="margin-top:0.85rem;">
         {% for group in campaign.groups %}
+        {% set group_src = (group.sources[0] if group.sources else source_domain) %}
         <div class="cve-card-item cve-card-item--available">
             <div class="cve-card-item__id">{{ group.id }}</div>
             <div class="cve-card-item__body">
                 <div class="cve-card-item__name"><a href="{{ group.url }}">{{ group.name }}</a></div>
+                <div class="cve-card-item__meta">
+                    {% if group.sources %}
+                    {% for src in group.sources %}
+                    {% set src_meta = source_meta.get(src, {}) %}
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                    {% endif %}
+                </div>
                 {% if group.description %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ group.description | md }}</div>{% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
-</section>
+</details>
 {% endif %}
 
 {% if campaign.techniques %}
-<section style="margin-top:1rem;">
-    <h2 class="section-title">Techniques Used</h2>
-    <div class="cve-list" style="margin-top:0.75rem;">
+<details class="card card-padded" data-collapse-key="mitre-campaign-{{ campaign.id }}-techniques" style="margin-top:1rem;">
+    <summary class="section-title" style="cursor:pointer;">Techniques Used</summary>
+    <div class="cve-list" style="margin-top:0.85rem;">
         {% for technique in campaign.techniques %}
+        {% set technique_src = (technique.sources[0] if technique.sources else source_domain) %}
+        {% set tid = (technique.id or '') | upper %}
         <div class="cve-card-item cve-card-item--available">
-            <div class="cve-card-item__id">{{ technique.id }}</div>
+            <div class="cve-card-item__id cve-card-item__id--pill">{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}</div>
             <div class="cve-card-item__body">
                 <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
+                <div class="cve-card-item__meta">
+                    {% if technique.sources %}
+                    {% for src in technique.sources %}
+                    {% set src_meta = source_meta.get(src, {}) %}
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                    {% endif %}
+                </div>
                 {% if technique.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.use | md }}</div>{% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
-</section>
+</details>
 {% endif %}
 
 {% if campaign.software %}
-<section style="margin-top:1rem;">
-    <h2 class="section-title">Software Used</h2>
-    <div class="cve-list" style="margin-top:0.75rem;">
+<details class="card card-padded" data-collapse-key="mitre-campaign-{{ campaign.id }}-software" style="margin-top:1rem;">
+    <summary class="section-title" style="cursor:pointer;">Software Used</summary>
+    <div class="cve-list" style="margin-top:0.85rem;">
         {% for item in campaign.software %}
+        {% set software_src = (item.sources[0] if item.sources else source_domain) %}
         <div class="cve-card-item cve-card-item--available">
             <div class="cve-card-item__id">{{ item.id }}</div>
             <div class="cve-card-item__body">
                 <div class="cve-card-item__name"><a href="{{ item.url }}">{{ item.name }}</a></div>
+                <div class="cve-card-item__meta">
+                    {% if item.sources %}
+                    {% for src in item.sources %}
+                    {% set src_meta = source_meta.get(src, {}) %}
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                    {% endif %}
+                </div>
                 <div class="cve-card-item__meta"><span>{{ item.software_type }}</span></div>
                 {% if item.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ item.use | md }}</div>{% endif %}
             </div>
         </div>
         {% endfor %}
     </div>
-</section>
+</details>
 {% endif %}
+</div>
+
+<div id="slide-panel-container"></div>
 {% endblock %}

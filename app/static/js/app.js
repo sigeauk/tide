@@ -15,6 +15,14 @@ console.debug('TIDE app.js loading...');
 (function() {
     'use strict';
 
+    const NAV_GROUP_IDS = [
+        'nav-group-risk',
+        'nav-group-rules',
+        'nav-group-threats',
+        'nav-group-mitre',
+        'nav-group-cti'
+    ];
+
     // ========================================
     // CONFIGURATION
     // ========================================
@@ -91,6 +99,74 @@ console.debug('TIDE app.js loading...');
         
         // Save preference
         localStorage.setItem('sidebar-expanded', isExpanded);
+    };
+
+    /**
+     * Toggle a sidebar nav group and persist its collapsed state.
+     */
+    window.toggleNavGroup = function(id) {
+        const el = document.getElementById(id);
+        if (!el) return;
+
+        const willOpen = el.classList.contains('collapsed');
+
+        // Accordion behavior: opening one section collapses the rest.
+        if (willOpen) {
+            NAV_GROUP_IDS.forEach(function(groupId) {
+                const groupEl = document.getElementById(groupId);
+                if (!groupEl || groupId === id) return;
+                groupEl.classList.add('collapsed');
+                try {
+                    localStorage.setItem('nav_' + groupId, '1');
+                } catch (e) {
+                    console.warn('Unable to persist nav group state for', groupId, e);
+                }
+            });
+        }
+
+        const isNowCollapsed = el.classList.toggle('collapsed');
+        try {
+            localStorage.setItem('nav_' + id, isNowCollapsed ? '1' : '0');
+        } catch (e) {
+            console.warn('Unable to persist nav group state for', id, e);
+        }
+    };
+
+    /**
+     * Expand/collapse all remembered collapsible sections.
+     * If scopeSelector is provided, only sections inside that container are updated.
+     */
+    window.setAllRememberedCollapsibles = function(scopeSelector, expand) {
+        const root = scopeSelector ? document.querySelector(scopeSelector) : document;
+        if (!root) return;
+
+        const scopeToken = scopeSelector
+            ? scopeSelector.replace(/^[#\.]/, '')
+            : (root.getAttribute('data-collapse-scope') || 'global');
+
+        const blocks = root.querySelectorAll('details[data-collapse-key]');
+        blocks.forEach(function(block) {
+            const key = block.getAttribute('data-collapse-key');
+            if (!key) return;
+
+            if (expand) {
+                block.setAttribute('open', '');
+            } else {
+                block.removeAttribute('open');
+            }
+
+            try {
+                localStorage.setItem('collapse_' + key, expand ? '1' : '0');
+            } catch (e) {
+                console.warn('Unable to persist collapsible state for', key, e);
+            }
+        });
+
+        try {
+            localStorage.setItem('collapse_scope_' + scopeToken, expand ? '1' : '0');
+        } catch (e) {
+            console.warn('Unable to persist collapsible scope state for', scopeToken, e);
+        }
     };
 
     /**
@@ -220,6 +296,81 @@ console.debug('TIDE app.js loading...');
     }
 
     /**
+     * Restore each nav group's collapse state.
+     * Default behavior is collapsed when no preference exists.
+     */
+    function restoreNavGroupStates() {
+        NAV_GROUP_IDS.forEach(function(id) {
+            const el = document.getElementById(id);
+            if (!el) return;
+
+            let shouldCollapse = true;
+            try {
+                const saved = localStorage.getItem('nav_' + id);
+                if (saved === '0') shouldCollapse = false;
+                if (saved === '1') shouldCollapse = true;
+            } catch (e) {
+                // Keep collapsed default if storage is unavailable.
+            }
+
+            el.classList.toggle('collapsed', shouldCollapse);
+        });
+    }
+
+    /**
+     * Restore and persist state for any details[data-collapse-key] block.
+     */
+    function restoreCollapsibleDetailsState() {
+        const scopes = document.querySelectorAll('[data-collapse-scope]');
+        scopes.forEach(function(scopeEl) {
+            const scopeToken = scopeEl.getAttribute('data-collapse-scope');
+            if (!scopeToken) return;
+            try {
+                const scopeSaved = localStorage.getItem('collapse_scope_' + scopeToken);
+                if (scopeSaved === '1' || scopeSaved === '0') {
+                    const expand = scopeSaved === '1';
+                    const scopedBlocks = scopeEl.querySelectorAll('details[data-collapse-key]');
+                    scopedBlocks.forEach(function(block) {
+                        if (expand) block.setAttribute('open', '');
+                        else block.removeAttribute('open');
+                    });
+                }
+            } catch (e) {
+                // Keep per-block or template defaults if storage is unavailable.
+            }
+        });
+
+        const blocks = document.querySelectorAll('details[data-collapse-key]');
+        blocks.forEach(function(block) {
+            const key = block.getAttribute('data-collapse-key');
+            if (!key) return;
+
+            try {
+                const saved = localStorage.getItem('collapse_' + key);
+                if (saved === '1') block.setAttribute('open', '');
+                if (saved === '0') block.removeAttribute('open');
+            } catch (e) {
+                // Keep template default if storage is unavailable.
+            }
+
+            if (block.dataset.collapseBound === '1') return;
+            block.addEventListener('toggle', function() {
+                try {
+                    localStorage.setItem('collapse_' + key, block.open ? '1' : '0');
+                    const scopeEl = block.closest('[data-collapse-scope]');
+                    if (scopeEl) {
+                        const scopeToken = scopeEl.getAttribute('data-collapse-scope');
+                        if (scopeToken) localStorage.removeItem('collapse_scope_' + scopeToken);
+                    }
+                } catch (e) {
+                    console.warn('Unable to persist collapsible state for', key, e);
+                }
+            });
+            block.dataset.collapseBound = '1';
+        });
+    }
+
+    /**
      * Restore theme from localStorage
      */
     function restoreTheme() {
@@ -255,6 +406,8 @@ console.debug('TIDE app.js loading...');
      */
     function initializePage() {
         restoreSidebarState();
+        restoreNavGroupStates();
+        restoreCollapsibleDetailsState();
         restoreTheme();
         updateActiveNavItem();
         document.dispatchEvent(new CustomEvent('tide:pageInit'));

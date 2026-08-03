@@ -13,6 +13,15 @@ MITRE_REF_SOURCES = {
     "mitre-ics-attack",
 }
 
+MITRE_KILL_CHAIN_NAMES = {
+    "mitre-attack",
+    "mitre-attack-mobile",
+    "mitre-attack-ics",
+    "mitre-mobile-attack",
+    "mitre-ics-attack",
+    "mitre-pre-attack",
+}
+
 # --- ISO COUNTRY MAPPING ---
 ISO_MAP = {
     "RU": "ru", "RUSSIA": "ru", "RUSSIAN": "ru", "USSR": "ru",
@@ -270,7 +279,7 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
                 kill_chain_phases = [
                     (phase.get("phase_name") or "").strip().lower()
                     for phase in (obj.get("kill_chain_phases") or [])
-                    if (phase.get("kill_chain_name") or "").strip().lower() == "mitre-attack"
+                    if (phase.get("kill_chain_name") or "").strip().lower() in MITRE_KILL_CHAIN_NAMES
                 ]
                 techniques_by_stix[obj_id] = {
                     "stix_id": obj_id,

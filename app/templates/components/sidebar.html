@@ -3,6 +3,7 @@ OpenCTI-Style Accordion Sidebar — Grouped Navigation
 Top-level items (standalone + group headers) share identical styling.
 Children are indented, slightly muted, icon-free.
 -->
+{% from "macros/icons.html" import icon %}
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <img src="/static/icons/tide 48x48.png?v={{ cache_bust }}" alt="TIDE" class="sidebar-logo">
@@ -43,11 +44,9 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── Risk & Baselines ── -->
         {% if not user or user.can_read('page:cve_overview') or user.can_read('page:baselines') %}
-        <div class="nav-group" id="nav-group-risk">
+        <div class="nav-group collapsed" id="nav-group-risk">
             <button name="Risks" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-risk')" data-tooltip="Risk &amp; Baselines">
-                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/>
-                </svg>
+                {{ icon('triangle-alert', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Risks</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -68,11 +67,9 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── Rules ── -->
         {% if not user or user.can_read('page:rules') or user.can_read('page:promotion') or user.can_read('page:sigma') %}
-        <div class="nav-group" id="nav-group-rules">
+        <div class="nav-group collapsed" id="nav-group-rules">
             <button name="Rules" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-rules')" data-tooltip="Rules">
-                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>
-                </svg>
+                {{ icon('shield-check', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Rules</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -98,11 +95,9 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── Threats ── -->
         {% if not user or user.can_read('page:threats') or user.can_read('page:heatmap') %}
-        <div class="nav-group" id="nav-group-threats">
+        <div class="nav-group collapsed" id="nav-group-threats">
             <button name="Threats" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-threats')" data-tooltip="Threats">
-                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
-                </svg>
+                {{ icon('target', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Threats</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -123,11 +118,9 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── MITRE ── -->
         {% if not user or user.can_read('page:threats') %}
-        <div class="nav-group" id="nav-group-mitre">
+        <div class="nav-group collapsed" id="nav-group-mitre">
             <button name="MITRE" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-mitre')" data-tooltip="MITRE">
-                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 3 3 7.5 12 12l9-4.5L12 3z"/><path d="M3 12l9 4.5 9-4.5"/><path d="M3 16.5 12 21l9-4.5"/>
-                </svg>
+                {{ icon('ampersand', '18', 'nav-icon-svg') }}
                 <span class="nav-label">MITRE</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -156,11 +149,9 @@ Children are indented, slightly muted, icon-free.
 
         <!-- ── CTI ── -->
         {% if not user or user.can_read('page:cti') or user.can_read('page:cti_indicators') or user.can_read('page:cti_actors') or user.can_read('page:cti_reports') %}
-        <div class="nav-group" id="nav-group-cti">
+        <div class="nav-group collapsed" id="nav-group-cti">
             <button name="CTI" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-cti')" data-tooltip="CTI">
-                <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 2 4 6v6c0 5 3.5 8.5 8 10 4.5-1.5 8-5 8-10V6l-8-4Z"/>
-                </svg>
+                {{ icon('eye', '18', 'nav-icon-svg') }}
                 <span class="nav-label">CTI</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
@@ -241,28 +232,4 @@ Children are indented, slightly muted, icon-free.
         </button>
     </div>
 </aside>
-
-<script>
-function toggleNavGroup(id) {
-    var el = document.getElementById(id);
-    if (el) el.classList.toggle('collapsed');
-    // Persist state
-    try {
-        var key = 'nav_' + id;
-        localStorage.setItem(key, el.classList.contains('collapsed') ? '1' : '0');
-    } catch(e) {}
-}
-// Restore collapsed state on load
-document.addEventListener('DOMContentLoaded', function() {
-    ['nav-group-risk','nav-group-rules','nav-group-threats','nav-group-mitre'].forEach(function(id) {
-        try {
-            var saved = localStorage.getItem('nav_' + id);
-            if (saved === '1') {
-                var el = document.getElementById(id);
-                if (el) el.classList.add('collapsed');
-            }
-        } catch(e) {}
-    });
-});
-</script>
 

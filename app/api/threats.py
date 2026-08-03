@@ -145,6 +145,7 @@ class ActorWithCoverage:
     coverage_pct: int
     ttps_with_coverage: List[TTPWithCoverage]
     iso_code: Optional[str] = None  # For flag SVG path
+    group_url: Optional[str] = None
 
 
 @router.get("", response_class=HTMLResponse)
@@ -200,6 +201,29 @@ def list_threats(
     
     # Calculate coverage only for filtered actors
     actors_with_coverage = []
+
+    # Best-effort MITRE group URL resolution so actor titles can deep-link
+    # to group detail pages when the actor maps to a known ATT&CK group.
+    group_lookup = {}
+    try:
+        for grp in db.list_mitre_groups(domain="enterprise"):
+            gid = (grp.get("id") or "").strip().upper()
+            if not gid:
+                continue
+            group_url = f"/mitre/groups/{gid}"
+
+            name_key = (grp.get("name") or "").strip().lower()
+            if name_key and name_key not in group_lookup:
+                group_lookup[name_key] = group_url
+
+            aliases_raw = grp.get("aliases") or ""
+            for alias in str(aliases_raw).split(","):
+                alias_key = alias.strip().lower()
+                if alias_key and alias_key not in group_lookup:
+                    group_lookup[alias_key] = group_url
+    except Exception:
+        group_lookup = {}
+
     for actor in actors:
         actor_ttps = {str(t).strip().upper() for t in actor.ttps}
         covered_count = len(actor_ttps.intersection(covered_ttps))
@@ -221,6 +245,20 @@ def list_threats(
         # Get ISO code from origin, name, or description
         text_to_check = f"{actor.origin or ''} {actor.name} {actor.description or ''}"
         iso_code = get_iso_code(text_to_check)
+
+        # Resolve actor title link to MITRE group detail by matching actor
+        # canonical name and aliases to the MITRE groups catalog.
+        group_url = None
+        actor_keys = [(actor.name or "").strip().lower()]
+        if actor.aliases:
+            actor_keys.extend(
+                [a.strip().lower() for a in str(actor.aliases).split(",") if a.strip()]
+            )
+        for key in actor_keys:
+            hit = group_lookup.get(key)
+            if hit:
+                group_url = hit
+                break
         
         actors_with_coverage.append(ActorWithCoverage(
             name=actor.name,
@@ -234,6 +272,7 @@ def list_threats(
             coverage_pct=coverage_pct,
             ttps_with_coverage=ttps_with_coverage,
             iso_code=iso_code,
+            group_url=group_url,
         ))
     
     # Apply sorting

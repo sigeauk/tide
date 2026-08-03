@@ -1519,6 +1519,14 @@ a:hover { color: var(--color-primary); }
   padding-top: 0.1rem;
 }
 
+.cve-card-item__id--pill {
+  min-width: 6rem;
+  width: 6rem;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 0;
+}
+
 .cve-card-item__id a {
   text-decoration: none;
 }
@@ -2545,6 +2553,11 @@ a:hover { color: var(--color-primary); }
 }
 
 .source-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  align-self: flex-start;
   font-size: 0.7rem;
   padding: 0.15rem 0.5rem;
   background: var(--color-bg-action);
@@ -2560,6 +2573,26 @@ a:hover { color: var(--color-primary); }
 .source-pill.src-mobile     { background: var(--color-primary-muted); border-color: var(--color-primary); color: var(--color-primary); }
 .source-pill.src-pre        { background: var(--color-danger-glow);  border-color: var(--color-danger);  color: var(--color-danger-text); }
 .source-pill.src-opencti    { background: var(--color-success-glow); border-color: var(--color-success); color: var(--color-success-text); }
+
+.source-pill-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-wrap: nowrap;
+  vertical-align: middle;
+}
+
+.source-pill.source-pill--count {
+  min-width: 4.5rem;
+  justify-content: center;
+  text-align: center;
+}
+
+.source-pill-row .source-pill {
+  min-width: 2.5rem;
+  justify-content: center;
+  text-align: center;
+}
 
 .threat-card-aliases {
   font: var(--small);

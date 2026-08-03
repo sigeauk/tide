@@ -459,62 +459,255 @@ def save_mitre_definitions(df):
 
 def _ensure_mitre_kb_schema(conn):
     """Create offline MITRE KB tables used by /mitre pages."""
+    def _migrate_stix_domain_pk(
+        table_name: str,
+        column_defs: list[str],
+        ordered_columns: list[str],
+    ) -> None:
+        """Migrate legacy ``stix_id`` PK tables to ``(stix_id, domain)`` PK."""
+        try:
+            ti = conn.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+            pk_cols = [str(r[1]).lower() for r in ti if int(r[5] or 0) > 0]
+            stix_only_pk = pk_cols == ["stix_id"]
+        except Exception:
+            stix_only_pk = False
+
+        if not stix_only_pk:
+            return
+
+        tmp = f"{table_name}__new"
+        conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+        conn.execute(
+            f"""
+            CREATE TABLE {tmp} (
+                {', '.join(column_defs)},
+                PRIMARY KEY (stix_id, domain)
+            )
+            """
+        )
+        mapped = []
+        for col in ordered_columns:
+            if col == "domain":
+                mapped.append("COALESCE(NULLIF(domain, ''), 'enterprise') AS domain")
+            else:
+                mapped.append(col)
+        mapped_clause = ",\n                    ".join(mapped)
+        insert_cols = ", ".join(ordered_columns)
+
+        conn.execute(
+            f"""
+            INSERT INTO {tmp} ({insert_cols})
+            SELECT DISTINCT
+                {mapped_clause}
+            FROM {table_name}
+            WHERE COALESCE(NULLIF(stix_id, ''), '') <> ''
+            """
+        )
+        conn.execute(f"DROP TABLE {table_name}")
+        conn.execute(f"ALTER TABLE {tmp} RENAME TO {table_name}")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mitre_techniques (
+            stix_id VARCHAR,
+            id VARCHAR,
+            name VARCHAR,
+            tactic VARCHAR,
+            url VARCHAR,
+            description VARCHAR,
+            is_subtechnique BOOLEAN,
+            domain VARCHAR,
+            PRIMARY KEY (stix_id, domain)
+        )
+    """)
+
+    # Legacy installs created ``mitre_techniques`` with ``id`` as the
+    # primary key, then later ``stix_id`` as a single-column primary key.
+    # Both block loading multiple ATT&CK domains because the same technique
+    # can appear in more than one domain. Migrate to ``(stix_id, domain)``.
+    try:
+        ti = conn.execute("PRAGMA table_info('mitre_techniques')").fetchall()
+        id_is_pk = any(str(r[1]).lower() == "id" and int(r[5] or 0) > 0 for r in ti)
+    except Exception:
+        id_is_pk = False
+
+    if id_is_pk:
+        conn.execute("DROP TABLE IF EXISTS mitre_techniques__new")
+        conn.execute("""
+            CREATE TABLE mitre_techniques__new (
+                stix_id VARCHAR PRIMARY KEY,
+                id VARCHAR,
+                name VARCHAR,
+                tactic VARCHAR,
+                url VARCHAR,
+                description VARCHAR,
+                is_subtechnique BOOLEAN,
+                domain VARCHAR
+            )
+        """)
+        conn.execute("""
+            INSERT INTO mitre_techniques__new
+                (stix_id, id, name, tactic, url, description, is_subtechnique, domain)
+            SELECT DISTINCT
+                COALESCE(
+                    NULLIF(stix_id, ''),
+                    id || ':' || COALESCE(NULLIF(domain, ''), 'enterprise')
+                ) AS stix_id,
+                id,
+                name,
+                tactic,
+                url,
+                COALESCE(description, '') AS description,
+                COALESCE(is_subtechnique, FALSE) AS is_subtechnique,
+                COALESCE(NULLIF(domain, ''), 'enterprise') AS domain
+            FROM mitre_techniques
+            WHERE COALESCE(NULLIF(id, ''), '') <> ''
+        """)
+        conn.execute("DROP TABLE mitre_techniques")
+        conn.execute("ALTER TABLE mitre_techniques__new RENAME TO mitre_techniques")
+
+    _migrate_stix_domain_pk(
+        "mitre_techniques",
+        [
+            "stix_id VARCHAR",
+            "id VARCHAR",
+            "name VARCHAR",
+            "tactic VARCHAR",
+            "url VARCHAR",
+            "description VARCHAR",
+            "is_subtechnique BOOLEAN",
+            "domain VARCHAR",
+        ],
+        ["stix_id", "id", "name", "tactic", "url", "description", "is_subtechnique", "domain"],
+    )
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_tactics (
-            stix_id VARCHAR PRIMARY KEY,
+            stix_id VARCHAR,
             tactic_id VARCHAR,
             name VARCHAR,
             shortname VARCHAR,
             description VARCHAR,
             domain VARCHAR,
-            url VARCHAR
+            url VARCHAR,
+            PRIMARY KEY (stix_id, domain)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_groups (
-            stix_id VARCHAR PRIMARY KEY,
+            stix_id VARCHAR,
             group_id VARCHAR,
             name VARCHAR,
             aliases VARCHAR,
             description VARCHAR,
             domain VARCHAR,
-            url VARCHAR
+            url VARCHAR,
+            PRIMARY KEY (stix_id, domain)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_mitigations (
-            stix_id VARCHAR PRIMARY KEY,
+            stix_id VARCHAR,
             mitigation_id VARCHAR,
             name VARCHAR,
             description VARCHAR,
             domain VARCHAR,
-            url VARCHAR
+            url VARCHAR,
+            PRIMARY KEY (stix_id, domain)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_software (
-            stix_id VARCHAR PRIMARY KEY,
+            stix_id VARCHAR,
             software_id VARCHAR,
             name VARCHAR,
             description VARCHAR,
             software_type VARCHAR,
             platforms VARCHAR,
             domain VARCHAR,
-            url VARCHAR
+            url VARCHAR,
+            PRIMARY KEY (stix_id, domain)
         )
     """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_campaigns (
-            stix_id VARCHAR PRIMARY KEY,
+            stix_id VARCHAR,
             campaign_id VARCHAR,
             name VARCHAR,
             description VARCHAR,
             first_seen VARCHAR,
             last_seen VARCHAR,
             domain VARCHAR,
-            url VARCHAR
+            url VARCHAR,
+            PRIMARY KEY (stix_id, domain)
         )
     """)
+
+    _migrate_stix_domain_pk(
+        "mitre_tactics",
+        [
+            "stix_id VARCHAR",
+            "tactic_id VARCHAR",
+            "name VARCHAR",
+            "shortname VARCHAR",
+            "description VARCHAR",
+            "domain VARCHAR",
+            "url VARCHAR",
+        ],
+        ["stix_id", "tactic_id", "name", "shortname", "description", "domain", "url"],
+    )
+    _migrate_stix_domain_pk(
+        "mitre_groups",
+        [
+            "stix_id VARCHAR",
+            "group_id VARCHAR",
+            "name VARCHAR",
+            "aliases VARCHAR",
+            "description VARCHAR",
+            "domain VARCHAR",
+            "url VARCHAR",
+        ],
+        ["stix_id", "group_id", "name", "aliases", "description", "domain", "url"],
+    )
+    _migrate_stix_domain_pk(
+        "mitre_mitigations",
+        [
+            "stix_id VARCHAR",
+            "mitigation_id VARCHAR",
+            "name VARCHAR",
+            "description VARCHAR",
+            "domain VARCHAR",
+            "url VARCHAR",
+        ],
+        ["stix_id", "mitigation_id", "name", "description", "domain", "url"],
+    )
+    _migrate_stix_domain_pk(
+        "mitre_software",
+        [
+            "stix_id VARCHAR",
+            "software_id VARCHAR",
+            "name VARCHAR",
+            "description VARCHAR",
+            "software_type VARCHAR",
+            "platforms VARCHAR",
+            "domain VARCHAR",
+            "url VARCHAR",
+        ],
+        ["stix_id", "software_id", "name", "description", "software_type", "platforms", "domain", "url"],
+    )
+    _migrate_stix_domain_pk(
+        "mitre_campaigns",
+        [
+            "stix_id VARCHAR",
+            "campaign_id VARCHAR",
+            "name VARCHAR",
+            "description VARCHAR",
+            "first_seen VARCHAR",
+            "last_seen VARCHAR",
+            "domain VARCHAR",
+            "url VARCHAR",
+        ],
+        ["stix_id", "campaign_id", "name", "description", "first_seen", "last_seen", "domain", "url"],
+    )
     conn.execute("""
         CREATE TABLE IF NOT EXISTS mitre_group_techniques (
             group_stix_id VARCHAR,
@@ -635,7 +828,25 @@ def _save_table_from_df(conn, table_name, df, columns):
     clean = df.copy()
     clean.columns = [c.lower().strip() for c in clean.columns]
     clean = ensure_columns(clean, columns)
-    clean = clean.drop_duplicates(subset=columns)
+    key_map = {
+        "mitre_techniques": ["stix_id", "domain"],
+        "mitre_tactics": ["stix_id", "domain"],
+        "mitre_groups": ["stix_id", "domain"],
+        "mitre_mitigations": ["stix_id", "domain"],
+        "mitre_software": ["stix_id", "domain"],
+        "mitre_campaigns": ["stix_id", "domain"],
+        "mitre_group_techniques": ["group_stix_id", "technique_stix_id", "domain"],
+        "mitre_technique_tactics": ["technique_stix_id", "tactic_stix_id", "domain"],
+        "mitre_technique_mitigations": ["technique_stix_id", "mitigation_stix_id", "domain"],
+        "mitre_group_associations": ["group_stix_id", "associated_group_stix_id", "domain"],
+        "mitre_group_software": ["group_stix_id", "software_stix_id", "domain"],
+        "mitre_software_techniques": ["software_stix_id", "technique_stix_id", "domain"],
+        "mitre_campaign_techniques": ["campaign_stix_id", "technique_stix_id", "domain"],
+        "mitre_campaign_software": ["campaign_stix_id", "software_stix_id", "domain"],
+        "mitre_campaign_groups": ["campaign_stix_id", "group_stix_id", "domain"],
+    }
+    dedupe_keys = [k for k in key_map.get(table_name, columns) if k in clean.columns]
+    clean = clean.drop_duplicates(subset=dedupe_keys if dedupe_keys else columns)
     conn.register(source_name, clean)
     col_clause = ", ".join(columns)
     conn.execute(

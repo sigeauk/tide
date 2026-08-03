@@ -1,47 +1,203 @@
 {% extends "base.html" %}
+{% from "components/mitre_pill.html" import mitre_pill %}
 
 {% block title %}MITRE Techniques | TIDE{% endblock %}
 
 {% block content %}
+<style>
+    #mitre-techniques summary {
+        list-style: none;
+    }
+    #mitre-techniques summary::-webkit-details-marker {
+        display: none;
+    }
+</style>
+
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
-        <h1 class="page-title-hero">Enterprise Techniques</h1>
+        {% if selected_tactic %}
+        <h1 class="page-title-hero">{{ selected_tactic.id }} - {{ selected_tactic.name }} Techniques</h1>
+        <p class="page-subtitle">Tactic detail and technique views are unified here. Parent techniques contain their sub-techniques.</p>
+        {% else %}
+        <h1 class="page-title-hero">MITRE Techniques</h1>
         <p class="page-subtitle">Techniques represent how an adversary achieves a tactical goal by performing an action.</p>
+        {% endif %}
     </div>
-    <div class="text-muted" style="padding-top:0.5rem;">Techniques: {{ techniques | length }}</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;padding-top:0.5rem;">
+        {% if source_domain != 'all' %}
+        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+        {% else %}
+        <span class="text-muted">All sources</span>
+        {% endif %}
+        <div class="text-muted">Techniques: {{ techniques | rejectattr('is_subtechnique') | list | length }}</div>
+        {% if selected_tactic %}
+        <a class="btn btn-secondary btn-sm" href="/mitre/tactic">Back to Tactics</a>
+        {% endif %}
+    </div>
 </div>
 
 <form method="get" action="/mitre/technique" class="filters-bar" style="margin-top:1rem;">
+    {% if tactic_filter %}<input type="hidden" name="tactic" value="{{ tactic_filter }}">{% endif %}
     <div class="filter-group grow">
         <label class="form-label">Search Techniques</label>
         <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, or description">
+    </div>
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select class="form-input form-select" name="src">
+            {% for value, label in source_options %}
+            <option value="{{ value }}" {% if source_domain == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
     </div>
     <div class="filter-group" style="align-self:flex-end;">
         <button class="btn btn-primary" type="submit">Apply</button>
     </div>
 </form>
 
-<div class="cve-list" style="margin-top:0.75rem;">
-    {% for technique in techniques %}
-    {% if technique.is_subtechnique %}
-    <div class="cve-card-item cve-card-item--available" style="margin-left:1.2rem;border-left-width:4px;">
-    {% else %}
-    <div class="cve-card-item cve-card-item--available">
-    {% endif %}
-        <div class="cve-card-item__id">
-            <a href="{{ technique.url }}">{{ technique.id }}</a>
-            {% if technique.is_subtechnique %}<span class="text-muted">Sub-technique</span>{% endif %}
-            {% if technique.parent_id %}<span class="text-muted">of {{ technique.parent_id }}</span>{% endif %}
-        </div>
-        <div class="cve-card-item__body">
-            <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
-            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
-            {% if technique.tactic %}<div class="cve-card-item__meta"><span>{{ technique.tactic }}</span></div>{% endif %}
-        </div>
-        <div class="cve-card-item__right">
-            <div class="cve-card-item__meta"><span>{{ technique.group_count }} groups</span><span>{{ technique.mitigation_count }} mitigations</span></div>
+<div id="mitre-techniques" data-collapse-scope="mitre-techniques" class="cve-list" style="margin-top:0.75rem;">
+    {% set orphan_sub = namespace(items=[]) %}
+    {% for technique in techniques if not technique.is_subtechnique %}
+    {% set technique_src = (technique.sources[0] if technique.sources else source_domain) %}
+    {% set sub_count = namespace(value=0) %}
+    {% for sub in techniques if sub.is_subtechnique and sub.parent_id == technique.id %}
+    {% set sub_count.value = sub_count.value + 1 %}
+    {% endfor %}
+    <details class="cve-card-item cve-card-item--available" data-collapse-key="mitre-techniques-{{ technique.id }}" style="display:block;">
+        <summary style="cursor:pointer;">
+            <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+                {% set tid = (technique.id or '') | upper %}
+                <div class="cve-card-item__id cve-card-item__id--pill">
+                    {{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}
+                    {% if sub_count.value > 0 %}
+                    <div style="margin-top:0.35rem;">
+                        <a
+                            href="#"
+                            class="text-muted"
+                            onclick="event.preventDefault();event.stopPropagation();toggleTechniqueSub('{{ technique.id }}')"
+                            aria-controls="subtechniques-{{ technique.id }}"
+                        >Sub-techniques ({{ sub_count.value }})</a>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="cve-card-item__body">
+                    <div class="cve-card-item__name"><a href="{{ technique.url }}" onclick="event.stopPropagation();">{{ technique.name }}</a></div>
+                    <div class="cve-card-item__meta">
+                        {% if technique.sources %}
+                        {% for src in technique.sources %}
+                        {% set src_meta = source_meta.get(src, {}) %}
+                        <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                        {% endfor %}
+                        {% else %}
+                        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                        {% endif %}
+                        {% if technique.tactic %}<span>{{ technique.tactic }}</span>{% endif %}
+                    </div>
+                </div>
+                <div class="cve-card-item__right">
+                    <div class="cve-card-item__meta">
+                        <span>{{ technique.group_count }} groups</span>
+                        <span>{{ technique.mitigation_count }} mitigations</span>
+                    </div>
+                </div>
+            </div>
+        </summary>
+        <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
+    </details>
+
+    {% if sub_count.value > 0 %}
+    <div id="subtechniques-{{ technique.id }}" style="display:none;margin:0.25rem 0 0.9rem 1.2rem;">
+        <div class="cve-list">
+            {% for sub in techniques if sub.is_subtechnique and sub.parent_id == technique.id %}
+            {% set sub_src = (sub.sources[0] if sub.sources else source_domain) %}
+            <details class="cve-card-item cve-card-item--available" data-collapse-key="mitre-techniques-sub-{{ technique.id }}-{{ sub.id }}" style="display:block;border-left-width:4px;">
+                <summary style="cursor:pointer;">
+                    <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+                        {% set sid = (sub.id or '') | upper %}
+                        <div class="cve-card-item__id cve-card-item__id--pill">
+                            {{ mitre_pill(sid, covered=(sid in covered_ttps), rule_count=ttp_rule_counts.get(sid, 0), clickable=true, size='sm') }}
+                            <span class="text-muted">Sub-technique</span>
+                        </div>
+                        <div class="cve-card-item__body">
+                            <div class="cve-card-item__name"><a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a></div>
+                            <div class="cve-card-item__meta">
+                                {% if sub.sources %}
+                                {% for src in sub.sources %}
+                                {% set src_meta = source_meta.get(src, {}) %}
+                                <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                                {% endfor %}
+                                {% else %}
+                                <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                                {% endif %}
+                                {% if sub.tactic %}<span>{{ sub.tactic }}</span>{% endif %}
+                            </div>
+                        </div>
+                        <div class="cve-card-item__right">
+                            <div class="cve-card-item__meta"><span>{{ sub.group_count }} groups</span><span>{{ sub.mitigation_count }} mitigations</span></div>
+                        </div>
+                    </div>
+                </summary>
+                <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ sub.description | md }}</div>
+            </details>
+            {% endfor %}
         </div>
     </div>
+    {% endif %}
     {% endfor %}
+
+    {% for sub in techniques if sub.is_subtechnique %}
+    {% if not sub.parent_id %}
+    {% set orphan_sub.items = orphan_sub.items + [sub] %}
+    {% endif %}
+    {% endfor %}
+
+    {% if orphan_sub.items %}
+    <details class="card card-padded" data-collapse-key="mitre-techniques-orphan-subtechniques" style="margin-top:0.6rem;">
+        <summary class="section-title" style="cursor:pointer;">Unmapped Sub-techniques</summary>
+        <div class="cve-list" style="margin-top:0.6rem;">
+            {% for sub in orphan_sub.items %}
+            {% set orphan_src = (sub.sources[0] if sub.sources else source_domain) %}
+            <details class="cve-card-item cve-card-item--available" data-collapse-key="mitre-techniques-orphan-{{ sub.id }}" style="display:block;border-left-width:4px;">
+                <summary style="cursor:pointer;">
+                    {% set osid = (sub.id or '') | upper %}
+                    <div class="cve-card-item__id cve-card-item__id--pill">
+                        {{ mitre_pill(osid, covered=(osid in covered_ttps), rule_count=ttp_rule_counts.get(osid, 0), clickable=true, size='sm') }}
+                        <span class="text-muted">Sub-technique</span>
+                    </div>
+                    <div class="cve-card-item__body">
+                        <div class="cve-card-item__name"><a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a></div>
+                        <div class="cve-card-item__meta">
+                            {% if sub.sources %}
+                            {% for src in sub.sources %}
+                            {% set src_meta = source_meta.get(src, {}) %}
+                            <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                            {% endfor %}
+                            {% else %}
+                            <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </summary>
+                <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ sub.description | md }}</div>
+            </details>
+            {% endfor %}
+        </div>
+    </details>
+    {% endif %}
+
+    {% if not techniques %}
+    <div class="card card-padded text-muted">No techniques found for the current filters.</div>
+    {% endif %}
 </div>
+
+<div id="slide-panel-container"></div>
+
+<script>
+    function toggleTechniqueSub(techniqueId) {
+        const panel = document.getElementById(`subtechniques-${techniqueId}`);
+        if (!panel) return;
+        const isHidden = panel.style.display === "none" || panel.style.display === "";
+        panel.style.display = isHidden ? "block" : "none";
+    }
+</script>
 {% endblock %}

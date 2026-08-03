@@ -5499,6 +5499,51 @@ class DatabaseService:
                 "campaign_groups": int(conn.execute("SELECT COUNT(*) FROM mitre_campaign_groups").fetchone()[0]),
             }
 
+    _MITRE_DOMAIN_ORDER = ("enterprise", "ics", "mobile", "pre")
+
+    def _sort_mitre_sources(self, sources: List[str]) -> List[str]:
+        order = {d: i for i, d in enumerate(self._MITRE_DOMAIN_ORDER)}
+        unique = sorted({(s or "").strip().lower() for s in sources if s}, key=lambda d: (order.get(d, 99), d))
+        return [d for d in unique if d]
+
+    def _mitre_sources_map(self, conn, table: str, id_col: str, ids: List[str]) -> Dict[str, List[str]]:
+        keys = sorted({(i or "").strip().upper() for i in ids if i})
+        if not keys:
+            return {}
+        placeholders = ", ".join(["?"] * len(keys))
+        rows = conn.execute(
+            f"""
+            SELECT UPPER({id_col}) AS object_id, LOWER(domain) AS domain
+            FROM {table}
+            WHERE UPPER({id_col}) IN ({placeholders})
+            """,
+            keys,
+        ).fetchall()
+        out: Dict[str, List[str]] = {}
+        for object_id, domain in rows:
+            out.setdefault(object_id, []).append(domain)
+        return {k: self._sort_mitre_sources(v) for k, v in out.items()}
+
+    def _mitre_sources_for_id(self, conn, table: str, id_col: str, object_id: str) -> List[str]:
+        val = (object_id or "").strip().upper()
+        if not val:
+            return []
+        rows = conn.execute(
+            f"""
+            SELECT LOWER(domain) AS domain
+            FROM {table}
+            WHERE UPPER({id_col}) = ?
+            """,
+            [val],
+        ).fetchall()
+        return self._sort_mitre_sources([r[0] for r in rows])
+
+    def _default_mitre_sources(self, domain: str) -> List[str]:
+        key = (domain or "").strip().lower()
+        if key == "all":
+            return []
+        return self._sort_mitre_sources([key])
+
     def list_mitre_tactics(self, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List tactics with rollup counts for techniques and groups."""
         order_clause = "CASE t.tactic_id "
@@ -5509,25 +5554,33 @@ class DatabaseService:
         ]):
             order_clause += f"WHEN '{tactic_id}' THEN {index} "
         order_clause += "ELSE 999 END"
+        include_all = (domain or "").strip().lower() == "all"
         with self.get_connection() as conn:
+            where_clause = "" if include_all else "WHERE LOWER(t.domain) = LOWER(?)"
+            params = [] if include_all else [domain]
             rows = conn.execute(
                 f"""
                 SELECT
                     t.tactic_id,
-                    COALESCE(t.name, t.tactic_id) AS name,
-                    t.shortname,
-                    t.description,
+                    COALESCE(MAX(NULLIF(t.name, t.tactic_id)), MAX(t.name), t.tactic_id) AS name,
+                    COALESCE(MAX(NULLIF(t.shortname, '')), '') AS shortname,
+                    COALESCE(MAX(NULLIF(t.description, '')), '') AS description,
                     COUNT(DISTINCT tt.technique_id) AS technique_count,
                     COUNT(DISTINCT gt.group_id) AS group_count
                 FROM mitre_tactics t
-                LEFT JOIN mitre_technique_tactics tt ON tt.tactic_stix_id = t.stix_id
-                LEFT JOIN mitre_group_techniques gt ON gt.technique_stix_id = tt.technique_stix_id
-                WHERE LOWER(t.domain) = LOWER(?)
-                GROUP BY t.tactic_id, name, t.shortname, t.description
+                                LEFT JOIN mitre_technique_tactics tt
+                                    ON tt.tactic_stix_id = t.stix_id
+                                 AND LOWER(tt.domain) = LOWER(t.domain)
+                                LEFT JOIN mitre_group_techniques gt
+                                    ON gt.technique_stix_id = tt.technique_stix_id
+                                 AND LOWER(gt.domain) = LOWER(t.domain)
+                {where_clause}
+                GROUP BY t.tactic_id
                 ORDER BY {order_clause}, name
                 """,
-                [domain],
+                params,
             ).fetchall()
+            source_map = self._mitre_sources_map(conn, "mitre_tactics", "tactic_id", [r[0] for r in rows if r[0]])
         return [
             {
                 "id": r[0],
@@ -5537,6 +5590,7 @@ class DatabaseService:
                 "technique_count": int(r[4] or 0),
                 "group_count": int(r[5] or 0),
                 "url": f"/mitre/tactic/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
             for r in rows
             if r[0]
@@ -5547,51 +5601,76 @@ class DatabaseService:
         tid = (tactic_id or "").strip().upper()
         if not tid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+        params = [tid] if include_all else [tid, domain]
         with self.get_connection() as conn:
             tactic_row = conn.execute(
-                """
+                f"""
                 SELECT tactic_id, COALESCE(name, tactic_id), shortname, description
                 FROM mitre_tactics
-                WHERE UPPER(tactic_id) = ? AND LOWER(domain) = LOWER(?)
-                ORDER BY domain
+                WHERE UPPER(tactic_id) = ?{where_domain}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [tid, domain],
+                params,
             ).fetchone()
             if not tactic_row:
                 return {}
 
             techniques = conn.execute(
-                """
-                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), mt.is_subtechnique
+                f"""
+                SELECT mt.id, mt.name, COALESCE(MAX(NULLIF(mt.description, '')), ''), BOOL_OR(mt.is_subtechnique)
                 FROM mitre_technique_tactics mtt
-                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mtt.technique_stix_id
-                WHERE UPPER(t.tactic_id) = ? AND LOWER(t.domain) = LOWER(?)
+                                JOIN mitre_tactics t
+                                    ON t.stix_id = mtt.tactic_stix_id
+                                 AND LOWER(t.domain) = LOWER(mtt.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mtt.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mtt.domain)
+                WHERE UPPER(t.tactic_id) = ?{where_domain}
+                GROUP BY mt.id, mt.name
                 ORDER BY mt.id
                 """,
-                [tid, domain],
+                params,
             ).fetchall()
 
             groups = conn.execute(
-                """
-                SELECT DISTINCT mg.group_id, mg.name
+                f"""
+                SELECT mg.group_id, mg.name
                 FROM mitre_group_techniques mgt
                 JOIN mitre_technique_tactics mtt
-                  ON mtt.technique_stix_id = mgt.technique_stix_id
-                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                                WHERE UPPER(t.tactic_id) = ? AND LOWER(t.domain) = LOWER(?)
+                                    ON mtt.technique_stix_id = mgt.technique_stix_id
+                                 AND LOWER(mtt.domain) = LOWER(mgt.domain)
+                                JOIN mitre_tactics t
+                                    ON t.stix_id = mtt.tactic_stix_id
+                                 AND LOWER(t.domain) = LOWER(mtt.domain)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                                WHERE UPPER(t.tactic_id) = ?{where_domain}
+                GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
-                                [tid, domain],
+                params,
             ).fetchall()
+
+            tactic_sources = self._mitre_sources_for_id(conn, "mitre_tactics", "tactic_id", tid)
+            technique_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
+            group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
 
         return {
             "id": tactic_row[0],
             "name": tactic_row[1],
             "shortname": tactic_row[2] or "",
             "description": tactic_row[3] or "",
+            "sources": tactic_sources,
             "techniques": [
                 {
                     "id": r[0],
@@ -5600,6 +5679,7 @@ class DatabaseService:
                     "is_subtechnique": bool(r[3]),
                     "parent_id": (r[0].split(".", 1)[0] if bool(r[3]) and "." in (r[0] or "") else ""),
                     "url": f"/mitre/technique/{r[0]}",
+                    "sources": technique_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in techniques
             ],
@@ -5608,6 +5688,7 @@ class DatabaseService:
                     "id": r[0],
                     "name": r[1],
                     "url": f"/mitre/groups/{r[0]}",
+                    "sources": group_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in groups
             ],
@@ -5615,15 +5696,16 @@ class DatabaseService:
 
     def list_mitre_techniques(self, search: Optional[str] = None, tactic_id: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List MITRE techniques with optional free-text and tactic filter."""
+        include_all = (domain or "").strip().lower() == "all"
         domain_sql = (domain or "enterprise").replace("'", "''").lower()
-        where = [f"LOWER(mt.domain) = '{domain_sql}'"]
+        where = [] if include_all else [f"LOWER(mt.domain) = '{domain_sql}'"]
         params: list = []
         if search:
             like = f"%{search}%"
             where.append("(LOWER(mt.id) LIKE LOWER(?) OR LOWER(mt.name) LIKE LOWER(?) OR LOWER(COALESCE(mt.description, '')) LIKE LOWER(?))")
             params.extend([like, like, like])
         if tactic_id:
-            where.append("EXISTS (SELECT 1 FROM mitre_technique_tactics mtt JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id WHERE mtt.technique_stix_id = mt.stix_id AND UPPER(t.tactic_id) = ?)")
+            where.append("EXISTS (SELECT 1 FROM mitre_technique_tactics mtt JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id AND LOWER(t.domain) = LOWER(mtt.domain) WHERE mtt.technique_stix_id = mt.stix_id AND LOWER(mtt.domain) = LOWER(mt.domain) AND UPPER(t.tactic_id) = ?)")
             params.append((tactic_id or "").upper())
 
         where_clause = f"WHERE {' AND '.join(where)}" if where else ""
@@ -5639,10 +5721,18 @@ class DatabaseService:
                     COUNT(DISTINCT mgt.group_stix_id) AS group_count,
                     COUNT(DISTINCT mtm.mitigation_stix_id) AS mitigation_count
                 FROM mitre_techniques mt
-                LEFT JOIN mitre_technique_tactics mtt ON mtt.technique_stix_id = mt.stix_id
-                LEFT JOIN mitre_tactics tshort ON tshort.stix_id = mtt.tactic_stix_id AND LOWER(tshort.domain) = '{domain_sql}'
-                LEFT JOIN mitre_group_techniques mgt ON mgt.technique_stix_id = mt.stix_id
-                LEFT JOIN mitre_technique_mitigations mtm ON mtm.technique_stix_id = mt.stix_id
+                                LEFT JOIN mitre_technique_tactics mtt
+                                    ON mtt.technique_stix_id = mt.stix_id
+                                 AND LOWER(mtt.domain) = LOWER(mt.domain)
+                                LEFT JOIN mitre_tactics tshort
+                                    ON tshort.stix_id = mtt.tactic_stix_id
+                                 AND LOWER(tshort.domain) = LOWER(mtt.domain)
+                                LEFT JOIN mitre_group_techniques mgt
+                                    ON mgt.technique_stix_id = mt.stix_id
+                                 AND LOWER(mgt.domain) = LOWER(mt.domain)
+                                LEFT JOIN mitre_technique_mitigations mtm
+                                    ON mtm.technique_stix_id = mt.stix_id
+                                 AND LOWER(mtm.domain) = LOWER(mt.domain)
                 {where_clause}
                 GROUP BY mt.id, mt.name, mt.description, mt.is_subtechnique
                 ORDER BY mt.id
@@ -5669,6 +5759,10 @@ class DatabaseService:
 
             rows = sorted(rows, key=_rank)
 
+        out_rows = [r for r in rows if r[0]]
+        with self.get_connection() as conn:
+            source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in out_rows])
+
         return [
             {
                 "id": r[0],
@@ -5680,9 +5774,9 @@ class DatabaseService:
                 "group_count": int(r[5] or 0),
                 "mitigation_count": int(r[6] or 0),
                 "url": f"/mitre/technique/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
-            for r in rows
-            if r[0]
+            for r in out_rows
         ]
 
     def get_mitre_technique_detail(self, technique_id: str, domain: str = "enterprise") -> Dict[str, Any]:
@@ -5690,16 +5784,26 @@ class DatabaseService:
         tid = (technique_id or "").strip().upper()
         if not tid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+        params = [tid] if include_all else [tid, domain]
 
         with self.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT id, name, COALESCE(description, ''), COALESCE(tactic, ''), is_subtechnique
                 FROM mitre_techniques
-                WHERE UPPER(id) = ? AND LOWER(domain) = LOWER(?)
+                WHERE UPPER(id) = ?{where_domain}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [tid, domain],
+                params,
             ).fetchone()
             if not row:
                 return {}
@@ -5707,14 +5811,22 @@ class DatabaseService:
             parent_technique = None
             if bool(row[4]) and "." in (row[0] or ""):
                 parent_id = row[0].split(".", 1)[0]
+                parent_params = [parent_id] if include_all else [parent_id, domain]
                 parent_row = conn.execute(
-                    """
+                    f"""
                     SELECT id, name
                     FROM mitre_techniques
-                    WHERE UPPER(id) = ? AND LOWER(domain) = LOWER(?)
+                    WHERE UPPER(id) = ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"}
+                    ORDER BY CASE LOWER(domain)
+                        WHEN 'enterprise' THEN 0
+                        WHEN 'ics' THEN 1
+                        WHEN 'mobile' THEN 2
+                        WHEN 'pre' THEN 3
+                        ELSE 9
+                    END
                     LIMIT 1
                     """,
-                    [parent_id, domain],
+                    parent_params,
                 ).fetchone()
                 if parent_row:
                     parent_technique = {
@@ -5724,62 +5836,90 @@ class DatabaseService:
                     }
 
             subtechniques = conn.execute(
-                """
+                f"""
                 SELECT id, name, COALESCE(description, '')
                 FROM mitre_techniques
-                WHERE UPPER(id) LIKE ? AND LOWER(domain) = LOWER(?) AND is_subtechnique = TRUE
+                WHERE UPPER(id) LIKE ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"} AND is_subtechnique = TRUE
+                GROUP BY id, name, description
                 ORDER BY id
                 """,
-                [f"{tid}.%", domain],
+                ([f"{tid}.%"] if include_all else [f"{tid}.%", domain]),
             ).fetchall()
 
             tactics = conn.execute(
-                """
-                SELECT DISTINCT t.tactic_id, COALESCE(t.name, t.tactic_id)
+                f"""
+                SELECT t.tactic_id, COALESCE(MAX(NULLIF(t.name, '')), t.tactic_id)
                 FROM mitre_technique_tactics mtt
-                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mtt.technique_stix_id
-                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                                JOIN mitre_tactics t
+                                    ON t.stix_id = mtt.tactic_stix_id
+                                 AND LOWER(t.domain) = LOWER(mtt.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mtt.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mtt.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY t.tactic_id
                 ORDER BY t.tactic_id
                 """,
-                [tid, domain],
+                params,
             ).fetchall()
 
             groups = conn.execute(
-                """
-                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mg.aliases, '')
+                f"""
+                SELECT mg.group_id, mg.name, COALESCE(MAX(NULLIF(mg.aliases, '')), '')
                 FROM mitre_group_techniques mgt
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
-                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mgt.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mgt.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
-                [tid, domain],
+                params,
             ).fetchall()
 
             mitigations = conn.execute(
-                """
-                SELECT DISTINCT mm.mitigation_id, mm.name, COALESCE(mm.description, ''), COALESCE(mm.url, '')
+                f"""
+                SELECT mm.mitigation_id, mm.name, COALESCE(MAX(NULLIF(mm.description, '')), ''), COALESCE(MAX(NULLIF(mm.url, '')), '')
                 FROM mitre_technique_mitigations mtm
-                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mtm.technique_stix_id
-                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                                JOIN mitre_mitigations mm
+                                    ON mm.stix_id = mtm.mitigation_stix_id
+                                 AND LOWER(mm.domain) = LOWER(mtm.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mtm.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mtm.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY mm.mitigation_id, mm.name
                 ORDER BY mm.mitigation_id
                 """,
-                [tid, domain],
+                params,
             ).fetchall()
 
             procedure_examples = conn.execute(
-                """
-                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mgt.use_description, '')
+                f"""
+                SELECT mg.group_id, mg.name, COALESCE(MAX(NULLIF(mgt.use_description, '')), '')
                 FROM mitre_group_techniques mgt
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
-                WHERE UPPER(mt.id) = ? AND LOWER(mt.domain) = LOWER(?)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mgt.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mgt.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
-                [tid, domain],
+                params,
             ).fetchall()
+
+            technique_sources = self._mitre_sources_for_id(conn, "mitre_techniques", "id", tid)
+            tactic_source_map = self._mitre_sources_map(conn, "mitre_tactics", "tactic_id", [r[0] for r in tactics if r[0]])
+            sub_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in subtechniques if r[0]])
+            group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
+            mitigation_source_map = self._mitre_sources_map(conn, "mitre_mitigations", "mitigation_id", [r[0] for r in mitigations if r[0]])
+            proc_group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in procedure_examples if r[0]])
 
         return {
             "id": row[0],
@@ -5787,18 +5927,36 @@ class DatabaseService:
             "description": row[2],
             "tactic": row[3],
             "is_subtechnique": bool(row[4]),
+            "sources": technique_sources,
             "parent_technique": parent_technique,
             "url": f"/mitre/technique/{row[0]}",
             "tactics": [
-                {"id": r[0], "name": r[1], "url": f"/mitre/tactic/{r[0]}"}
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "url": f"/mitre/tactic/{r[0]}",
+                    "sources": tactic_source_map.get((r[0] or "").upper(), []),
+                }
                 for r in tactics
             ],
             "subtechniques": [
-                {"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/technique/{r[0]}"}
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "url": f"/mitre/technique/{r[0]}",
+                    "sources": sub_source_map.get((r[0] or "").upper(), []),
+                }
                 for r in subtechniques
             ],
             "groups": [
-                {"id": r[0], "name": r[1], "aliases": r[2], "url": f"/mitre/groups/{r[0]}"}
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "aliases": r[2],
+                    "url": f"/mitre/groups/{r[0]}",
+                    "sources": group_source_map.get((r[0] or "").upper(), []),
+                }
                 for r in groups
             ],
             "mitigations": [
@@ -5808,22 +5966,30 @@ class DatabaseService:
                     "description": r[2],
                     "reference": r[3],
                     "url": f"/mitre/mitigations/{r[0]}",
+                    "sources": mitigation_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in mitigations
             ],
             "procedure_examples": [
-                {"group_id": r[0], "group_name": r[1], "use": r[2], "url": f"/mitre/groups/{r[0]}"}
+                {
+                    "group_id": r[0],
+                    "group_name": r[1],
+                    "use": r[2],
+                    "url": f"/mitre/groups/{r[0]}",
+                    "sources": proc_group_source_map.get((r[0] or "").upper(), []),
+                }
                 for r in procedure_examples
             ],
         }
 
     def list_mitre_groups(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List MITRE intrusion-set groups for the offline KB."""
-        params: list = [domain]
-        where_clause = "WHERE LOWER(mg.domain) = LOWER(?)"
+        include_all = (domain or "").strip().lower() == "all"
+        params: list = [] if include_all else [domain]
+        where_clause = "" if include_all else "WHERE LOWER(mg.domain) = LOWER(?)"
         if search:
             like = f"%{search}%"
-            where_clause += " AND (LOWER(mg.group_id) LIKE LOWER(?) OR LOWER(mg.name) LIKE LOWER(?) OR LOWER(COALESCE(mg.aliases, '')) LIKE LOWER(?))"
+            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mg.group_id) LIKE LOWER(?) OR LOWER(mg.name) LIKE LOWER(?) OR LOWER(COALESCE(mg.aliases, '')) LIKE LOWER(?))"
             params.extend([like, like, like])
 
         with self.get_connection() as conn:
@@ -5831,20 +5997,26 @@ class DatabaseService:
                 f"""
                 SELECT
                     mg.group_id,
-                    mg.name,
-                    COALESCE(mg.aliases, '') AS aliases,
-                    COALESCE(mg.description, '') AS group_description,
+                    COALESCE(MAX(NULLIF(mg.name, mg.group_id)), MAX(mg.name), mg.group_id) AS name,
+                    COALESCE(MAX(NULLIF(mg.aliases, '')), '') AS aliases,
+                    COALESCE(MAX(NULLIF(mg.description, '')), '') AS group_description,
                     COUNT(DISTINCT mgt.technique_stix_id) AS technique_count,
                     COUNT(DISTINCT mga.associated_group_stix_id) AS associated_count
                 FROM mitre_groups mg
-                LEFT JOIN mitre_group_techniques mgt ON mgt.group_stix_id = mg.stix_id
-                LEFT JOIN mitre_group_associations mga ON mga.group_stix_id = mg.stix_id
+                                LEFT JOIN mitre_group_techniques mgt
+                                    ON mgt.group_stix_id = mg.stix_id
+                                 AND LOWER(mgt.domain) = LOWER(mg.domain)
+                                LEFT JOIN mitre_group_associations mga
+                                    ON mga.group_stix_id = mg.stix_id
+                                 AND LOWER(mga.domain) = LOWER(mg.domain)
                 {where_clause}
-                GROUP BY mg.group_id, mg.name, mg.aliases, mg.description
-                ORDER BY mg.name
+                GROUP BY mg.group_id
+                ORDER BY name
                 """,
                 params,
             ).fetchall()
+
+            source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in rows if r[0]])
 
         return [
             {
@@ -5855,6 +6027,7 @@ class DatabaseService:
                 "technique_count": int(r[4] or 0),
                 "associated_count": int(r[5] or 0),
                 "url": f"/mitre/groups/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
             for r in rows
             if r[0]
@@ -5865,99 +6038,164 @@ class DatabaseService:
         gid = (group_id or "").strip().upper()
         if not gid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(mg.domain) = LOWER(?)"
+        params = [gid] if include_all else [gid, domain]
 
         with self.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT group_id, name, COALESCE(aliases, ''), COALESCE(description, '')
                 FROM mitre_groups
-                WHERE UPPER(group_id) = ? AND LOWER(domain) = LOWER(?)
+                WHERE UPPER(group_id) = ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [gid, domain],
+                params,
             ).fetchone()
             if not row:
                 return {}
 
             techniques = conn.execute(
-                """
-                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), COALESCE(mt.tactic, ''), COALESCE(mgt.use_description, '')
+                f"""
+                SELECT
+                    mt.id,
+                    COALESCE(MAX(NULLIF(mt.name, mt.id)), MAX(mt.name), mt.id) AS name,
+                    COALESCE(MAX(NULLIF(mt.description, '')), ''),
+                    COALESCE(MAX(NULLIF(mt.tactic, '')), ''),
+                    COALESCE(MAX(NULLIF(mgt.use_description, '')), '')
                 FROM mitre_group_techniques mgt
-                JOIN mitre_techniques mt ON mt.stix_id = mgt.technique_stix_id
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mgt.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mgt.domain)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                WHERE UPPER(mg.group_id) = ?{where_domain}
+                GROUP BY mt.id
                 ORDER BY mt.id
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
 
             associated = conn.execute(
-                """
-                SELECT DISTINCT g2.group_id, g2.name, COALESCE(mga.description, '')
+                f"""
+                SELECT g2.group_id, g2.name, COALESCE(MAX(NULLIF(mga.description, '')), '')
                 FROM mitre_group_associations mga
-                JOIN mitre_groups g1 ON g1.stix_id = mga.group_stix_id
-                JOIN mitre_groups g2 ON g2.stix_id = mga.associated_group_stix_id
-                WHERE UPPER(g1.group_id) = ? AND LOWER(g1.domain) = LOWER(?)
+                                JOIN mitre_groups g1
+                                    ON g1.stix_id = mga.group_stix_id
+                                 AND LOWER(g1.domain) = LOWER(mga.domain)
+                                JOIN mitre_groups g2
+                                    ON g2.stix_id = mga.associated_group_stix_id
+                                 AND LOWER(g2.domain) = LOWER(mga.domain)
+                WHERE UPPER(g1.group_id) = ?{"" if include_all else " AND LOWER(g1.domain) = LOWER(?)"}
+                GROUP BY g2.group_id, g2.name
                 ORDER BY g2.name
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
 
             campaigns = conn.execute(
-                """
-                SELECT DISTINCT mc.campaign_id, mc.name, COALESCE(mcg.description, '')
+                f"""
+                SELECT
+                    mc.campaign_id,
+                    COALESCE(MAX(NULLIF(mc.name, mc.campaign_id)), MAX(mc.name), mc.campaign_id) AS name,
+                    COALESCE(MAX(NULLIF(mcg.description, '')), '')
                 FROM mitre_campaign_groups mcg
-                JOIN mitre_groups mg ON mg.stix_id = mcg.group_stix_id
-                JOIN mitre_campaigns mc ON mc.stix_id = mcg.campaign_stix_id
-                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
-                ORDER BY mc.name
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mcg.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mcg.domain)
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mcg.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mcg.domain)
+                WHERE UPPER(mg.group_id) = ?{where_domain}
+                GROUP BY mc.campaign_id
+                ORDER BY name
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
 
             software = conn.execute(
-                """
-                SELECT DISTINCT ms.software_id, ms.name, COALESCE(ms.software_type, ''), COALESCE(mgs.use_description, '')
+                f"""
+                SELECT
+                    ms.software_id,
+                    COALESCE(MAX(NULLIF(ms.name, ms.software_id)), MAX(ms.name), ms.software_id) AS name,
+                    COALESCE(MAX(NULLIF(ms.software_type, '')), ''),
+                    COALESCE(MAX(NULLIF(mgs.use_description, '')), '')
                 FROM mitre_group_software mgs
-                JOIN mitre_groups mg ON mg.stix_id = mgs.group_stix_id
-                JOIN mitre_software ms ON ms.stix_id = mgs.software_stix_id
-                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
-                ORDER BY ms.name
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgs.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgs.domain)
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mgs.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mgs.domain)
+                WHERE UPPER(mg.group_id) = ?{where_domain}
+                GROUP BY ms.software_id
+                ORDER BY name
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
 
             tactics = conn.execute(
-                """
-                SELECT DISTINCT t.tactic_id, COALESCE(t.name, t.tactic_id)
+                f"""
+                SELECT t.tactic_id, COALESCE(MAX(NULLIF(t.name, '')), t.tactic_id)
                 FROM mitre_group_techniques mgt
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                JOIN mitre_technique_tactics mtt ON mtt.technique_stix_id = mgt.technique_stix_id
-                JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id
-                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                                JOIN mitre_technique_tactics mtt
+                                    ON mtt.technique_stix_id = mgt.technique_stix_id
+                                 AND LOWER(mtt.domain) = LOWER(mgt.domain)
+                                JOIN mitre_tactics t
+                                    ON t.stix_id = mtt.tactic_stix_id
+                                 AND LOWER(t.domain) = LOWER(mtt.domain)
+                WHERE UPPER(mg.group_id) = ?{where_domain}
+                GROUP BY t.tactic_id
                 ORDER BY t.tactic_id
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
 
             mitigations = conn.execute(
-                """
-                SELECT DISTINCT mm.mitigation_id, mm.name, COALESCE(mm.description, '')
+                f"""
+                SELECT mm.mitigation_id, mm.name, COALESCE(MAX(NULLIF(mm.description, '')), '')
                 FROM mitre_group_techniques mgt
-                JOIN mitre_groups mg ON mg.stix_id = mgt.group_stix_id
-                JOIN mitre_technique_mitigations mtm ON mtm.technique_stix_id = mgt.technique_stix_id
-                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
-                WHERE UPPER(mg.group_id) = ? AND LOWER(mg.domain) = LOWER(?)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgt.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                                JOIN mitre_technique_mitigations mtm
+                                    ON mtm.technique_stix_id = mgt.technique_stix_id
+                                 AND LOWER(mtm.domain) = LOWER(mgt.domain)
+                                JOIN mitre_mitigations mm
+                                    ON mm.stix_id = mtm.mitigation_stix_id
+                                 AND LOWER(mm.domain) = LOWER(mtm.domain)
+                WHERE UPPER(mg.group_id) = ?{where_domain}
+                GROUP BY mm.mitigation_id, mm.name
                 ORDER BY mm.mitigation_id
                 """,
-                [gid, domain],
+                params,
             ).fetchall()
+
+            group_sources = self._mitre_sources_for_id(conn, "mitre_groups", "group_id", gid)
+            tech_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
+            assoc_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in associated if r[0]])
+            camp_source_map = self._mitre_sources_map(conn, "mitre_campaigns", "campaign_id", [r[0] for r in campaigns if r[0]])
+            sw_source_map = self._mitre_sources_map(conn, "mitre_software", "software_id", [r[0] for r in software if r[0]])
+            tactic_source_map = self._mitre_sources_map(conn, "mitre_tactics", "tactic_id", [r[0] for r in tactics if r[0]])
+            mit_source_map = self._mitre_sources_map(conn, "mitre_mitigations", "mitigation_id", [r[0] for r in mitigations if r[0]])
 
         return {
             "id": row[0],
             "name": row[1],
             "aliases": row[2],
             "description": row[3],
+            "sources": group_sources,
             "url": f"/mitre/groups/{row[0]}",
             "techniques": [
                 {
@@ -5967,6 +6205,7 @@ class DatabaseService:
                     "tactic": r[3],
                     "use": r[4],
                     "url": f"/mitre/technique/{r[0]}",
+                    "sources": tech_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in techniques
             ],
@@ -5976,6 +6215,7 @@ class DatabaseService:
                     "name": r[1],
                     "description": r[2],
                     "url": f"/mitre/groups/{r[0]}",
+                    "sources": assoc_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in associated
             ],
@@ -5985,6 +6225,7 @@ class DatabaseService:
                     "name": r[1],
                     "description": r[2],
                     "url": f"/mitre/campaigns/{r[0]}",
+                    "sources": camp_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in campaigns
             ],
@@ -5995,6 +6236,7 @@ class DatabaseService:
                     "software_type": r[2],
                     "use": r[3],
                     "url": f"/mitre/software/{r[0]}",
+                    "sources": sw_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in software
             ],
@@ -6003,6 +6245,7 @@ class DatabaseService:
                     "id": r[0],
                     "name": r[1],
                     "url": f"/mitre/tactic/{r[0]}",
+                    "sources": tactic_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in tactics
             ],
@@ -6012,6 +6255,7 @@ class DatabaseService:
                     "name": r[1],
                     "description": r[2],
                     "url": f"/mitre/mitigations/{r[0]}",
+                    "sources": mit_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in mitigations
             ],
@@ -6019,11 +6263,12 @@ class DatabaseService:
 
     def list_mitre_software(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List MITRE software (malware/tool) for offline ATT&CK pages."""
-        params: list = [domain]
-        where_clause = "WHERE LOWER(ms.domain) = LOWER(?)"
+        include_all = (domain or "").strip().lower() == "all"
+        params: list = [] if include_all else [domain]
+        where_clause = "" if include_all else "WHERE LOWER(ms.domain) = LOWER(?)"
         if search:
             like = f"%{search}%"
-            where_clause += " AND (LOWER(ms.software_id) LIKE LOWER(?) OR LOWER(ms.name) LIKE LOWER(?) OR LOWER(COALESCE(ms.software_type, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.platforms, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.description, '')) LIKE LOWER(?))"
+            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(ms.software_id) LIKE LOWER(?) OR LOWER(ms.name) LIKE LOWER(?) OR LOWER(COALESCE(ms.software_type, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.platforms, '')) LIKE LOWER(?) OR LOWER(COALESCE(ms.description, '')) LIKE LOWER(?))"
             params.extend([like, like, like, like, like])
 
         with self.get_connection() as conn:
@@ -6038,14 +6283,20 @@ class DatabaseService:
                     COUNT(DISTINCT mst.technique_stix_id) AS technique_count,
                     COUNT(DISTINCT mgs.group_stix_id) AS group_count
                 FROM mitre_software ms
-                LEFT JOIN mitre_software_techniques mst ON mst.software_stix_id = ms.stix_id
-                LEFT JOIN mitre_group_software mgs ON mgs.software_stix_id = ms.stix_id
+                                LEFT JOIN mitre_software_techniques mst
+                                    ON mst.software_stix_id = ms.stix_id
+                                 AND LOWER(mst.domain) = LOWER(ms.domain)
+                                LEFT JOIN mitre_group_software mgs
+                                    ON mgs.software_stix_id = ms.stix_id
+                                 AND LOWER(mgs.domain) = LOWER(ms.domain)
                 {where_clause}
                 GROUP BY ms.software_id, ms.name, ms.description, ms.software_type, ms.platforms
                 ORDER BY ms.name
                 """,
                 params,
             ).fetchall()
+
+            source_map = self._mitre_sources_map(conn, "mitre_software", "software_id", [r[0] for r in rows if r[0]])
 
         return [
             {
@@ -6057,6 +6308,7 @@ class DatabaseService:
                 "technique_count": int(r[5] or 0),
                 "group_count": int(r[6] or 0),
                 "url": f"/mitre/software/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
             for r in rows
             if r[0]
@@ -6067,43 +6319,67 @@ class DatabaseService:
         sid = (software_id or "").strip().upper()
         if not sid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(ms.domain) = LOWER(?)"
+        params = [sid] if include_all else [sid, domain]
 
         with self.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT software_id, name, COALESCE(description, ''), COALESCE(software_type, ''), COALESCE(platforms, '')
                 FROM mitre_software
-                WHERE UPPER(software_id) = ? AND LOWER(domain) = LOWER(?)
+                WHERE UPPER(software_id) = ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [sid, domain],
+                params,
             ).fetchone()
             if not row:
                 return {}
 
             techniques = conn.execute(
-                """
-                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, ''), COALESCE(mst.use_description, '')
+                f"""
+                SELECT mt.id, mt.name, COALESCE(MAX(NULLIF(mt.description, '')), ''), COALESCE(MAX(NULLIF(mst.use_description, '')), '')
                 FROM mitre_software_techniques mst
-                JOIN mitre_software ms ON ms.stix_id = mst.software_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mst.technique_stix_id
-                WHERE UPPER(ms.software_id) = ? AND LOWER(ms.domain) = LOWER(?)
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mst.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mst.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mst.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mst.domain)
+                WHERE UPPER(ms.software_id) = ?{where_domain}
+                GROUP BY mt.id, mt.name
                 ORDER BY mt.id
                 """,
-                [sid, domain],
+                params,
             ).fetchall()
 
             groups = conn.execute(
-                """
-                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mgs.use_description, '')
+                f"""
+                SELECT mg.group_id, mg.name, COALESCE(MAX(NULLIF(mgs.use_description, '')), '')
                 FROM mitre_group_software mgs
-                JOIN mitre_software ms ON ms.stix_id = mgs.software_stix_id
-                JOIN mitre_groups mg ON mg.stix_id = mgs.group_stix_id
-                WHERE UPPER(ms.software_id) = ? AND LOWER(ms.domain) = LOWER(?)
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mgs.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mgs.domain)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mgs.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mgs.domain)
+                WHERE UPPER(ms.software_id) = ?{where_domain}
+                GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
-                [sid, domain],
+                params,
             ).fetchall()
+
+            software_sources = self._mitre_sources_for_id(conn, "mitre_software", "software_id", sid)
+            tech_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
+            group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
 
         return {
             "id": row[0],
@@ -6111,6 +6387,7 @@ class DatabaseService:
             "description": row[2],
             "software_type": row[3],
             "platforms": row[4],
+            "sources": software_sources,
             "url": f"/mitre/software/{row[0]}",
             "techniques": [
                 {
@@ -6119,6 +6396,7 @@ class DatabaseService:
                     "description": r[2],
                     "use": r[3],
                     "url": f"/mitre/technique/{r[0]}",
+                    "sources": tech_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in techniques
             ],
@@ -6128,6 +6406,7 @@ class DatabaseService:
                     "name": r[1],
                     "use": r[2],
                     "url": f"/mitre/groups/{r[0]}",
+                    "sources": group_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in groups
             ],
@@ -6135,11 +6414,12 @@ class DatabaseService:
 
     def list_mitre_campaigns(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List MITRE campaign objects for offline ATT&CK pages."""
-        params: list = [domain]
-        where_clause = "WHERE LOWER(mc.domain) = LOWER(?)"
+        include_all = (domain or "").strip().lower() == "all"
+        params: list = [] if include_all else [domain]
+        where_clause = "" if include_all else "WHERE LOWER(mc.domain) = LOWER(?)"
         if search:
             like = f"%{search}%"
-            where_clause += " AND (LOWER(mc.campaign_id) LIKE LOWER(?) OR LOWER(mc.name) LIKE LOWER(?) OR LOWER(COALESCE(mc.description, '')) LIKE LOWER(?))"
+            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mc.campaign_id) LIKE LOWER(?) OR LOWER(mc.name) LIKE LOWER(?) OR LOWER(COALESCE(mc.description, '')) LIKE LOWER(?))"
             params.extend([like, like, like])
 
         with self.get_connection() as conn:
@@ -6154,14 +6434,20 @@ class DatabaseService:
                     COUNT(DISTINCT mcg.group_stix_id) AS group_count,
                     COUNT(DISTINCT mct.technique_stix_id) AS technique_count
                 FROM mitre_campaigns mc
-                LEFT JOIN mitre_campaign_groups mcg ON mcg.campaign_stix_id = mc.stix_id
-                LEFT JOIN mitre_campaign_techniques mct ON mct.campaign_stix_id = mc.stix_id
+                                LEFT JOIN mitre_campaign_groups mcg
+                                    ON mcg.campaign_stix_id = mc.stix_id
+                                 AND LOWER(mcg.domain) = LOWER(mc.domain)
+                                LEFT JOIN mitre_campaign_techniques mct
+                                    ON mct.campaign_stix_id = mc.stix_id
+                                 AND LOWER(mct.domain) = LOWER(mc.domain)
                 {where_clause}
                 GROUP BY mc.campaign_id, mc.name, mc.description, mc.first_seen, mc.last_seen
                 ORDER BY mc.name
                 """,
                 params,
             ).fetchall()
+
+            source_map = self._mitre_sources_map(conn, "mitre_campaigns", "campaign_id", [r[0] for r in rows if r[0]])
 
         return [
             {
@@ -6173,6 +6459,7 @@ class DatabaseService:
                 "group_count": int(r[5] or 0),
                 "technique_count": int(r[6] or 0),
                 "url": f"/mitre/campaigns/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
             for r in rows
             if r[0]
@@ -6183,55 +6470,92 @@ class DatabaseService:
         cid = (campaign_id or "").strip().upper()
         if not cid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(mc.domain) = LOWER(?)"
+        params = [cid] if include_all else [cid, domain]
 
         with self.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT campaign_id, name, COALESCE(description, ''), COALESCE(first_seen, ''), COALESCE(last_seen, '')
                 FROM mitre_campaigns
-                WHERE UPPER(campaign_id) = ? AND LOWER(domain) = LOWER(?)
+                WHERE UPPER(campaign_id) = ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [cid, domain],
+                params,
             ).fetchone()
             if not row:
                 return {}
 
             groups = conn.execute(
-                """
-                SELECT DISTINCT mg.group_id, mg.name, COALESCE(mcg.description, '')
+                f"""
+                SELECT mg.group_id, mg.name, COALESCE(MAX(NULLIF(mcg.description, '')), '')
                 FROM mitre_campaign_groups mcg
-                JOIN mitre_campaigns mc ON mc.stix_id = mcg.campaign_stix_id
-                JOIN mitre_groups mg ON mg.stix_id = mcg.group_stix_id
-                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mcg.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mcg.domain)
+                                JOIN mitre_groups mg
+                                    ON mg.stix_id = mcg.group_stix_id
+                                 AND LOWER(mg.domain) = LOWER(mcg.domain)
+                WHERE UPPER(mc.campaign_id) = ?{where_domain}
+                GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
-                [cid, domain],
+                params,
             ).fetchall()
 
             techniques = conn.execute(
-                """
-                SELECT DISTINCT mt.id, mt.name, COALESCE(mct.use_description, '')
+                f"""
+                SELECT
+                    mt.id,
+                    COALESCE(MAX(NULLIF(mt.name, mt.id)), MAX(mt.name), mt.id) AS name,
+                    COALESCE(MAX(NULLIF(mct.use_description, '')), '')
                 FROM mitre_campaign_techniques mct
-                JOIN mitre_campaigns mc ON mc.stix_id = mct.campaign_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mct.technique_stix_id
-                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mct.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mct.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mct.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mct.domain)
+                WHERE UPPER(mc.campaign_id) = ?{where_domain}
+                GROUP BY mt.id
                 ORDER BY mt.id
                 """,
-                [cid, domain],
+                params,
             ).fetchall()
 
             software = conn.execute(
-                """
-                SELECT DISTINCT ms.software_id, ms.name, COALESCE(ms.software_type, ''), COALESCE(mcs.use_description, '')
+                f"""
+                SELECT
+                    ms.software_id,
+                    COALESCE(MAX(NULLIF(ms.name, ms.software_id)), MAX(ms.name), ms.software_id) AS name,
+                    COALESCE(MAX(NULLIF(ms.software_type, '')), ''),
+                    COALESCE(MAX(NULLIF(mcs.use_description, '')), '')
                 FROM mitre_campaign_software mcs
-                JOIN mitre_campaigns mc ON mc.stix_id = mcs.campaign_stix_id
-                JOIN mitre_software ms ON ms.stix_id = mcs.software_stix_id
-                WHERE UPPER(mc.campaign_id) = ? AND LOWER(mc.domain) = LOWER(?)
-                ORDER BY ms.name
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mcs.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mcs.domain)
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mcs.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mcs.domain)
+                WHERE UPPER(mc.campaign_id) = ?{where_domain}
+                GROUP BY ms.software_id
+                ORDER BY name
                 """,
-                [cid, domain],
+                params,
             ).fetchall()
+
+            campaign_sources = self._mitre_sources_for_id(conn, "mitre_campaigns", "campaign_id", cid)
+            group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
+            tech_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
+            sw_source_map = self._mitre_sources_map(conn, "mitre_software", "software_id", [r[0] for r in software if r[0]])
 
         return {
             "id": row[0],
@@ -6239,6 +6563,7 @@ class DatabaseService:
             "description": row[2],
             "first_seen": row[3],
             "last_seen": row[4],
+            "sources": campaign_sources,
             "url": f"/mitre/campaigns/{row[0]}",
             "groups": [
                 {
@@ -6246,6 +6571,7 @@ class DatabaseService:
                     "name": r[1],
                     "description": r[2],
                     "url": f"/mitre/groups/{r[0]}",
+                    "sources": group_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in groups
             ],
@@ -6255,6 +6581,7 @@ class DatabaseService:
                     "name": r[1],
                     "use": r[2],
                     "url": f"/mitre/technique/{r[0]}",
+                    "sources": tech_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in techniques
             ],
@@ -6265,6 +6592,7 @@ class DatabaseService:
                     "software_type": r[2],
                     "use": r[3],
                     "url": f"/mitre/software/{r[0]}",
+                    "sources": sw_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in software
             ],
@@ -6272,11 +6600,12 @@ class DatabaseService:
 
     def list_mitre_mitigations(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List MITRE mitigations and linked technique counts."""
-        params: list = [domain]
-        where_clause = "WHERE LOWER(mm.domain) = LOWER(?)"
+        include_all = (domain or "").strip().lower() == "all"
+        params: list = [] if include_all else [domain]
+        where_clause = "" if include_all else "WHERE LOWER(mm.domain) = LOWER(?)"
         if search:
             like = f"%{search}%"
-            where_clause += " AND (LOWER(mm.mitigation_id) LIKE LOWER(?) OR LOWER(mm.name) LIKE LOWER(?) OR LOWER(COALESCE(mm.description, '')) LIKE LOWER(?))"
+            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mm.mitigation_id) LIKE LOWER(?) OR LOWER(mm.name) LIKE LOWER(?) OR LOWER(COALESCE(mm.description, '')) LIKE LOWER(?))"
             params.extend([like, like, like])
 
         with self.get_connection() as conn:
@@ -6288,13 +6617,17 @@ class DatabaseService:
                     COALESCE(mm.description, '') AS description,
                     COUNT(DISTINCT mtm.technique_stix_id) AS technique_count
                 FROM mitre_mitigations mm
-                LEFT JOIN mitre_technique_mitigations mtm ON mtm.mitigation_stix_id = mm.stix_id
+                                LEFT JOIN mitre_technique_mitigations mtm
+                                    ON mtm.mitigation_stix_id = mm.stix_id
+                                 AND LOWER(mtm.domain) = LOWER(mm.domain)
                 {where_clause}
                 GROUP BY mm.mitigation_id, mm.name, mm.description
                 ORDER BY mm.mitigation_id
                 """,
                 params,
             ).fetchall()
+
+            source_map = self._mitre_sources_map(conn, "mitre_mitigations", "mitigation_id", [r[0] for r in rows if r[0]])
 
         return [
             {
@@ -6303,6 +6636,7 @@ class DatabaseService:
                 "description": r[2],
                 "technique_count": int(r[3] or 0),
                 "url": f"/mitre/mitigations/{r[0]}",
+                "sources": source_map.get((r[0] or "").upper(), self._default_mitre_sources(domain)),
             }
             for r in rows
             if r[0]
@@ -6313,37 +6647,56 @@ class DatabaseService:
         mid = (mitigation_id or "").strip().upper()
         if not mid:
             return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(mm.domain) = LOWER(?)"
+        params = [mid] if include_all else [mid, domain]
 
         with self.get_connection() as conn:
             row = conn.execute(
-                """
+                f"""
                 SELECT mitigation_id, name, COALESCE(description, ''), COALESCE(url, '')
                 FROM mitre_mitigations
-                WHERE UPPER(mitigation_id) = ? AND LOWER(domain) = LOWER(?)
+                WHERE UPPER(mitigation_id) = ?{"" if include_all else " AND LOWER(domain) = LOWER(?)"}
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
                 LIMIT 1
                 """,
-                [mid, domain],
+                params,
             ).fetchone()
             if not row:
                 return {}
 
             techniques = conn.execute(
-                """
-                SELECT DISTINCT mt.id, mt.name, COALESCE(mt.description, '')
+                f"""
+                SELECT mt.id, mt.name, COALESCE(MAX(NULLIF(mt.description, '')), '')
                 FROM mitre_technique_mitigations mtm
-                JOIN mitre_mitigations mm ON mm.stix_id = mtm.mitigation_stix_id
-                JOIN mitre_techniques mt ON mt.stix_id = mtm.technique_stix_id
-                WHERE UPPER(mm.mitigation_id) = ? AND LOWER(mm.domain) = LOWER(?)
+                                JOIN mitre_mitigations mm
+                                    ON mm.stix_id = mtm.mitigation_stix_id
+                                 AND LOWER(mm.domain) = LOWER(mtm.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mtm.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mtm.domain)
+                WHERE UPPER(mm.mitigation_id) = ?{where_domain}
+                GROUP BY mt.id, mt.name
                 ORDER BY mt.id
                 """,
-                [mid, domain],
+                params,
             ).fetchall()
+
+            mitigation_sources = self._mitre_sources_for_id(conn, "mitre_mitigations", "mitigation_id", mid)
+            tech_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
 
         return {
             "id": row[0],
             "name": row[1],
             "description": row[2],
             "reference": row[3],
+            "sources": mitigation_sources,
             "url": f"/mitre/mitigations/{row[0]}",
             "techniques": [
                 {
@@ -6351,6 +6704,7 @@ class DatabaseService:
                     "name": r[1],
                     "description": r[2],
                     "url": f"/mitre/technique/{r[0]}",
+                    "sources": tech_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in techniques
             ],

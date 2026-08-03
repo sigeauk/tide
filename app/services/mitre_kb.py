@@ -55,9 +55,8 @@ def load_mitre_kb_from_files(force: bool = False, mitre_dir: str = "/opt/repos/m
         out["reason"] = "No MITRE ATT&CK JSON files found."
         return out
 
-    # TIDE MITRE pages currently target enterprise ATT&CK parity.
-    if "enterprise-attack.json" in files:
-        files = ["enterprise-attack.json"]
+    # Load every local ATT&CK domain file present in /opt/repos/mitre.
+    # Domains are isolated by the ``domain`` column in MITRE KB tables.
 
     digest = _mitre_source_digest(mitre_dir)
     db = get_database_service()

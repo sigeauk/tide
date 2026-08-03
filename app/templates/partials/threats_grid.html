@@ -12,7 +12,11 @@
                 {% if actor.iso_code %}
                 <img src="/static/flags/4x3/{{ actor.iso_code }}.svg" alt="{{ actor.iso_code }}" class="actor-flag-icon">
                 {% endif %}
+                {% if actor.group_url %}
+                <a href="{{ actor.group_url }}" class="actor-name" title="Open MITRE group: {{ actor.name }}">{{ actor.name }}</a>
+                {% else %}
                 <span class="actor-name" title="{{ actor.name }}">{{ actor.name }}</span>
+                {% endif %}
             </div>
             <!-- Source Pills - right aligned -->
             <div class="source-pills">

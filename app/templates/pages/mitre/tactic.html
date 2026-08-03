@@ -5,27 +5,105 @@
 {% block content %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
-        <h1 class="page-title-hero">Enterprise Tactics</h1>
+        <h1 class="page-title-hero">MITRE Tactics</h1>
         <p class="page-subtitle">Tactics represent the why of an ATT&CK technique or sub-technique. This list is served from local ATT&CK data.</p>
     </div>
-    <div class="text-muted" style="padding-top:0.5rem;">Enterprise Tactics: {{ tactics | length }}</div>
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;padding-top:0.5rem;">
+        {% if source_domain != 'all' %}
+        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+        {% else %}
+        <span class="text-muted">All sources</span>
+        {% endif %}
+        <div class="text-muted">Tactics: {{ tactics | length }}</div>
+    </div>
 </div>
 
+<form method="get" action="/mitre/tactic" class="filters-bar" style="margin-top:1rem;">
+    <div class="filter-group">
+        <label class="form-label">Source</label>
+        <select class="form-input form-select" name="src">
+            {% for value, label in source_options %}
+            <option value="{{ value }}" {% if source_domain == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div class="filter-group" style="align-self:flex-end;">
+        <button class="btn btn-primary" type="submit">Apply</button>
+    </div>
+</form>
+
 <div class="cve-list" style="margin-top:0.75rem;">
+    {% if source_domain == 'all' %}
+    {% for item in tactic_groups %}
+    <details class="card card-padded" style="margin-top:0.4rem;">
+        <summary style="list-style:none;cursor:pointer;display:flex;align-items:center;gap:0.75rem;">
+            <div class="cve-card-item__id">
+                <span>{{ item.id }}</span>
+            </div>
+            <div class="cve-card-item__body" style="flex:1;min-width:0;">
+                <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    <span>{{ item.name }}</span>
+                    <span class="source-pill-row" style="flex-wrap:nowrap;">
+                        {% for src in item.sources %}
+                        {% set src_meta = source_meta.get(src, {}) %}
+                        <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                        {% endfor %}
+                    </span>
+                </div>
+            </div>
+            <div class="cve-card-item__right">
+                <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
+            </div>
+        </summary>
+
+        <div class="cve-list" style="margin-top:0.7rem;">
+            {% for row in item.source_rows %}
+            {% set src_meta = source_meta.get(row.source, {}) %}
+            <a class="cve-card-item cve-card-item--available" href="/mitre/technique?tactic={{ row.id }}&src={{ row.source }}" style="margin-left:0.4rem;">
+                <div class="cve-card-item__id">
+                    <span>{{ row.id }}</span>
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', row.source | upper) }}">{{ src_meta.get('code', row.source | upper) }}</span>
+                </div>
+                <div class="cve-card-item__body">
+                    <div class="cve-card-item__name">{{ row.name }}</div>
+                    {% set row_desc = (row.description or '') %}
+                    {% if row_desc %}<div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row_desc }}</div>{% elif row.shortname %}<div class="cve-card-item__meta">{{ row.shortname }}</div>{% endif %}
+                </div>
+                <div class="cve-card-item__right">
+                    <div class="cve-card-item__meta"><span>{{ row.technique_count }} techniques</span><span>{{ row.group_count }} groups</span></div>
+                </div>
+            </a>
+            {% endfor %}
+        </div>
+    </details>
+    {% endfor %}
+    {% else %}
     {% for item in tactics %}
+    {% set item_src = (item.sources[0] if item.sources else source_domain) %}
     <a class="cve-card-item cve-card-item--available" href="{{ item.url }}">
         <div class="cve-card-item__id">
             <span>{{ item.id }}</span>
-            {% if item.shortname %}<span class="text-muted">{{ item.shortname }}</span>{% endif %}
+            <span class="source-pill-row">
+                {% if item.sources %}
+                {% for src in item.sources %}
+                {% set src_meta = source_meta.get(src, {}) %}
+                <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                {% endfor %}
+                {% else %}
+                <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                {% endif %}
+            </span>
         </div>
         <div class="cve-card-item__body">
             <div class="cve-card-item__name">{{ item.name }}</div>
-            <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ item.description | md }}</div>
+            {% set desc = (item.description or '') %}
+            <div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ desc }}</div>
         </div>
         <div class="cve-card-item__right">
             <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
         </div>
     </a>
     {% endfor %}
+    {% endif %}
 </div>
 {% endblock %}
