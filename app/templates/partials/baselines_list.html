@@ -1,73 +1,64 @@
-{# Partial: baselines_list.html — CVE-overview-style row list
+{# Partial: baselines_list.html — baseline cards aligned with system baseline grammar
    Context: baselines (list[dict]) from get_baselines_overview()
-     Each dict: id, name, description, step_count, detection_count, system_count, worst_status
+     Each dict: id, name, description, technique_count, system_count, worst_status
 #}
 {% from "macros/icons.html" import icon %}
 
 {% if baselines %}
-<div class="card card-flush">
-    <div class="cve-list" style="padding:0.75rem 1rem;">
+<div class="cve-list">
     {% for bl in baselines %}
-    <div   name="Baseline List Item" class="cve-card-item {% if bl.worst_status == 'red' %}cve-card-item--nocover{% elif bl.worst_status == 'amber' %}cve-card-item--detected{% else %}cve-card-item--unaffected{% endif %}"
-         style="cursor:pointer;" onclick="window.location='/baselines/{{ bl.id }}'">
+    {% if bl.worst_status == 'red' %}
+      {% set bl_color = 'var(--color-danger)' %}
+    {% elif bl.worst_status == 'amber' %}
+      {% set bl_color = 'var(--color-warning)' %}
+    {% elif bl.worst_status == 'green' %}
+      {% set bl_color = 'var(--color-success)' %}
+    {% elif bl.worst_status == 'grey' %}
+      {% set bl_color = 'var(--color-muted)' %}
+    {% else %}
+      {% set bl_color = 'var(--color-border)' %}
+    {% endif %}
 
-        {# Left: RAG dot + name #}
-        <div class="cve-card-item__id" style="min-width:220px;">
-            <span style="display:inline-block;width:10px;height:10px;border-radius:50%;flex-shrink:0;
-                {% if bl.worst_status == 'red' %}background:var(--color-danger);
-                {% elif bl.worst_status == 'amber' %}background:var(--color-warning);
-                {% elif bl.worst_status == 'green' %}background:var(--color-success);
-                {% else %}background:var(--color-border);{% endif %}"
-                title="{% if bl.worst_status == 'red' %}Not covered{% elif bl.worst_status == 'amber' %}Blind spots{% elif bl.worst_status == 'green' %}Fully covered{% else %}Not applied{% endif %}">
-            </span>
-            <a  name="Baselines" href="/baselines/{{ bl.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;
-                {% if bl.worst_status == 'red' %}color:var(--color-danger);
-                {% elif bl.worst_status == 'amber' %}color:var(--color-warning);
-                {% elif bl.worst_status == 'green' %}color:var(--color-success);
-                {% else %}color:var(--color-primary);{% endif %}"
-               onclick="event.stopPropagation();">
-                {{ bl.name }}
-            </a>
-        </div>
-
-        {# Body: description with markdown + Read More toggle #}
-        <div  name="Read more" class="cve-card-item__body" onclick="event.stopPropagation();">
-            {% if bl.description %}
-            <div class="cve-card-item__desc md-content" id="bl-desc-short-{{ bl.id }}">
-                {{ bl.description[:120] }}{% if bl.description | length > 120 %}&hellip;
-                <a name="Read more" href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-short-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-full-{{ bl.id }}').style.display='';">Read more</a>
-                {% endif %}
+    <details class="cve-card-item cve-card-item--available" style="display:block;margin-bottom:0.75rem;border-left-color:{{ bl_color }};" data-collapse-key="baseline-list-{{ bl.id }}" data-baseline-id="{{ bl.id }}" ontoggle="loadBaselineListPreview(this, '{{ bl.id }}')">
+      <summary style="cursor:pointer;list-style:none;">
+            <div style="display:grid;grid-template-columns:minmax(90px, 110px) 1fr auto;gap:0.75rem;align-items:center;">
+                <div class="cve-card-item__id" style="font-weight:700;color:{{ bl_color }};text-transform:uppercase;">
+                    {% if bl.worst_status == 'red' %}Missing
+                    {% elif bl.worst_status == 'amber' %}Gap
+                    {% elif bl.worst_status == 'green' %}Covered
+                    {% elif bl.worst_status == 'grey' %}N/A
+                    {% else %}Not Applied{% endif %}
+                </div>
+                <div class="cve-card-item__body">
+                    <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                        <a name="Baselines" href="/baselines/{{ bl.id }}" onclick="event.stopPropagation();">{{ bl.name }}</a>
+                    </div>
+                </div>
+                <div class="cve-card-item__right">
+                    <div class="cve-card-item__meta" style="display:flex;align-items:center;gap:0.35rem;">
+                        <span>{{ bl.technique_count or bl.step_count }} technique{{ 's' if (bl.technique_count or bl.step_count) != 1 else '' }}</span>
+                        <span style="opacity:0.45;">&middot;</span>
+                        <span>{{ bl.system_count }} system{{ 's' if bl.system_count != 1 else '' }}</span>
+                    </div>
+                </div>
             </div>
-            {% if bl.description | length > 120 %}
-            <div class="cve-card-item__desc md-content" id="bl-desc-full-{{ bl.id }}" style="display:none;">
-                {{ bl.description | md }}
-                <a name="Show less" href="#" class="read-more-link" onclick="event.preventDefault();event.stopPropagation();document.getElementById('bl-desc-full-{{ bl.id }}').style.display='none';document.getElementById('bl-desc-short-{{ bl.id }}').style.display='';">Show less</a>
-            </div>
-            {% endif %}
-            {% else %}
-            <div class="cve-card-item__desc" style="color:var(--color-muted);font-style:italic;">No description.</div>
-            {% endif %}
-        </div>
+        </summary>
 
-        {# Right: compact metadata string #}
-        <div class="cve-card-item__right" style="display:flex;align-items:center;gap:0.5rem;">
-            <span style="font-size:0.75rem;color:var(--color-text-muted);white-space:nowrap;">
-                {{ bl.detection_count }} Rule{{ 's' if bl.detection_count != 1 }}
-                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
-                {{ bl.step_count }} Technique{{ 's' if bl.step_count != 1 }}
-                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
-                {{ bl.tactic_count }} Tactic{{ 's' if bl.tactic_count != 1 }}
-                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
-                {% if bl.system_count > 0 %}
-                <span style="color:var(--color-info);">{{ bl.system_count }} System{{ 's' if bl.system_count != 1 }}</span>
-                {% else %}
-                <span style="opacity:0.5;">Not Applied</span>
-                {% endif %}
-            </span>
-        </div>
-    </div>
+        {% if bl.description %}
+        <div class="md-content" style="margin-top:0.45rem;">{{ bl.description | md }}</div>
+        {% else %}
+        <div class="md-content" style="margin-top:0.45rem;color:var(--color-muted);font-style:italic;">No description.</div>
+        {% endif %}
+
+        {% if bl.system_count > 0 %}
+        <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--color-text-muted);">Applied to {{ bl.system_count }} system{{ 's' if bl.system_count != 1 else '' }}.</div>
+        {% else %}
+        <div style="margin-top:0.5rem;font-size:0.75rem;color:var(--color-text-muted);">Not applied to any systems yet.</div>
+        {% endif %}
+
+        <div id="baseline-list-preview-{{ bl.id }}" style="margin-top:0.6rem;"></div>
+    </details>
     {% endfor %}
-    </div>
 </div>
 {% else %}
 <div class="card card-padded-lg card-center">

@@ -1,7 +1,10 @@
 {% extends "base.html" %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% block title %}MITRE Knowledge Base | TIDE{% endblock %}
 
 {% block content %}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', none)]) }}
+
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
         <h1 class="page-title-hero">MITRE ATT&CK Knowledge Base</h1>
@@ -16,6 +19,7 @@
         <a class="btn btn-secondary" href="/mitre/software">Software</a>
         <a class="btn btn-secondary" href="/mitre/campaigns">Campaigns</a>
         <a class="btn btn-secondary" href="/mitre/mitigations">Mitigations</a>
+        <a class="btn btn-secondary" href="/mitre/nist">NIST</a>
     </div>
 </div>
 
@@ -51,6 +55,22 @@
     <div class="metric-card">
         <div class="metric-label">Technique-Mitigation Edges</div>
         <div class="metric-value">{{ overview.technique_mitigations or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">NIST Families</div>
+        <div class="metric-value">{{ nist_overview.groups or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">NIST Capabilities</div>
+        <div class="metric-value">{{ nist_overview.capabilities or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">NIST Techniques</div>
+        <div class="metric-value">{{ nist_overview.techniques or 0 }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">NIST Mappings</div>
+        <div class="metric-value">{{ nist_overview.mappings or 0 }}</div>
     </div>
 </div>
 
@@ -91,6 +111,12 @@
             <div class="cve-card-item__body">
                 <div class="cve-card-item__title">Mitigations</div>
                 <div class="cve-card-item__meta">Courses of action linked to ATT&CK techniques.</div>
+            </div>
+        </a>
+        <a class="cve-card-item" href="/mitre/nist">
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__title">NIST 800-53</div>
+                <div class="cve-card-item__meta">Control families, capability descriptions, and technique mappings from the bundled mappings-explorer data.</div>
             </div>
         </a>
     </div>

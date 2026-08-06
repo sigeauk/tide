@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
+
+{% block title %}{{ nist_group.code }} - NIST 800-53 | TIDE{% endblock %}
+
+{% block content %}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('NIST', '/mitre/nist'), (nist_group.code, none)]) }}
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
+        <h1 class="page-title-hero">{{ nist_group.code }} - {{ nist_group.name }}</h1>
+        <p class="page-subtitle">Capability descriptions under this control family, with the ATT&CK techniques they mitigate.</p>
+        <h2 class="section-title" style="margin-top:1rem;">Description</h2>
+        <div class="md-content" style="margin-top:0.5rem;">{{ (nist_group.description or 'Capability descriptions under this control family, with mapped ATT&CK techniques.') | md }}</div>
+    </div>
+    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
+        <aside class="card card-padded">
+            <h2 class="section-title">Details</h2>
+            {% set technique_total = namespace(value=0) %}
+            {% for capability in nist_group.capabilities %}
+            {% set technique_total.value = technique_total.value + (capability.technique_count or 0) %}
+            {% endfor %}
+            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                <div><strong>Family:</strong> {{ nist_group.code }}</div>
+                <div><strong>Capabilities:</strong> {{ nist_group.capabilities | length }}</div>
+                <div><strong>Techniques:</strong> {{ technique_total.value }}</div>
+            </div>
+        </aside>
+        <div style="display:flex;justify-content:flex-end;gap:0.5rem;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllRememberedCollapsibles('#nist-capability-group-detail', true)">Expand all</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="setAllRememberedCollapsibles('#nist-capability-group-detail', false)">Collapse all</button>
+        </div>
+    </div>
+</div>
+
+<div id="nist-capability-group-detail" data-collapse-scope="nist-capability-group-detail" style="margin-top:0.75rem;">
+    <form method="get" action="/mitre/nist/{{ nist_group.code }}" class="filters-bar" style="margin-top:1rem;">
+        <div class="filter-group grow">
+            <label class="form-label">Search Capabilities</label>
+            <input class="form-input" type="text" name="q" value="{{ query or '' }}" placeholder="Search by capability title, id, or comments">
+        </div>
+        <div class="filter-group" style="align-self:flex-end;">
+            <button class="btn btn-primary" type="submit">Apply</button>
+        </div>
+    </form>
+
+    <div id="nist-capabilities" style="margin-top:1rem;">
+    <details class="card card-padded" data-collapse-key="nist-group-{{ nist_group.code }}-capabilities" open>
+        <summary class="section-title" style="cursor:pointer;">Capabilities ({{ nist_group.capabilities | length }})</summary>
+        <div class="cve-list" style="margin-top:0.75rem;">
+            {% for capability in nist_group.capabilities %}
+            <details class="cve-card-item cve-card-item--available" data-collapse-key="nist-capability-{{ nist_group.code }}-{{ capability.slug }}" style="display:block;">
+                <summary style="cursor:pointer;display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+                    <div class="cve-card-item__id">{{ capability.capability_id or capability.slug }}</div>
+                    <div class="cve-card-item__body">
+                        <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                            <a href="{{ capability.url }}" onclick="event.stopPropagation();">{{ capability.title }}</a>
+                            <span class="source-pill src-opencti" title="NIST 800-53">NIST</span>
+                        </div>
+                    </div>
+                    <div class="cve-card-item__right">
+                        <div class="cve-card-item__meta"><span>{{ capability.technique_count }} techniques</span></div>
+                    </div>
+                </summary>
+                <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ (capability.comments or 'No description available.') | md }}</div>
+            </details>
+            {% endfor %}
+
+            {% if not nist_group.capabilities %}
+            <div class="card card-padded text-muted">No NIST capabilities matched the current search.</div>
+            {% endif %}
+        </div>
+    </details>
+    </div>
+</div>
+{% endblock %}

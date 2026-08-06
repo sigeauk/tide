@@ -9,147 +9,109 @@
 
     {{ breadcrumb(items=[('Home', '/'), ('Baselines', '/baselines'), (baseline.name, none)]) }}
 
-    <!-- Header -->
-    <div style="margin-bottom:1.5rem;">
-        <div style="display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;margin-bottom:0.5rem;">
-            <h1 style="margin:0;font-size:1.6rem;font-weight:700;color:var(--color-primary);">{{ baseline.name }}</h1>
-            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="{{ baseline.tactics | length }} Technique{{ 's' if baseline.tactics | length != 1 }}">
-                {{ icon('crosshair','14') }} {{ baseline.tactics | length }}
-            </span>
-            {% if applied_systems %}
-            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="Applied to {{ applied_systems | length }} System{{ 's' if applied_systems | length != 1 }}">
-                {{ icon('layers','14') }} {{ applied_systems | length }}
-            </span>
-            {% endif %}
-            <div class="action-menu" style="margin-left:auto;">
-                <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
-                    {{ icon('more-vertical', '14') }} Actions
-                </button>
-                <div class="action-menu__dropdown">
-                    <button name="Add Technique" class="action-menu__item"
-                            onclick="document.getElementById('add-tactic-modal').style.display='flex'">
-                        {{ icon('plus', '14') }} Add Technique
-                    </button>
-                    <button name="Import Techniques" class="action-menu__item"
-                            onclick="document.getElementById('import-techniques-modal').style.display='flex'">
-                        {{ icon('upload', '14') }} Import Techniques
-                    </button>
-                    <div class="action-menu__sep"></div>
-                    <button name="Export Report" class="action-menu__item"
-                            onclick="document.getElementById('bl-export-modal').style.display='flex'">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                            <polyline points="7 10 12 15 17 10"/>
-                            <line x1="12" y1="15" x2="12" y2="3"/>
-                        </svg>
-                        Export Report
-                    </button>
-                    <button name="Edit Baseline" class="action-menu__item"
-                            onclick="document.getElementById('edit-baseline-modal').style.display='flex'">
-                        {{ icon('pencil', '14') }} Edit Baseline
-                    </button>
-                </div>
-            </div>
-
-            {# 4.1.0 P6 redesign — Coverage Quest launcher.
-               Lives on the right of the header (accent blue, not purple).
-               Always visible when the baseline has at least one MITRE
-               technique; works whether or not systems are pre-applied
-               (auto-applies on launch). When no systems are applied yet,
-               the picker is forced open via ?need_system=1 from the
-               server so the user can't post an empty system_id. #}
-            {% if baseline.tactics %}
-            {% set _need_sys = (request.query_params.get('need_system') == '1') %}
-            {% set _has_sys = (applied_systems | length > 0) %}
-            <div class="quest-launcher" style="position:relative;">
-                <button name="Start coverage quest" type="button" class="btn btn-sm"
-                        id="quest-launch-btn"
-                        onclick="document.getElementById('quest-launch-pop').style.display='block';this.style.display='none';"
-                        style="display:{{ 'none' if _need_sys else 'inline-flex' }};align-items:center;gap:0.35rem;
-                               background:rgba(47,129,247,.12);color:var(--color-info,#2f81f7);
-                               border:1px solid rgba(47,129,247,.4);font-weight:600;">
-                    {{ icon('target','14') }} Start coverage quest
-                </button>
-                <div id="quest-launch-pop"
-                     style="display:{{ 'block' if _need_sys else 'none' }};position:absolute;top:calc(100% + 0.4rem);right:0;
-                            background:var(--color-bg-surface);border:1px solid rgba(47,129,247,.4);
-                            border-radius:var(--radius-lg);padding:0.85rem;box-shadow:var(--shadow);
-                            z-index:60;min-width:300px;">
-                    <div style="font-size:0.78rem;font-weight:600;margin-bottom:0.5rem;color:var(--color-text);">
-                        {% if _need_sys %}Pick a system to defend{% else %}Pick a system to harden{% endif %}
-                    </div>
-                    {% if _need_sys %}
-                    <div style="font-size:0.72rem;color:var(--color-warning);margin-bottom:0.5rem;">
-                        A system is required to start the quest.
-                    </div>
-                    {% endif %}
-                    <form name="Submit Start" hx-post="/api/quest/start"
-                          hx-swap="none"
-                          style="display:flex;flex-direction:column;gap:0.5rem;">
-                        <input type="hidden" name="baseline_id" value="{{ baseline.id }}">
-                        <select name="system_id" required class="form-input"
-                                style="font-size:0.82rem;">
-                            <option value="">— select a system —</option>
-                            {% if _has_sys %}
-                                <optgroup label="Already applied">
-                                    {% for sys in applied_systems %}
-                                        <option value="{{ sys.system_id }}">{{ sys.system_name }}</option>
-                                    {% endfor %}
-                                </optgroup>
-                                {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
-                                {% if all_systems and (all_systems | length > applied_systems | length) %}
-                                <optgroup label="Other systems (will be applied)">
-                                    {% for sys in all_systems %}
-                                        {% if sys.id not in applied_ids %}
-                                            <option value="{{ sys.id }}">{{ sys.name }}</option>
-                                        {% endif %}
-                                    {% endfor %}
-                                </optgroup>
-                                {% endif %}
-                            {% else %}
-                                {% for sys in all_systems %}
-                                    <option value="{{ sys.id }}">{{ sys.name }}</option>
-                                {% endfor %}
-                            {% endif %}
-                        </select>
-                        <div style="display:flex;gap:0.4rem;">
-                            <button name="Start" type="submit" class="btn btn-sm" style="flex:1;
-                                    background:var(--color-info,#2f81f7);color:#fff;border:none;font-weight:600;
-                                    display:inline-flex;align-items:center;justify-content:center;gap:0.3rem;">
-                                {{ icon('target','12') }} Start
-                            </button>
-                            <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
-                                    onclick="document.getElementById('quest-launch-pop').style.display='none';document.getElementById('quest-launch-btn').style.display='inline-flex';">
-                                Cancel
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-            {% endif %}
+    <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+        <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
+            <h1 class="page-title-hero">{{ baseline.name }}</h1>
+            <p class="page-subtitle">{% if baseline.description %}{{ baseline.description }}{% else %}No description.{% endif %}</p>
         </div>
-        <div class="md-content" style="margin:0;font-size:1.05rem;color:var(--color-text-muted);">
-            {% if baseline.description %}{{ baseline.description | md }}{% else %}<p style="font-style:italic;">No description.</p>{% endif %}
+        <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
+            <aside class="card card-padded">
+                <h2 class="section-title">Details</h2>
+                <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                    {% set ns_t = namespace(total=0) %}
+                    {% for step in baseline.tactics %}
+                        {% if step.display_technique_ids is defined and step.display_technique_ids %}
+                            {% set ns_t.total = ns_t.total + (step.display_technique_ids | length) %}
+                        {% elif step.techniques is defined and step.techniques %}
+                            {% set ns_t.total = ns_t.total + (step.techniques | length) %}
+                        {% elif step.technique_id %}
+                            {% set ns_t.total = ns_t.total + 1 %}
+                        {% endif %}
+                    {% endfor %}
+                    <div><strong>Techniques:</strong> {{ ns_t.total }}</div>
+                    <div><strong>Applied Systems:</strong> {{ applied_systems | length }}</div>
+                    <div><strong>Covered Techniques:</strong> {{ covered_ttps | length }}</div>
+                </div>
+            </aside>
+            <div style="display:flex;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;align-items:center;row-gap:0.4rem;">
+                {% if baseline.tactics %}
+                {% set _need_sys = (request.query_params.get('need_system') == '1') %}
+                {% set _has_sys = (applied_systems | length > 0) %}
+                <div class="quest-launcher" style="position:relative;order:5;">
+                    <button name="Start coverage quest" type="button" class="btn btn-sm"
+                            id="quest-launch-btn"
+                            onclick="document.getElementById('quest-launch-pop').style.display='block';this.style.display='none';"
+                            style="display:{{ 'none' if _need_sys else 'inline-flex' }};align-items:center;gap:0.35rem;
+                                   background:rgba(47,129,247,.12);color:var(--color-info,#2f81f7);
+                                   border:1px solid rgba(47,129,247,.4);font-weight:600;">
+                        {{ icon('target','14') }} Start coverage quest
+                    </button>
+                    <div id="quest-launch-pop"
+                         style="display:{{ 'block' if _need_sys else 'none' }};position:absolute;top:calc(100% + 0.4rem);right:0;
+                                background:var(--color-bg-surface);border:1px solid rgba(47,129,247,.4);
+                                border-radius:var(--radius-lg);padding:0.85rem;box-shadow:var(--shadow);
+                                z-index:60;min-width:300px;">
+                        <div style="font-size:0.78rem;font-weight:600;margin-bottom:0.5rem;color:var(--color-text);">
+                            {% if _need_sys %}Pick a system to defend{% else %}Pick a system to harden{% endif %}
+                        </div>
+                        {% if _need_sys %}
+                        <div style="font-size:0.72rem;color:var(--color-warning);margin-bottom:0.5rem;">
+                            A system is required to start the quest.
+                        </div>
+                        {% endif %}
+                        <form name="Submit Start" hx-post="/api/quest/start"
+                              hx-swap="none"
+                              style="display:flex;flex-direction:column;gap:0.5rem;">
+                            <input type="hidden" name="baseline_id" value="{{ baseline.id }}">
+                            <select name="system_id" required class="form-input"
+                                    style="font-size:0.82rem;">
+                                <option value="">- select a system -</option>
+                                {% if _has_sys %}
+                                    <optgroup label="Already applied">
+                                        {% for sys in applied_systems %}
+                                            <option value="{{ sys.system_id }}">{{ sys.system_name }}</option>
+                                        {% endfor %}
+                                    </optgroup>
+                                    {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
+                                    {% if all_systems and (all_systems | length > applied_systems | length) %}
+                                    <optgroup label="Other systems (will be applied)">
+                                        {% for sys in all_systems %}
+                                            {% if sys.id not in applied_ids %}
+                                                <option value="{{ sys.id }}">{{ sys.name }}</option>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </optgroup>
+                                    {% endif %}
+                                {% else %}
+                                    {% for sys in all_systems %}
+                                        <option value="{{ sys.id }}">{{ sys.name }}</option>
+                                    {% endfor %}
+                                {% endif %}
+                            </select>
+                            <div style="display:flex;gap:0.4rem;">
+                                <button name="Start" type="submit" class="btn btn-sm" style="flex:1;
+                                        background:var(--color-info,#2f81f7);color:#fff;border:none;font-weight:600;
+                                        display:inline-flex;align-items:center;justify-content:center;gap:0.3rem;">
+                                    {{ icon('target','12') }} Start
+                                </button>
+                                <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
+                                        onclick="document.getElementById('quest-launch-pop').style.display='none';document.getElementById('quest-launch-btn').style.display='inline-flex';">
+                                    Cancel
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+                {% endif %}
+                <button name="Add Technique" class="btn btn-secondary btn-sm" onclick="document.getElementById('add-tactic-modal').style.display='flex'">{{ icon('plus', '14') }} Add Technique</button>
+                <button name="Import Techniques" class="btn btn-secondary btn-sm" onclick="document.getElementById('import-techniques-modal').style.display='flex'">{{ icon('upload', '14') }} Import</button>
+                <button name="Export Report" class="btn btn-secondary btn-sm" onclick="document.getElementById('bl-export-modal').style.display='flex'">Export Report</button>
+                <button name="Edit Baseline" class="btn btn-primary btn-sm" onclick="document.getElementById('edit-baseline-modal').style.display='flex'">{{ icon('pencil', '14') }} Edit</button>
+            </div>
         </div>
     </div>
 
-    <!-- Info Card: Applied Systems summary -->
-    <div class="card card-padded card-mb">
-        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;">
-            <div>
-                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Techniques</div>
-                <div style="font-size:0.9rem;">{{ baseline.tactics | length }}</div>
-            </div>
-            <div>
-                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Applied Systems</div>
-                <div style="font-size:0.9rem;">{{ applied_systems | length }}</div>
-            </div>
-            <div>
-                <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.25rem;">Techniques Covered</div>
-                <div style="font-size:0.9rem;">{{ tactic_groups | length }}</div>
-            </div>
-        </div>
-
+    <div class="card card-padded card-mb" style="margin-top:1rem;">
         {% if applied_systems %}
         <div id="baseline-systems" style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--color-border);">
             <div style="font-size:0.75rem;font-weight:600;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:0.5rem;">Applied To</div>
@@ -172,32 +134,10 @@
             </div>
         </div>
         {% endif %}
-
-        <!-- Add system -->
-        {% if all_systems %}
-        <div style="margin-top:{% if applied_systems %}0.75rem{% else %}1rem;padding-top:1rem;border-top:1px solid var(--color-border){% endif %};">
-            <div style="display:flex;align-items:center;gap:0.5rem;">
-                <select name="Apply to system…" id="apply-system-select" class="form-input" style="font-size:0.82rem;flex:1;max-width:260px;">
-                    <option value="">Apply to system…</option>
-                    {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
-                    {% for sys in all_systems %}
-                    {% if sys.id not in applied_ids %}
-                    <option value="{{ sys.id }}">{{ sys.name }}</option>
-                    {% endif %}
-                    {% endfor %}
-                </select>
-                <button name="Apply" type="button" class="btn btn-primary btn-sm" style="font-size:0.8rem;"
-                        onclick="var sel=document.getElementById('apply-system-select');if(sel.value){htmx.ajax('POST','/api/baselines/{{ baseline.id }}/apply/'+sel.value,{swap:'none'});}">
-                    {{ icon('plus','12') }} Apply
-                </button>
-            </div>
-        </div>
-        {% endif %}
     </div>
 
-    <!-- System Filter + Techniques -->
+    <form class="filters-bar" style="margin-bottom:1rem;align-items:flex-end;flex-wrap:nowrap;overflow-x:auto;">
     {% if applied_systems %}
-    <div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;margin-bottom:1rem;">
         <div class="filter-multi" style="position:relative;">
             <button name="All Systems ▾" class="form-input" style="max-width:240px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
                     onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
@@ -217,9 +157,29 @@
                 </div>
             </div>
         </div>
-        <span id="baseline-filter-summary" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
-    </div>
     {% endif %}
+        <div class="filter-group" style="max-width:320px;">
+            <label class="form-label">Apply to System</label>
+            <div style="display:flex;align-items:center;gap:0.5rem;">
+                <select name="Apply to system…" id="apply-system-select" class="form-input" style="font-size:0.82rem;flex:1;">
+                    <option value="">Apply to system…</option>
+                    {% set applied_ids = applied_systems | map(attribute='system_id') | list %}
+                    {% for sys in all_systems %}
+                    {% if sys.id not in applied_ids %}
+                    <option value="{{ sys.id }}">{{ sys.name }}</option>
+                    {% endif %}
+                    {% endfor %}
+                </select>
+                <button name="Apply" type="button" class="btn btn-primary btn-sm"
+                        onclick="var sel=document.getElementById('apply-system-select');if(sel.value){htmx.ajax('POST','/api/baselines/{{ baseline.id }}/apply/'+sel.value,{swap:'none'});}">
+                    {{ icon('plus','12') }} Apply
+                </button>
+            </div>
+        </div>
+        <div class="filter-group" style="align-self:flex-end;">
+            <span id="baseline-filter-summary" style="font-size:0.8rem;color:var(--color-text-muted);"></span>
+        </div>
+    </form>
 
     <!-- Tactics grouped by MITRE Tactic -->
     <div id="baseline-tactics">
@@ -249,56 +209,15 @@ function filterTechCards() {
     }
 
     // Process each tech card
-    document.querySelectorAll('.tech-card').forEach(function(card){
+    document.querySelectorAll('.baseline-technique-card').forEach(function(card){
         var cov;
         try { cov = JSON.parse(card.getAttribute('data-coverage')); } catch(e){ cov = []; }
         if(!cov.length) return;
 
-        // Filter coverage to selected systems (empty = all)
         var filtered = selected.length === cbs.length || selected.length === 0
             ? cov
             : cov.filter(function(c){ return selected.indexOf(c.sid) !== -1; });
-
-        // Compute worst status
-        var worst = 'none';
-        var worstP = 99;
-        var counts = {green:0, amber:0, red:0, grey:0};
-        var names  = {green:[], amber:[], red:[], grey:[]};
-        filtered.forEach(function(c){
-            counts[c.s]++;
-            names[c.s].push(c.n);
-            var p = STATUS_PRIORITY[c.s];
-            if(p !== undefined && p < worstP){ worstP = p; worst = c.s; }
-        });
-        if(!filtered.length) worst = 'none';
-
-        // Update card border class
-        card.className = card.className.replace(/tech-card--\w+/g, '');
-        card.classList.add('tech-card--' + worst);
-
-        // Update title color class
-        var title = card.querySelector('.tech-card__title');
-        if(title){
-            title.className = title.className.replace(/tech-card__title--\w+/g, '');
-            title.classList.add('tech-card__title--' + worst);
-        }
-
-        // Rebuild rollup badges
-        var rollups = card.querySelector('[data-rollups]');
-        if(rollups){
-            var html = '';
-            ['green','amber','red','grey'].forEach(function(s){
-                if(counts[s] > 0){
-                    var colorMap = {green:'var(--color-success)',amber:'var(--color-warning)',red:'var(--color-danger)',grey:'var(--color-muted)'};
-                    html += '<span class="tech-rollup tech-rollup--'+s+'" data-rollup="'+s+'">'
-                        + '<span style="width:8px;height:8px;border-radius:50%;background:'+colorMap[s]+';display:inline-block;"></span> '+counts[s]
-                        + '<span class="tech-rollup__tip">'+STATUS_LABELS[s]+': '+names[s].join(', ')+'</span>'
-                        + '</span>';
-                }
-            });
-            if(!filtered.length) html = '<span class="badge badge-neutral" style="font-size:0.65rem;">No match</span>';
-            rollups.innerHTML = html;
-        }
+        card.style.display = filtered.length ? 'block' : 'none';
     });
 
     // Close dropdown

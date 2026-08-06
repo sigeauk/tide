@@ -370,6 +370,9 @@ console.debug('TIDE app.js loading...');
         });
     }
 
+    // Expose for pages that lazily inject nested details blocks.
+    window.restoreCollapsibleDetailsState = restoreCollapsibleDetailsState;
+
     /**
      * Restore theme from localStorage
      */
@@ -565,6 +568,10 @@ console.debug('TIDE app.js loading...');
                 target.tagName === 'MAIN') {
                 initializePage();
                 executePageInitializers();
+            } else {
+                // Partial swaps can inject new details[data-collapse-key] blocks.
+                // Rebind restore/persistence for newly inserted accordions.
+                restoreCollapsibleDetailsState();
             }
             
             // Re-highlight any code blocks (Prism.js)

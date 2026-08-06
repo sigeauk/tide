@@ -4,78 +4,65 @@
 {% block title %}Systems | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
-    <div>
+{% set total_hosts = summaries | sum(attribute='host_count') %}
+{% set total_vulns = summaries | sum(attribute='vuln_count') %}
+{% set total_sw = summaries | sum(attribute='software_count') %}
+{% set total_baselines = summaries | sum(attribute='baseline_count') %}
+{% set coverage_avg = ((summaries | sum(attribute='baseline_coverage_pct')) / (summaries | length)) | round | int if summaries else 0 %}
+
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
         <h1 class="page-title-hero">Systems</h1>
         <p class="page-subtitle">Track enterprise systems, devices, and map known vulnerabilities (CISA CVE) to packages.</p>
     </div>
-    <div class="action-menu" style="flex-shrink:0;">
-        <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
-            {{ icon('more-vertical', '14') }} Actions
-        </button>
-        <div class="action-menu__dropdown">
-            <button name="Add System" class="action-menu__item"
-                    onclick="document.getElementById('add-env-modal').style.display='flex'">
-                {{ icon('plus', '14') }} Add System
-            </button>
-            <button name="Upload Nessus" class="action-menu__item"
-                    onclick="document.getElementById('nessus-upload-modal').style.display='flex'">
-                {{ icon('upload', '14') }} Upload Nessus
-            </button>
-            <div class="action-menu__sep"></div>
-            <button name="Classifications" class="action-menu__item"
-                    onclick="document.getElementById('clf-modal').style.display='flex'">
-                {{ icon('tag', '14') }} Classifications
-            </button>
+    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
+        <aside class="card card-padded">
+            <h2 class="section-title">Details</h2>
+            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                <div><strong>Systems:</strong> {{ summaries | length }}</div>
+                <div><strong>Baseline Assignments:</strong> {{ total_baselines }}</div>
+                <div><strong>Average Coverage:</strong> {{ coverage_avg }}%</div>
+            </div>
+        </aside>
+        <div style="display:flex;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('nessus-upload-modal').style.display='flex'">{{ icon('upload', '14') }} Upload Nessus</button>
+            <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('add-env-modal').style.display='flex'">{{ icon('plus', '14') }} Add System</button>
         </div>
     </div>
 </div>
 
-<!-- Metrics -->
-<div name="Open Inventory Stats Partial" class="metrics-grid" id="inv-metrics"
-     hx-get="/api/inventory/inventory-stats-partial"
-     hx-trigger="load"
-     hx-swap="innerHTML">
-    {% set total_hosts = summaries | sum(attribute='host_count') %}
-    {% set total_vulns = summaries | sum(attribute='vuln_count') %}
-    {% set total_sw    = summaries | sum(attribute='software_count') %}
-    {% set total_baselines = summaries | sum(attribute='baseline_count') %}
-    <div class="metric-card">
-        <p class="metric-value">{{ summaries | length }}</p>
-        <p class="metric-label">Systems</p>
-        <p class="metric-sub">{{ icon_text('layout', 'Enterprise segments', '14') }}</p>
+<form class="filters-bar" style="margin-top:1rem;align-items:flex-end;flex-wrap:nowrap;overflow-x:auto;" onsubmit="event.preventDefault();filterSystemCards();">
+    <div class="filter-group grow">
+        <label class="form-label">Search Systems</label>
+        <input id="system-filter-q" class="form-input" type="text" placeholder="Search systems by name, description, classification, or metadata">
     </div>
-    <div class="metric-card">
-        <p class="metric-value">{{ total_hosts }}</p>
-        <p class="metric-label">Devices</p>
-        <p class="metric-sub">{{ icon_text('server', 'Physical & virtual', '14') }}</p>
+    <div class="filter-group">
+        <label class="form-label">Classification</label>
+        <select id="system-filter-classification" class="form-input">
+            <option value="">All classifications</option>
+            {% for clf in classifications %}
+            <option value="{{ clf.name | lower }}">{{ clf.name }}</option>
+            {% endfor %}
+        </select>
     </div>
-    <div class="metric-card">
-        <p class="metric-value {{ 'danger' if total_vulns > 0 else 'success' }}">{{ total_vulns }}</p>
-        <p class="metric-label">CVE Matches</p>
-        <p class="metric-sub">{{ icon_text('bug', 'Unique CVEs matched', '14') }}</p>
+    <div class="filter-group">
+        <label class="form-label">Risk Status</label>
+        <select id="system-filter-risk" class="form-input">
+            <option value="">All statuses</option>
+            <option value="red">At Risk</option>
+            <option value="amber">Monitored</option>
+            <option value="green">Clean</option>
+        </select>
     </div>
-    <div class="metric-card">
-        <p class="metric-value">{{ total_baselines }}</p>
-        <p class="metric-label">Baseline Assignments</p>
-        <p class="metric-sub">{{ icon_text('clipboard-list', 'Applied to systems', '14') }}</p>
+    <div class="filter-group" style="align-self:flex-end;display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button class="btn btn-primary" type="submit">Apply</button>
+        <button class="btn btn-secondary" type="button" onclick="clearSystemFilters()">Clear</button>
     </div>
-    <div class="metric-card">
-        <p class="metric-value">{{ total_sw }}</p>
-        <p class="metric-label">Packages</p>
-        <p class="metric-sub">{{ icon_text('package', 'Installed packages', '14') }}</p>
-    </div>
-    <div class="metric-card">
-        <p class="metric-value">
-            <a name="View →" href="/cve-overview" style="font-size:0.85rem;color:var(--color-accent,hsl(220,85%,55%))">View →</a>
-        </p>
-        <p class="metric-label">CVE Overview</p>
-        <p class="metric-sub">{{ icon_text('shield-alert', 'Full CVE catalogue', '14') }}</p>
-    </div>
-</div>
+</form>
 
-<!-- Systems grid -->
-<div id="systems-grid">
+<div id="systems-filter-count" class="text-muted" style="margin-top:0.6rem;font-size:0.82rem;"></div>
+
+<div id="systems-grid" style="margin-top:0.75rem;">
     {% include "partials/system_cards.html" %}
 </div>
 
@@ -209,6 +196,49 @@
 </div>
 
 <script>
+function filterSystemCards() {
+    const query = (document.getElementById('system-filter-q') || {}).value?.toLowerCase() || '';
+    const classification = (document.getElementById('system-filter-classification') || {}).value || '';
+    const risk = (document.getElementById('system-filter-risk') || {}).value || '';
+    const cards = document.querySelectorAll('#systems-grid .system-cve-card');
+    let visible = 0;
+
+    cards.forEach(function(card) {
+        const haystack = [
+            card.dataset.name || '',
+            card.dataset.description || '',
+            card.dataset.classification || '',
+            card.dataset.metrics || ''
+        ].join(' ');
+        const matchesQuery = !query || haystack.indexOf(query) !== -1;
+        const matchesClassification = !classification || (card.dataset.classification || '') === classification;
+        const matchesRisk = !risk || (card.dataset.risk || '') === risk;
+        const show = matchesQuery && matchesClassification && matchesRisk;
+        card.style.display = show ? 'block' : 'none';
+        if (show) visible++;
+    });
+
+    const countEl = document.getElementById('systems-filter-count');
+    if (countEl) {
+        countEl.textContent = (query || classification || risk)
+            ? visible + ' of ' + cards.length + ' systems shown'
+            : '';
+    }
+}
+
+function clearSystemFilters() {
+    document.getElementById('system-filter-q').value = '';
+    document.getElementById('system-filter-classification').value = '';
+    document.getElementById('system-filter-risk').value = '';
+    filterSystemCards();
+}
+
+document.addEventListener('htmx:afterSettle', function(evt) {
+    if (evt.detail.target && evt.detail.target.id === 'systems-grid') {
+        filterSystemCards();
+    }
+});
+
 function toggleNewEnvForm(val) {
     const el = document.getElementById('new-env-form');
     const sel = document.getElementById('nessus-system-select');
@@ -225,4 +255,6 @@ function syncNewEnvField() {
         document.getElementById('new-env-name').value;
 }
 </script>
+
+<div id="slide-panel-container"></div>
 {% endblock %}

@@ -245,6 +245,7 @@ class SystemSummary(BaseModel):
     software_count: int = 0
     baseline_count: int = 0
     baseline_coverage_pct: int = 0
+    baselines: List[Dict] = Field(default_factory=list)
     worst_status: str = "green"         # 'green' | 'amber' | 'red' (worst-case RAG across all hosts)
 
 

@@ -149,7 +149,7 @@ def _gone_redirect(request: Request, fallback_url: str = "/") -> Response:
 def page_systems(request: Request, user: CurrentUser, client_id: ActiveClient):
     summaries = get_system_summaries(client_id=client_id)
     systems = [s.system for s in summaries]  # for Nessus modal dropdown
-    return _render("pages/systems.html", request, {
+    return _render("pages/inventory/systems.html", request, {
         "active_page": "systems", "summaries": summaries, "systems": systems, "user": user,
         "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
     })
@@ -164,7 +164,7 @@ def page_system_detail(request: Request, system_id: str, user: CurrentUser, clie
     host_summaries = get_host_summaries(system_id, client_id=client_id)
     baselines = get_system_baselines(system_id, client_id=client_id)
     all_baselines = list_playbooks(client_id=client_id)
-    return _render("pages/system_detail.html", request, {
+    return _render("pages/inventory/system_detail.html", request, {
         "active_page": "systems", "system": system,
         "host_summaries": host_summaries, "user": user,
         "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
@@ -182,7 +182,7 @@ def page_host_detail(request: Request, host_id: str, user: CurrentUser, client_i
     software = list_host_software(host_id, client_id=client_id)
     vulns = get_host_vulnerabilities(host_id, client_id=client_id)
     clf_color = get_classification_color(system.classification, client_id=client_id) if system and system.classification else None
-    return _render("pages/host_detail.html", request, {
+    return _render("pages/inventory/host_detail.html", request, {
         "active_page": "systems", "host": host, "system": system,
         "software": software, "vulns": vulns, "user": user,
         "clf_color": clf_color,
@@ -193,7 +193,7 @@ def page_host_detail(request: Request, host_id: str, user: CurrentUser, client_i
 def page_cve_overview(request: Request, user: CurrentUser, client_id: ActiveClient):
     cves = get_all_cve_overview(client_id=client_id)
     stats = get_cve_overview_stats(cves=cves, client_id=client_id)
-    return _render("pages/cve_overview.html", request, {
+    return _render("pages/inventory/cve_overview.html", request, {
         "active_page": "cve_overview", "cves": cves,
         "matched_count": stats.matched_count,
         "stats": stats, "user": user,
@@ -219,7 +219,7 @@ def page_cve_detail(request: Request, cve_id: str, user: CurrentUser, client_id:
     # Get all systems for "apply to system" dropdown
     all_systems = list_systems(client_id=client_id)
     cve_blind_spots = get_blind_spots("cve", cve_id, client_id=client_id)
-    return _render("pages/cve_detail.html", request, {
+    return _render("pages/inventory/cve_detail.html", request, {
         "active_page": "cve_overview", "cve": cve, "user": user,
         "cve_id": cve.cve_id,
         "techniques": techniques,
@@ -806,29 +806,18 @@ async def api_upload_mitre_mapping(
 
 
 def _baseline_coverage_with_step_detections(baseline_id: str, covered_ttps, ttp_rule_counts):
-    """4.1.4: covered_ttps / ttp_rule_counts come from detection_rules.mitre_ids
-    (synced SIEM rules) and ignore step_detections rows the user attaches via
-    the baseline UI or the coverage Quest. Merge in the per-baseline
-    step_detections so a rule attached through the Quest immediately lights
-    up the technique pill on the baseline page."""
-    try:
-        from app.services.quest import baseline_coverage_map
-        bcov = baseline_coverage_map(baseline_id)
-    except Exception:
-        return covered_ttps, ttp_rule_counts
-    merged_covered = set(covered_ttps) | {tid.upper() for tid, n in bcov.items() if n > 0}
-    merged_counts = dict(ttp_rule_counts)
-    for tid, n in bcov.items():
-        if n > 0:
-            tid_u = tid.upper()
-            merged_counts[tid_u] = max(merged_counts.get(tid_u, 0), n)
-    return merged_covered, merged_counts
+    """Return tenant-scoped SIEM coverage/counts for baseline pill rendering.
+
+    Baseline pages should reflect only detection_rules visible in the active
+    tenant scopes, so colour and count remain aligned with the technique modal
+    rule list."""
+    return set(covered_ttps), dict(ttp_rule_counts)
 
 
 @router.get("/baselines", response_class=HTMLResponse)
 def page_baselines(request: Request, user: CurrentUser, client_id: ActiveClient):
     baselines = get_baselines_overview(client_id=client_id)
-    return _render("pages/baselines.html", request, {
+    return _render("pages/inventory/baselines.html", request, {
         "active_page": "baselines", "baselines": baselines, "user": user,
     })
 
@@ -861,7 +850,7 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, 
         baseline_id, _db.get_all_covered_ttps(client_id=client_id),
         _db.get_ttp_rule_counts(client_id=client_id),
     )
-    return _render("pages/baseline_detail.html", request, {
+    return _render("pages/inventory/baseline_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "user": user,
         "mitre_tactics": MITRE_TACTICS,
         "tactic_groups": tactic_groups,
@@ -870,6 +859,28 @@ def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, 
         "step_coverage": step_coverage,
         "covered_ttps": covered_ttps,
         "ttp_rule_counts": ttp_rule_counts,
+    })
+
+
+@router.get("/api/baselines/{baseline_id}/preview", response_class=HTMLResponse)
+def api_baseline_list_preview(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Expanded techniques preview used by /baselines list cards."""
+    pb = get_playbook(baseline_id, client_id=client_id)
+    if not pb:
+        return HTMLResponse("")
+    step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
+    from app.services.database import get_database_service as _get_db
+    _db = _get_db()
+    covered_ttps, ttp_rule_counts = _baseline_coverage_with_step_detections(
+        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
+        _db.get_ttp_rule_counts(client_id=client_id),
+    )
+    return _render("partials/baseline_tactics.html", request, {
+        "baseline": pb,
+        "step_coverage": step_coverage,
+        "covered_ttps": covered_ttps,
+        "ttp_rule_counts": ttp_rule_counts,
+        "user": user,
     })
 
 
@@ -902,6 +913,31 @@ _UI_BUCKETS: list[tuple[str, set[str]]] = [
 ]
 
 
+def _sigma_index_exists() -> bool:
+    """Return True when sigma_rules_index is available in the active DB."""
+    from app.services.database import get_database_service
+    db = get_database_service()
+    with db.get_shared_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = 'main' AND table_name = 'sigma_rules_index'"
+        ).fetchone()
+    return bool(row)
+
+
+def _ensure_sigma_index_ready() -> bool:
+    """Best-effort ensure sigma_rules_index exists and is populated."""
+    if _sigma_index_exists():
+        return True
+    try:
+        from app import sigma_helper as sigma_mod
+        indexed = sigma_mod.index_sigma_rules()
+        logger.info("Baseline generator: sigma index rebuilt on demand (%d rows)", indexed)
+    except Exception as exc:
+        logger.warning("Baseline generator: sigma index rebuild failed: %s", exc)
+    return _sigma_index_exists()
+
+
 def _sigma_tech_catalog() -> dict[str, list[dict]]:
     """Return a curated Service Catalog of primary technologies for the UI.
 
@@ -910,6 +946,10 @@ def _sigma_tech_catalog() -> dict[str, list[dict]]:
     UI buckets (Endpoints, Cloud & Identity, Network & Security) with
     everything else falling into "Other Applications".
     """
+    if not _ensure_sigma_index_ready():
+        logger.info("Baseline generator: sigma_rules_index missing for active DB; returning empty catalog")
+        return {}
+
     from app.services.database import get_database_service
     db = get_database_service()
     with db.get_shared_connection() as conn:
@@ -982,7 +1022,7 @@ def _build_baseline_groups(
 
     Returns ``groups`` — a flat list of baseline group dicts.
     """
-    if not selections:
+    if not selections or not _ensure_sigma_index_ready():
         return []
 
     from app.services.database import get_database_service
@@ -1626,7 +1666,7 @@ def page_tactic_detail(request: Request, baseline_id: str, tactic_id: str, user:
         sigma_ctx["sigma_rule_ids"] = unique_ids
         sigma_ctx["sigma_rule_map"] = sigma_rule_map
 
-    return _render("pages/tactic_detail.html", request, {
+    return _render("pages/inventory/tactic_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "tactic": step,
         "step": step,  # alias for partials that still reference step
         "step_id": tactic_id,  # needed by tactic_affected_systems.html partial

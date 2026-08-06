@@ -8,50 +8,54 @@
     "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
     "Discovery","Lateral Movement","Collection","Command and Control",
     "Exfiltration","Impact","Other"] %}
+{% set TACTIC_ID_MAP = {
+  "Reconnaissance": "TA0043",
+  "Resource Development": "TA0042",
+  "Initial Access": "TA0001",
+  "Execution": "TA0002",
+  "Persistence": "TA0003",
+  "Privilege Escalation": "TA0004",
+  "Defense Evasion": "TA0005",
+  "Credential Access": "TA0006",
+  "Discovery": "TA0007",
+  "Lateral Movement": "TA0008",
+  "Collection": "TA0009",
+  "Command and Control": "TA0011",
+  "Exfiltration": "TA0010",
+  "Impact": "TA0040",
+  "Other": "OTHER"
+} %}
 
 {% set STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2, "grey": 3} %}
 
 {% if baseline.tactics %}
-{# Build ordered list of phases that have techniques #}
 {% set ns = namespace(order=[]) %}
 {% for t in baseline.tactics %}
   {% set tac = t.tactic or "Other" %}
-  {% if tac not in ns.order %}
-    {% set ns.order = ns.order + [tac] %}
-  {% endif %}
+  {% if tac not in ns.order %}{% set ns.order = ns.order + [tac] %}{% endif %}
 {% endfor %}
-{# Sort by kill chain index #}
 {% set ns_sorted = namespace(phases=[]) %}
 {% for kc in KILL_CHAIN %}
-  {% if kc in ns.order %}
-    {% set ns_sorted.phases = ns_sorted.phases + [kc] %}
-  {% endif %}
+  {% if kc in ns.order %}{% set ns_sorted.phases = ns_sorted.phases + [kc] %}{% endif %}
 {% endfor %}
-{# Add any phases not in KILL_CHAIN at the end #}
 {% for p in ns.order %}
-  {% if p not in ns_sorted.phases %}
-    {% set ns_sorted.phases = ns_sorted.phases + [p] %}
-  {% endif %}
+  {% if p not in ns_sorted.phases %}{% set ns_sorted.phases = ns_sorted.phases + [p] %}{% endif %}
 {% endfor %}
 
+<div class="cve-list" data-collapse-scope="baseline-tactics-list">
 {% for tactic in ns_sorted.phases %}
-{% set tactic_slug = tactic | lower | replace(' ', '-') %}
-<div class="card card-padded card-mb-sm">
-    <!-- Kill chain phase header (collapsible) -->
-    <div  name="technique" style="display:flex;align-items:center;gap:0.5rem;padding-bottom:0.5rem;border-bottom:2px solid var(--color-info);cursor:pointer;"
-         onclick="var b=document.getElementById('bl-phase-{{ loop.index }}');var c=document.getElementById('bl-phase-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
-        <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:rgba(59,130,246,.12);color:var(--color-info);flex-shrink:0;">
-            {{ icon('crosshair','14') }}
-        </span>
-        <h3 style="margin:0;font-size:1rem;font-weight:700;color:var(--color-primary);flex:1;">{{ tactic }}</h3>
+<details data-collapse-key="baseline-{{ baseline.id }}-tactic-{{ loop.index }}" style="display:block;margin-bottom:0.45rem;">
+    <summary style="cursor:pointer;list-style:none;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
+      <div style="font-size:0.84rem;font-weight:600;color:var(--color-text);">{{ tactic }}</div>
+      <div>
         {% set ns_tc = namespace(count=0) %}
         {% for s in baseline.tactics %}{% if (s.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
-        <span class="badge badge-neutral" style="font-size:0.68rem;">{{ ns_tc.count }} technique{{ 's' if ns_tc.count != 1 }}</span>
-        <span id="bl-phase-chev-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(90deg);display:flex;flex-shrink:0;">{{ icon('chevron-right', '16') }}</span>
-    </div>
-
-    <!-- Technique cards under this phase (collapsible body) -->
-    <div id="bl-phase-{{ loop.index }}" style="display:flex;flex-direction:column;gap:0.5rem;margin-top:0.75rem;">
+        <span style="font-size:0.75rem;color:var(--color-text-muted);">{{ ns_tc.count }}</span>
+            </div>
+        </div>
+    </summary>
+  <div class="cve-list" style="margin-top:0.3rem;">
     {% for step in baseline.tactics %}
     {% if (step.tactic or "Other") == tactic %}
 
@@ -70,7 +74,17 @@
       {% elif ns_worst.val == 2 %}{% set worst = "green" %}
       {% else %}{% set worst = "grey" %}{% endif %}
     {% else %}
-      {% set worst = "none" %}
+      {% set worst = "red" %}
+    {% endif %}
+
+    {% if worst == 'green' %}
+      {% set step_color = 'var(--color-success)' %}
+    {% elif worst == 'amber' %}
+      {% set step_color = 'var(--color-warning)' %}
+    {% elif worst == 'grey' %}
+      {% set step_color = 'var(--color-muted)' %}
+    {% else %}
+      {% set step_color = 'var(--color-danger)' %}
     {% endif %}
 
     {# Count per-status #}
@@ -90,65 +104,44 @@
       {% set _ = cov_json.append('{"sid":"' ~ c.system_id ~ '","n":"' ~ c.system_name ~ '","s":"' ~ c.status ~ '"}') %}
     {% endfor %}
 
-    <div   name="Open Technique Card" class="tech-card tech-card--{{ worst }}"
+    {% set primary_tid = step.techniques[0].technique_id if step.techniques else step.technique_id %}
+    {% set display_tids = step.display_technique_ids if step.display_technique_ids is defined and step.display_technique_ids else ([primary_tid] if primary_tid else []) %}
+    {% set first_tid = display_tids[0] if display_tids else '' %}
+    {% set first_tid_upper = first_tid | upper if first_tid else '' %}
+    <details class="cve-card-item cve-card-item--available baseline-technique-card"
+         data-collapse-key="baseline-{{ baseline.id }}-step-{{ step.id }}"
          data-step-id="{{ step.id }}"
          data-coverage='[{{ cov_json | join(",") }}]'
-         onclick="window.location='/baselines/{{ baseline.id }}/tactics/{{ step.id }}'">
-        <div class="tech-card__body">
-            <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                <a  name="Tactics" href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}"
-                   class="tech-card__title tech-card__title--{{ worst }}"
-                   onclick="event.stopPropagation();">{{ step.title }}</a>
-                {% if step.techniques %}
-                    {% for t in step.techniques %}
-                    {% set tid_upper = t.technique_id | upper %}
-                    {{ mitre_pill(t.technique_id, covered=(tid_upper in covered_ttps if covered_ttps is defined else false), rule_count=(ttp_rule_counts.get(tid_upper, 0) if ttp_rule_counts is defined else 0), clickable=true, size='sm') }}
-                    {% endfor %}
-                {% elif step.technique_id %}
-                    {% set tid_upper = step.technique_id | upper %}
-                    {{ mitre_pill(step.technique_id, covered=(tid_upper in covered_ttps if covered_ttps is defined else false), rule_count=(ttp_rule_counts.get(tid_upper, 0) if ttp_rule_counts is defined else 0), clickable=true, size='sm') }}
-                {% endif %}
-            </div>
-            {% if step.description %}
-            <div class="tech-card__desc">{{ step.description[:120] }}{% if step.description|length > 120 %}…{% endif %}</div>
+         style="display:block;border-left-color:{{ step_color }};">
+      <summary style="cursor:pointer;list-style:none;">
+        <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+          <div class="cve-card-item__id cve-card-item__id--pill" style="display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:0.35rem;flex-wrap:nowrap;min-width:0;width:auto;white-space:nowrap;overflow:hidden;line-height:1;">
+            {% if first_tid %}
+            {% set tid_rule_count = (ttp_rule_counts.get(first_tid_upper, 0) if ttp_rule_counts is defined else 0) %}
+            {{ mitre_pill(first_tid, covered=(tid_rule_count > 0), rule_count=tid_rule_count, clickable=true, size='sm', show_zero_count=true) }}
+            {% if display_tids and (display_tids | length) > 1 %}
+            <span class="text-muted" style="display:inline-flex;align-items:center;font-size:0.72rem;line-height:1;white-space:nowrap;transform:translateY(-1px);">+{{ (display_tids | length) - 1 }}</span>
             {% endif %}
+            {% else %}
+            <span>STEP</span>
+            {% endif %}
+          </div>
+          <div class="cve-card-item__body">
+            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;"><a name="Tactics" href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}" onclick="event.stopPropagation();">{{ step.title }}</a></div>
+          </div>
+          <div class="cve-card-item__right">
+            <div class="cve-card-item__meta"><span>{{ cov | length }} system{{ 's' if (cov | length) != 1 else '' }}</span></div>
+          </div>
         </div>
-        {# Right: rollup counters #}
-        <div class="tech-card__rollups" data-rollups>
-            {% if ns_g.c > 0 %}
-            <span class="tech-rollup tech-rollup--green" data-rollup="green">
-                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-success);display:inline-block;"></span> {{ ns_g.c }}
-                <span class="tech-rollup__tip">Covered: {{ ns_gn.names | join(', ') }}</span>
-            </span>
-            {% endif %}
-            {% if ns_a.c > 0 %}
-            <span class="tech-rollup tech-rollup--amber" data-rollup="amber">
-                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-warning);display:inline-block;"></span> {{ ns_a.c }}
-                <span class="tech-rollup__tip">Known Gap: {{ ns_an.names | join(', ') }}</span>
-            </span>
-            {% endif %}
-            {% if ns_r.c > 0 %}
-            <span class="tech-rollup tech-rollup--red" data-rollup="red">
-                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-danger);display:inline-block;"></span> {{ ns_r.c }}
-                <span class="tech-rollup__tip">Missing: {{ ns_rn.names | join(', ') }}</span>
-            </span>
-            {% endif %}
-            {% if ns_y.c > 0 %}
-            <span class="tech-rollup tech-rollup--grey" data-rollup="grey">
-                <span style="width:8px;height:8px;border-radius:50%;background:var(--color-muted);display:inline-block;"></span> {{ ns_y.c }}
-                <span class="tech-rollup__tip">N/A: {{ ns_yn.names | join(', ') }}</span>
-            </span>
-            {% endif %}
-            {% if not cov %}
-            <span class="badge badge-neutral" style="font-size:0.65rem;">No systems</span>
-            {% endif %}
-        </div>
-    </div>
+      </summary>
+      <div class="md-content" style="margin-top:0.45rem;">{{ (step.description or 'No description available.') | md }}</div>
+    </details>
     {% endif %}
     {% endfor %}
     </div>
-</div>
+  </details>
 {% endfor %}
+   </div>
 
 {% else %}
 <div class="card card-padded-lg card-center">

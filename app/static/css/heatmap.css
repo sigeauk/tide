@@ -49,7 +49,7 @@
     height: 16px;
     color: var(--color-text-muted);
     transition: transform 0.15s ease;
-    flex-shrink: 0;
+    padding: 0;
 }
 
 .actor-select-container.open .actor-select-chevron {
@@ -284,12 +284,13 @@
 
 .slide-panel {
     width: 100%;
-    max-width: 480px;
+    max-width: 1080px;
     height: 100vh;
     background-color: var(--color-bg-surface);
     border-left: 1px solid var(--color-border);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
     animation: slideIn 0.3s ease-out;
 }
 
@@ -303,11 +304,15 @@
 }
 
 .slide-panel-header {
+    position: relative !important;
+    top: auto !important;
     display: flex;
+    flex: 0 0 auto;
     align-items: flex-start;
     justify-content: space-between;
     padding: 1.5rem;
     border-bottom: 1px solid var(--color-border);
+    z-index: 1;
 }
 
 .technique-id {
@@ -346,8 +351,10 @@
 
 .slide-panel-content {
     flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: 1.5rem;
+    padding: 1rem 1.25rem 1.5rem;
+    overscroll-behavior: contain;
 }
 
 /* ========================================
@@ -373,6 +380,360 @@
 .technique-status.status-gap {
     background-color: oklch(25% 0.08 25);
     color: oklch(85% 0.15 25);
+}
+
+.technique-status.status-latent {
+    background: var(--color-warning-bg);
+    color: var(--color-warning-text);
+}
+
+.technique-crumb {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.72rem;
+    color: var(--color-text-muted);
+    margin-bottom: 0.35rem;
+}
+
+.technique-crumb a {
+    color: var(--color-primary);
+}
+
+.technique-pill-strip {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 0.5rem;
+    row-gap: 0.4rem;
+    align-items: center;
+}
+
+.tech-head-strip {
+    margin-top: 0.05rem;
+}
+
+.tech-head-lines {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.tech-head-line {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.tech-head-label {
+    font-size: 0.68rem;
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.tech-head-title {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.14rem 0.5rem;
+    border: 1px solid var(--color-primary);
+    border-radius: var(--radius-sm);
+    background: var(--color-primary-muted);
+    color: var(--color-primary);
+    font-size: 0.68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.1;
+}
+
+.tech-head-value {
+    color: var(--color-text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+
+.technique-popup-stack {
+    display: block;
+}
+
+.tech-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.16rem 0.5rem;
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-primary);
+    background: var(--color-primary-muted);
+    color: var(--color-primary);
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.tech-chip--info {
+    border-color: var(--color-info);
+    background: var(--color-info-glow);
+    color: var(--color-info-text);
+}
+
+.tech-chip--warn {
+    border-color: var(--color-warning);
+    background: var(--color-warning-glow);
+    color: var(--color-warning-text);
+}
+
+.tech-chip--muted {
+    border-color: var(--color-border);
+    background: var(--color-bg-action);
+    color: var(--color-text-muted);
+}
+
+.technique-popup-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 340px);
+    gap: 1rem;
+    align-items: start;
+}
+
+.technique-main-column,
+.technique-side-column {
+    min-width: 0;
+}
+
+.technique-side-column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.technique-side-column > .card {
+    margin-top: 0 !important;
+}
+
+.technique-description {
+    max-height: none;
+    overflow: visible;
+    position: static;
+}
+
+.tech-simple-list {
+    margin: 0;
+    padding-left: 1rem;
+}
+
+.tech-simple-list li {
+    margin: 0.2rem 0;
+}
+
+.tech-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.tech-tab {
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-action);
+    color: var(--color-text-secondary);
+    font-size: 0.74rem;
+    font-weight: 600;
+    border-radius: var(--radius-md);
+    padding: 0.32rem 0.55rem;
+    cursor: pointer;
+}
+
+.tech-tab.is-active {
+    background: var(--color-primary-muted);
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.tech-tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.tech-tag-list--entities {
+    gap: 0.45rem;
+}
+
+.tech-entity-groups {
+    display: grid;
+    gap: 0.7rem;
+}
+
+.tech-entity-block {
+    display: grid;
+    gap: 0.4rem;
+}
+
+.tech-entity-label {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--color-text-muted);
+}
+
+.tech-entity-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.4rem;
+}
+
+.tech-entity-item {
+    display: block;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg-action);
+    color: var(--color-text-secondary);
+    font-size: 0.74rem;
+    padding: 0.38rem 0.55rem;
+}
+
+.tech-entity-item:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.tech-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.72rem;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    padding: 0.2rem 0.45rem;
+    background: var(--color-bg-action);
+}
+
+.tech-tag:hover {
+    color: var(--color-primary);
+    border-color: var(--color-primary);
+}
+
+.tech-collapse-title {
+    cursor: pointer;
+    list-style: none;
+    display: flex;
+    align-items: center;
+    margin: 0;
+    padding: 0.1rem 0 0.55rem;
+    border-bottom: 1px solid var(--color-border-muted);
+}
+
+.tech-collapse-title::-webkit-details-marker {
+    display: none;
+}
+
+.card > details[open] > :not(summary) {
+    margin-top: 0.7rem;
+}
+
+.card > details {
+    display: block;
+}
+
+.card > details[open] {
+    display: grid;
+    row-gap: 0.7rem;
+    align-content: start;
+}
+
+.card > details > * {
+    min-width: 0;
+}
+
+.card > details > summary.tech-collapse-title.rules-title {
+    margin-bottom: 0 !important;
+}
+
+.card > details[open] > summary.tech-collapse-title.rules-title + * {
+    margin-top: 0.75rem !important;
+}
+
+.tech-section-body {
+    display: grid;
+    gap: 0.75rem;
+}
+
+.technique-side-column .card {
+    overflow: hidden;
+}
+
+.technique-side-column .technique-status {
+    display: flex;
+    width: 100%;
+    margin-bottom: 0.8rem;
+}
+
+.tech-relational-stack {
+    display: grid;
+    gap: 0.9rem;
+}
+
+.mitre-sections {
+    gap: 0.7rem;
+}
+
+.mitre-subsection {
+    border: 1px solid var(--color-border-muted);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-action);
+    overflow: hidden;
+}
+
+.mitre-subsummary {
+    cursor: pointer;
+    list-style: none;
+    margin: 0;
+    padding: 0.58rem 0.72rem;
+    font-size: 0.76rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    border-bottom: 1px solid transparent;
+}
+
+.mitre-subsummary::-webkit-details-marker {
+    display: none;
+}
+
+.mitre-subsection[open] > .mitre-subsummary {
+    border-bottom-color: var(--color-border-muted);
+}
+
+.mitre-subbody {
+    padding: 0.62rem 0.72rem 0.72rem;
+}
+
+.mitre-subbody .tech-entity-list {
+    gap: 0.36rem;
+}
+
+.tech-relational-section {
+    display: grid;
+    gap: 0.45rem;
+}
+
+.tech-relational-title {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin: 0;
+}
+
+@media (max-width: 980px) {
+    .slide-panel {
+        max-width: 100%;
+    }
+
+    .technique-popup-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* ========================================

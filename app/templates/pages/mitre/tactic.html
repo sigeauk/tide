@@ -1,54 +1,59 @@
 {% extends "base.html" %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 
 {% block title %}MITRE Tactics | TIDE{% endblock %}
 
 {% block content %}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('Tactics', none)]) }}
+
+<style>
+    #mitre-tactics summary {
+        list-style: none;
+    }
+    #mitre-tactics summary::-webkit-details-marker {
+        display: none;
+    }
+</style>
+
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
         <h1 class="page-title-hero">MITRE Tactics</h1>
         <p class="page-subtitle">Tactics represent the why of an ATT&CK technique or sub-technique. This list is served from local ATT&CK data.</p>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;padding-top:0.5rem;">
-        {% if source_domain != 'all' %}
-        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
-        {% else %}
-        <span class="text-muted">All sources</span>
-        {% endif %}
-        <div class="text-muted">Tactics: {{ tactics | length }}</div>
+    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
+        <aside class="card card-padded">
+            <h2 class="section-title">Details</h2>
+            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                <div><strong>Tactics:</strong> {{ (tactic_groups | length) if source_domain == 'all' else (tactics | length) }}</div>
+            </div>
+        </aside>
     </div>
 </div>
 
 <form method="get" action="/mitre/tactic" class="filters-bar" style="margin-top:1rem;">
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <select class="form-input form-select" name="src">
-            {% for value, label in source_options %}
-            <option value="{{ value }}" {% if source_domain == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
+    <input type="hidden" name="src" value="{{ source_domain }}">
+    <div class="filter-group grow">
+        <label class="form-label">Search Tactics</label>
+        <input class="form-input" type="text" name="q" value="{{ query or '' }}" placeholder="Search tactics by ID, name, shortname, or description">
     </div>
     <div class="filter-group" style="align-self:flex-end;">
         <button class="btn btn-primary" type="submit">Apply</button>
     </div>
 </form>
 
-<div class="cve-list" style="margin-top:0.75rem;">
+<div id="mitre-tactics" class="cve-list" style="margin-top:0.75rem;">
     {% if source_domain == 'all' %}
     {% for item in tactic_groups %}
     <details class="card card-padded" style="margin-top:0.4rem;">
         <summary style="list-style:none;cursor:pointer;display:flex;align-items:center;gap:0.75rem;">
-            <div class="cve-card-item__id">
-                <span>{{ item.id }}</span>
-            </div>
+            <div class="cve-card-item__id"><span>{{ item.id }}</span></div>
             <div class="cve-card-item__body" style="flex:1;min-width:0;">
-                <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.4rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                <div class="cve-card-item__name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
                     <span>{{ item.name }}</span>
-                    <span class="source-pill-row" style="flex-wrap:nowrap;">
-                        {% for src in item.sources %}
-                        {% set src_meta = source_meta.get(src, {}) %}
-                        <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
-                        {% endfor %}
-                    </span>
+                    {% for src in item.sources %}
+                    {% set src_meta = source_meta.get(src, {}) %}
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                    {% endfor %}
                 </div>
             </div>
             <div class="cve-card-item__right">
@@ -59,20 +64,22 @@
         <div class="cve-list" style="margin-top:0.7rem;">
             {% for row in item.source_rows %}
             {% set src_meta = source_meta.get(row.source, {}) %}
-            <a class="cve-card-item cve-card-item--available" href="/mitre/technique?tactic={{ row.id }}&src={{ row.source }}" style="margin-left:0.4rem;">
-                <div class="cve-card-item__id">
-                    <span>{{ row.id }}</span>
-                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', row.source | upper) }}">{{ src_meta.get('code', row.source | upper) }}</span>
-                </div>
-                <div class="cve-card-item__body">
-                    <div class="cve-card-item__name">{{ row.name }}</div>
-                    {% set row_desc = (row.description or '') %}
-                    {% if row_desc %}<div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ row_desc }}</div>{% elif row.shortname %}<div class="cve-card-item__meta">{{ row.shortname }}</div>{% endif %}
-                </div>
-                <div class="cve-card-item__right">
-                    <div class="cve-card-item__meta"><span>{{ row.technique_count }} techniques</span><span>{{ row.group_count }} groups</span></div>
-                </div>
-            </a>
+            <details class="cve-card-item cve-card-item--available" style="display:block;margin-left:0.4rem;">
+                <summary style="cursor:pointer;display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+                    <div class="cve-card-item__id"><span>{{ row.id }}</span></div>
+                    <div class="cve-card-item__body">
+                        <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                            <a href="/mitre/technique?tactic={{ row.id }}&src={{ row.source }}" onclick="event.stopPropagation();">{{ row.name }}</a>
+                            <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', row.source | upper) }}">{{ src_meta.get('code', row.source | upper) }}</span>
+                        </div>
+                    </div>
+                    <div class="cve-card-item__right">
+                        <div class="cve-card-item__meta"><span>{{ row.technique_count }} techniques</span><span>{{ row.group_count }} groups</span></div>
+                    </div>
+                </summary>
+                {% set row_desc = (row.description or '') %}
+                {% if row_desc %}<div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ row_desc | md }}</div>{% elif row.shortname %}<div class="cve-card-item__meta" style="margin-top:0.35rem;">{{ row.shortname }}</div>{% endif %}
+            </details>
             {% endfor %}
         </div>
     </details>
@@ -80,29 +87,29 @@
     {% else %}
     {% for item in tactics %}
     {% set item_src = (item.sources[0] if item.sources else source_domain) %}
-    <a class="cve-card-item cve-card-item--available" href="{{ item.url }}">
-        <div class="cve-card-item__id">
-            <span>{{ item.id }}</span>
-            <span class="source-pill-row">
-                {% if item.sources %}
-                {% for src in item.sources %}
-                {% set src_meta = source_meta.get(src, {}) %}
-                <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
-                {% endfor %}
-                {% else %}
-                <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
-                {% endif %}
-            </span>
-        </div>
-        <div class="cve-card-item__body">
-            <div class="cve-card-item__name">{{ item.name }}</div>
-            {% set desc = (item.description or '') %}
-            <div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ desc }}</div>
-        </div>
-        <div class="cve-card-item__right">
-            <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
-        </div>
-    </a>
+    <details class="cve-card-item cve-card-item--available" style="display:block;">
+        <summary style="cursor:pointer;display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
+            <div class="cve-card-item__id"><span>{{ item.id }}</span></div>
+            <div class="cve-card-item__body">
+                <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                    <a href="{{ item.url }}" onclick="event.stopPropagation();">{{ item.name }}</a>
+                    {% if item.sources %}
+                    {% for src in item.sources %}
+                    {% set src_meta = source_meta.get(src, {}) %}
+                    <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                    {% endfor %}
+                    {% else %}
+                    <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="cve-card-item__right">
+                <div class="cve-card-item__meta"><span>{{ item.technique_count }} techniques</span><span>{{ item.group_count }} groups</span></div>
+            </div>
+        </summary>
+        {% set desc = (item.description or '') %}
+        <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ desc | md }}</div>
+    </details>
     {% endfor %}
     {% endif %}
 </div>

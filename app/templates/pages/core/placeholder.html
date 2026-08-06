@@ -11,10 +11,16 @@
     <p class="page-subtitle">{{ page_subtitle }}</p>
 </div>
 
+{% set is_not_found = page_title and ('Not Found' in page_title) %}
+
 <div class="empty-state mt-xl">
-    <div class="empty-state-icon">{{ icon('construction', '48') }}</div>
-    <div class="empty-state-title">Coming Soon</div>
+    <div class="empty-state-icon">{{ icon('alert-circle', '48') if is_not_found else icon('construction', '48') }}</div>
+    <div class="empty-state-title">{{ 'Not Found' if is_not_found else 'Coming Soon' }}</div>
+    {% if is_not_found %}
+    <p>{{ page_subtitle or 'The requested resource could not be found.' }}</p>
+    {% else %}
     <p>This page is being migrated from Streamlit to FastAPI.</p>
+    {% endif %}
     <p style="margin-top: 1rem;">
         <a name="HOME →" href="/" class="btn btn-primary">HOME →</a>
     </p>

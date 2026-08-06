@@ -35,7 +35,7 @@
     </div>
     <div class="metric-card">
         {% set ns_steps = namespace(total=0) %}
-        {% for bl in baselines %}{% set ns_steps.total = ns_steps.total + bl.step_count %}{% endfor %}
+        {% for bl in baselines %}{% set ns_steps.total = ns_steps.total + (bl.technique_count or bl.step_count) %}{% endfor %}
         <p class="metric-value">{{ ns_steps.total }}</p>
         <p class="metric-label">Techniques Defined</p>
         <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
@@ -169,4 +169,45 @@
         </form>
     </div>
 </div>
+
+<script>
+function loadBaselineListPreview(detailsEl, baselineId) {
+    if (!detailsEl || !detailsEl.open) return;
+    if (detailsEl.dataset.previewLoaded === '1') return;
+    var targetId = 'baseline-list-preview-' + baselineId;
+    var target = document.getElementById(targetId);
+    if (!target) return;
+    target.innerHTML = '<div style="font-size:0.78rem;color:var(--color-text-muted);padding:0.35rem 0;">Loading techniques...</div>';
+    htmx.ajax('GET', '/api/baselines/' + baselineId + '/preview', {
+        target: '#' + targetId,
+        swap: 'innerHTML'
+    });
+    detailsEl.dataset.previewLoaded = '1';
+}
+
+function hydrateOpenBaselinePreviews() {
+    var openCards = document.querySelectorAll('#baselines-list details[data-collapse-key^="baseline-list-"][open]');
+    openCards.forEach(function(card) {
+        var baselineId = card.getAttribute('data-baseline-id');
+        if (baselineId) {
+            loadBaselineListPreview(card, baselineId);
+        }
+    });
+}
+
+document.addEventListener('tide:pageInit', function() {
+    hydrateOpenBaselinePreviews();
+});
+
+document.addEventListener('htmx:afterSettle', function(e) {
+    var target = e && e.detail ? e.detail.target : null;
+    if (!target) return;
+    if (target.id === 'baselines-list' || (target.closest && target.closest('#baselines-list'))) {
+        hydrateOpenBaselinePreviews();
+    }
+});
+</script>
+
+<!-- Required for mitre_pill slide panel -->
+<div id="slide-panel-container"></div>
 {% endblock %}

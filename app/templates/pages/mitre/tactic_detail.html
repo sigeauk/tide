@@ -1,22 +1,19 @@
 {% extends "base.html" %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 
 {% block title %}{{ tactic.id }} - MITRE Tactic | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
-    <div>
-        <h1 class="page-title-hero">{{ tactic.id }} - {{ tactic.name }}</h1>
-    </div>
-    <a class="btn btn-secondary" href="/mitre/tactic">Back to Tactics</a>
-</div>
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('Tactics', '/mitre/tactic'), (tactic.id, none)]) }}
 
-<div id="mitre-tactic-detail" data-collapse-scope="mitre-tactic-detail" style="margin-top:0.75rem;">
-<div style="display:flex;flex-wrap:wrap;gap:1rem;margin-top:1rem;align-items:flex-start;">
-    <div style="flex:1 1 520px;min-width:280px;">
-        <h2 class="section-title">Description</h2>
+<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
+        <h1 class="page-title-hero">{{ tactic.id }} - {{ tactic.name }}</h1>
+        <p class="page-subtitle">Tactic detail with linked techniques and related groups.</p>
+        <h2 class="section-title" style="margin-top:1rem;">Description</h2>
         <div class="md-content" style="margin-top:0.5rem;">{{ (tactic.description or 'No description available.') | md }}</div>
     </div>
-
     <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
         <aside class="card card-padded">
             <h2 class="section-title">Details</h2>
@@ -38,10 +35,9 @@
             {% endfor %}
             {% endfor %}
             <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
-                <div><strong>ID:</strong> {{ tactic.id }}</div>
                 <div>
-                    <strong>Source:</strong>
-                    <span class="source-pill-row">
+                    <strong>ID:</strong> {{ tactic.id }}
+                    <span class="source-pill-row" style="margin-left:0.35rem;">
                         {% set entity_sources = tactic.sources or [] %}
                         {% if 'enterprise' in entity_sources %}<span class="source-pill source-pill--count src-enterprise" title="MITRE ATT&CK Enterprise">ENT {{ src_counts.enterprise }}</span>{% endif %}
                         {% if 'ics' in entity_sources %}<span class="source-pill source-pill--count src-ics" title="MITRE ATT&CK ICS">ICS {{ src_counts.ics }}</span>{% endif %}
@@ -63,28 +59,34 @@
     </div>
 </div>
 
+<div id="mitre-tactic-detail" data-collapse-scope="mitre-tactic-detail" style="margin-top:0.75rem;">
+
+
 <section style="margin-top:1rem;">
-    <h2 class="section-title">Techniques</h2>
+    <h2 class="section-title">Techniques ({{ tactic.techniques | rejectattr('is_subtechnique') | list | length }})</h2>
     <div class="cve-list" style="margin-top:0.75rem;">
         {% for technique in tactic.techniques if not technique.is_subtechnique %}
         {% set technique_src = (technique.sources[0] if technique.sources else source_domain) %}
-        <div class="cve-card-item cve-card-item--available">
-            <div class="cve-card-item__id">
-                <a href="{{ technique.url }}">{{ technique.id }}</a>
-                {% if technique.sources %}
-                {% for src in technique.sources %}
-                {% set src_meta = source_meta.get(src, {}) %}
-                <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
-                {% endfor %}
-                {% else %}
-                <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
-                {% endif %}
-            </div>
-            <div class="cve-card-item__body">
-                <div class="cve-card-item__name"><a href="{{ technique.url }}">{{ technique.name }}</a></div>
-                <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
-            </div>
-        </div>
+        {% set tid = (technique.id or '') | upper %}
+        <details class="cve-card-item cve-card-item--available" data-collapse-key="mitre-tactic-{{ tactic.id }}-technique-{{ technique.id }}" style="display:block;">
+            <summary style="list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:0.75rem;">
+                <div class="cve-card-item__id cve-card-item__id--pill">{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}</div>
+                <div class="cve-card-item__body">
+                    <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                        <a href="{{ technique.url }}">{{ technique.name }}</a>
+                        {% if technique.sources %}
+                        {% for src in technique.sources %}
+                        {% set src_meta = source_meta.get(src, {}) %}
+                        <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                        {% endfor %}
+                        {% else %}
+                        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </summary>
+            <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ technique.description | md }}</div>
+        </details>
 
         {% set has_sub = namespace(value=false) %}
         {% for sub in tactic.techniques if sub.is_subtechnique and sub.parent_id == technique.id %}
@@ -93,29 +95,34 @@
 
         {% if has_sub.value %}
         <details class="card card-padded" data-collapse-key="mitre-tactic-{{ tactic.id }}-{{ technique.id }}-subtechniques" style="margin:0.5rem 0 0.75rem 1.2rem;">
-            <summary class="section-title" style="cursor:pointer;">Sub-techniques</summary>
+            <summary class="section-title" style="cursor:pointer;">Sub-techniques ({{ tactic.techniques | selectattr('is_subtechnique') | selectattr('parent_id', 'equalto', technique.id) | list | length }})</summary>
             <div class="cve-list" style="margin-top:0.75rem;">
                 {% for sub in tactic.techniques if sub.is_subtechnique and sub.parent_id == technique.id %}
                 {% set sub_src = (sub.sources[0] if sub.sources else source_domain) %}
-                <div class="cve-card-item cve-card-item--available" style="border-left-width:4px;">
-                    <div class="cve-card-item__id">
-                        <a href="{{ sub.url }}">{{ sub.id }}</a>
-                        <span class="text-muted">Sub-technique</span>
-                        <span class="text-muted">of {{ technique.id }}</span>
-                        {% if sub.sources %}
-                        {% for src in sub.sources %}
-                        {% set src_meta = source_meta.get(src, {}) %}
-                        <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
-                        {% endfor %}
-                        {% else %}
-                        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
-                        {% endif %}
-                    </div>
-                    <div class="cve-card-item__body">
-                        <div class="cve-card-item__name"><a href="{{ sub.url }}">{{ sub.name }}</a></div>
-                        <div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ sub.description | md }}</div>
-                    </div>
-                </div>
+                {% set sid = (sub.id or '') | upper %}
+                <details class="cve-card-item cve-card-item--available" data-collapse-key="mitre-tactic-{{ tactic.id }}-sub-{{ sub.id }}" style="display:block;border-left-width:4px;">
+                    <summary style="list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:0.75rem;">
+                        <div class="cve-card-item__id cve-card-item__id--pill">
+                            {{ mitre_pill(sid, covered=(sid in covered_ttps), rule_count=ttp_rule_counts.get(sid, 0), clickable=true, size='sm') }}
+                            <span class="text-muted">Sub-technique</span>
+                            <span class="text-muted">of {{ technique.id }}</span>
+                        </div>
+                        <div class="cve-card-item__body">
+                            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                                <a href="{{ sub.url }}">{{ sub.name }}</a>
+                                {% if sub.sources %}
+                                {% for src in sub.sources %}
+                                {% set src_meta = source_meta.get(src, {}) %}
+                                <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>
+                                {% endfor %}
+                                {% else %}
+                                <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </summary>
+                    <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ sub.description | md }}</div>
+                </details>
                 {% endfor %}
             </div>
         </details>
@@ -123,5 +130,8 @@
         {% endfor %}
     </div>
 </section>
-        </div>
+
+</div>
+
+<div id="slide-panel-container"></div>
 {% endblock %}

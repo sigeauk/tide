@@ -10,6 +10,7 @@ from typing import List, Optional, Set, Dict
 import io
 import os
 import time
+import re
 
 from app.api.deps import ActiveClient, DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
@@ -269,10 +270,243 @@ def get_technique_detail(
     raw_tactic = ttp_map.get(ttp_upper, "")
     tactic = get_tactic_display(raw_tactic)
     is_covered = ttp_upper in covered_ttps
-    
+
     # Get ALL rules (including disabled) so users see coverage gaps clearly
     rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False, client_id=client_id)
     has_rules = len(rules) > 0
+    enabled_rules = [r for r in rules if r.enabled]
+    rule_count = len(enabled_rules)
+
+    coverage_state = "active" if rule_count > 0 else ("latent" if has_rules else "none")
+    coverage_label = "Active Coverage" if coverage_state == "active" else ("Latent Coverage" if coverage_state == "latent" else "No Coverage")
+    coverage_detail = (
+        f"{rule_count} enabled rule{'s' if rule_count != 1 else ''}"
+        if coverage_state == "active"
+        else (
+            f"{len(rules)} disabled rule{'s' if len(rules) != 1 else ''} available"
+            if coverage_state == "latent"
+            else "No related Sigma rules detected"
+        )
+    )
+
+    # Parse logsource fields from Sigma rule raw_data for explicit required-log hints.
+    required_logs: List[str] = []
+    required_log_set: set[str] = set()
+
+    def _add_required_log(value: str):
+        text = (value or "").strip()
+        if not text:
+            return
+        key = text.lower()
+        if key in required_log_set:
+            return
+        required_log_set.add(key)
+        required_logs.append(text)
+
+    for rule in rules:
+        raw = rule.raw_data or {}
+        logsource = raw.get("logsource") if isinstance(raw, dict) else None
+        if isinstance(logsource, dict):
+            product = str(logsource.get("product") or "").strip()
+            service = str(logsource.get("service") or "").strip()
+            category = str(logsource.get("category") or "").strip()
+            if product and service:
+                _add_required_log(f"{product} / {service}")
+            elif product:
+                _add_required_log(product)
+            if category:
+                _add_required_log(category)
+    parent_technique = None
+    if "." in ttp_upper:
+        parent_id = ttp_upper.split(".", 1)[0]
+        parent_name = ttp_names.get(parent_id)
+        if parent_name:
+            parent_technique = {
+                "id": parent_id,
+                "name": parent_name,
+                "url": f"/mitre/technique/{parent_id}",
+            }
+
+    # Pull richer MITRE context from the shared DB (safe fallback on any schema mismatch).
+    tactic_pills: List[str] = [tactic] if tactic and tactic != "Other" else []
+    technique_description: str = ""
+    source_domains: List[str] = []
+    subtechniques: List[Dict[str, str]] = []
+    related_groups: List[Dict[str, str]] = []
+    related_campaigns: List[Dict[str, str]] = []
+    related_software: List[Dict[str, str]] = []
+    related_mitigations: List[Dict[str, str]] = []
+    related_procedure_examples: List[Dict[str, str]] = []
+    platforms: List[str] = []
+    permissions: List[str] = []
+
+    try:
+        with db.get_shared_connection(read_only=True) as conn:
+            tr = conn.execute(
+                """
+                SELECT id, COALESCE(name, id), COALESCE(description, ''), COALESCE(is_subtechnique, FALSE)
+                FROM mitre_techniques
+                WHERE UPPER(id) = ?
+                ORDER BY CASE LOWER(domain)
+                    WHEN 'enterprise' THEN 0
+                    WHEN 'ics' THEN 1
+                    WHEN 'mobile' THEN 2
+                    WHEN 'pre' THEN 3
+                    ELSE 9
+                END
+                LIMIT 1
+                """,
+                [ttp_upper],
+            ).fetchone()
+            if tr:
+                name = tr[1] or name
+                if tr[2]:
+                    technique_description = tr[2]
+
+            src_rows = conn.execute(
+                "SELECT DISTINCT LOWER(domain) FROM mitre_techniques WHERE UPPER(id) = ? ORDER BY LOWER(domain)",
+                [ttp_upper],
+            ).fetchall()
+            source_domains = [r[0] for r in src_rows if r and r[0]]
+
+            tactic_rows = conn.execute(
+                """
+                SELECT DISTINCT COALESCE(NULLIF(t.name, ''), t.tactic_id)
+                FROM mitre_technique_tactics mtt
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = mtt.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mtt.domain)
+                JOIN mitre_tactics t
+                  ON t.stix_id = mtt.tactic_stix_id
+                 AND LOWER(t.domain) = LOWER(mtt.domain)
+                WHERE UPPER(mt.id) = ?
+                ORDER BY 1
+                """,
+                [ttp_upper],
+            ).fetchall()
+            tactic_pills = [r[0] for r in tactic_rows if r and r[0]] or tactic_pills
+
+            sub_rows = conn.execute(
+                """
+                SELECT id, COALESCE(name, id), COALESCE(description, '')
+                FROM mitre_techniques
+                WHERE COALESCE(is_subtechnique, FALSE) = TRUE
+                  AND UPPER(id) LIKE ?
+                ORDER BY id
+                """,
+                [f"{ttp_upper}.%"],
+            ).fetchall()
+            subtechniques = [
+                {"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/technique/{r[0]}"}
+                for r in sub_rows if r and r[0]
+            ]
+
+            grp_rows = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id, COALESCE(mg.name, mg.group_id)
+                FROM mitre_group_techniques mgt
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = mgt.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mgt.domain)
+                JOIN mitre_groups mg
+                  ON mg.stix_id = mgt.group_stix_id
+                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                WHERE UPPER(mt.id) = ?
+                ORDER BY mg.group_id
+                """,
+                [ttp_upper],
+            ).fetchall()
+            related_groups = [{"id": r[0], "name": r[1], "url": f"/mitre/groups/{r[0]}"} for r in grp_rows if r and r[0]]
+
+            camp_rows = conn.execute(
+                """
+                SELECT DISTINCT mc.campaign_id, COALESCE(mc.name, mc.campaign_id)
+                FROM mitre_campaign_techniques mct
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = mct.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mct.domain)
+                JOIN mitre_campaigns mc
+                  ON mc.stix_id = mct.campaign_stix_id
+                 AND LOWER(mc.domain) = LOWER(mct.domain)
+                WHERE UPPER(mt.id) = ?
+                ORDER BY mc.campaign_id
+                """,
+                [ttp_upper],
+            ).fetchall()
+            related_campaigns = [{"id": r[0], "name": r[1], "url": f"/mitre/campaigns/{r[0]}"} for r in camp_rows if r and r[0]]
+
+            sw_rows = conn.execute(
+                """
+                SELECT DISTINCT ms.software_id, COALESCE(ms.name, ms.software_id), COALESCE(ms.platforms, '')
+                FROM mitre_software_techniques mst
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = mst.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mst.domain)
+                JOIN mitre_software ms
+                  ON ms.stix_id = mst.software_stix_id
+                 AND LOWER(ms.domain) = LOWER(mst.domain)
+                WHERE UPPER(mt.id) = ?
+                ORDER BY ms.software_id
+                """,
+                [ttp_upper],
+            ).fetchall()
+            related_software = [{"id": r[0], "name": r[1], "platforms": r[2], "url": f"/mitre/software/{r[0]}"} for r in sw_rows if r and r[0]]
+
+            for sw in related_software:
+                for p in re.split(r"[,;]", sw.get("platforms") or ""):
+                    val = (p or "").strip()
+                    if val and val.lower() not in {x.lower() for x in platforms}:
+                        platforms.append(val)
+
+            mit_rows = conn.execute(
+                """
+                SELECT DISTINCT mm.mitigation_id, COALESCE(mm.name, mm.mitigation_id)
+                FROM mitre_technique_mitigations mtm
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = mtm.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mtm.domain)
+                JOIN mitre_mitigations mm
+                  ON mm.stix_id = mtm.mitigation_stix_id
+                 AND LOWER(mm.domain) = LOWER(mtm.domain)
+                WHERE UPPER(mt.id) = ?
+                ORDER BY mm.mitigation_id
+                """,
+                [ttp_upper],
+            ).fetchall()
+            related_mitigations = [{"id": r[0], "name": r[1], "url": f"/mitre/mitigations/{r[0]}"} for r in mit_rows if r and r[0]]
+
+            proc_rows = conn.execute(
+                """
+                SELECT DISTINCT mg.group_id,
+                                COALESCE(mg.name, mg.group_id),
+                                COALESCE(NULLIF(mgt.use_description, ''), '')
+                FROM mitre_group_techniques mgt
+                JOIN mitre_techniques mt
+                    ON mt.stix_id = mgt.technique_stix_id
+                 AND LOWER(mt.domain) = LOWER(mgt.domain)
+                JOIN mitre_groups mg
+                    ON mg.stix_id = mgt.group_stix_id
+                 AND LOWER(mg.domain) = LOWER(mgt.domain)
+                WHERE UPPER(mt.id) = ?
+                    AND COALESCE(NULLIF(mgt.use_description, ''), '') <> ''
+                ORDER BY mg.group_id
+                """,
+                [ttp_upper],
+            ).fetchall()
+            related_procedure_examples = [
+                {"id": r[0], "name": r[1], "use": r[2], "url": f"/mitre/groups/{r[0]}"}
+                for r in proc_rows if r and r[0]
+            ]
+    except Exception:
+        pass
+
+    try:
+        nist_capabilities = db.list_nist_capabilities_for_technique(ttp_upper, domain="all")
+    except Exception:
+        nist_capabilities = []
+
+    # Permission hints are not currently persisted in the local MITRE schema.
+    permissions = []
     
     # Build technique object for template
     from app.models.threats import MITRETechnique
@@ -289,10 +523,28 @@ def get_technique_detail(
         "partials/technique_detail.html",
         {
             "technique": technique,
+            "parent_technique": parent_technique,
             "tactic": tactic,
+            "tactic_pills": tactic_pills,
+            "source_domains": source_domains,
+            "platform_pills": platforms,
+            "permission_pills": permissions,
+            "subtechniques": subtechniques,
+            "related_groups": related_groups,
+            "related_campaigns": related_campaigns,
+            "related_software": related_software,
+            "related_mitigations": related_mitigations,
+            "related_procedure_examples": related_procedure_examples,
+            "nist_capabilities": nist_capabilities,
+            "technique_description": technique_description,
+            "required_logs": required_logs,
             "is_covered": is_covered,
             "has_rules": has_rules,
-            "rule_count": len([r for r in rules if r.enabled]),
+            "rule_count": rule_count,
+            "total_rule_count": len(rules),
+            "coverage_state": coverage_state,
+            "coverage_label": coverage_label,
+            "coverage_detail": coverage_detail,
             "actors": [],  # TODO: Get actors using this TTP
             "search": search or "",  # Pass search to template for rules endpoint
         }

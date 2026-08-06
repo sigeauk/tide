@@ -68,10 +68,13 @@ RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubuserc
 # ─── CVE / VULNERABILITY DATA ─────
 RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
         https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json || \
-    echo "WARN: CISA KEV download failed (air-gap build) — file will be absent at runtime" && \
-    curl -sSL -o /opt/repos/mappings/attack-to-cve.json \
-        https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/main/mappings/attack-to-cve.json || \
-    echo "WARN: ATT&CK-to-CVE mapping download failed (air-gap build) — file will be absent at runtime"
+    echo "WARN: CISA KEV download failed — file will be absent at runtime" && \
+    curl -sSL -o /opt/repos/mappings/kev-07.28.2025_attack-16.1-enterprise.json \
+        https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/refs/heads/main/mappings/kev/attack-16.1/kev-07.28.2025/enterprise/kev-07.28.2025_attack-16.1-enterprise.json && \
+    cp /opt/repos/mappings/kev-07.28.2025_attack-16.1-enterprise.json /opt/repos/mappings/attack-to-cve.json && \
+    curl -sSL -o /opt/repos/mappings/nist_800_53-rev5_attack-16.1-enterprise.json \
+        https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/refs/heads/main/mappings/nist_800_53/attack-16.1/nist_800_53-rev5/enterprise/nist_800_53-rev5_attack-16.1-enterprise.json || \
+    echo "WARN: mappings-explorer downloads failed — mapping pages will be incomplete at runtime"
 
 # Copy application code and VERSION file
 COPY app/ /app/app/

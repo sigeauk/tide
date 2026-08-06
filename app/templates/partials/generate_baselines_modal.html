@@ -19,6 +19,7 @@
 
         <input type="hidden" name="system_id" value="{{ system_id }}">
 
+        {% if catalog %}
         <div class="gen-card-scroll">
         <div class="gen-card-grid">
         {% for bucket_name, techs in catalog.items() %}
@@ -43,6 +44,13 @@
         {% endfor %}
         </div>
         </div>
+        {% else %}
+        <div class="empty-output" style="padding:1.25rem 0.9rem;margin:0.35rem 0;">
+            {{ icon('info','18') }}
+            <p style="margin:0.45rem 0 0.25rem;">No Sigma rule index found for this tenant.</p>
+            <p class="text-sm" style="margin:0;">Run Sigma indexing first, then reopen this generator.</p>
+        </div>
+        {% endif %}
 
         <!-- ── Preview area (populated by HTMX POST) ───────────── -->
         <div id="gen-preview-area"></div>
@@ -57,7 +65,7 @@
             </span>
             <button name="Cancel" type="button" class="btn btn-secondary"
                     onclick="document.getElementById('generate-baselines-modal').style.display='none'">Cancel</button>
-            <button name="Preview" type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.35rem;">
+            <button name="Preview" type="submit" class="btn btn-primary" style="display:flex;align-items:center;gap:0.35rem;" {% if not catalog %}disabled{% endif %}>
                 {{ icon('search','14') }} Preview
             </button>
         </div>

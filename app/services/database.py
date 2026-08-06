@@ -24,7 +24,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Schema version for migrations
-SCHEMA_VERSION = 58
+SCHEMA_VERSION = 59
 
 
 def _scope_predicate(
@@ -2722,6 +2722,55 @@ class DatabaseService:
             self._set_schema_version(conn, 58)
             logger.info(
                 "Migration 58: added MITRE software/campaign tables and relationship edges."
+            )
+
+        # Migration 59: explicit MITRE page RBAC resources for role templates.
+        if current_version < 59:
+            try:
+                resources = [
+                    "page:mitre",
+                    "page:mitre_tactic",
+                    "page:mitre_technique",
+                    "page:mitre_groups",
+                    "page:mitre_software",
+                    "page:mitre_campaigns",
+                    "page:mitre_mitigations",
+                ]
+                role_rows = conn.execute("SELECT id, name FROM roles").fetchall()
+                role_map = {name: rid for rid, name in role_rows}
+                client_rows = conn.execute("SELECT id FROM clients").fetchall()
+
+                for cid, in client_rows:
+                    if "ADMIN" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, true) ON CONFLICT DO NOTHING",
+                                [role_map["ADMIN"], cid, res],
+                            )
+                    if "ANALYST" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, true) ON CONFLICT DO NOTHING",
+                                [role_map["ANALYST"], cid, res],
+                            )
+                    if "ENGINEER" in role_map:
+                        for res in resources:
+                            conn.execute(
+                                "INSERT INTO role_permissions "
+                                "(role_id, client_id, resource, can_read, can_write) "
+                                "VALUES (?, ?, ?, true, false) ON CONFLICT DO NOTHING",
+                                [role_map["ENGINEER"], cid, res],
+                            )
+            except Exception as exc:
+                logger.error(f"Migration 59 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 59)
+            logger.info(
+                "Migration 59: seeded explicit MITRE page permissions in per-client role templates."
             )
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
@@ -5499,6 +5548,288 @@ class DatabaseService:
                 "campaign_groups": int(conn.execute("SELECT COUNT(*) FROM mitre_campaign_groups").fetchone()[0]),
             }
 
+    def get_nist_overview(self) -> Dict[str, int]:
+        """Return high-level offline NIST KB counts."""
+        with self.get_shared_connection() as conn:
+            return {
+                "groups": int(conn.execute("SELECT COUNT(*) FROM nist_capability_groups").fetchone()[0]),
+                "capabilities": int(
+                    conn.execute(
+                        """
+                        SELECT COUNT(DISTINCT capability_group || '|' || capability_slug)
+                        FROM nist_capabilities
+                        """
+                    ).fetchone()[0]
+                ),
+                "techniques": int(
+                    conn.execute("SELECT COUNT(DISTINCT attack_object_id) FROM nist_capabilities").fetchone()[0]
+                ),
+                "mappings": int(conn.execute("SELECT COUNT(*) FROM nist_capabilities").fetchone()[0]),
+            }
+
+    _NIST_GROUP_ORDER = ("AC", "CA", "CM", "SC", "SI", "CP", "IA", "SA", "RA", "MP", "SR")
+
+    def _nist_group_order_clause(self, column: str = "group_code") -> str:
+        clause = f"CASE UPPER({column}) "
+        for index, group_code in enumerate(self._NIST_GROUP_ORDER):
+            clause += f"WHEN '{group_code}' THEN {index} "
+        clause += "ELSE 999 END"
+        return clause
+
+    def list_nist_capability_groups(self, search: Optional[str] = None, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        include_all = (domain or "").strip().lower() == "all"
+        where_clause = "" if include_all else "WHERE LOWER(g.domain) = LOWER(?)"
+        params = [] if include_all else [domain]
+        if search:
+            like = f"%{search}%"
+            where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(g.group_code) LIKE LOWER(?) OR LOWER(g.group_name) LIKE LOWER(?))"
+            params.extend([like, like])
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    g.group_code,
+                    COALESCE(MAX(NULLIF(g.group_name, g.group_code)), MAX(g.group_name), g.group_code) AS group_name,
+                    COALESCE(MAX(NULLIF(g.attack_version, '')), '') AS attack_version,
+                    COALESCE(MAX(NULLIF(g.framework_version, '')), '') AS framework_version,
+                    COUNT(DISTINCT c.capability_group || '|' || c.capability_slug) AS capability_count,
+                    COUNT(DISTINCT c.attack_object_id) AS technique_count
+                FROM nist_capability_groups g
+                                LEFT JOIN nist_capabilities c
+                                    ON c.capability_group = g.group_code
+                                 AND LOWER(c.domain) = LOWER(g.domain)
+                {where_clause}
+                GROUP BY g.group_code
+                ORDER BY {self._nist_group_order_clause('g.group_code')}, group_name
+                """,
+                params,
+            ).fetchall()
+        return [
+            {
+                "code": r[0],
+                "name": r[1],
+                "attack_version": r[2] or "",
+                "framework_version": r[3] or "",
+                "capability_count": int(r[4] or 0),
+                "technique_count": int(r[5] or 0),
+                "url": f"/mitre/nist/{r[0]}",
+            }
+            for r in rows
+            if r[0]
+        ]
+
+    def get_nist_capability_group_detail(self, group_code: str, search: Optional[str] = None, domain: str = "enterprise") -> Dict[str, Any]:
+        code = (group_code or "").strip().upper()
+        if not code:
+            return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(c.domain) = LOWER(?)"
+        params = [code] if include_all else [code, domain]
+        with self.get_shared_connection() as conn:
+            group_row = conn.execute(
+                f"""
+                SELECT
+                    g.group_code,
+                    COALESCE(MAX(NULLIF(g.group_name, g.group_code)), MAX(g.group_name), g.group_code) AS group_name,
+                    COALESCE(MAX(NULLIF(g.attack_version, '')), '') AS attack_version,
+                    COALESCE(MAX(NULLIF(g.framework_version, '')), '') AS framework_version
+                FROM nist_capability_groups g
+                WHERE UPPER(g.group_code) = ?{'' if include_all else ' AND LOWER(g.domain) = LOWER(?)'}
+                GROUP BY g.group_code
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            if not group_row:
+                return {}
+
+            capability_where = where_domain
+            capability_params = list(params)
+            if search:
+                like = f"%{search}%"
+                capability_where += " AND (LOWER(c.capability_description) LIKE LOWER(?) OR LOWER(COALESCE(c.comments, '')) LIKE LOWER(?) OR LOWER(COALESCE(c.capability_id, '')) LIKE LOWER(?))"
+                capability_params.extend([like, like, like])
+
+            capabilities = conn.execute(
+                f"""
+                SELECT
+                    c.capability_slug,
+                    COALESCE(MAX(NULLIF(c.capability_id, '')), '') AS capability_id,
+                    COALESCE(MAX(NULLIF(c.capability_description, '')), '') AS capability_description,
+                    COALESCE(MAX(NULLIF(c.comments, '')), '') AS comments,
+                    COUNT(DISTINCT c.attack_object_id) AS technique_count
+                FROM nist_capabilities c
+                WHERE UPPER(c.capability_group) = ?{where_domain}
+                {capability_where[len(where_domain):] if search else ''}
+                GROUP BY c.capability_slug, c.capability_id, c.capability_description
+                ORDER BY capability_description, capability_slug
+                """,
+                capability_params,
+            ).fetchall()
+
+        return {
+            "code": group_row[0],
+            "name": group_row[1],
+            "attack_version": group_row[2] or "",
+            "framework_version": group_row[3] or "",
+            "url": f"/mitre/nist/{group_row[0]}",
+            "capabilities": [
+                {
+                    "group_code": group_row[0],
+                    "group_name": group_row[1],
+                    "capability_id": r[1],
+                    "slug": r[0],
+                    "title": r[2] or r[1] or r[0],
+                    "comments": r[3] or "",
+                    "technique_count": int(r[4] or 0),
+                    "url": f"/mitre/nist/{group_row[0]}/{r[0]}",
+                }
+                for r in capabilities
+                if r[0]
+            ],
+        }
+
+    def get_nist_capability_detail(self, group_code: str, capability_slug: str, domain: str = "enterprise") -> Dict[str, Any]:
+        code = (group_code or "").strip().upper()
+        slug = (capability_slug or "").strip().lower()
+        if not code or not slug:
+            return {}
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(c.domain) = LOWER(?)"
+        params = [code, slug] if include_all else [code, slug, domain]
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                f"""
+                SELECT
+                    c.capability_group,
+                    COALESCE(MAX(NULLIF(g.group_name, g.group_code)), MAX(c.group_name), c.capability_group) AS group_name,
+                    COALESCE(MAX(NULLIF(c.capability_id, '')), '') AS capability_id,
+                    COALESCE(MAX(NULLIF(c.capability_description, '')), '') AS capability_description,
+                    COALESCE(MAX(NULLIF(c.comments, '')), '') AS comments,
+                    COALESCE(MAX(NULLIF(c.mapping_type, '')), '') AS mapping_type,
+                    COUNT(DISTINCT c.attack_object_id) AS technique_count
+                FROM nist_capabilities c
+                                LEFT JOIN nist_capability_groups g
+                                    ON g.group_code = c.capability_group
+                                 AND LOWER(g.domain) = LOWER(c.domain)
+                WHERE UPPER(c.capability_group) = ? AND LOWER(c.capability_slug) = ?{where_domain}
+                GROUP BY c.capability_group
+                LIMIT 1
+                """,
+                params,
+            ).fetchone()
+            if not row:
+                return {}
+
+            techniques = conn.execute(
+                f"""
+                SELECT
+                    c.attack_object_id,
+                    COALESCE(MAX(NULLIF(t.name, '')), MAX(NULLIF(c.attack_object_name, '')), c.attack_object_id) AS technique_name,
+                    COALESCE(MAX(NULLIF(t.description, '')), '') AS technique_description,
+                    COUNT(*) AS mapping_count
+                FROM nist_capabilities c
+                                LEFT JOIN mitre_techniques t
+                                    ON UPPER(t.id) = UPPER(c.attack_object_id)
+                                 AND LOWER(t.domain) = LOWER(c.domain)
+                WHERE UPPER(c.capability_group) = ? AND LOWER(c.capability_slug) = ?{where_domain}
+                GROUP BY c.attack_object_id
+                ORDER BY c.attack_object_id
+                """,
+                params,
+            ).fetchall()
+
+            capability_count_map: Dict[str, int] = {}
+            technique_ids = [r[0] for r in techniques if r[0]]
+            if technique_ids:
+                placeholders = ",".join(["?"] * len(technique_ids))
+                count_where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+                count_params = technique_ids if include_all else [*technique_ids, domain]
+                capability_count_rows = conn.execute(
+                    f"""
+                    SELECT
+                        UPPER(attack_object_id) AS attack_object_id,
+                        COUNT(DISTINCT capability_group || '|' || capability_slug) AS capability_count
+                    FROM nist_capabilities
+                    WHERE UPPER(attack_object_id) IN ({placeholders}){count_where_domain}
+                    GROUP BY UPPER(attack_object_id)
+                    """,
+                    count_params,
+                ).fetchall()
+                capability_count_map = {str(r[0]).upper(): int(r[1] or 0) for r in capability_count_rows if r and r[0]}
+            source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
+
+        return {
+            "group_code": row[0],
+            "group_name": row[1],
+            "capability_id": row[2],
+            "title": row[3] or row[2] or slug,
+            "comments": row[4] or "",
+            "mapping_type": row[5] or "",
+            "technique_count": int(row[6] or 0),
+            "slug": slug,
+            "url": f"/mitre/nist/{code}/{slug}",
+            "group_url": f"/mitre/nist/{code}",
+            "techniques": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2] or "",
+                    "mapping_count": int(r[3] or 0),
+                    "capability_count": capability_count_map.get((r[0] or "").strip().upper(), 0),
+                    "sources": source_map.get((r[0] or "").strip().upper(), self._default_mitre_sources(domain)),
+                    "url": f"/mitre/technique/{r[0]}",
+                }
+                for r in techniques
+                if r[0]
+            ],
+        }
+
+    def list_nist_capabilities_for_technique(self, technique_id: str, domain: str = "enterprise") -> List[Dict[str, Any]]:
+        tid = (technique_id or "").strip().upper()
+        if not tid:
+            return []
+        include_all = (domain or "").strip().lower() == "all"
+        where_domain = "" if include_all else " AND LOWER(c.domain) = LOWER(?)"
+        params = [tid] if include_all else [tid, domain]
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT
+                    c.capability_group,
+                    COALESCE(MAX(NULLIF(g.group_name, g.group_code)), MAX(c.group_name), c.capability_group) AS group_name,
+                    c.capability_slug,
+                    COALESCE(MAX(NULLIF(c.capability_id, '')), '') AS capability_id,
+                    COALESCE(MAX(NULLIF(c.capability_description, '')), '') AS capability_description,
+                    COALESCE(MAX(NULLIF(c.comments, '')), '') AS comments,
+                    COUNT(*) AS mapping_count
+                FROM nist_capabilities c
+                                LEFT JOIN nist_capability_groups g
+                                    ON g.group_code = c.capability_group
+                                 AND LOWER(g.domain) = LOWER(c.domain)
+                WHERE UPPER(c.attack_object_id) = ?{where_domain}
+                GROUP BY c.capability_group, c.capability_slug
+                ORDER BY c.capability_group, capability_description, capability_slug
+                """,
+                params,
+            ).fetchall()
+
+        return [
+            {
+                "group_code": r[0],
+                "group_name": r[1],
+                "slug": r[2],
+                "capability_id": r[3],
+                "title": r[4] or r[3] or r[2],
+                "comments": r[5] or "",
+                "mapping_count": int(r[6] or 0),
+                "url": f"/mitre/nist/{r[0]}/{r[2]}",
+                "group_url": f"/mitre/nist/{r[0]}",
+            }
+            for r in rows
+            if r[0] and r[2]
+        ]
+
     _MITRE_DOMAIN_ORDER = ("enterprise", "ics", "mobile", "pre")
 
     def _sort_mitre_sources(self, sources: List[str]) -> List[str]:
@@ -5603,6 +5934,7 @@ class DatabaseService:
             return {}
         include_all = (domain or "").strip().lower() == "all"
         where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+        where_domain_joined = "" if include_all else " AND LOWER(t.domain) = LOWER(?)"
         params = [tid] if include_all else [tid, domain]
         with self.get_connection() as conn:
             tactic_row = conn.execute(
@@ -5634,7 +5966,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mtt.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mtt.domain)
-                WHERE UPPER(t.tactic_id) = ?{where_domain}
+                WHERE UPPER(t.tactic_id) = ?{where_domain_joined}
                 GROUP BY mt.id, mt.name
                 ORDER BY mt.id
                 """,
@@ -5654,7 +5986,7 @@ class DatabaseService:
                                 JOIN mitre_groups mg
                                     ON mg.stix_id = mgt.group_stix_id
                                  AND LOWER(mg.domain) = LOWER(mgt.domain)
-                                WHERE UPPER(t.tactic_id) = ?{where_domain}
+                                WHERE UPPER(t.tactic_id) = ?{where_domain_joined}
                 GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
@@ -5760,6 +6092,92 @@ class DatabaseService:
             rows = sorted(rows, key=_rank)
 
         out_rows = [r for r in rows if r[0]]
+
+        # When a sub-technique matches search, include its parent technique so
+        # the list page can render context and nested sub-techniques together.
+        if search and out_rows:
+            present_ids = {(r[0] or "").upper() for r in out_rows if r and r[0]}
+            parent_ids = sorted(
+                {
+                    (r[0] or "").split(".", 1)[0].upper()
+                    for r in out_rows
+                    if bool(r[3]) and "." in (r[0] or "")
+                    and (r[0] or "").split(".", 1)[0].upper() not in present_ids
+                }
+            )
+
+            if parent_ids:
+                parent_params: list = list(parent_ids)
+                parent_where = [
+                    "UPPER(mt.id) IN ({})".format(", ".join(["?"] * len(parent_ids))),
+                    "mt.is_subtechnique = FALSE",
+                ]
+                if not include_all:
+                    parent_where.append("LOWER(mt.domain) = LOWER(?)")
+                    parent_params.append(domain)
+                if tactic_id:
+                    parent_where.append(
+                        "EXISTS (SELECT 1 FROM mitre_technique_tactics mtt JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id AND LOWER(t.domain) = LOWER(mtt.domain) WHERE mtt.technique_stix_id = mt.stix_id AND LOWER(mtt.domain) = LOWER(mt.domain) AND UPPER(t.tactic_id) = ?)"
+                    )
+                    parent_params.append((tactic_id or "").upper())
+
+                parent_where_clause = f"WHERE {' AND '.join(parent_where)}"
+
+                with self.get_connection() as conn:
+                    parent_rows = conn.execute(
+                        f"""
+                        SELECT
+                            mt.id,
+                            mt.name,
+                            COALESCE(mt.description, '') AS description,
+                            mt.is_subtechnique,
+                            COALESCE(string_agg(DISTINCT NULLIF(tshort.shortname, ''), ', '), '') AS tactic_shortname,
+                            COUNT(DISTINCT mgt.group_stix_id) AS group_count,
+                            COUNT(DISTINCT mtm.mitigation_stix_id) AS mitigation_count
+                        FROM mitre_techniques mt
+                                        LEFT JOIN mitre_technique_tactics mtt
+                                            ON mtt.technique_stix_id = mt.stix_id
+                                         AND LOWER(mtt.domain) = LOWER(mt.domain)
+                                        LEFT JOIN mitre_tactics tshort
+                                            ON tshort.stix_id = mtt.tactic_stix_id
+                                         AND LOWER(tshort.domain) = LOWER(mtt.domain)
+                                        LEFT JOIN mitre_group_techniques mgt
+                                            ON mgt.technique_stix_id = mt.stix_id
+                                         AND LOWER(mgt.domain) = LOWER(mt.domain)
+                                        LEFT JOIN mitre_technique_mitigations mtm
+                                            ON mtm.technique_stix_id = mt.stix_id
+                                         AND LOWER(mtm.domain) = LOWER(mt.domain)
+                        {parent_where_clause}
+                        GROUP BY mt.id, mt.name, mt.description, mt.is_subtechnique
+                        ORDER BY mt.id
+                        """,
+                        parent_params,
+                    ).fetchall()
+
+                parent_by_id = {(r[0] or "").upper(): r for r in parent_rows if r and r[0]}
+                merged_rows = []
+                inserted = set()
+                for r in out_rows:
+                    if bool(r[3]) and "." in (r[0] or ""):
+                        pid = (r[0] or "").split(".", 1)[0].upper()
+                        prow = parent_by_id.get(pid)
+                        if prow and pid not in inserted:
+                            merged_rows.append(prow)
+                            inserted.add(pid)
+                    rid = (r[0] or "").upper()
+                    if rid not in inserted:
+                        merged_rows.append(r)
+                        inserted.add(rid)
+
+                # Keep any parent rows that were not inserted in the first pass.
+                for pid in parent_ids:
+                    prow = parent_by_id.get(pid)
+                    if prow and pid not in inserted:
+                        merged_rows.append(prow)
+                        inserted.add(pid)
+
+                out_rows = merged_rows
+
         with self.get_connection() as conn:
             source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in out_rows])
 
@@ -5897,6 +6315,48 @@ class DatabaseService:
                 params,
             ).fetchall()
 
+            software = conn.execute(
+                f"""
+                SELECT ms.software_id,
+                       ms.name,
+                       COALESCE(MAX(NULLIF(ms.software_type, '')), ''),
+                       COALESCE(MAX(NULLIF(ms.platforms, '')), ''),
+                       COALESCE(MAX(NULLIF(ms.description, '')), ''),
+                       COALESCE(MAX(NULLIF(ms.url, '')), '')
+                FROM mitre_software_techniques mst
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mst.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mst.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mst.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mst.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY ms.software_id, ms.name
+                ORDER BY ms.software_id
+                """,
+                params,
+            ).fetchall()
+
+            campaigns = conn.execute(
+                f"""
+                SELECT mc.campaign_id,
+                       COALESCE(MAX(NULLIF(mc.name, '')), mc.campaign_id),
+                       COALESCE(MAX(NULLIF(mc.description, '')), ''),
+                       COALESCE(MAX(NULLIF(mc.url, '')), '')
+                FROM mitre_campaign_techniques mct
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mct.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mct.domain)
+                                JOIN mitre_techniques mt
+                                    ON mt.stix_id = mct.technique_stix_id
+                                 AND LOWER(mt.domain) = LOWER(mct.domain)
+                WHERE UPPER(mt.id) = ?{where_domain}
+                GROUP BY mc.campaign_id
+                ORDER BY mc.campaign_id
+                """,
+                params,
+            ).fetchall()
+
             procedure_examples = conn.execute(
                 f"""
                 SELECT mg.group_id, mg.name, COALESCE(MAX(NULLIF(mgt.use_description, '')), '')
@@ -5919,7 +6379,9 @@ class DatabaseService:
             sub_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in subtechniques if r[0]])
             group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
             mitigation_source_map = self._mitre_sources_map(conn, "mitre_mitigations", "mitigation_id", [r[0] for r in mitigations if r[0]])
+            campaign_source_map = self._mitre_sources_map(conn, "mitre_campaigns", "campaign_id", [r[0] for r in campaigns if r[0]])
             proc_group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in procedure_examples if r[0]])
+            software_source_map = self._mitre_sources_map(conn, "mitre_software", "software_id", [r[0] for r in software if r[0]])
 
         return {
             "id": row[0],
@@ -5970,6 +6432,17 @@ class DatabaseService:
                 }
                 for r in mitigations
             ],
+            "campaigns": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "description": r[2],
+                    "reference": r[3],
+                    "url": f"/mitre/campaigns/{r[0]}",
+                    "sources": campaign_source_map.get((r[0] or "").upper(), []),
+                }
+                for r in campaigns
+            ],
             "procedure_examples": [
                 {
                     "group_id": r[0],
@@ -5979,6 +6452,19 @@ class DatabaseService:
                     "sources": proc_group_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in procedure_examples
+            ],
+            "software": [
+                {
+                    "id": r[0],
+                    "name": r[1],
+                    "software_type": r[2],
+                    "platforms": r[3],
+                    "description": r[4],
+                    "reference": r[5],
+                    "url": f"/mitre/software/{r[0]}",
+                    "sources": software_source_map.get((r[0] or "").upper(), []),
+                }
+                for r in software
             ],
         }
 
@@ -6722,11 +7208,13 @@ class DatabaseService:
             client_id: If provided, restrict to rules in spaces linked to this client.
             environment_role: If provided with client_id, restrict to production or staging spaces.
         """
-        # Pre-fetch client spaces for filtering
-        client_spaces = None
+        # Pre-fetch client scopes for filtering.
+        # Use composite (siem_id, space) to prevent cross-SIEM leakage when
+        # multiple SIEMs share the same Kibana space name.
+        client_scopes = None
         if client_id:
-            client_spaces = self.get_client_siem_spaces(client_id, environment_role)
-            if not client_spaces:
+            client_scopes = self.get_client_siem_scopes(client_id, environment_role)
+            if not client_scopes:
                 return []
         # Honour per-tenant validation thresholds when scoped to a client.
         thresholds = (
@@ -6746,11 +7234,11 @@ class DatabaseService:
             if enabled_only:
                 base_conditions += " AND enabled = 1"
             
-            # Client-SIEM space filtering
-            if client_spaces:
-                placeholders = ", ".join("?" for _ in client_spaces)
-                base_conditions += f" AND LOWER(space) IN ({placeholders})"
-                params.extend([s.lower() for s in client_spaces])
+            # Client-SIEM scope filtering (siem_id + space pair).
+            if client_scopes:
+                scope_frag, scope_params = _scope_predicate(client_scopes)
+                base_conditions += f" AND {scope_frag}"
+                params.extend(scope_params)
             
             if search:
                 # Apply same search logic as grid - match name, author, rule_id, OR mitre_ids

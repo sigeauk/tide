@@ -128,7 +128,11 @@ def _load_mitre_cve_map():
     global _mitre_cve_map_cache, _mitre_cve_map_loaded
     if _mitre_cve_map_loaded:
         return _mitre_cve_map_cache or {}
-    for p in ["/app/data/attack-to-cve.json", "/opt/repos/mappings/attack-to-cve.json"]:
+    for p in [
+        "/app/data/attack-to-cve.json",
+        "/opt/repos/mappings/kev-07.28.2025_attack-16.1-enterprise.json",
+        "/opt/repos/mappings/attack-to-cve.json",
+    ]:
         if os.path.exists(p):
             try:
                 with open(p, "r", encoding="utf-8") as fh:
@@ -137,17 +141,31 @@ def _load_mitre_cve_map():
                     _mitre_cve_map_loaded = True
                     _mitre_cve_map_cache = {}
                     return {}
-                first_key = next(iter(raw))
-                if first_key.upper().startswith("CVE-"):
-                    _mitre_cve_map_cache = {k.upper(): v for k, v in raw.items()}
-                else:
+                if isinstance(raw, dict) and "mapping_objects" in raw:
                     inverted = {}
-                    for tid, cve_list in raw.items():
-                        for cve_id in cve_list:
-                            inverted.setdefault(cve_id.upper(), [])
-                            if tid not in inverted[cve_id.upper()]:
-                                inverted[cve_id.upper()].append(tid)
+                    for item in raw.get("mapping_objects") or []:
+                        if not isinstance(item, dict):
+                            continue
+                        cve_id = (item.get("capability_id") or "").strip().upper()
+                        technique_id = (item.get("attack_object_id") or "").strip().upper()
+                        if not cve_id or not cve_id.startswith("CVE-") or not technique_id:
+                            continue
+                        inverted.setdefault(cve_id, [])
+                        if technique_id not in inverted[cve_id]:
+                            inverted[cve_id].append(technique_id)
                     _mitre_cve_map_cache = inverted
+                else:
+                    first_key = next(iter(raw))
+                    if first_key.upper().startswith("CVE-"):
+                        _mitre_cve_map_cache = {k.upper(): v for k, v in raw.items()}
+                    else:
+                        inverted = {}
+                        for tid, cve_list in raw.items():
+                            for cve_id in cve_list:
+                                inverted.setdefault(cve_id.upper(), [])
+                                if tid not in inverted[cve_id.upper()]:
+                                    inverted[cve_id.upper()].append(tid)
+                        _mitre_cve_map_cache = inverted
                 _mitre_cve_map_loaded = True
                 return _mitre_cve_map_cache
             except Exception as exc:
@@ -1361,6 +1379,10 @@ def get_system_summaries(client_id: str = None):
     for system in systems:
         hosts = all_hosts.get(system.id, [])
         sw_count = sum(len(all_software.get(h.id, [])) for h in hosts)
+        # Keep systems list baseline expansions visually consistent with the
+        # system detail assurance-baseline cards by including step-level
+        # detection metadata (pill coloring + detection counts).
+        system_baselines = get_system_baselines(system.id, include_detection_details=True, client_id=client_id)
         # Count unique CVEs affecting this system with one pass
         vuln_cves: set = set()
         # Track per-host vuln/detected counts for worst-case RAG
@@ -1405,6 +1427,7 @@ def get_system_summaries(client_id: str = None):
             software_count=sw_count,
             baseline_count=baseline_counts.get(str(system.id), 0),
             baseline_coverage_pct=baseline_coverage_pct,
+            baselines=system_baselines,
             worst_status=worst_status))
     return summaries
 
@@ -2626,6 +2649,30 @@ def get_baselines_overview(client_id: str = None) -> List[Dict]:
         ).fetchall()
         step_counts = dict(step_rows)
 
+        # Technique counts per playbook.
+        # A step may have multiple step_techniques rows; if none exist, fall back
+        # to playbook_steps.technique_id when present.
+        step_rows_full = conn.execute(
+            f"SELECT id, playbook_id, technique_id FROM playbook_steps WHERE playbook_id IN ({placeholders})",
+            pb_ids,
+        ).fetchall()
+        step_ids_all = [r[0] for r in step_rows_full]
+        step_tech_counts = {}
+        if step_ids_all:
+            stp = ",".join("?" for _ in step_ids_all)
+            st_rows = conn.execute(
+                f"SELECT step_id, COUNT(*) FROM step_techniques WHERE step_id IN ({stp}) GROUP BY step_id",
+                step_ids_all,
+            ).fetchall()
+            step_tech_counts = {sid: int(cnt or 0) for sid, cnt in st_rows}
+
+        technique_counts = {}
+        for step_id, pb_id, technique_id in step_rows_full:
+            cnt = step_tech_counts.get(step_id, 0)
+            if cnt <= 0 and (technique_id or "").strip():
+                cnt = 1
+            technique_counts[pb_id] = technique_counts.get(pb_id, 0) + cnt
+
         # Tactic counts per playbook (distinct tactics)
         tactic_rows = conn.execute(
             f"SELECT playbook_id, COUNT(DISTINCT COALESCE(NULLIF(tactic,''),'Other')) "
@@ -2737,9 +2784,10 @@ def get_baselines_overview(client_id: str = None) -> List[Dict]:
             for sid in all_system_ids:
                 system_applied_det_ids[sid] = set()
 
-    # Compute worst status per playbook
-    # Priority: red > amber > grey > green
-    STATUS_PRIORITY = {"red": 0, "amber": 1, "grey": 2, "green": 3}
+    # Compute worst status per playbook.
+    # Grey (N/A) should not drag down mixed states:
+    # red > amber > green > grey
+    STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2, "grey": 3}
 
     results = []
     for pb_id, pb_name, pb_desc in pbs:
@@ -2775,6 +2823,7 @@ def get_baselines_overview(client_id: str = None) -> List[Dict]:
             "name": pb_name,
             "description": pb_desc or "",
             "step_count": step_counts.get(pb_id, 0),
+            "technique_count": technique_counts.get(pb_id, 0),
             "tactic_count": tactic_counts.get(pb_id, 0),
             "detection_count": det_counts.get(pb_id, 0),
             "system_count": sys_counts.get(pb_id, 0),

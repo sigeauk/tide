@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/ui/breadcrumb.html" import breadcrumb %}
 
 {% block title %}MITRE Techniques | TIDE{% endblock %}
 
 {% block content %}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('Techniques', none)]) }}
+
 <style>
     #mitre-techniques summary {
         list-style: none;
@@ -14,6 +17,7 @@
 </style>
 
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+    {% set technique_total = (techniques | length) if query else (techniques | rejectattr('is_subtechnique') | list | length) %}
     <div>
         {% if selected_tactic %}
         <h1 class="page-title-hero">{{ selected_tactic.id }} - {{ selected_tactic.name }} Techniques</h1>
@@ -23,32 +27,22 @@
         <p class="page-subtitle">Techniques represent how an adversary achieves a tactical goal by performing an action.</p>
         {% endif %}
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:0.4rem;padding-top:0.5rem;">
-        {% if source_domain != 'all' %}
-        <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
-        {% else %}
-        <span class="text-muted">All sources</span>
-        {% endif %}
-        <div class="text-muted">Techniques: {{ techniques | rejectattr('is_subtechnique') | list | length }}</div>
-        {% if selected_tactic %}
-        <a class="btn btn-secondary btn-sm" href="/mitre/tactic">Back to Tactics</a>
-        {% endif %}
+    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;">
+        <aside class="card card-padded">
+            <h2 class="section-title">Details</h2>
+            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
+                <div><strong>Techniques:</strong> {{ technique_total }}</div>
+            </div>
+        </aside>
     </div>
 </div>
 
 <form method="get" action="/mitre/technique" class="filters-bar" style="margin-top:1rem;">
     {% if tactic_filter %}<input type="hidden" name="tactic" value="{{ tactic_filter }}">{% endif %}
+    <input type="hidden" name="src" value="{{ source_domain }}">
     <div class="filter-group grow">
         <label class="form-label">Search Techniques</label>
-        <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, or description">
-    </div>
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <select class="form-input form-select" name="src">
-            {% for value, label in source_options %}
-            <option value="{{ value }}" {% if source_domain == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
+        <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search techniques and sub-techniques by ID, name, or description">
     </div>
     <div class="filter-group" style="align-self:flex-end;">
         <button class="btn btn-primary" type="submit">Apply</button>
@@ -81,8 +75,8 @@
                     {% endif %}
                 </div>
                 <div class="cve-card-item__body">
-                    <div class="cve-card-item__name"><a href="{{ technique.url }}" onclick="event.stopPropagation();">{{ technique.name }}</a></div>
-                    <div class="cve-card-item__meta">
+                    <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                        <a href="{{ technique.url }}" onclick="event.stopPropagation();">{{ technique.name }}</a>
                         {% if technique.sources %}
                         {% for src in technique.sources %}
                         {% set src_meta = source_meta.get(src, {}) %}
@@ -91,6 +85,8 @@
                         {% else %}
                         <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
                         {% endif %}
+                    </div>
+                    <div class="cve-card-item__meta">
                         {% if technique.tactic %}<span>{{ technique.tactic }}</span>{% endif %}
                     </div>
                 </div>
@@ -106,7 +102,7 @@
     </details>
 
     {% if sub_count.value > 0 %}
-    <div id="subtechniques-{{ technique.id }}" style="display:none;margin:0.25rem 0 0.9rem 1.2rem;">
+    <div id="subtechniques-{{ technique.id }}" style="display:{% if query %}block{% else %}none{% endif %};margin:0.25rem 0 0.9rem 1.2rem;">
         <div class="cve-list">
             {% for sub in techniques if sub.is_subtechnique and sub.parent_id == technique.id %}
             {% set sub_src = (sub.sources[0] if sub.sources else source_domain) %}
@@ -119,8 +115,8 @@
                             <span class="text-muted">Sub-technique</span>
                         </div>
                         <div class="cve-card-item__body">
-                            <div class="cve-card-item__name"><a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a></div>
-                            <div class="cve-card-item__meta">
+                            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                                <a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
                                 {% if sub.sources %}
                                 {% for src in sub.sources %}
                                 {% set src_meta = source_meta.get(src, {}) %}
@@ -129,6 +125,8 @@
                                 {% else %}
                                 <span class="source-pill {{ source_pill_class }}" title="{{ source_label }}">{{ source_code }}</span>
                                 {% endif %}
+                            </div>
+                            <div class="cve-card-item__meta">
                                 {% if sub.tactic %}<span>{{ sub.tactic }}</span>{% endif %}
                             </div>
                         </div>
@@ -153,7 +151,7 @@
 
     {% if orphan_sub.items %}
     <details class="card card-padded" data-collapse-key="mitre-techniques-orphan-subtechniques" style="margin-top:0.6rem;">
-        <summary class="section-title" style="cursor:pointer;">Unmapped Sub-techniques</summary>
+        <summary class="section-title" style="cursor:pointer;">Unmapped Sub-techniques ({{ orphan_sub.items | length }})</summary>
         <div class="cve-list" style="margin-top:0.6rem;">
             {% for sub in orphan_sub.items %}
             {% set orphan_src = (sub.sources[0] if sub.sources else source_domain) %}
@@ -165,8 +163,8 @@
                         <span class="text-muted">Sub-technique</span>
                     </div>
                     <div class="cve-card-item__body">
-                        <div class="cve-card-item__name"><a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a></div>
-                        <div class="cve-card-item__meta">
+                        <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                            <a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
                             {% if sub.sources %}
                             {% for src in sub.sources %}
                             {% set src_meta = source_meta.get(src, {}) %}

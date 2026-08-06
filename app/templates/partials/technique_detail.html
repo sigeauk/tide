@@ -1,12 +1,36 @@
+{% from "components/mitre_pill.html" import mitre_pill %}
+
 <!-- Technique Detail Slide-Over Panel -->
-<div  name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
-    
-    <div  name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
-        <!-- Panel Header -->
+<div name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
+    <div name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
         <div class="slide-panel-header">
-            <div>
-                <span class="technique-id">{{ technique.id }}{% if rule_count > 0 %} <span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}</span>
-                <h2 class="technique-name">{{ technique.name }}</h2>
+            <div style="min-width:0;">
+                {% if parent_technique %}
+                <div class="technique-crumb">
+                    <a href="{{ parent_technique.url }}">{{ parent_technique.id }} - {{ parent_technique.name }}</a>
+                    <span>></span>
+                    <span>{{ technique.id }}</span>
+                </div>
+                {% endif %}
+                <h2 class="technique-name">{{ technique.id }} - {{ technique.name }}</h2>
+                <div class="tech-head-lines" style="margin-top:0.5rem;">
+                    {% if tactic_pills %}
+                    <div class="tech-head-line">
+                        <span class="tech-head-title">Tactics: </span>
+                        <span class="tech-head-value">{{ tactic_pills | join(', ') }}</span>
+                    </div>
+                    {% endif %}
+                    {% if platform_pills %}
+                    <div class="tech-head-line">
+                        <span class="tech-head-title">Platforms: </span>
+                        <span class="tech-head-value">{{ platform_pills | join(', ') }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="tech-head-line">
+                        <span class="tech-head-title">Data Sources: </span>
+                        <span class="tech-head-value">{{ required_logs | join(', ') if required_logs else 'N/A' }}</span>
+                    </div>
+                </div>
             </div>
             <button name="Close Technique Panel" class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -14,97 +38,215 @@
                 </svg>
             </button>
         </div>
-        
-        <!-- Panel Content -->
+
         <div class="slide-panel-content">
-            <!-- Status Badge -->
-            <div class="technique-status {{ 'status-covered' if is_covered else 'status-gap' }}">
-                {% if is_covered %}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
-                        <polyline points="22 4 12 14.01 9 11.01"/>
-                    </svg>
-                    {% if search %}
-                        {{ rule_count }} rule{{ 's' if rule_count != 1 else '' }} matching "{{ search }}"
-                    {% else %}
-                        Covered by {{ rule_count }} enabled rule{{ 's' if rule_count != 1 else '' }}
-                    {% endif %}
-                {% else %}
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <line x1="12" y1="8" x2="12" y2="12"/>
-                        <line x1="12" y1="16" x2="12.01" y2="16"/>
-                    </svg>
-                    Coverage Gap - No Detection Rules
-                {% endif %}
-            </div>
-            
-            <!-- Metadata -->
-            <div class="technique-meta">
-                <div class="meta-item">
-                    <span class="meta-label">Tactic</span>
-                    <span class="meta-value">{{ tactic }}</span>
-                </div>
-                {% if actors %}
-                <div class="meta-item">
-                    <span class="meta-label">Used By</span>
-                    <span class="meta-value">{{ actors | join(', ') }}</span>
-                </div>
-                {% endif %}
-            </div>
-            
-            <!-- Action Buttons -->
-            <div class="technique-actions">
-                     <a name="MITRE" href="/mitre/technique/{{ technique.id }}" 
-                   class="btn btn-secondary btn-sm grow">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
-                        <polyline points="15 3 21 3 21 9"/>
-                        <line x1="10" y1="14" x2="21" y2="3"/>
-                    </svg>
-                    MITRE
-                </a>
-                <a name="Sigma" href="/sigma?technique={{ technique.id }}" 
-                   class="btn btn-primary btn-sm grow">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="11" cy="11" r="8"/>
-                        <path d="m21 21-4.3-4.3"/>
-                    </svg>
-                    Sigma
-                </a>
-            </div>
-            
-            <!-- Detection Rules Section -->
-            {% if is_covered or has_rules %}
-            <div class="rules-section">
-                {% if not is_covered and has_rules %}
-                <div class="alert alert-warning" style="margin-bottom:0.75rem;font-size:0.82rem;display:flex;align-items:center;gap:0.4rem;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                    Rules exist but are currently <strong>disabled</strong> — enable them in the Sigma library to activate coverage.
-                </div>
-                {% endif %}
-                <h3 class="rules-title">Detection Rules {% if search %}<span class="rules-title-filter text-primary">(filtered by "{{ search }}")</span>{% else %}<span class="rules-title-filter text-muted">({{ 'enabled' if is_covered else 'disabled' }})</span>{% endif %}</h3>
-                <div name="Open Rules" id="technique-rules" 
-                     hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
-                     hx-trigger="load"
-                     hx-swap="innerHTML">
-                    <div class="loading-spinner heatmap-spinner">
-                        <div class="spinner"></div>
-                        <span>Loading rules...</span>
+            <div class="technique-popup-stack">
+                <section class="technique-main-column">
+                    <div class="technique-actions" style="margin-top:0; margin-bottom:0.25rem;">
+                        <a name="MITRE" href="/mitre/technique/{{ technique.id }}" class="btn btn-secondary btn-sm grow">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                            MITRE
+                        </a>
+                        <a name="Sigma" href="/sigma?technique={{ technique.id }}" class="btn btn-primary btn-sm grow">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+                            Sigma
+                        </a>
                     </div>
-                </div>
+
+                    <details class="card card-padded">
+                        <summary class="rules-title tech-collapse-title">Description</summary>
+                        {% set desc = (technique_description or 'No description available.') %}
+                        <div class="technique-description">{{ desc | md }}</div>
+                    </details>
+
+                    {% if required_logs %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                        <summary class="rules-title tech-collapse-title">Data Sources</summary>
+                        <ul class="tech-simple-list">
+                            {% for ds in required_logs %}
+                            <li>{{ ds }}</li>
+                            {% endfor %}
+                        </ul>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if subtechniques %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                        <summary class="rules-title tech-collapse-title">Sub-techniques ({{ subtechniques|length }})</summary>
+                        <div class="cve-list" style="margin-top:0.4rem;">
+                            {% for sub in subtechniques %}
+                            <a class="cve-card-item cve-card-item--available" href="{{ sub.url }}">
+                                <div class="cve-card-item__id"><span>{{ sub.id }}</span></div>
+                                <div class="cve-card-item__body">
+                                    <div class="cve-card-item__name">{{ sub.name }}</div>
+                                    {% if sub.description %}<div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ sub.description }}</div>{% endif %}
+                                </div>
+                            </a>
+                            {% endfor %}
+                        </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if related_groups %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">Groups ({{ related_groups|length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for g in related_groups %}
+                                <a class="cve-card-item cve-card-item--available" href="{{ g.url }}">
+                                    <div class="cve-card-item__id"><span>{{ g.id }}</span></div>
+                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ g.name }}</div></div>
+                                </a>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if related_campaigns %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">Campaigns ({{ related_campaigns|length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for c in related_campaigns %}
+                                <a class="cve-card-item cve-card-item--available" href="{{ c.url }}">
+                                    <div class="cve-card-item__id"><span>{{ c.id }}</span></div>
+                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ c.name }}</div></div>
+                                </a>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if related_software %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">Software & Tools ({{ related_software|length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for s in related_software %}
+                                <a class="cve-card-item cve-card-item--available" href="{{ s.url }}">
+                                    <div class="cve-card-item__id"><span>{{ s.id }}</span></div>
+                                    <div class="cve-card-item__body">
+                                        <div class="cve-card-item__name">{{ s.name }}</div>
+                                        {% if s.platforms %}<div class="cve-card-item__meta">{{ s.platforms | replace(',', ' · ') | replace(';', ' · ') }}</div>{% endif %}
+                                    </div>
+                                </a>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if related_mitigations %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">Mitigations ({{ related_mitigations|length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for m in related_mitigations %}
+                                <a class="cve-card-item cve-card-item--available" href="{{ m.url }}">
+                                    <div class="cve-card-item__id"><span>{{ m.id }}</span></div>
+                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ m.name }}</div></div>
+                                </a>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if related_procedure_examples %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">Procedure Examples ({{ related_procedure_examples | length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for ex in related_procedure_examples %}
+                                <div class="cve-card-item cve-card-item--available">
+                                    <a class="cve-card-item__id" href="{{ ex.url }}"><span>{{ ex.id }}</span></a>
+                                    <div class="cve-card-item__body">
+                                        <div class="cve-card-item__name"><a href="{{ ex.url }}">{{ ex.name }}</a></div>
+                                        {% if ex.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ ex.use | md }}</div>{% endif %}
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if nist_capabilities %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details>
+                            <summary class="rules-title tech-collapse-title">NIST 800-53 Capabilities ({{ nist_capabilities | length }})</summary>
+                            <div class="cve-list" style="margin-top:0.4rem;">
+                                {% for capability in nist_capabilities %}
+                                <details class="cve-card-item cve-card-item--available" style="display:block;">
+                                    <summary style="list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:0.75rem;">
+                                        <div class="cve-card-item__id">{{ capability.group_code }}</div>
+                                        <div class="cve-card-item__body">
+                                            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
+                                                <a href="{{ capability.url }}">{{ capability.title }}</a>
+                                                <span class="source-pill src-opencti" title="NIST 800-53">NIST</span>
+                                            </div>
+                                            <div class="cve-card-item__meta">{{ capability.group_name }}</div>
+                                        </div>
+                                    </summary>
+                                    <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ (capability.comments or 'No description available.') | md }}</div>
+                                </details>
+                                {% endfor %}
+                            </div>
+                        </details>
+                    </div>
+                    {% endif %}
+
+                    {% if has_rules %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details open>
+                        <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">({{ total_rule_count }} rule{{ '' if total_rule_count == 1 else 's' }})</span>{% if search %}<span class="rules-title-filter text-primary"> filtered by "{{ search }}"</span>{% endif %}</summary>
+                        <div class="tech-section-body">
+                        <div class="technique-status {{ 'status-covered' if coverage_state == 'active' else ('status-latent' if coverage_state == 'latent' else 'status-gap') }}">
+                            {% if coverage_state == 'active' %}
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+                            {% elif coverage_state == 'latent' %}
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                            {% else %}
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                            {% endif %}
+                            {{ coverage_label }}
+                        </div>
+                        <div class="text-muted">{{ coverage_detail }}</div>
+                        <div name="Open Rules" id="technique-rules"
+                             hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
+                             hx-trigger="load"
+                             hx-swap="innerHTML">
+                            <div class="loading-spinner heatmap-spinner">
+                                <div class="spinner"></div>
+                                <span>Loading rules...</span>
+                            </div>
+                        </div>
+                        </div>
+                        </details>
+                    </div>
+                    {% else %}
+                    <div class="card card-padded" style="margin-top:0.75rem;">
+                        <details open>
+                        <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">(0 rules)</span></summary>
+                        <div class="tech-section-body">
+                        <div class="technique-status status-gap">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                            No Coverage
+                        </div>
+                        <div class="text-muted">No related Sigma rules detected</div>
+                        <div class="text-muted">No detection rules found for this technique.</div>
+                        </div>
+                        </details>
+                    </div>
+                    {% endif %}
+                </section>
             </div>
-            {% else %}
-            <div class="gap-recommendations">
-                <h3 class="rules-title">Recommendations</h3>
-                <ul class="recommendations-list">
-                    <li>Search for Sigma rules covering {{ technique.id }}</li>
-                    <li>Check vendor detection content for this technique</li>
-                    <li>Consider creating custom detection logic</li>
-                    <li>Review sub-techniques for alternative coverage</li>
-                </ul>
-            </div>
-            {% endif %}
         </div>
     </div>
 </div>

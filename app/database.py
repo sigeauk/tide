@@ -1,6 +1,7 @@
 import duckdb
 import json
 import os
+import re
 from log import log_info, log_error, log_debug
 import pandas as pd
 import time
@@ -844,6 +845,8 @@ def _save_table_from_df(conn, table_name, df, columns):
         "mitre_campaign_techniques": ["campaign_stix_id", "technique_stix_id", "domain"],
         "mitre_campaign_software": ["campaign_stix_id", "software_stix_id", "domain"],
         "mitre_campaign_groups": ["campaign_stix_id", "group_stix_id", "domain"],
+        "nist_capability_groups": ["group_code", "domain"],
+        "nist_capabilities": ["capability_group", "capability_slug", "attack_object_id", "domain"],
     }
     dedupe_keys = [k for k in key_map.get(table_name, columns) if k in clean.columns]
     clean = clean.drop_duplicates(subset=dedupe_keys if dedupe_keys else columns)
@@ -988,6 +991,93 @@ def save_mitre_knowledge(knowledge, domain):
     except Exception as e:
         log_error(f"Save MITRE knowledge failed: {e}")
         raise
+    finally:
+        conn.close()
+
+
+def _slugify_nist_capability(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-")
+    return slug or "capability"
+
+
+def _ensure_nist_kb_schema(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS nist_capability_groups (
+            group_code VARCHAR,
+            group_name VARCHAR,
+            attack_version VARCHAR,
+            framework_version VARCHAR,
+            domain VARCHAR,
+            url VARCHAR,
+            PRIMARY KEY (group_code, domain)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS nist_capabilities (
+            capability_group VARCHAR,
+            group_name VARCHAR,
+            capability_id VARCHAR,
+            capability_slug VARCHAR,
+            capability_description VARCHAR,
+            comments VARCHAR,
+            mapping_type VARCHAR,
+            attack_object_id VARCHAR,
+            attack_object_name VARCHAR,
+            status VARCHAR,
+            domain VARCHAR,
+            url VARCHAR,
+            PRIMARY KEY (capability_group, capability_slug, attack_object_id, domain)
+        )
+    """)
+
+
+def save_nist_knowledge(knowledge, domain):
+    if not isinstance(knowledge, dict):
+        return
+    conn = get_connection(read_only=False)
+    try:
+        _ensure_nist_kb_schema(conn)
+        domain_value = (domain or "unknown").strip().lower()
+
+        conn.execute("DELETE FROM nist_capabilities WHERE LOWER(domain) = ?", [domain_value])
+        conn.execute("DELETE FROM nist_capability_groups WHERE LOWER(domain) = ?", [domain_value])
+
+        groups_df = knowledge.get("capability_groups")
+        if groups_df is not None and not groups_df.empty:
+            groups_df = groups_df.copy()
+            groups_df["domain"] = domain_value
+            _save_table_from_df(
+                conn,
+                "nist_capability_groups",
+                groups_df,
+                ["group_code", "group_name", "attack_version", "framework_version", "domain", "url"],
+            )
+
+        capabilities_df = knowledge.get("capabilities")
+        if capabilities_df is not None and not capabilities_df.empty:
+            capabilities_df = capabilities_df.copy()
+            capabilities_df["domain"] = domain_value
+            _save_table_from_df(
+                conn,
+                "nist_capabilities",
+                capabilities_df,
+                [
+                    "capability_group",
+                    "group_name",
+                    "capability_id",
+                    "capability_slug",
+                    "capability_description",
+                    "comments",
+                    "mapping_type",
+                    "attack_object_id",
+                    "attack_object_name",
+                    "status",
+                    "domain",
+                    "url",
+                ],
+            )
+    except Exception as exc:
+        log_error(f"Save NIST Knowledge Failed: {exc}")
     finally:
         conn.close()
 

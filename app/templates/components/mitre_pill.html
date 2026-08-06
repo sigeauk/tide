@@ -24,7 +24,7 @@ Parameters:
 - search_filter: Optional string - current search filter to pass to sidebar API
 #}
 
-{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, neutral=false, clickable=true, size='sm', search_filter='') %}
+{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, neutral=false, clickable=true, size='sm', search_filter='', show_zero_count=false) %}
 {# Determine status class based on coverage or neutral override #}
 {% if neutral %}
     {% set status_class = 'mitre-neutral' %}
@@ -41,14 +41,13 @@ Parameters:
 <span  name="Open Technique Details" 
     class="mitre-pill {{ status_class }} {{ size_class }}"
     {% if clickable %}
-    hx-get="/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
-    hx-target="#slide-panel-container"
-    hx-swap="innerHTML"
-    onclick="event.stopPropagation();"
+    onpointerdown="event.preventDefault(); event.stopPropagation();"
+    onmousedown="event.preventDefault(); event.stopPropagation();"
+    onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
     style="cursor: pointer;"
     {% endif %}
-    title="{{ technique_id }}{% if covered %} Covered{% else %} Gap{% endif %}{% if rule_count > 0 %} - {{ rule_count }} rule{{ 's' if rule_count > 1 else '' }}{% endif %}">
-    {{ technique_id }}{% if rule_count > 0 %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
+    title="{{ technique_id }}{% if covered %} Covered{% else %} Gap{% endif %}{% if rule_count > 0 or show_zero_count %} - {{ rule_count }} rule{{ '' if rule_count == 1 else 's' }}{% endif %}">
+    {{ technique_id }}{% if rule_count > 0 or show_zero_count %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
 </span>
 {% endmacro %}
 
@@ -81,10 +80,9 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
             <span name="Open Technique Details" 
                 class="mitre-pill mitre-neutral mitre-{{ size }}"
                 {% if clickable %}
-                hx-get="/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}"
-                hx-target="#slide-panel-container"
-                hx-swap="innerHTML"
-                onclick="event.stopPropagation();"
+                onpointerdown="event.preventDefault(); event.stopPropagation();"
+                onmousedown="event.preventDefault(); event.stopPropagation();"
+                onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
                 style="cursor: pointer;"
                 {% endif %}
                 title="{{ mid }}">

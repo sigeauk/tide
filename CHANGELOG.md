@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.9] - 2026-08-06
+
+### Added
+- **Technique detail relationship coverage expanded.** Technique detail pages now include a dedicated **Campaigns Using This Technique** section and campaign data in the related-entity model.
+- **Heatmap technique popup metadata and procedures.** The popup now includes a **Data Sources** line and a dedicated **Procedure Examples** card fed from MITRE use descriptions.
+- **Offline NIST mappings-explorer support.** TIDE now bakes the NIST 800-53 mappings-explorer JSON into the image at build time, adds a new MITRE NIST section with list and detail pages, and surfaces NIST capabilities on technique detail pages.
+
+### Changed
+- **MITRE section headers now include counts across pages.** Collapsible relationship sections now display item totals consistently across MITRE detail/list experiences (techniques, groups, software, campaigns, mitigations, tactics, and unmapped sub-techniques).
+- **Technique totals are now consistent between views.** The MITRE technique detail header/summary totals were aligned with popup/entity counts so related-entity numbers match across pages.
+- **MITRE pages now use explicit breadcrumb trails and standard page header layout.** MITRE list/detail pages now follow the shared breadcrumb and title/subtitle spacing pattern used across TIDE.
+- **MITRE page access is now explicitly permissioned in Role Templates.** MITRE routes now map to dedicated page resources instead of a shared fallback, so tenant admins can manage MITRE page access directly in the role matrix.
+- **Systems and baseline pages now follow the unified investigation layout.** Systems, system detail, and baseline technique views now share the same breadcrumb, details panel, filter bar, and collapsible entity-card structure for more consistent navigation and scanning.
+- **Systems and baseline card polish now matches MITRE card grammar more closely.** Collapsed system/device rows are now single-line without secondary status text, baseline tactic headers render MITRE tactic IDs (for example TA0001) instead of generic labels, and the baseline header action cluster keeps Start coverage quest visibly aligned with peer actions.
+- **System baseline coverage nesting and inventory header alignment were tightened.** System detail baseline coverage removed the third nested card level by flattening step rows into a single compact layer, and Systems/System Detail/Baseline pages now share consistent top-right Details panel sizing and alignment behavior.
+- **System detail baseline view now mirrors MITRE list structure more closely.** Removed tactic-level nested card containers entirely from System Detail baseline coverage so each baseline expands to one flat technique-row list with consistent row grammar.
+- **Generate Baselines no longer 500s when Sigma index is absent.** The generator now detects missing `sigma_rules_index`, returns an empty catalog safely, and shows a clear modal empty state with Preview disabled instead of raising a server error.
+- **System detail baseline hierarchy and visuals refined for consistency.** Baseline cards no longer show a default blue left accent, techniques are grouped under plain collapsible tactic headings (MITRE order), technique cards use left-edge status color (green/red/amber/grey), status text pills were removed, and page-level Expand all / Collapse all controls were removed while per-card collapse memory remains active.
+
+### Fixed
+- **MITRE software visibility on technique detail pages.** Software relationships are now rendered reliably on technique detail pages, including section totals.
+- **Procedure example rendering in heatmap popup.** Fixed broken procedure-card markup caused by nested links; procedure entries now render cleanly with proper link behavior and description formatting.
+- **Baseline list MITRE behavior and rule isolation.** Baseline list MITRE pills now open the technique side panel reliably, expanded baseline cards preserve their collapse state across navigation/refresh, and technique rule lookups now respect SIEM+space tenant scopes to prevent cross-tenant rule bleed.
+- **Baseline and system-baseline MITRE pills now use tenant-scoped rule counts as the colour source.** Pills no longer show green when a tenant has zero visible rules, and badges now display explicit counts (including 0) so colour and count stay aligned with the technique modal.
+
 ## [5.0.8] - 2026-08-03
 
 ### Fixed

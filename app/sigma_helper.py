@@ -273,6 +273,28 @@ def index_sigma_rules() -> int:
         ))
 
     with db.get_shared_connection() as conn:
+        # Self-heal for environments where migration 30 did not run yet.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sigma_rules_index (
+                rule_id   VARCHAR PRIMARY KEY,
+                title     VARCHAR,
+                level     VARCHAR,
+                status    VARCHAR,
+                product   VARCHAR,
+                category  VARCHAR,
+                service   VARCHAR,
+                techniques VARCHAR[],
+                tactics   VARCHAR[],
+                file_path VARCHAR,
+                indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        try:
+            conn.execute("CREATE INDEX idx_sigma_product  ON sigma_rules_index(product)")
+            conn.execute("CREATE INDEX idx_sigma_service  ON sigma_rules_index(service)")
+            conn.execute("CREATE INDEX idx_sigma_category ON sigma_rules_index(category)")
+        except Exception:
+            pass
         conn.execute("DELETE FROM sigma_rules_index")
         conn.executemany(
             """INSERT INTO sigma_rules_index

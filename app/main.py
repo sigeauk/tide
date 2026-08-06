@@ -223,6 +223,19 @@ async def lifespan(app: FastAPI):
     except Exception as _mitre_exc:
         logger.error("MITRE KB startup load failed: %s", _mitre_exc, exc_info=True)
 
+    try:
+        from app.services.nist_kb import load_nist_kb_from_files
+        nist_state = load_nist_kb_from_files(force=False)
+        logger.info(
+            "NIST KB startup load: updated=%s files=%s errors=%s reason=%s",
+            nist_state.get("updated"),
+            nist_state.get("processed_files"),
+            len(nist_state.get("errors") or []),
+            nist_state.get("reason"),
+        )
+    except Exception as _nist_exc:
+        logger.error("NIST KB startup load failed: %s", _nist_exc, exc_info=True)
+
     # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
     # ``cti_connectors`` has been retired. It was useful for the 4.1.20
     # upgrade path but is now actively harmful: deleting the legacy
@@ -637,21 +650,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/sigma": "page:sigma",
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
-        "/mitre": "page:threats",
-        "/cti/indicators": "page:cti_indicators",
-        "/cti/actors": "page:cti_actors",
-        "/cti/reports": "page:cti_reports",
-        "/cti": "page:cti",
-        "/settings": "page:settings",
-        "/clients": "page:clients",
-        "/management": "page:management",
-    }
-    
-    # API prefix → resource mapping for write checks
-    API_WRITE_RESOURCE_MAP = {
-        "/api/settings/profile": "tab:profile",
-        "/api/settings/api-keys": "tab:profile",
-        "/api/rules": "page:rules",
+        "/mitre": "page:mitre",
+        "/mitre/tactic": "page:mitre_tactic",
+        "/mitre/technique": "page:mitre_technique",
+        "/mitre/groups": "page:mitre_groups",
+
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
         "/api/promotion": "page:promotion",
@@ -685,7 +688,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             resource = self.PATH_RESOURCE_MAP.get(path)
             if not resource:
                 # Check for sub-paths (e.g. /systems/123 → page:systems)
-                for prefix, res in self.PATH_RESOURCE_MAP.items():
+                for prefix, res in sorted(self.PATH_RESOURCE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
                     if prefix != "/" and path.startswith(prefix):
                         resource = res
                         break
@@ -1432,7 +1435,7 @@ def create_app() -> FastAPI:
         if logout:
             use_secure = settings.app_url.startswith("https://")
             response = render_template(
-                "pages/login.html",
+                "pages/auth/login.html",
                 request,
                 {
                     "next": next,
@@ -1480,7 +1483,7 @@ def create_app() -> FastAPI:
                 return RedirectResponse(url=next, status_code=302)
         
         return render_template(
-            "pages/login.html",
+            "pages/auth/login.html",
             request,
             {
                 "next": next,
@@ -1501,7 +1504,7 @@ def create_app() -> FastAPI:
     def home(request: Request, user: CurrentUser):
         """Home page - redirect to dashboard or show landing."""
         return render_template(
-            "pages/home.html",
+            "pages/core/home.html",
             request,
             {
                 "user": user,
@@ -1565,7 +1568,7 @@ def create_app() -> FastAPI:
         spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
         
         return render_template(
-            "pages/rule_health.html",
+            "pages/rules/rule_health.html",
             request,
             {
                 "user": user,
@@ -1629,7 +1632,7 @@ def create_app() -> FastAPI:
         )
 
         return render_template(
-            "pages/heatmap.html",
+            "pages/threats/heatmap.html",
             request,
             {
                 "user": user,
@@ -1699,7 +1702,7 @@ def create_app() -> FastAPI:
             baselines_overview = []
         
         return render_template(
-            "pages/dashboard.html",
+            "pages/core/dashboard.html",
             request,
             {
                 "user": user,
@@ -1773,7 +1776,7 @@ def create_app() -> FastAPI:
         sources = _cti_filter_options(metrics.source_breakdown.keys()) if metrics.source_breakdown else []
 
         return render_template(
-            "pages/threat_landscape.html",
+            "pages/threats/threat_landscape.html",
             request,
             {
                 "user": user,
@@ -1787,8 +1790,8 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/mitre", response_class=HTMLResponse)
-    def mitre_index_page(request: Request, user: CurrentUser, db: DbDep):
-        return RedirectResponse(url="/mitre/tactic?src=all", status_code=307)
+    def mitre_index_page(request: Request, user: CurrentUser):
+        return RedirectResponse(url="/mitre/technique", status_code=302)
 
     _MITRE_SOURCE_META = {
         "all": {
@@ -1905,10 +1908,20 @@ def create_app() -> FastAPI:
         request: Request,
         user: CurrentUser,
         db: DbDep,
-        src: str = "all",
+        q: str = "",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         tactics = db.list_mitre_tactics(domain=src)
+        if q:
+            needle = q.strip().lower()
+            tactics = [
+                t for t in tactics
+                if needle in str(t.get("id") or "").lower()
+                or needle in str(t.get("name") or "").lower()
+                or needle in str(t.get("shortname") or "").lower()
+                or needle in str(t.get("description") or "").lower()
+            ]
         tactic_groups = []
         if src == "all":
             source_sequence = ["enterprise", "mobile", "ics", "pre"]
@@ -1970,6 +1983,7 @@ def create_app() -> FastAPI:
                 "active_sub": "tactic",
                 "tactics": tactics,
                 "tactic_groups": tactic_groups,
+                "query": q,
                 **src_ctx,
             },
         )
@@ -1987,13 +2001,13 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_tactic_detail(tactic_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Tactic Not Found",
-                    "message": f"No MITRE tactic found for {tactic_id}.",
+                    "page_title": "Tactic Not Found",
+                    "page_subtitle": f"No MITRE tactic found for {tactic_id}.",
                 },
             )
         query = urlencode({"tactic": detail["id"]})
@@ -2006,7 +2020,7 @@ def create_app() -> FastAPI:
         db: DbDep,
         q: str = "",
         tactic: str = "",
-        src: str = "all",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         techniques = db.list_mitre_techniques(
@@ -2054,17 +2068,18 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_technique_detail(technique_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Technique Not Found",
-                    "message": f"No MITRE technique found for {technique_id}.",
+                    "page_title": "Technique Not Found",
+                    "page_subtitle": f"No MITRE technique found for {technique_id}.",
                 },
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
+        nist_capabilities = db.list_nist_capabilities_for_technique(technique_id, domain="all")
         src_ctx = _mitre_source_context("all")
 
         return render_template(
@@ -2077,6 +2092,7 @@ def create_app() -> FastAPI:
                 "technique": detail,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
+                "nist_capabilities": nist_capabilities,
                 **src_ctx,
             },
         )
@@ -2087,7 +2103,7 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
-        src: str = "all",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         groups = db.list_mitre_groups(search=q or None, domain=src)
@@ -2120,13 +2136,13 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_group_detail(group_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Group Not Found",
-                    "message": f"No MITRE group found for {group_id}.",
+                    "page_title": "Group Not Found",
+                    "page_subtitle": f"No MITRE group found for {group_id}.",
                 },
             )
 
@@ -2153,7 +2169,7 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
-        src: str = "all",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         software = db.list_mitre_software(search=q or None, domain=src)
@@ -2186,13 +2202,13 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_software_detail(software_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Software Not Found",
-                    "message": f"No MITRE software found for {software_id}.",
+                    "page_title": "Software Not Found",
+                    "page_subtitle": f"No MITRE software found for {software_id}.",
                 },
             )
 
@@ -2219,7 +2235,7 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
-        src: str = "all",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         campaigns = db.list_mitre_campaigns(search=q or None, domain=src)
@@ -2252,13 +2268,13 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_campaign_detail(campaign_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Campaign Not Found",
-                    "message": f"No MITRE campaign found for {campaign_id}.",
+                    "page_title": "Campaign Not Found",
+                    "page_subtitle": f"No MITRE campaign found for {campaign_id}.",
                 },
             )
 
@@ -2285,7 +2301,7 @@ def create_app() -> FastAPI:
         user: CurrentUser,
         db: DbDep,
         q: str = "",
-        src: str = "all",
+        src: str = "enterprise",
     ):
         src, _ = _resolve_mitre_source(src)
         mitigations = db.list_mitre_mitigations(search=q or None, domain=src)
@@ -2318,13 +2334,13 @@ def create_app() -> FastAPI:
         detail = db.get_mitre_mitigation_detail(mitigation_id, domain="all")
         if not detail:
             return render_template(
-                "pages/placeholder.html",
+                "pages/core/placeholder.html",
                 request,
                 {
                     "user": user,
                     "active_page": "mitre",
-                    "title": "Mitigation Not Found",
-                    "message": f"No MITRE mitigation found for {mitigation_id}.",
+                    "page_title": "Mitigation Not Found",
+                    "page_subtitle": f"No MITRE mitigation found for {mitigation_id}.",
                 },
             )
 
@@ -2342,6 +2358,90 @@ def create_app() -> FastAPI:
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
                 **src_ctx,
+            },
+        )
+
+    @app.get("/mitre/nist", response_class=HTMLResponse)
+    def mitre_nist_page(request: Request, user: CurrentUser, db: DbDep, q: str = ""):
+        groups = db.list_nist_capability_groups(search=q or None, domain="enterprise")
+        for group in groups:
+            detail = db.get_nist_capability_group_detail(group.get("code"), domain="enterprise")
+            group["capabilities"] = detail.get("capabilities", []) if detail else []
+        return render_template(
+            "pages/mitre/nist.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "nist",
+                "nist_groups": groups,
+                "nist_overview": db.get_nist_overview(),
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/nist/{group_code}", response_class=HTMLResponse)
+    def mitre_nist_group_page(request: Request, group_code: str, user: CurrentUser, db: DbDep, q: str = ""):
+        detail = db.get_nist_capability_group_detail(group_code, search=q or None, domain="enterprise")
+        if not detail:
+            return render_template(
+                "pages/core/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "page_title": "NIST Group Not Found",
+                    "page_subtitle": f"No NIST 800-53 capability group found for {group_code}.",
+                },
+            )
+
+        return render_template(
+            "pages/mitre/nist_group.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "nist",
+                "nist_group": detail,
+                "nist_overview": db.get_nist_overview(),
+                "query": q,
+            },
+        )
+
+    @app.get("/mitre/nist/{group_code}/{capability_slug}", response_class=HTMLResponse)
+    def mitre_nist_capability_page(
+        request: Request,
+        group_code: str,
+        capability_slug: str,
+        user: CurrentUser,
+        db: DbDep,
+    ):
+        detail = db.get_nist_capability_detail(group_code, capability_slug, domain="enterprise")
+        cid = _resolve_active_client_for_mitre(request, user, db)
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, cid)
+        if not detail:
+            return render_template(
+                "pages/core/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "page_title": "NIST Capability Not Found",
+                    "page_subtitle": f"No NIST 800-53 capability found for {group_code} / {capability_slug}.",
+                },
+            )
+
+        return render_template(
+            "pages/mitre/nist_detail.html",
+            request,
+            {
+                "user": user,
+                "active_page": "mitre",
+                "active_sub": "nist",
+                "nist_capability": detail,
+                "nist_overview": db.get_nist_overview(),
+                "covered_ttps": covered_ttps,
+                "ttp_rule_counts": ttp_rule_counts,
             },
         )
     
@@ -2381,7 +2481,7 @@ def create_app() -> FastAPI:
         production_spaces = sorted({sp for _, sp in production_scopes})
         
         return render_template(
-            "pages/promotion.html",
+            "pages/rules/promotion.html",
             request,
             {
                 "user": user,
@@ -2449,7 +2549,7 @@ def create_app() -> FastAPI:
         template_files = sigma_mod.list_saved_templates()
         
         return render_template(
-            "pages/sigma.html",
+            "pages/rules/sigma.html",
             request,
             {
                 "user": user,
@@ -2475,7 +2575,7 @@ def create_app() -> FastAPI:
     def attack_tree_page(request: Request, user: CurrentUser):
         """Attack Tree page (placeholder)."""
         return render_template(
-            "pages/placeholder.html",
+            "pages/core/placeholder.html",
             request,
             {
                 "user": user,
@@ -2489,7 +2589,7 @@ def create_app() -> FastAPI:
     def presentation_page(request: Request, user: CurrentUser):
         """Presentation page (placeholder)."""
         return render_template(
-            "pages/placeholder.html",
+            "pages/core/placeholder.html",
             request,
             {
                 "user": user,
@@ -2503,7 +2603,7 @@ def create_app() -> FastAPI:
     def preferences_page(request: Request, user: CurrentUser):
         """User preferences page."""
         return render_template(
-            "pages/preferences.html",
+            "pages/admin/preferences.html",
             request,
             {
                 "user": user,
@@ -2533,7 +2633,7 @@ def create_app() -> FastAPI:
         }
 
         return render_template(
-            "pages/settings.html",
+            "pages/admin/settings.html",
             request,
             {
                 "user": user,
@@ -2558,7 +2658,7 @@ def create_app() -> FastAPI:
             c["_siem_configs"] = db.list_siem_configs(c["id"])
             c["_users"] = db.get_client_users(c["id"])
         return render_template(
-            "pages/clients.html",
+            "pages/admin/clients.html",
             request,
             {
                 "user": user,
@@ -2659,7 +2759,7 @@ def create_app() -> FastAPI:
         except Exception as _exc:
             logger.warning(f"siem_rule_counts read for client {client_id} failed: {_exc}")
         return render_template(
-            "pages/client_detail.html",
+            "pages/admin/client_detail.html",
             request,
             {
                 "user": user,
@@ -2702,7 +2802,7 @@ def create_app() -> FastAPI:
         if tab not in ("clients", "users"):
             tab = "clients"
         return render_template(
-            "pages/management.html",
+            "pages/admin/management.html",
             request,
             {
                 "user": user,

@@ -208,7 +208,7 @@ def _render_walker(
 
     return request.app.state.templates.TemplateResponse(
         request,
-        "pages/quest.html",
+        "pages/quest/quest.html",
         {
             "request": request,
             "user": user,
