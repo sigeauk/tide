@@ -15,6 +15,7 @@ import re
 from app.api.deps import ActiveClient, DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
 from app.services.ttl_cache import heatmap_matrix_cache
+from app import sigma_helper as sigma_mod
 
 import logging
 
@@ -277,6 +278,9 @@ def get_technique_detail(
     enabled_rules = [r for r in rules if r.enabled]
     rule_count = len(enabled_rules)
 
+    # Sigma catalog rules related to this technique (status-ordered in helper).
+    sigma_related_rules = sigma_mod.search_rules(technique_filter=ttp_upper, limit=250)
+
     coverage_state = "active" if rule_count > 0 else ("latent" if has_rules else "none")
     coverage_label = "Active Coverage" if coverage_state == "active" else ("Latent Coverage" if coverage_state == "latent" else "No Coverage")
     coverage_detail = (
@@ -403,7 +407,7 @@ def get_technique_detail(
 
             grp_rows = conn.execute(
                 """
-                SELECT DISTINCT mg.group_id, COALESCE(mg.name, mg.group_id)
+                                SELECT DISTINCT mg.group_id, COALESCE(mg.name, mg.group_id), COALESCE(mg.description, '')
                 FROM mitre_group_techniques mgt
                 JOIN mitre_techniques mt
                   ON mt.stix_id = mgt.technique_stix_id
@@ -416,11 +420,11 @@ def get_technique_detail(
                 """,
                 [ttp_upper],
             ).fetchall()
-            related_groups = [{"id": r[0], "name": r[1], "url": f"/mitre/groups/{r[0]}"} for r in grp_rows if r and r[0]]
+            related_groups = [{"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/groups/{r[0]}"} for r in grp_rows if r and r[0]]
 
             camp_rows = conn.execute(
                 """
-                SELECT DISTINCT mc.campaign_id, COALESCE(mc.name, mc.campaign_id)
+                                SELECT DISTINCT mc.campaign_id, COALESCE(mc.name, mc.campaign_id), COALESCE(mc.description, '')
                 FROM mitre_campaign_techniques mct
                 JOIN mitre_techniques mt
                   ON mt.stix_id = mct.technique_stix_id
@@ -433,11 +437,11 @@ def get_technique_detail(
                 """,
                 [ttp_upper],
             ).fetchall()
-            related_campaigns = [{"id": r[0], "name": r[1], "url": f"/mitre/campaigns/{r[0]}"} for r in camp_rows if r and r[0]]
+            related_campaigns = [{"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/campaigns/{r[0]}"} for r in camp_rows if r and r[0]]
 
             sw_rows = conn.execute(
                 """
-                SELECT DISTINCT ms.software_id, COALESCE(ms.name, ms.software_id), COALESCE(ms.platforms, '')
+                                SELECT DISTINCT ms.software_id, COALESCE(ms.name, ms.software_id), COALESCE(ms.platforms, ''), COALESCE(ms.description, '')
                 FROM mitre_software_techniques mst
                 JOIN mitre_techniques mt
                   ON mt.stix_id = mst.technique_stix_id
@@ -450,7 +454,7 @@ def get_technique_detail(
                 """,
                 [ttp_upper],
             ).fetchall()
-            related_software = [{"id": r[0], "name": r[1], "platforms": r[2], "url": f"/mitre/software/{r[0]}"} for r in sw_rows if r and r[0]]
+            related_software = [{"id": r[0], "name": r[1], "platforms": r[2], "description": r[3], "url": f"/mitre/software/{r[0]}"} for r in sw_rows if r and r[0]]
 
             for sw in related_software:
                 for p in re.split(r"[,;]", sw.get("platforms") or ""):
@@ -460,7 +464,7 @@ def get_technique_detail(
 
             mit_rows = conn.execute(
                 """
-                SELECT DISTINCT mm.mitigation_id, COALESCE(mm.name, mm.mitigation_id)
+                                SELECT DISTINCT mm.mitigation_id, COALESCE(mm.name, mm.mitigation_id), COALESCE(mm.description, '')
                 FROM mitre_technique_mitigations mtm
                 JOIN mitre_techniques mt
                   ON mt.stix_id = mtm.technique_stix_id
@@ -473,7 +477,7 @@ def get_technique_detail(
                 """,
                 [ttp_upper],
             ).fetchall()
-            related_mitigations = [{"id": r[0], "name": r[1], "url": f"/mitre/mitigations/{r[0]}"} for r in mit_rows if r and r[0]]
+            related_mitigations = [{"id": r[0], "name": r[1], "description": r[2], "url": f"/mitre/mitigations/{r[0]}"} for r in mit_rows if r and r[0]]
 
             proc_rows = conn.execute(
                 """
@@ -542,6 +546,7 @@ def get_technique_detail(
             "has_rules": has_rules,
             "rule_count": rule_count,
             "total_rule_count": len(rules),
+            "sigma_related_rules": sigma_related_rules,
             "coverage_state": coverage_state,
             "coverage_label": coverage_label,
             "coverage_detail": coverage_detail,

@@ -12,24 +12,56 @@
 <div class="rules-list-container">
     {% if rules %}
         {% for rule in rules %}
-        <button name="Open Sigma Rule" class="rule-item-btn" onclick="loadRuleYaml('{{ rule.id }}')">
-            <span class="rule-item-title" title="{{ rule.title }}">
-                {{ rule.title[:45] }}{% if rule.title|length > 45 %}...{% endif %}
-            </span>
-            <span class="rule-item-meta">
-                {% if rule._techniques %}
-                    {% for tech in rule._techniques[:2] %}
-                    {{ mitre_pill(tech, covered=(tech in covered_ttps), rule_count=ttp_rule_counts.get(tech, 0), clickable=true, size='sm') }}
-                    {% endfor %}
-                    {% if rule._techniques|length > 2 %}
-                    <span class="mitre-pill mitre-more mitre-sm">+{{ rule._techniques|length - 2 }}</span>
-                    {% endif %}
+        {% set _status = (rule.status | default('experimental')) | lower %}
+        {% set _tech_count = rule._techniques|length %}
+        {% set _is_selected = (selected_rule_id | default('', true)) == rule.id %}
+        {% if _tech_count > 1 %}
+        <details class="sigma-rule-card sigma-rule-card--expandable cve-card-item{% if _is_selected %} sigma-rule-selected{% endif %}" data-rule-id="{{ rule.id }}">
+            <summary name="Open Sigma Rule" class="rule-item-btn" onclick="loadRuleYaml('{{ rule.id }}')">
+                <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
+                    <span class="rule-item-id-summary">
+                        {{ mitre_pill(rule._techniques[0], covered=(rule._techniques[0] in covered_ttps), rule_count=ttp_rule_counts.get(rule._techniques[0], 0), clickable=true, size='sm') }}
+                        <span class="mitre-pill mitre-more mitre-sm">+{{ _tech_count - 1 }}</span>
+                    </span>
+                    <span class="rule-item-id-expanded">
+                        {% for tech in rule._techniques[1:] %}
+                        <span class="rule-item-expanded-pill">
+                            {{ mitre_pill(tech, covered=(tech in covered_ttps), rule_count=ttp_rule_counts.get(tech, 0), clickable=true, size='sm') }}
+                        </span>
+                        {% endfor %}
+                    </span>
+                </span>
+                <span class="rule-item-body cve-card-item__body">
+                    <span class="rule-item-title cve-card-item__name" title="{{ rule.title }}">
+                        {{ rule.title[:100] }}{% if rule.title|length > 100 %}...{% endif %}
+                    </span>
+                </span>
+                <span class="rule-item-right cve-card-item__right">
+                    <span class="sigma-status-text sigma-status-{{ _status }}">{{ _status | upper }}</span>
+                </span>
+            </summary>
+        </details>
+        {% else %}
+        <button name="Open Sigma Rule" class="rule-item-btn sigma-rule-card cve-card-item cve-card-item--available{% if _is_selected %} sigma-rule-selected{% endif %}" data-rule-id="{{ rule.id }}" onclick="loadRuleYaml('{{ rule.id }}')">
+            <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
+                {% if _tech_count == 1 %}
+                <span class="rule-item-id-summary">
+                    {{ mitre_pill(rule._techniques[0], covered=(rule._techniques[0] in covered_ttps), rule_count=ttp_rule_counts.get(rule._techniques[0], 0), clickable=true, size='sm') }}
+                </span>
+                {% else %}
+                <span class="rule-no-tech">No ATT&CK</span>
                 {% endif %}
-                <span class="level-badge level-{{ rule.level | default('medium') }}">
-                    {{ rule.level | default('medium') | upper }}
+            </span>
+            <span class="rule-item-body cve-card-item__body">
+                <span class="rule-item-title cve-card-item__name" title="{{ rule.title }}">
+                    {{ rule.title[:100] }}{% if rule.title|length > 100 %}...{% endif %}
                 </span>
             </span>
+            <span class="rule-item-right cve-card-item__right">
+                <span class="sigma-status-text sigma-status-{{ _status }}">{{ _status | upper }}</span>
+            </span>
         </button>
+        {% endif %}
         {% endfor %}
     {% else %}
         <div class="empty-output" style="min-height: 100px;">

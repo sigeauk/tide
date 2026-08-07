@@ -78,6 +78,140 @@
         max-height: none;
         overflow: visible;
     }
+    .sigma-workbench .rules-list-container {
+        gap: 0.45rem;
+    }
+    .sigma-workbench .sigma-rule-card {
+        margin: 0;
+        padding: 0;
+        gap: 0;
+        display: block;
+        overflow: hidden;
+        border-radius: var(--radius-lg);
+    }
+    .sigma-workbench .sigma-rule-card > summary {
+        list-style: none;
+    }
+    .sigma-workbench .sigma-rule-card > summary::-webkit-details-marker {
+        display: none;
+    }
+    .sigma-workbench .rule-item-btn {
+        display: flex;
+        width: 100%;
+        border: var(--border-card);
+        border-top: 1px solid var(--color-highlight-1);
+        border-radius: var(--radius-lg);
+        background: transparent;
+        padding: 0.22rem 0.5rem;
+        gap: 0.38rem;
+        align-items: center;
+        cursor: pointer;
+        min-height: 1.65rem;
+        white-space: nowrap;
+    }
+    .sigma-workbench .rule-item-btn:hover {
+        background: var(--color-bg-surface-hover);
+    }
+    .sigma-workbench .sigma-rule-card.sigma-rule-selected .rule-item-btn,
+    .sigma-workbench .rule-item-btn.sigma-rule-selected {
+        border-left: 3px solid var(--color-info, #3b82f6);
+        background: color-mix(in srgb, var(--color-info, #3b82f6) 14%, transparent);
+    }
+    .sigma-workbench .sigma-rule-card--expandable[open] .rule-item-btn {
+        border-bottom: 1px solid var(--color-border-muted);
+        align-items: flex-start;
+        border-bottom-left-radius: 0;
+        border-bottom-right-radius: 0;
+    }
+    .sigma-workbench details.sigma-rule-card > summary.rule-item-btn {
+        border: 0;
+        border-radius: var(--radius-lg);
+    }
+    .sigma-workbench .rule-item-id {
+        min-width: 5.8rem;
+        width: 5.8rem;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.2rem;
+        padding-top: 0;
+        overflow: hidden;
+    }
+    .sigma-workbench .rule-item-id-summary {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.25rem;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+    .sigma-workbench .sigma-rule-card--expandable[open] .rule-item-id-summary .mitre-more {
+        display: none;
+    }
+    .sigma-workbench .rule-item-id-expanded {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.25rem;
+    }
+    .sigma-workbench .sigma-rule-card:not([open]) .rule-item-id-expanded {
+        display: none;
+    }
+    .sigma-workbench .rule-item-body {
+        min-width: 0;
+    }
+    .sigma-workbench .rule-item-title {
+        font-size: 0.8rem;
+        font-weight: 500;
+        line-height: 1.25;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .sigma-workbench .rule-item-right {
+        min-width: 6.2rem;
+        align-items: flex-end;
+        justify-content: center;
+    }
+    .sigma-workbench .rule-no-tech {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.64rem;
+        color: var(--color-text-muted);
+        border: 1px dashed var(--color-border-muted);
+        border-radius: 999px;
+        padding: 0.06rem 0.45rem;
+        height: 1.25rem;
+    }
+    .sigma-workbench .sigma-status-text {
+        display: inline-block;
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+        min-width: 5.4rem;
+        text-align: right;
+        color: var(--color-text-secondary);
+    }
+    .sigma-workbench .sigma-status-stable {
+        color: var(--color-success);
+    }
+    .sigma-workbench .sigma-status-test {
+        color: var(--color-info, #3b82f6);
+    }
+    .sigma-workbench .sigma-status-experimental {
+        color: var(--color-warning);
+    }
+    .sigma-workbench .sigma-status-deprecated,
+    .sigma-workbench .sigma-status-unsupported {
+        color: var(--color-danger);
+    }
+    .sigma-workbench .rule-item-expanded-pill {
+        display: inline-flex;
+    }
+    .sigma-workbench #yaml-editor {
+        display: none !important;
+    }
     #sigma-convert-response {
         display: none;
     }
@@ -194,7 +328,7 @@
                            hx-get="/api/sigma/rules"
                            hx-trigger="keyup changed delay:300ms"
                            hx-target="#rules-list"
-                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
                            name="q">
                 </div>
                 <div class="browser-filter">
@@ -204,7 +338,7 @@
                            hx-get="/api/sigma/rules"
                            hx-trigger="keyup changed delay:300ms"
                            hx-target="#rules-list"
-                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
                            name="technique"
                            value="{{ technique_filter }}">
                 </div>
@@ -214,7 +348,7 @@
                             hx-get="/api/sigma/rules"
                             hx-trigger="change"
                             hx-target="#rules-list"
-                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
                             name="category">
                         <option value="">All</option>
                         {% for cat in categories %}
@@ -228,7 +362,7 @@
                             hx-get="/api/sigma/rules"
                             hx-trigger="change"
                             hx-target="#rules-list"
-                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter"
+                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
                             name="level">
                         <option value="">All</option>
                         <option value="critical">Critical</option>
@@ -236,6 +370,22 @@
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
                         <option value="informational">Info</option>
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label>Status</label>
+                    <select id="status-filter"
+                            hx-get="/api/sigma/rules"
+                            hx-trigger="change"
+                            hx-target="#rules-list"
+                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
+                            name="status">
+                        <option value="">All</option>
+                        <option value="stable">Stable</option>
+                        <option value="test">Test</option>
+                        <option value="experimental">Experimental</option>
+                        <option value="deprecated">Deprecated</option>
+                        <option value="unsupported">Unsupported</option>
                     </select>
                 </div>
             </div>
@@ -380,6 +530,11 @@ level: medium"></textarea>
 </div>
 
 <div id="sigma-convert-response" aria-hidden="true"></div>
+<input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
+<div id="sigma-prefill-config"
+    data-rule-id="{{ selected_rule_id | default('', true) }}"
+    data-autoconvert="0"
+    style="display:none;"></div>
 
 <script>
 // Clean up any stale state from previous page visits
@@ -409,6 +564,22 @@ function _sigmaLoadScript(src) {
         document.head.appendChild(s);
     });
 }
+
+window.bindSigmaRuleAccordion = function() {
+    var ruleList = document.getElementById('rules-list');
+    if (!ruleList) return;
+    var cards = ruleList.querySelectorAll('details.sigma-rule-card--expandable');
+    cards.forEach(function(card) {
+        if (card._sigmaAccordionBound) return;
+        card._sigmaAccordionBound = true;
+        card.addEventListener('toggle', function() {
+            if (!card.open) return;
+            ruleList.querySelectorAll('details.sigma-rule-card--expandable[open]').forEach(function(other) {
+                if (other !== card) other.open = false;
+            });
+        });
+    });
+};
 
 // Initialize Sigma page components - exposed globally for HTMX re-initialization
 window.initSigmaPage = function(retryCount = 0) {
@@ -550,6 +721,7 @@ window.initSigmaPage = function(retryCount = 0) {
 
     const ruleBrowser = document.getElementById('rule-browser');
     if (ruleBrowser) ruleBrowser.classList.add('open');
+    if (window.bindSigmaRuleAccordion) window.bindSigmaRuleAccordion();
     
     // Refresh the Custom Pipeline dropdown from the API so edits on the
     // Settings page are visible without a hard browser refresh.
@@ -875,27 +1047,35 @@ window.refreshTemplateFileSelect = function() {
         .catch(function(e) { console.error('[Sigma] Failed to refresh template list:', e); });
 };
 
+    var _sigmaPrefillCfg = document.getElementById('sigma-prefill-config');
+    window._sigmaPrefillRuleId = _sigmaPrefillCfg ? (_sigmaPrefillCfg.dataset.ruleId || '') : '';
+    window._sigmaPrefillAutoConvert = _sigmaPrefillCfg ? _sigmaPrefillCfg.dataset.autoconvert === '1' : false;
+    window._sigmaPrefillConsumed = false;
+
 // Initialize immediately on page load
 console.log('[Sigma] Script block executing, calling initSigmaPage...');
 window.initSigmaPage();
 
 document.addEventListener('htmx:afterSwap', function(event) {
     var target = event.detail && event.detail.target;
-    if (!target || target.id !== 'sigma-convert-response') return;
+    if (!target) return;
 
-    var openRuleButton = target.querySelector('button[hx-get^="/api/rules/create-form?prefill="]');
-    if (!openRuleButton) return;
-
-    var url = openRuleButton.getAttribute('hx-get');
-    if (!url || !window.htmx) return;
-    htmx.ajax('GET', url, { target: '#modal-container', swap: 'innerHTML' });
+    if (target.id === 'rules-list') {
+        if (window.bindSigmaRuleAccordion) window.bindSigmaRuleAccordion();
+        if (window.setSelectedSigmaRule && window._sigmaSelectedRuleId) {
+            window.setSelectedSigmaRule(window._sigmaSelectedRuleId, false);
+        }
+        return;
+    }
 });
 
 // Toggle rule browser (global for onclick)
 window.toggleRuleBrowser = function() {};
 
 // Load rule YAML into editor (global for onclick)
-window.loadRuleYaml = function(ruleId) {
+window.loadRuleYaml = function(ruleId, opts) {
+    opts = opts || {};
+    var convertAfterLoad = !!opts.convertAfterLoad;
     const editor = window.sigmaYamlEditor;
     if (!editor) {
         console.error('YAML editor not initialized');
@@ -905,14 +1085,53 @@ window.loadRuleYaml = function(ruleId) {
     fetch(`/api/sigma/rule/${ruleId}`)
         .then(response => response.text())
         .then(yaml => {
+            if (window.setSelectedSigmaRule) {
+                window.setSelectedSigmaRule(ruleId, true);
+            }
             editor.setValue(yaml);
+            var yamlTextarea = document.getElementById('yaml-editor');
+            if (yamlTextarea) yamlTextarea.value = yaml;
             // Force refresh to ensure syntax highlighting is applied
             setTimeout(() => editor.refresh(), 10);
             var convertTarget = document.getElementById('sigma-convert-response');
             if (convertTarget) convertTarget.innerHTML = '';
             document.getElementById('validation-result').innerHTML = '';
+            if (convertAfterLoad) {
+                var convertForm = document.getElementById('convert-form');
+                if (convertForm) setTimeout(() => convertForm.requestSubmit(), 0);
+            }
         })
         .catch(err => console.error('Failed to load rule:', err));
+};
+
+window._sigmaTryAutoLoadFromUrl = function(attempt) {
+    var maxAttempts = 50;
+    if (window._sigmaPrefillConsumed || !window._sigmaPrefillRuleId) return;
+    if (!window.sigmaYamlEditor) {
+        if (attempt < maxAttempts) {
+            setTimeout(function() { window._sigmaTryAutoLoadFromUrl(attempt + 1); }, 100);
+        }
+        return;
+    }
+    window._sigmaPrefillConsumed = true;
+    window.loadRuleYaml(window._sigmaPrefillRuleId, { convertAfterLoad: false });
+};
+
+window._sigmaTryAutoLoadFromUrl(0);
+
+window._sigmaSelectedRuleId = window._sigmaPrefillRuleId || '';
+window.setSelectedSigmaRule = function(ruleId, syncHiddenField) {
+    window._sigmaSelectedRuleId = ruleId || '';
+    document.querySelectorAll('#rules-list [data-rule-id]').forEach(function(row) {
+        var isSelected = !!ruleId && row.getAttribute('data-rule-id') === ruleId;
+        row.classList.toggle('sigma-rule-selected', isSelected);
+        var summaryOrBtn = row.querySelector('.rule-item-btn');
+        if (summaryOrBtn) summaryOrBtn.classList.toggle('sigma-rule-selected', isSelected);
+    });
+    if (syncHiddenField !== false) {
+        var hidden = document.getElementById('selected-rule-id');
+        if (hidden) hidden.value = ruleId || '';
+    }
 };
 
 // Clear YAML editor (global for onclick)

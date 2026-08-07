@@ -54,7 +54,76 @@ def resolve_tenant_db_path(client_id: str, data_dir: str) -> Optional[str]:
     with _cache_lock:
         filename = _tenant_db_cache.get(client_id)
     if filename:
-        return os.path.join(data_dir, filename)
+        full_path = os.path.join(data_dir, filename)
+        if os.path.exists(full_path):
+            return full_path
+        # Cache can go stale if the file is removed/renamed out-of-band.
+        with _cache_lock:
+            _tenant_db_cache.pop(client_id, None)
+
+    # Fallback: re-check shared catalog when cache miss occurs (e.g. fresh
+    # worker, stale cache, or failed startup cache refresh).
+    try:
+        from app.config import get_settings
+
+        settings = get_settings()
+        shared_db_path = settings.db_path
+        conn = duckdb.connect(shared_db_path, read_only=False)
+        try:
+            row = conn.execute(
+                "SELECT db_filename, slug FROM clients WHERE id = ?",
+                [client_id],
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            return None
+
+        db_filename, slug = row
+        candidates: List[str] = []
+        if db_filename:
+            candidates.append(db_filename)
+
+        # Legacy/recovery patterns when db_filename was not persisted.
+        short_id = (client_id or "")[:8]
+        if slug:
+            candidates.append(f"{slug}_{short_id}.duckdb")
+        candidates.append(f"dc_{short_id}.duckdb")
+        candidates.append(f"primary_{short_id}.duckdb")
+
+        for candidate in candidates:
+            full_path = os.path.join(data_dir, candidate)
+            if not os.path.exists(full_path):
+                continue
+            with _cache_lock:
+                _tenant_db_cache[client_id] = candidate
+            # Heal catalog registration if it was missing.
+            if not db_filename:
+                try:
+                    conn2 = duckdb.connect(shared_db_path, read_only=False)
+                    try:
+                        conn2.execute(
+                            "UPDATE clients SET db_filename = ? WHERE id = ?",
+                            [candidate, client_id],
+                        )
+                    finally:
+                        conn2.close()
+                except Exception as _exc:
+                    logger.warning(
+                        "Tenant DB resolve: failed to backfill clients.db_filename "
+                        "for %s: %s",
+                        client_id,
+                        _exc,
+                    )
+            return full_path
+    except Exception as exc:
+        logger.warning(
+            "Tenant DB resolve fallback failed for %s: %s",
+            client_id,
+            exc,
+        )
+
     return None
 
 

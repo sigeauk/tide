@@ -1994,11 +1994,10 @@ def create_app() -> FastAPI:
         tactic_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/tactic/{tactic_id}", status_code=307)
-        detail = db.get_mitre_tactic_detail(tactic_id, domain="all")
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "tactic", tactic_id, src)
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2010,7 +2009,7 @@ def create_app() -> FastAPI:
                     "page_subtitle": f"No MITRE tactic found for {tactic_id}.",
                 },
             )
-        query = urlencode({"tactic": detail["id"]})
+        query = urlencode({"tactic": detail["id"], "src": resolved_src})
         return RedirectResponse(url=f"/mitre/technique?{query}", status_code=307)
 
     @app.get("/mitre/technique", response_class=HTMLResponse)
@@ -2059,13 +2058,11 @@ def create_app() -> FastAPI:
         technique_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/technique/{technique_id}", status_code=307)
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "technique", technique_id, src)
         _cid = _resolve_active_client_for_mitre(request, user, db)
-
-        detail = db.get_mitre_technique_detail(technique_id, domain="all")
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2079,8 +2076,18 @@ def create_app() -> FastAPI:
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        nist_capabilities = db.list_nist_capabilities_for_technique(technique_id, domain="all")
-        src_ctx = _mitre_source_context("all")
+        from app import sigma_helper as sigma_mod
+        try:
+            sigma_related_rules = sigma_mod.search_rules(
+                technique_filter=(technique_id or "").upper(),
+                limit=250,
+            )
+        except Exception:
+            sigma_related_rules = []
+        total_sigma_rule_count = len(sigma_related_rules)
+        nist_domain = resolved_src if resolved_src in ("enterprise", "mobile", "ics", "pre") else "all"
+        nist_capabilities = db.list_nist_capabilities_for_technique(technique_id, domain=nist_domain)
+        src_ctx = _mitre_source_context(resolved_src)
 
         return render_template(
             "pages/mitre/technique_detail.html",
@@ -2092,6 +2099,8 @@ def create_app() -> FastAPI:
                 "technique": detail,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
+                "total_sigma_rule_count": total_sigma_rule_count,
+                "sigma_related_rules": sigma_related_rules,
                 "nist_capabilities": nist_capabilities,
                 **src_ctx,
             },
@@ -2127,13 +2136,11 @@ def create_app() -> FastAPI:
         group_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/groups/{group_id}", status_code=307)
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "group", group_id, src)
         _cid = _resolve_active_client_for_mitre(request, user, db)
-
-        detail = db.get_mitre_group_detail(group_id, domain="all")
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2147,7 +2154,7 @@ def create_app() -> FastAPI:
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context("all")
+        src_ctx = _mitre_source_context(resolved_src)
 
         return render_template(
             "pages/mitre/group_detail.html",
@@ -2193,13 +2200,11 @@ def create_app() -> FastAPI:
         software_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/software/{software_id}", status_code=307)
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "software", software_id, src)
         _cid = _resolve_active_client_for_mitre(request, user, db)
-
-        detail = db.get_mitre_software_detail(software_id, domain="all")
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2213,7 +2218,7 @@ def create_app() -> FastAPI:
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context("all")
+        src_ctx = _mitre_source_context(resolved_src)
 
         return render_template(
             "pages/mitre/software_detail.html",
@@ -2259,13 +2264,11 @@ def create_app() -> FastAPI:
         campaign_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/campaigns/{campaign_id}", status_code=307)
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "campaign", campaign_id, src)
         _cid = _resolve_active_client_for_mitre(request, user, db)
-
-        detail = db.get_mitre_campaign_detail(campaign_id, domain="all")
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2279,7 +2282,7 @@ def create_app() -> FastAPI:
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context("all")
+        src_ctx = _mitre_source_context(resolved_src)
 
         return render_template(
             "pages/mitre/campaign_detail.html",
@@ -2325,13 +2328,11 @@ def create_app() -> FastAPI:
         mitigation_id: str,
         user: CurrentUser,
         db: DbDep,
-        src: Optional[str] = None,
+        src: str = "enterprise",
     ):
-        if src is not None:
-            return RedirectResponse(url=f"/mitre/mitigations/{mitigation_id}", status_code=307)
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, "mitigation", mitigation_id, src)
         _cid = _resolve_active_client_for_mitre(request, user, db)
-
-        detail = db.get_mitre_mitigation_detail(mitigation_id, domain="all")
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2345,7 +2346,7 @@ def create_app() -> FastAPI:
             )
 
         covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context("all")
+        src_ctx = _mitre_source_context(resolved_src)
 
         return render_template(
             "pages/mitre/mitigation_detail.html",
@@ -2494,7 +2495,14 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/sigma", response_class=HTMLResponse)
-    def sigma_page(request: Request, user: CurrentUser, db: DbDep, technique: str = ""):
+    def sigma_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        technique: str = "",
+        rule: str = "",
+        autoconvert: bool = False,
+    ):
         """Sigma Convert page."""
         from app import sigma_helper as sigma_mod
         
@@ -2562,6 +2570,8 @@ def create_app() -> FastAPI:
                 "pipelines": pipelines,
                 "formats": formats,
                 "technique_filter": technique,
+                "selected_rule_id": rule,
+                "auto_convert_selected_rule": autoconvert,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
                 "deploy_targets": deploy_targets,

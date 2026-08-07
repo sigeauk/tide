@@ -5,12 +5,22 @@
 {% block title %}{{ software.id }} - MITRE Software | TIDE{% endblock %}
 
 {% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('Software', '/mitre/software'), (software.id, none)]) }}
+{{ breadcrumb(items=[('Home', '/'), ('MITRE', '/mitre'), ('Software', '/mitre/software?src=' ~ source_domain), (software.id, none)]) }}
 
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
         <h1 class="page-title-hero">{{ software.id }} - {{ software.name }}</h1>
         <p class="page-subtitle">Software detail with related techniques and groups.</p>
+        <form method="get" action="/mitre/software/{{ software.id }}" class="filters-bar" style="margin-top:0.75rem;">
+            <div class="filter-group" style="max-width:260px;">
+                <label class="form-label" for="mitre-software-detail-source">Source</label>
+                <select class="form-select" id="mitre-software-detail-source" name="src" onchange="this.form.submit()">
+                    {% for option_value, option_label in source_options %}
+                    <option value="{{ option_value }}" {% if source_domain == option_value %}selected{% endif %}>{{ option_label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </form>
         <h2 class="section-title" style="margin-top:1rem;">Description</h2>
         <div class="md-content" style="margin-top:0.5rem;">{{ (software.description or 'No description available.') | md }}</div>
     </div>
@@ -74,7 +84,7 @@
                 <div class="cve-card-item__id cve-card-item__id--pill">{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}</div>
                 <div class="cve-card-item__body">
                     <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                        <a href="{{ technique.url }}">{{ technique.name }}</a>
+                        <a href="{{ technique.url }}?src={{ technique_src }}">{{ technique.name }}</a>
                         {% if technique.sources %}
                         {% for src in technique.sources %}
                         {% set src_meta = source_meta.get(src, {}) %}
@@ -104,7 +114,7 @@
                 <div class="cve-card-item__id">{{ group.id }}</div>
                 <div class="cve-card-item__body">
                     <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                        <a href="{{ group.url }}">{{ group.name }}</a>
+                        <a href="{{ group.url }}?src={{ group_src }}">{{ group.name }}</a>
                         {% if group.sources %}
                         {% for src in group.sources %}
                         {% set src_meta = source_meta.get(src, {}) %}

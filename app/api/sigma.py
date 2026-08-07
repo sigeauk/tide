@@ -31,6 +31,8 @@ def search_rules(
     technique: str = Query(""),
     category: str = Query(""),
     level: str = Query(""),
+    status: str = Query(""),
+    selected: str = Query(""),
     limit: int = Query(100, le=500),
 ):
     """
@@ -41,6 +43,7 @@ def search_rules(
         technique_filter=technique,
         category_filter=category,
         level_filter=level,
+        status_filter=status,
         limit=limit
     )
     
@@ -58,6 +61,7 @@ def search_rules(
             "filtered_count": len(results),
             "covered_ttps": covered_ttps,
             "ttp_rule_counts": ttp_rule_counts,
+            "selected_rule_id": selected,
         }
     )
 

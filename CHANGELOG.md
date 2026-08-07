@@ -4,6 +4,30 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.10] - 2026-08-07
+
+### Changed
+- **Rule History modal now uses one unified timeline with compact accordion cards.** The previous Table/Activity/Scores tabs were replaced with a single Rule History stream that starts collapsed and supports inline expansion for score breakdowns and edit context.
+- **Rule History filtering now follows analyst workflow order.** The modal now presents Date, Action, and User controls together at the top so operators can quickly isolate Score, Validation, or Edits records without switching views.
+- **Rule History score expansions now use a three-panel operator layout.** Score entries now open into dedicated Quality Scores, Meta Scores, and Rule Score panels with progress bars and per-metric totals for faster audit review.
+- **Technique-to-Sigma navigation now preloads without auto-convert modal behavior.** Clicking related Sigma entries in the technique panel now navigates to Sigma with the target rule preloaded into `rule.yml`, while conversion remains a manual operator action.
+- **Sigma rule selection highlighting is now consistent for deep links and manual clicks.** The selected Sigma row now uses the blue highlight styling whether it is preselected from technique navigation or selected directly in the Sigma rule list.
+- **Technique relationship sections now use compact expandable rows with smaller ID/status columns.** Groups, Campaigns, Software & Tools, Mitigations, Procedure Examples, NIST capabilities, and Sigma relationship rows now share the same compact collapsed height and expand inline to reveal descriptions with wrapped titles.
+- **Technique side-panel cards now use accordion behavior.** Top-level cards in the technique side panel are now single-open, so opening one section closes the others for cleaner scanning.
+- **Inner relationship rows now use accordion behavior per section.** Expandable rows inside each side-panel card now single-open within their own section to reduce visual clutter.
+- **Technique side-panel headings now support direct page navigation.** The technique title now links directly to its MITRE technique page; MITRE/Sigma action buttons were removed, and Group/Campaign/NIST/Sigma card headings now navigate to their corresponding pages while keeping card expand/collapse behavior.
+- **All requested MITRE side-panel headings now link to their list pages.** Sub-techniques, Groups, Software & Tools, Campaigns, Mitigations, and NIST headings now provide direct navigation links while preserving in-card expand/collapse.
+- **Sigma browser cards now use consistent corner rounding.** Expandable and non-expandable Sigma rule rows now share unified rounded card edges.
+- **MITRE technique detail pages now include an inline Sigma Rules section.** Operators can now review related Sigma rules directly on `/mitre/technique/{id}` pages using the same rule content and coverage styling as the side panel.
+
+### Fixed
+- **Rule score history no longer appends duplicate snapshots on unchanged syncs.** During sync, TIDE now compares each rule's latest stored score payload with the new payload and only writes a new score-history record when there is an actual score delta.
+- **Elastic-sync edit events now retain field-level diffs and consistent attribution.** Automated sync edits now record changed fields with before/after values and are attributed to `elastic` so user history no longer splits between sync activity and operator actions.
+- **Sigma workbench no longer shows duplicate raw YAML alongside the editor.** The plain `rule.yml` textarea is now hidden in the UI so only the CodeMirror editor is visible.
+- **Technique Description card now matches compact section heights.** The Description section now uses the same collapsed card sizing structure as other technique relationship cards.
+- **MITRE technique pages no longer 500 when Sigma rule storage is unavailable.** The new Sigma section now degrades safely when `detection_rules` is absent and skips rule-list loading unless rules are present.
+- **MITRE technique Sigma counts now match the side panel.** The technique detail page now sources Sigma rules from the same Sigma catalog query as the slide panel, so totals and listed related Sigma rules stay consistent.
+
 ## [5.0.9] - 2026-08-06
 
 ### Added
@@ -22,6 +46,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **System detail baseline view now mirrors MITRE list structure more closely.** Removed tactic-level nested card containers entirely from System Detail baseline coverage so each baseline expands to one flat technique-row list with consistent row grammar.
 - **Generate Baselines no longer 500s when Sigma index is absent.** The generator now detects missing `sigma_rules_index`, returns an empty catalog safely, and shows a clear modal empty state with Preview disabled instead of raising a server error.
 - **System detail baseline hierarchy and visuals refined for consistency.** Baseline cards no longer show a default blue left accent, techniques are grouped under plain collapsible tactic headings (MITRE order), technique cards use left-edge status color (green/red/amber/grey), status text pills were removed, and page-level Expand all / Collapse all controls were removed while per-card collapse memory remains active.
+- **Sigma rule browser cards now match the shared list-card style and prioritise rule status.** Rule cards now show MITRE technique pills on the left, the rule title in the center, and Sigma rule status on the right, and the list is ordered by status priority (`stable`, `test`, `experimental`, `deprecated`, `unsupported`) to keep operationally-ready rules at the top.
+- **Sigma rule cards now stay single-line until expanded.** Collapsed rows now show one MITRE pill plus a `+N` counter, status is rendered as colored text (no pill), and clicking a row expands the card to show all MITRE pills stacked vertically.
+- **Sigma rule browser now includes a status filter and inline technique expansion.** Operators can now filter Sigma rules by status, and expanded rows reveal additional MITRE pills directly under the first pill while keeping the collapsed row to a strict one-line height.
+- **Sigma card expansion now behaves as a single-open accordion.** Only rules with more than one MITRE pill are expandable, one expanded rule closes the others, and single-pill or no-pill rows remain fixed-height without title shift.
+- **Expanded Sigma rows now hide the collapsed `+N` counter.** When a rule is opened, the stacked MITRE pills are shown directly and the collapsed counter is removed to reduce duplicate technique indicators.
+- **Technique detail cards now include Sigma catalog context with cleaner related rows.** The technique panel now includes a Sigma Rules card for the selected technique, while Sub-technique and NIST capability rows were simplified to ID + title for faster scanning.
+- **Technique relation cards were further flattened for scanability.** Sigma-related rows now use status as the leading identifier instead of Sigma ID, Software/Tools and Procedure Examples now render as single-line ID + title rows, and expandable Sigma cards no longer show the blue left accent.
+- **Sigma navigation from technique cards now opens and converts the selected rule directly.** Clicking a Sigma row in the technique panel now keeps the technique filter applied on Sigma and auto-loads + converts that exact Sigma rule; collapsed Sigma rows were also tightened with a smaller left ID column so more title text remains visible.
 
 ### Fixed
 - **MITRE software visibility on technique detail pages.** Software relationships are now rendered reliably on technique detail pages, including section totals.

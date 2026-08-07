@@ -434,22 +434,6 @@ console.debug('TIDE app.js loading...');
             return;
         }
 
-        var historyTab = e.target.closest('[data-history-tab]');
-        if (historyTab) {
-            var historyRoot = historyTab.closest('.modal-overlay[data-history-modal]');
-            if (!historyRoot) return;
-
-            var selectedTab = historyTab.dataset.historyTab;
-            historyRoot.querySelectorAll('[data-history-tab]').forEach(function(tab) {
-                tab.classList.toggle('is-active', tab.dataset.historyTab === selectedTab);
-            });
-            historyRoot.querySelectorAll('[data-history-view]').forEach(function(view) {
-                view.classList.toggle('is-active', view.dataset.historyView === selectedTab);
-            });
-            e.preventDefault();
-            return;
-        }
-
         document.querySelectorAll('.action-menu.open').forEach(function(m) {
             m.classList.remove('open');
         });
@@ -466,19 +450,18 @@ console.debug('TIDE app.js loading...');
         var userFilter = historyRoot.querySelector('#history-user-filter');
         var actionFilter = historyRoot.querySelector('#history-action-filter');
         var sortFilter = historyRoot.querySelector('#history-sort-filter');
-        var tableBody = historyRoot.querySelector('#history-table-body');
-        var activityList = historyRoot.querySelector('#history-activity-list');
+        var timelineList = historyRoot.querySelector('#history-timeline-list');
 
         var userValue = (userFilter && userFilter.value) || '';
         var actionValue = (actionFilter && actionFilter.value) || '';
         var sortValue = (sortFilter && sortFilter.value) || 'desc';
-        var containers = [tableBody, activityList].filter(Boolean);
+        var containers = [timelineList].filter(Boolean);
 
         containers.forEach(function(container) {
             var rows = Array.from(container.querySelectorAll('[data-history-row]'));
             rows.forEach(function(row) {
                 var matchesUser = !userValue || (row.dataset.user || '') === userValue;
-                var matchesAction = !actionValue || (row.dataset.action || '') === actionValue;
+                var matchesAction = !actionValue || (row.dataset.kind || '') === actionValue;
                 row.style.display = (matchesUser && matchesAction) ? '' : 'none';
             });
 

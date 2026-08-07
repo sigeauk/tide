@@ -344,15 +344,30 @@ def search_rules(
     technique_filter: str = "",
     category_filter: str = "",
     level_filter: str = "",
+    status_filter: str = "",
     limit: int = 100
 ) -> List[Dict]:
     """Search Sigma rules by various criteria."""
+    status_order = {
+        "stable": 0,
+        "test": 1,
+        "experimental": 2,
+        "deprecated": 3,
+        "unsupported": 4,
+    }
+
+    def _status_sort_key(rule: Dict) -> tuple:
+        status = str(rule.get("status") or "").strip().lower()
+        title = str(rule.get("title") or "").strip().lower()
+        return (status_order.get(status, len(status_order)), status, title)
+
     rules = load_all_rules()
     results = []
     
     query_lower = query.lower().strip()
     # Normalize technique filter - remove T prefix if present for flexible matching
     technique_filter = technique_filter.upper().strip()
+    status_filter = status_filter.lower().strip()
     if technique_filter.startswith('T'):
         technique_filter_num = technique_filter[1:]  # Just the number part
     else:
@@ -394,12 +409,17 @@ def search_rules(
         if level_filter:
             if rule.get('level', '').lower() != level_filter.lower():
                 continue
+
+        # Filter by Sigma rule status (stable, test, experimental, deprecated, unsupported)
+        if status_filter:
+            if str(rule.get('status', '')).lower() != status_filter:
+                continue
         
         results.append(rule)
-        
-        if len(results) >= limit:
-            break
-    
+
+    results.sort(key=_status_sort_key)
+    if limit > 0:
+        return results[:limit]
     return results
 
 

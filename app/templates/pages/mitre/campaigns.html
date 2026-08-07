@@ -31,7 +31,14 @@
 </div>
 
 <form method="get" action="/mitre/campaigns" class="filters-bar" style="margin-top:1rem;">
-    <input type="hidden" name="src" value="{{ source_domain }}">
+    <div class="filter-group">
+        <label class="form-label" for="mitre-campaigns-source">Source</label>
+        <select class="form-select" id="mitre-campaigns-source" name="src">
+            {% for option_value, option_label in source_options %}
+            <option value="{{ option_value }}" {% if source_domain == option_value %}selected{% endif %}>{{ option_label }}</option>
+            {% endfor %}
+        </select>
+    </div>
     <div class="filter-group grow">
         <label class="form-label">Search Campaigns</label>
         <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search by ID, name, description">
@@ -49,7 +56,7 @@
             <div class="cve-card-item__id">{{ campaign.id }}</div>
             <div class="cve-card-item__body">
                 <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                    <a href="{{ campaign.url }}" onclick="event.stopPropagation();">{{ campaign.name }}</a>
+                    <a href="{{ campaign.url }}?src={{ campaign_src }}" onclick="event.stopPropagation();">{{ campaign.name }}</a>
                     {% if campaign.sources %}
                     {% for src in campaign.sources %}
                     {% set src_meta = source_meta.get(src, {}) %}

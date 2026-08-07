@@ -39,7 +39,14 @@
 
 <form method="get" action="/mitre/technique" class="filters-bar" style="margin-top:1rem;">
     {% if tactic_filter %}<input type="hidden" name="tactic" value="{{ tactic_filter }}">{% endif %}
-    <input type="hidden" name="src" value="{{ source_domain }}">
+    <div class="filter-group">
+        <label class="form-label" for="mitre-technique-source">Source</label>
+        <select class="form-select" id="mitre-technique-source" name="src">
+            {% for option_value, option_label in source_options %}
+            <option value="{{ option_value }}" {% if source_domain == option_value %}selected{% endif %}>{{ option_label }}</option>
+            {% endfor %}
+        </select>
+    </div>
     <div class="filter-group grow">
         <label class="form-label">Search Techniques</label>
         <input class="form-input" type="text" name="q" value="{{ query }}" placeholder="Search techniques and sub-techniques by ID, name, or description">
@@ -76,7 +83,7 @@
                 </div>
                 <div class="cve-card-item__body">
                     <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                        <a href="{{ technique.url }}" onclick="event.stopPropagation();">{{ technique.name }}</a>
+                        <a href="{{ technique.url }}?src={{ technique_src }}" onclick="event.stopPropagation();">{{ technique.name }}</a>
                         {% if technique.sources %}
                         {% for src in technique.sources %}
                         {% set src_meta = source_meta.get(src, {}) %}
@@ -116,7 +123,7 @@
                         </div>
                         <div class="cve-card-item__body">
                             <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                                <a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
+                                <a href="{{ sub.url }}?src={{ sub_src }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
                                 {% if sub.sources %}
                                 {% for src in sub.sources %}
                                 {% set src_meta = source_meta.get(src, {}) %}
@@ -164,7 +171,7 @@
                     </div>
                     <div class="cve-card-item__body">
                         <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                            <a href="{{ sub.url }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
+                            <a href="{{ sub.url }}?src={{ orphan_src }}" onclick="event.stopPropagation();">{{ sub.name }}</a>
                             {% if sub.sources %}
                             {% for src in sub.sources %}
                             {% set src_meta = source_meta.get(src, {}) %}

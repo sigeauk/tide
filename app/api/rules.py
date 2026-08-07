@@ -262,13 +262,15 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
     timestamp_override = (form_data.get("timestamp_override") or "event.ingested").strip() or "event.ingested"
     highlighted_fields = _split_csv(form_data.get("highlighted_fields") or "")
     reason = (form_data.get("reason") or "").strip()
-    mitre_ids = [
-        str(item).strip().upper()
-        for item in (form_data.getlist("mitre_ids") if hasattr(form_data, "getlist") else [])
-        if str(item).strip()
-    ]
+    raw_mitre_values = (
+        form_data.getlist("mitre_ids") if hasattr(form_data, "getlist") else []
+    )
+    mitre_ids: list[str] = []
+    for raw_value in raw_mitre_values:
+        mitre_ids.extend(item.upper() for item in _split_csv(raw_value))
     if not mitre_ids:
         mitre_ids = [item.upper() for item in _split_csv(form_data.get("mitre_ids") or "")]
+    mitre_ids = list(dict.fromkeys(mitre_ids))
 
     payload = {
         "name": rule_name,
@@ -311,7 +313,57 @@ def _value_for_compare(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, str]:
+def _value_for_display(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, list):
+        cleaned = [str(v).strip() for v in value if str(v).strip()]
+        return ", ".join(cleaned) if cleaned else "-"
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, sort_keys=True)
+        except Exception:
+            return str(value)
+    text = str(value).strip()
+    return text if text else "-"
+
+
+def _canonicalize_id_list(value: Any, *, uppercase: bool = False) -> list[str]:
+    """Normalize list-like values for stable equality checks.
+
+    Handles list inputs and comma-separated strings, trims whitespace,
+    optionally uppercases values, de-duplicates case-insensitively, and sorts
+    for order-independent comparison.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        raw_items = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        raw_items = [value]
+
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for item in raw_items:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        if uppercase:
+            text = text.upper()
+        marker = text.lower()
+        if marker in seen:
+            continue
+        seen.add(marker)
+        normalized.append(text)
+
+    normalized.sort(key=str.lower)
+    return normalized
+
+
+def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, str, list[dict[str, str]]]:
     labels = {
         "name": "name",
         "description": "description",
@@ -331,16 +383,39 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
         "mitre_ids": "MITRE techniques",
     }
     changed: list[str] = []
+    changed_diffs: list[dict[str, str]] = []
     for key, label in labels.items():
         if key not in new_payload:
             continue
+
+        if key == "mitre_ids":
+            before_ids = _canonicalize_id_list(old_payload.get(key), uppercase=True)
+            after_ids = _canonicalize_id_list(new_payload.get(key), uppercase=True)
+            if before_ids != after_ids:
+                changed.append(label)
+                changed_diffs.append(
+                    {
+                        "field": label,
+                        "before": ", ".join(before_ids) if before_ids else "-",
+                        "after": ", ".join(after_ids) if after_ids else "-",
+                    }
+                )
+            continue
+
         before = _value_for_compare(old_payload.get(key))
         after = _value_for_compare(new_payload.get(key))
         if before != after:
             changed.append(label)
+            changed_diffs.append(
+                {
+                    "field": label,
+                    "before": _value_for_display(old_payload.get(key)),
+                    "after": _value_for_display(new_payload.get(key)),
+                }
+            )
 
     if not changed:
-        return "Updated rule settings.", "-"
+        return "Updated rule settings.", "-", []
 
     if len(changed) == 1:
         message = f"Edited '{changed[0]}' field."
@@ -349,7 +424,118 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
     else:
         quoted = ", ".join(f"'{name}'" for name in changed[:-1])
         message = f"Edited {quoted}, and '{changed[-1]}' fields."
-    return message, ", ".join(changed)
+    return message, ", ".join(changed), changed_diffs
+
+
+def _build_rule_history_entries(history: list[dict], score_history: list[dict]) -> list[dict]:
+    """Build one unified history timeline for the modal accordion."""
+    def _normalize_history_actor(actor_name: Any, actor_user_id: Any = None) -> str:
+        raw_name = str(actor_name or "").strip()
+        if not raw_name:
+            return "system"
+        normalized = " ".join(raw_name.lower().split())
+
+        # Keep sync actors deterministic and merge known local-user aliases.
+        if normalized in {"elastic", "system"}:
+            return normalized
+        if normalized in {"darral", "darral jukes"}:
+            return "darral"
+
+        if actor_user_id and normalized == "darral jukes":
+            return "darral"
+        return raw_name
+
+    entries: list[dict] = []
+
+    for event in history:
+        action = str(event.get("action") or "").strip().lower()
+        category = "validation" if action == "validated" else "edits"
+        if action == "validated":
+            badge = "Validated"
+        elif action == "edited":
+            badge = "Edit"
+        elif action:
+            badge = action.replace("_", " ").title()
+        else:
+            badge = "Edit"
+
+        detail = event.get("detail") or {}
+        field_diffs = detail.get("field_diffs") or []
+        changed_fields = detail.get("changed_fields") or ""
+        if (
+            action == "edited"
+            and detail.get("source") == "elastic_sync"
+            and not field_diffs
+            and not changed_fields
+        ):
+            fallback_diffs: list[dict[str, str]] = []
+            if detail.get("elastic_timestamp"):
+                fallback_diffs.append(
+                    {
+                        "field": "updated_at",
+                        "before": "-",
+                        "after": str(detail.get("elastic_timestamp")),
+                    }
+                )
+            if detail.get("kibana_user"):
+                fallback_diffs.append(
+                    {
+                        "field": "updated_by",
+                        "before": "-",
+                        "after": str(detail.get("kibana_user")),
+                    }
+                )
+            if fallback_diffs:
+                field_diffs = fallback_diffs
+                changed_fields = ", ".join(item.get("field", "") for item in fallback_diffs if item.get("field"))
+
+        entries.append(
+            {
+                "kind": category,
+                "action": action,
+                "badge": badge,
+                "actor": _normalize_history_actor(event.get("actor_name"), event.get("actor_user_id")),
+                "created_at": event.get("created_at"),
+                "message": detail.get("message") or "",
+                "reason": detail.get("reason") or "",
+                "elastic_timestamp": detail.get("elastic_timestamp") or "",
+                "changed_fields": changed_fields,
+                "field_diffs": field_diffs,
+                "expandable": category == "edits",
+            }
+        )
+
+    for score_row in score_history:
+        score_value = score_row.get("score")
+        score_display = "N/A" if score_value is None else str(score_value)
+        entries.append(
+            {
+                "kind": "score",
+                "action": "score",
+                "badge": f"Score: {score_display}/100",
+                "actor": "system",
+                "created_at": score_row.get("created_at"),
+                "message": "",
+                "reason": "",
+                "elastic_timestamp": "",
+                "changed_fields": "",
+                "field_diffs": [],
+                "score": score_row,
+                "expandable": True,
+            }
+        )
+
+    def _entry_time(item: dict) -> float:
+        created_at = item.get("created_at")
+        if not created_at:
+            return 0.0
+        try:
+            return float(created_at.timestamp())
+        except Exception:
+            return 0.0
+
+    entries.sort(key=_entry_time, reverse=True)
+    return entries
 
 
 def _build_space_labels(db, client_id: str) -> dict:
@@ -1022,7 +1208,8 @@ def get_rule_history(
 
     history = db.get_rule_history(rule_id, siem_id, space, limit=100)
     score_history = db.get_rule_score_history(rule_id, siem_id, space, limit=50)
-    history_users = sorted({event.get("actor_name") for event in history if event.get("actor_name")})
+    history_entries = _build_rule_history_entries(history, score_history)
+    history_users = sorted({entry.get("actor") for entry in history_entries if entry.get("actor")})
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
@@ -1031,6 +1218,7 @@ def get_rule_history(
             "history": history,
             "history_users": history_users,
             "score_history": score_history,
+            "history_entries": history_entries,
         },
     )
 
@@ -1052,7 +1240,8 @@ def get_rule_history_modal(
 
     history = db.get_rule_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=100)
     score_history = db.get_rule_score_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=50)
-    history_users = sorted({event.get("actor_name") for event in history if event.get("actor_name")})
+    history_entries = _build_rule_history_entries(history, score_history)
+    history_users = sorted({entry.get("actor") for entry in history_entries if entry.get("actor")})
     templates = request.app.state.templates
     scope_label = (
         _build_space_labels_by_pair(db, client_id).get(f'{siem_id or getattr(rule, "siem_id", "")}|{space}')
@@ -1066,6 +1255,7 @@ def get_rule_history_modal(
             "history": history,
             "history_users": history_users,
             "score_history": score_history,
+            "history_entries": history_entries,
             "space": space,
             "scope_label": scope_label,
             "siem_id": siem_id or getattr(rule, "siem_id", ""),
@@ -1143,7 +1333,19 @@ async def edit_rule(
             status_code=400,
         )
 
-    payload = dict(rule.raw_data or {})
+    old_payload = dict(rule.raw_data or {})
+    # Some historic rule payloads store MITRE only in structured columns, not
+    # in raw_data. Backfill for diffing so unchanged MITRE doesn't appear as
+    # "- -> Txxxx" on unrelated edits.
+    if not old_payload.get("mitre_ids"):
+        persisted_mitre_ids = _canonicalize_id_list(
+            getattr(rule, "mitre_ids", []) or [],
+            uppercase=True,
+        )
+        if persisted_mitre_ids:
+            old_payload["mitre_ids"] = persisted_mitre_ids
+
+    payload = dict(old_payload)
     payload.update(updated_fields)
     if new_name:
         payload["name"] = new_name
@@ -1158,8 +1360,7 @@ async def edit_rule(
     if not success:
         return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
 
-    change_message, changed_fields = _summarize_rule_changes(rule.raw_data or {}, payload)
-
+    change_message, changed_fields, field_diffs = _summarize_rule_changes(old_payload, payload)
     db.record_rule_history(
         rule_id=rule_id,
         siem_id=actual_siem_id,
@@ -1172,6 +1373,7 @@ async def edit_rule(
             "message": change_message,
             "reason": reason,
             "changed_fields": changed_fields,
+            "field_diffs": field_diffs,
         },
     )
 

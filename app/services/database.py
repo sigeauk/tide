@@ -9,8 +9,9 @@ import os
 import shutil
 import tempfile
 import time
+import uuid
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple, Set
 from contextlib import contextmanager
 from threading import Lock
@@ -22,6 +23,19 @@ from app.models.threats import ThreatActor, ThreatLandscapeMetrics
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _compact_exc_message(exc: Exception, max_len: int = 700) -> str:
+    """Return a log-safe exception message.
+
+    Some DuckDB failures include massive vector dumps (thousands of values)
+    in ``str(exc)``. Logging those verbatim floods container logs and makes
+    real errors hard to find.
+    """
+    text = str(exc or "").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
 # Schema version for migrations
 SCHEMA_VERSION = 59
@@ -169,7 +183,7 @@ class DatabaseService:
                 else:
                     raise
             except Exception as e:
-                logger.error(f"DB Connection failed: {e}")
+                logger.error("DB Connection failed: %s", _compact_exc_message(e))
                 raise
         raise duckdb.IOException("Database locked by another process.")
 
@@ -196,7 +210,10 @@ class DatabaseService:
                 else:
                     raise
             except Exception as e:
-                logger.error(f"Shared DB Connection failed: {e}")
+                logger.error(
+                    "Shared DB Connection failed: %s",
+                    _compact_exc_message(e),
+                )
                 raise
         raise duckdb.IOException("Shared database locked by another process.")
     
@@ -4236,30 +4253,25 @@ class DatabaseService:
         Returns the history record ID.
         """
         import json as _json
+        history_id = str(uuid.uuid4())
         detail_json = _json.dumps(detail or {})
         with self.get_connection() as conn:
             self._ensure_rule_lifecycle_history_table(conn)
             if created_at is None:
                 conn.execute(
                     "INSERT INTO rule_lifecycle_history "
-                    "(rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    [rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json],
+                    "(id, rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [history_id, rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json],
                 )
             else:
                 conn.execute(
                     "INSERT INTO rule_lifecycle_history "
-                    "(rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json, created_at],
+                    "(id, rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [history_id, rule_id, siem_id, space, client_id, action, actor_user_id, actor_name, detail_json, created_at],
                 )
-            row = conn.execute(
-                "SELECT id FROM rule_lifecycle_history "
-                "WHERE rule_id = ? AND siem_id = ? AND space = ? AND action = ? "
-                "ORDER BY created_at DESC LIMIT 1",
-                [rule_id, siem_id, space, action],
-            ).fetchone()
-        return row[0] if row else None
+        return history_id
     
     def get_rule_history(
         self,
@@ -4342,51 +4354,104 @@ class DatabaseService:
         client_id: str,
         rule_data: Dict[str, Any],
         created_at: Optional[datetime] = None,
+        only_if_changed: bool = False,
+        conn: Optional[Any] = None,
     ) -> Optional[str]:
-        """Store the score payload for one synced rule."""
-        with self.get_connection() as conn:
-            self._ensure_rule_score_history_table(conn)
+        """Store the score payload for one synced rule.
+
+        When ``only_if_changed`` is true, this performs a delta check against
+        the latest historical row for the same ``(rule_id, siem_id, space,
+        client_id)`` and skips writes when score payloads are identical.
+        """
+        score_columns = [
+            "score",
+            "quality_score",
+            "meta_score",
+            "score_mapping",
+            "score_field_type",
+            "score_search_time",
+            "score_language",
+            "score_note",
+            "score_override",
+            "score_tactics",
+            "score_techniques",
+            "score_author",
+            "score_highlights",
+        ]
+
+        def _norm(value: Any) -> Any:
+            if value is None:
+                return None
+            # Pandas uses NaN for nullable numeric columns.
+            if isinstance(value, float) and value != value:
+                return None
+            try:
+                if hasattr(value, "item"):
+                    value = value.item()
+            except Exception:
+                pass
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    return None
+                if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+                    try:
+                        return int(stripped)
+                    except Exception:
+                        return stripped
+                return stripped
+            return value
+
+        local_conn = conn
+        owns_conn = local_conn is None
+        if owns_conn:
+            local_conn_cm = self.get_connection()
+            local_conn = local_conn_cm.__enter__()
+        try:
+            self._ensure_rule_score_history_table(local_conn)
             columns = [
-                "rule_id", "siem_id", "space", "client_id", "score",
-                "quality_score", "meta_score", "score_mapping",
-                "score_field_type", "score_search_time", "score_language",
-                "score_note", "score_override", "score_tactics",
-                "score_techniques", "score_author", "score_highlights",
+                "rule_id", "siem_id", "space", "client_id", *score_columns
             ]
             values = [
                 rule_id,
                 siem_id,
                 space,
                 client_id,
-                rule_data.get("score"),
-                rule_data.get("quality_score"),
-                rule_data.get("meta_score"),
-                rule_data.get("score_mapping"),
-                rule_data.get("score_field_type"),
-                rule_data.get("score_search_time"),
-                rule_data.get("score_language"),
-                rule_data.get("score_note"),
-                rule_data.get("score_override"),
-                rule_data.get("score_tactics"),
-                rule_data.get("score_techniques"),
-                rule_data.get("score_author"),
-                rule_data.get("score_highlights"),
+                *[rule_data.get(col) for col in score_columns],
             ]
+
+            if only_if_changed:
+                previous = local_conn.execute(
+                    "SELECT " + ", ".join(score_columns) + " "
+                    "FROM rule_score_history "
+                    "WHERE rule_id = ? AND siem_id = ? AND space = ? AND client_id = ? "
+                    "ORDER BY created_at DESC LIMIT 1",
+                    [rule_id, siem_id, space, client_id],
+                ).fetchone()
+                if previous is not None:
+                    if [_norm(v) for v in previous] == [_norm(v) for v in values[4:]]:
+                        return None
+
             if created_at is None:
-                conn.execute(
+                local_conn.execute(
                     f"INSERT INTO rule_score_history ({', '.join(columns)}) VALUES ({', '.join(['?'] * len(columns))})",
                     values,
                 )
             else:
-                conn.execute(
+                local_conn.execute(
                     f"INSERT INTO rule_score_history ({', '.join(columns)}, created_at) VALUES ({', '.join(['?'] * len(columns))}, ?)",
                     values + [created_at],
                 )
-            row = conn.execute(
-                "SELECT id FROM rule_score_history WHERE rule_id = ? AND siem_id = ? AND space = ? ORDER BY created_at DESC LIMIT 1",
-                [rule_id, siem_id, space],
+            row = local_conn.execute(
+                "SELECT id FROM rule_score_history "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? AND client_id = ? "
+                "ORDER BY created_at DESC LIMIT 1",
+                [rule_id, siem_id, space, client_id],
             ).fetchone()
-        return row[0] if row else None
+            return row[0] if row else None
+        finally:
+            if owns_conn:
+                local_conn_cm.__exit__(None, None, None)
 
     def get_rule_score_history(
         self,
@@ -4441,16 +4506,17 @@ class DatabaseService:
             return
         
         raw_data = rule_data.get("raw_data", {})
-        created_by = (raw_data.get("created_by") or "system").strip() or "system"
-        updated_by = (raw_data.get("updated_by") or created_by or "system").strip() or "system"
+        created_by = (raw_data.get("created_by") or "").strip()
+        updated_by = (raw_data.get("updated_by") or created_by or "").strip()
 
         def _coerce_ts(value: Any) -> Optional[datetime]:
             if not value:
                 return None
             if isinstance(value, datetime):
-                return value
+                return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
             try:
-                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
             except Exception:
                 return None
 
@@ -4490,11 +4556,12 @@ class DatabaseService:
                 client_id=client_id,
                 action="created",
                 actor_user_id=None,
-                actor_name=created_by,
+                actor_name="elastic",
                 detail={
                     "source": "elastic_sync",
                     "message": "Created in Kibana before initial sync.",
                     "elastic_timestamp": created_at.isoformat(),
+                    "kibana_user": created_by or "",
                 },
                 created_at=created_at,
             )
@@ -4507,11 +4574,25 @@ class DatabaseService:
                 client_id=client_id,
                 action="edited",
                 actor_user_id=None,
-                actor_name=updated_by,
+                actor_name="elastic",
                 detail={
                     "source": "elastic_sync",
                     "message": "Updated in Kibana before sync.",
+                    "changed_fields": "updated_at, updated_by",
+                    "field_diffs": [
+                        {
+                            "field": "updated_at",
+                            "before": "-",
+                            "after": updated_stamp,
+                        },
+                        {
+                            "field": "updated_by",
+                            "before": "-",
+                            "after": updated_by or "",
+                        },
+                    ],
                     "elastic_timestamp": updated_stamp,
+                    "kibana_user": updated_by or "",
                 },
                 created_at=updated_at,
             )
@@ -7543,9 +7624,219 @@ class DatabaseService:
             logger.info(f"Skipping {len(dup_names)} duplicate rules (same rule_id + siem_id + space): {dup_names[:5]}{'...' if len(dup_names) > 5 else ''}")
             df_final = df_final.drop_duplicates(subset=['rule_id', 'siem_id', 'space'], keep='first')
 
+        pending_sync_edit_events: List[Dict[str, Any]] = []
+
+        def _fmt_display(value: Any) -> str:
+            if value is None:
+                return "-"
+            if isinstance(value, float) and value != value:
+                return "-"
+            if isinstance(value, list):
+                cleaned = [str(v).strip() for v in value if str(v).strip()]
+                return ", ".join(cleaned) if cleaned else "-"
+            if isinstance(value, dict):
+                try:
+                    return json.dumps(value, sort_keys=True)
+                except Exception:
+                    return str(value)
+            text = str(value).strip()
+            return text if text else "-"
+
+        def _norm_compare(value: Any) -> Any:
+            if value is None:
+                return ""
+            if isinstance(value, float) and value != value:
+                return ""
+            if isinstance(value, list):
+                try:
+                    return json.dumps(value, sort_keys=True)
+                except Exception:
+                    return ",".join(str(v).strip() for v in value if str(v).strip())
+            if isinstance(value, dict):
+                try:
+                    return json.dumps(value, sort_keys=True)
+                except Exception:
+                    return str(value)
+            if isinstance(value, str):
+                return value.strip()
+            return value
+
+        def _parse_raw(raw_val: Any) -> Dict[str, Any]:
+            if isinstance(raw_val, dict):
+                return raw_val
+            if isinstance(raw_val, str) and raw_val.strip():
+                try:
+                    parsed = json.loads(raw_val)
+                    return parsed if isinstance(parsed, dict) else {}
+                except Exception:
+                    return {}
+            return {}
+
+        def _coerce_ts(value: Any) -> Optional[datetime]:
+            if not value:
+                return None
+            if isinstance(value, datetime):
+                return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+            try:
+                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
+            except Exception:
+                return None
+
+        def _build_sync_field_diffs(old_row: Dict[str, Any], new_row: Dict[str, Any]) -> List[Dict[str, str]]:
+            diffs: List[Dict[str, str]] = []
+            tracked_cols = [
+                ("name", "name"),
+                ("severity", "severity"),
+                ("author", "author"),
+                ("enabled", "enabled"),
+                ("mitre_ids", "MITRE techniques"),
+            ]
+            for col, label in tracked_cols:
+                before = _norm_compare(old_row.get(col))
+                after = _norm_compare(new_row.get(col))
+                if before != after:
+                    diffs.append(
+                        {
+                            "field": label,
+                            "before": _fmt_display(old_row.get(col)),
+                            "after": _fmt_display(new_row.get(col)),
+                        }
+                    )
+
+            old_raw = _parse_raw(old_row.get("raw_data"))
+            new_raw = _parse_raw(new_row.get("raw_data"))
+            tracked_raw = [
+                ("description", "description"),
+                ("query", "query"),
+                ("language", "language"),
+                ("index", "index"),
+                ("interval", "interval"),
+                ("from", "lookback"),
+                ("note", "investigation guide"),
+                ("timestamp_override", "timestamp override"),
+                ("investigation_fields", "custom highlighted fields"),
+                ("tags", "tags"),
+                ("risk_score", "risk score"),
+                ("threat", "threat mapping"),
+            ]
+            for key, label in tracked_raw:
+                before = _norm_compare(old_raw.get(key))
+                after = _norm_compare(new_raw.get(key))
+                if before != after:
+                    diffs.append(
+                        {
+                            "field": label,
+                            "before": _fmt_display(old_raw.get(key)),
+                            "after": _fmt_display(new_raw.get(key)),
+                        }
+                    )
+            return diffs
+
+        def _field_diff_signature(field_diffs: List[Dict[str, Any]]) -> Tuple[Tuple[str, str, str], ...]:
+            signature: List[Tuple[str, str, str]] = []
+            for diff in field_diffs or []:
+                signature.append(
+                    (
+                        str(diff.get('field') or '').strip().lower(),
+                        _fmt_display(diff.get('before')),
+                        _fmt_display(diff.get('after')),
+                    )
+                )
+            return tuple(signature)
+
+        def _field_diff_map(field_diffs: List[Dict[str, Any]]) -> Dict[str, Tuple[str, str]]:
+            out: Dict[str, Tuple[str, str]] = {}
+            for diff in field_diffs or []:
+                field_name = str(diff.get('field') or '').strip().lower()
+                if not field_name:
+                    continue
+                out[field_name] = (
+                    _fmt_display(diff.get('before')),
+                    _fmt_display(diff.get('after')),
+                )
+            return out
+
+        def _is_recent_local_edit_echo(
+            conn,
+            rule_id: str,
+            siem_id: str,
+            space: str,
+            field_diffs: List[Dict[str, str]],
+            sync_ts: Optional[datetime],
+        ) -> bool:
+            if not field_diffs:
+                return False
+
+            event_ts = sync_ts or datetime.now()
+            window_start = event_ts - timedelta(minutes=10)
+            signature = _field_diff_signature(field_diffs)
+            if not signature:
+                return False
+            sync_map = _field_diff_map(field_diffs)
+
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT actor_name, detail, created_at
+                    FROM rule_lifecycle_history
+                    WHERE rule_id = ?
+                      AND siem_id = ?
+                      AND space = ?
+                      AND action = 'edited'
+                      AND created_at >= ?
+                    ORDER BY created_at DESC
+                    LIMIT 20
+                    """,
+                    [rule_id, siem_id, space, window_start],
+                ).fetchall()
+            except Exception:
+                return False
+
+            for actor_name, detail_raw, _created_at in rows:
+                actor_norm = str(actor_name or '').strip().lower()
+                if actor_norm == 'elastic':
+                    continue
+
+                local_ts = _coerce_ts(_created_at)
+                if local_ts and abs((event_ts - local_ts).total_seconds()) <= 120:
+                    return True
+
+                detail_obj = _parse_raw(detail_raw)
+                if str(detail_obj.get('source') or '').strip().lower() == 'elastic_sync':
+                    continue
+
+                local_signature = _field_diff_signature(detail_obj.get('field_diffs') or [])
+                if local_signature and local_signature == signature:
+                    return True
+
+                # Local edits may include additional fields (for example,
+                # normalized MITRE payload fields) while sync emits only the
+                # subset that changed in Elastic. Treat subset matches as echoes.
+                local_map = _field_diff_map(detail_obj.get('field_diffs') or [])
+                if sync_map and local_map:
+                    if all(local_map.get(field_name) == values for field_name, values in sync_map.items()):
+                        return True
+
+            return False
+
         with self.get_connection() as conn:
             try:
                 conn.execute("BEGIN TRANSACTION")
+
+                existing_by_key: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+                if client_id and synced_scopes:
+                    scope_where = " OR ".join(["(siem_id = ? AND space = ?)"] * len(synced_scopes))
+                    scope_params: List[Any] = []
+                    for siem_id_v, space_v in synced_scopes:
+                        scope_params.extend([siem_id_v, space_v])
+                    existing_rows = conn.execute(
+                        f"SELECT {', '.join(target_cols)} FROM detection_rules WHERE {scope_where}",
+                        scope_params,
+                    ).fetchall()
+                    for row in existing_rows:
+                        item = dict(zip(target_cols, row))
+                        existing_by_key[(item.get("rule_id"), item.get("siem_id"), item.get("space"))] = item
                 
                 # Delete existing rules from synced (siem_id, space) scopes so
                 # rules removed upstream don't persist as ghosts. Scoped by
@@ -7577,6 +7868,50 @@ class DatabaseService:
                     f"(replaced rules in scopes: {synced_scopes})"
                 )
 
+                if client_id and existing_by_key:
+                    for new_row in df_final.to_dict(orient='records'):
+                        key = (
+                            new_row.get('rule_id'),
+                            new_row.get('siem_id'),
+                            new_row.get('space') or 'default',
+                        )
+                        old_row = existing_by_key.get(key)
+                        if not old_row:
+                            continue
+
+                        field_diffs = _build_sync_field_diffs(old_row, new_row)
+                        if not field_diffs:
+                            continue
+
+                        raw_data = _parse_raw(new_row.get('raw_data'))
+                        sync_ts = _coerce_ts(raw_data.get('updated_at'))
+                        if _is_recent_local_edit_echo(
+                            conn,
+                            key[0],
+                            key[1],
+                            key[2],
+                            field_diffs,
+                            sync_ts,
+                        ):
+                            continue
+
+                        pending_sync_edit_events.append(
+                            {
+                                'rule_id': key[0],
+                                'siem_id': key[1],
+                                'space': key[2],
+                                'client_id': client_id,
+                                'created_at': sync_ts,
+                                'detail': {
+                                    'source': 'elastic_sync',
+                                    'message': 'Rule metadata changed during Elastic sync.',
+                                    'changed_fields': ', '.join(diff.get('field') for diff in field_diffs),
+                                    'field_diffs': field_diffs,
+                                    'elastic_timestamp': sync_ts.isoformat() if sync_ts else '',
+                                },
+                            }
+                        )
+
                 score_cols = [
                     'rule_id', 'siem_id', 'space', 'score', 'quality_score',
                     'meta_score', 'score_mapping', 'score_field_type',
@@ -7594,6 +7929,8 @@ class DatabaseService:
                                 row.get('space') or 'default',
                                 client_id,
                                 row,
+                                only_if_changed=True,
+                                conn=conn,
                             )
                     except Exception:
                         logger.exception(
@@ -7615,6 +7952,25 @@ class DatabaseService:
                 conn.execute("CHECKPOINT")
         except Exception:
             pass  # Auto-checkpoint will handle it
+
+        for event in pending_sync_edit_events:
+            try:
+                self.record_rule_history(
+                    rule_id=event['rule_id'],
+                    siem_id=event['siem_id'],
+                    space=event['space'],
+                    client_id=event['client_id'],
+                    action='edited',
+                    actor_user_id=None,
+                    actor_name='elastic',
+                    detail=event['detail'],
+                    created_at=event.get('created_at') or datetime.now(),
+                )
+            except Exception:
+                logger.exception(
+                    'Failed to record elastic sync edit history for rule_id=%s siem_id=%s space=%s',
+                    event.get('rule_id'), event.get('siem_id'), event.get('space'),
+                )
         
         return count
 

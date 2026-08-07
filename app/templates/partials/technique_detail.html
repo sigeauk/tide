@@ -1,5 +1,89 @@
 {% from "components/mitre_pill.html" import mitre_pill %}
 
+<style>
+    .slide-panel .tech-section-card {
+        margin-top: 0.55rem;
+        padding: 0.28rem 0.4rem;
+    }
+    .slide-panel .tech-collapse-title {
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-height: 1.84rem;
+        padding: 0.22rem 0.5rem;
+        margin: 0;
+        line-height: 1.2;
+        cursor: pointer;
+    }
+    .slide-panel .tech-collapse-title::-webkit-details-marker {
+        display: none;
+    }
+    .slide-panel .tech-collapse-title-link {
+        color: inherit;
+        text-decoration: none;
+    }
+    .slide-panel .tech-collapse-title-link:hover {
+        color: var(--color-primary);
+        text-decoration: underline;
+    }
+    .slide-panel .tech-rel-list {
+        margin-top: 0.35rem;
+    }
+    .slide-panel .tech-rel-item {
+        display: block;
+    }
+    .slide-panel .tech-rel-item > summary {
+        list-style: none;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.38rem;
+        padding: 0.22rem 0.5rem;
+        min-height: 1.65rem;
+    }
+    .slide-panel .tech-rel-item > summary::-webkit-details-marker {
+        display: none;
+    }
+    .slide-panel .tech-rel-item .cve-card-item__id {
+        min-width: 4.9rem;
+        width: 4.9rem;
+        font-size: 0.62rem;
+        font-weight: 700;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+    }
+    .slide-panel .tech-rel-item .cve-card-item__name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .slide-panel .tech-rel-item[open] .cve-card-item__name {
+        white-space: normal;
+        overflow: visible;
+        text-overflow: unset;
+        overflow-wrap: anywhere;
+    }
+    .slide-panel .tech-rel-item .tech-rel-description {
+        margin: 0.1rem 0.5rem 0.45rem;
+        font-size: 0.75rem;
+        color: var(--color-text-muted);
+        line-height: 1.42;
+    }
+</style>
+
+{% macro relation_row(item_id, item_name, item_url, item_description='') %}
+<details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+    <summary>
+        <div class="cve-card-item__id"><a href="{{ item_url }}" onclick="event.stopPropagation();">{{ item_id }}</a></div>
+        <div class="cve-card-item__body"><div class="cve-card-item__name">{{ item_name }}</div></div>
+    </summary>
+    <div class="tech-rel-description md-content">
+        {{ (item_description or 'No description available.') | md }}
+    </div>
+</details>
+{% endmacro %}
+
 <!-- Technique Detail Slide-Over Panel -->
 <div name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
     <div name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
@@ -12,7 +96,7 @@
                     <span>{{ technique.id }}</span>
                 </div>
                 {% endif %}
-                <h2 class="technique-name">{{ technique.id }} - {{ technique.name }}</h2>
+                <h2 class="technique-name"><a class="tech-collapse-title-link" href="/mitre/technique/{{ technique.id }}">{{ technique.id }} - {{ technique.name }}</a></h2>
                 <div class="tech-head-lines" style="margin-top:0.5rem;">
                     {% if tactic_pills %}
                     <div class="tech-head-line">
@@ -42,26 +126,17 @@
         <div class="slide-panel-content">
             <div class="technique-popup-stack">
                 <section class="technique-main-column">
-                    <div class="technique-actions" style="margin-top:0; margin-bottom:0.25rem;">
-                        <a name="MITRE" href="/mitre/technique/{{ technique.id }}" class="btn btn-secondary btn-sm grow">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                            MITRE
-                        </a>
-                        <a name="Sigma" href="/sigma?technique={{ technique.id }}" class="btn btn-primary btn-sm grow">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-                            Sigma
-                        </a>
-                    </div>
-
-                    <details class="card card-padded">
+                    <div class="card card-padded tech-section-card">
+                    <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                         <summary class="rules-title tech-collapse-title">Description</summary>
                         {% set desc = (technique_description or 'No description available.') %}
                         <div class="technique-description">{{ desc | md }}</div>
                     </details>
+                    </div>
 
                     {% if required_logs %}
                     <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                         <summary class="rules-title tech-collapse-title">Data Sources</summary>
                         <ul class="tech-simple-list">
                             {% for ds in required_logs %}
@@ -73,18 +148,12 @@
                     {% endif %}
 
                     {% if subtechniques %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                        <summary class="rules-title tech-collapse-title">Sub-techniques ({{ subtechniques|length }})</summary>
-                        <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                        <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/techniques" onclick="event.stopPropagation();">Sub-techniques</a> <span>({{ subtechniques|length }})</span></summary>
+                        <div class="cve-list tech-rel-list">
                             {% for sub in subtechniques %}
-                            <a class="cve-card-item cve-card-item--available" href="{{ sub.url }}">
-                                <div class="cve-card-item__id"><span>{{ sub.id }}</span></div>
-                                <div class="cve-card-item__body">
-                                    <div class="cve-card-item__name">{{ sub.name }}</div>
-                                    {% if sub.description %}<div class="cve-card-item__meta" style="max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ sub.description }}</div>{% endif %}
-                                </div>
-                            </a>
+                            {{ relation_row(sub.id, sub.name, sub.url, sub.description) }}
                             {% endfor %}
                         </div>
                         </details>
@@ -92,15 +161,12 @@
                     {% endif %}
 
                     {% if related_groups %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                            <summary class="rules-title tech-collapse-title">Groups ({{ related_groups|length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/groups" onclick="event.stopPropagation();">Groups</a> <span>({{ related_groups|length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
                                 {% for g in related_groups %}
-                                <a class="cve-card-item cve-card-item--available" href="{{ g.url }}">
-                                    <div class="cve-card-item__id"><span>{{ g.id }}</span></div>
-                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ g.name }}</div></div>
-                                </a>
+                                {{ relation_row(g.id, g.name, g.url, g.description) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -108,15 +174,12 @@
                     {% endif %}
 
                     {% if related_campaigns %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                            <summary class="rules-title tech-collapse-title">Campaigns ({{ related_campaigns|length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/campaigns" onclick="event.stopPropagation();">Campaigns</a> <span>({{ related_campaigns|length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
                                 {% for c in related_campaigns %}
-                                <a class="cve-card-item cve-card-item--available" href="{{ c.url }}">
-                                    <div class="cve-card-item__id"><span>{{ c.id }}</span></div>
-                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ c.name }}</div></div>
-                                </a>
+                                {{ relation_row(c.id, c.name, c.url, c.description) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -124,18 +187,12 @@
                     {% endif %}
 
                     {% if related_software %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                            <summary class="rules-title tech-collapse-title">Software & Tools ({{ related_software|length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/software" onclick="event.stopPropagation();">Software &amp; Tools</a> <span>({{ related_software|length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
                                 {% for s in related_software %}
-                                <a class="cve-card-item cve-card-item--available" href="{{ s.url }}">
-                                    <div class="cve-card-item__id"><span>{{ s.id }}</span></div>
-                                    <div class="cve-card-item__body">
-                                        <div class="cve-card-item__name">{{ s.name }}</div>
-                                        {% if s.platforms %}<div class="cve-card-item__meta">{{ s.platforms | replace(',', ' · ') | replace(';', ' · ') }}</div>{% endif %}
-                                    </div>
-                                </a>
+                                {{ relation_row(s.id, s.name, s.url, s.description) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -143,15 +200,12 @@
                     {% endif %}
 
                     {% if related_mitigations %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                            <summary class="rules-title tech-collapse-title">Mitigations ({{ related_mitigations|length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/mitigations" onclick="event.stopPropagation();">Mitigations</a> <span>({{ related_mitigations|length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
                                 {% for m in related_mitigations %}
-                                <a class="cve-card-item cve-card-item--available" href="{{ m.url }}">
-                                    <div class="cve-card-item__id"><span>{{ m.id }}</span></div>
-                                    <div class="cve-card-item__body"><div class="cve-card-item__name">{{ m.name }}</div></div>
-                                </a>
+                                {{ relation_row(m.id, m.name, m.url, m.description) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -159,18 +213,12 @@
                     {% endif %}
 
                     {% if related_procedure_examples %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                             <summary class="rules-title tech-collapse-title">Procedure Examples ({{ related_procedure_examples | length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                            <div class="cve-list tech-rel-list">
                                 {% for ex in related_procedure_examples %}
-                                <div class="cve-card-item cve-card-item--available">
-                                    <a class="cve-card-item__id" href="{{ ex.url }}"><span>{{ ex.id }}</span></a>
-                                    <div class="cve-card-item__body">
-                                        <div class="cve-card-item__name"><a href="{{ ex.url }}">{{ ex.name }}</a></div>
-                                        {% if ex.use %}<div class="md-content" style="font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ ex.use | md }}</div>{% endif %}
-                                    </div>
-                                </div>
+                                {{ relation_row(ex.id, ex.name, ex.url, ex.use) }}
                                 {% endfor %}
                             </div>
                         </details>
@@ -178,33 +226,54 @@
                     {% endif %}
 
                     {% if nist_capabilities %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details>
-                            <summary class="rules-title tech-collapse-title">NIST 800-53 Capabilities ({{ nist_capabilities | length }})</summary>
-                            <div class="cve-list" style="margin-top:0.4rem;">
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/nist" onclick="event.stopPropagation();">NIST 800-53 Capabilities</a> <span>({{ nist_capabilities | length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
                                 {% for capability in nist_capabilities %}
-                                <details class="cve-card-item cve-card-item--available" style="display:block;">
-                                    <summary style="list-style:none;cursor:pointer;display:flex;align-items:flex-start;gap:0.75rem;">
-                                        <div class="cve-card-item__id">{{ capability.group_code }}</div>
-                                        <div class="cve-card-item__body">
-                                            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                                                <a href="{{ capability.url }}">{{ capability.title }}</a>
-                                                <span class="source-pill src-opencti" title="NIST 800-53">NIST</span>
-                                            </div>
-                                            <div class="cve-card-item__meta">{{ capability.group_name }}</div>
-                                        </div>
-                                    </summary>
-                                    <div class="md-content" style="margin-top:0.4rem;font-size:0.75rem;color:var(--color-text-muted);line-height:1.45;">{{ (capability.comments or 'No description available.') | md }}</div>
-                                </details>
+                                {{ relation_row(capability.group_code, capability.title, capability.url, capability.description or capability.detail or '') }}
                                 {% endfor %}
                             </div>
                         </details>
                     </div>
                     {% endif %}
 
+                    {% if sigma_related_rules %}
+                    <div class="card card-padded tech-section-card">
+                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/sigma?technique={{ technique.id | urlencode }}" onclick="event.stopPropagation();">Sigma Rules</a> <span>({{ sigma_related_rules | length }})</span></summary>
+                            <div class="cve-list tech-rel-list">
+                                {% for srule in sigma_related_rules[:40] %}
+                                {% set s_status = (srule.status | default('experimental')) | lower %}
+                                {% set s_status_class = 'text-success' if s_status == 'stable' else ('text-primary' if s_status == 'test' else ('text-warning' if s_status == 'experimental' else 'text-danger')) %}
+                                <details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
+                                    <summary>
+                                        <div class="cve-card-item__id">
+                                            <a href="/sigma?technique={{ technique.id | urlencode }}&rule={{ (srule.id or '') | urlencode }}"
+                                               class="{{ s_status_class }}"
+                                               onclick="event.stopPropagation();"
+                                               style="text-decoration:none;">
+                                                {{ s_status | upper }}
+                                            </a>
+                                        </div>
+                                        <div class="cve-card-item__body"><div class="cve-card-item__name">{{ srule.title }}</div></div>
+                                    </summary>
+                                    <div class="tech-rel-description md-content">
+                                        {{ (srule.description or 'No description available.') | md }}
+                                    </div>
+                                </details>
+                                {% endfor %}
+                            </div>
+                            {% if sigma_related_rules | length > 40 %}
+                            <div class="cve-card-item__meta" style="margin-top:0.4rem;">Showing first 40 rules. Open Sigma page to view all.</div>
+                            {% endif %}
+                        </details>
+                    </div>
+                    {% endif %}
+
                     {% if has_rules %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details open>
+                    <div class="card card-padded tech-section-card">
+                        <details open class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                         <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">({{ total_rule_count }} rule{{ '' if total_rule_count == 1 else 's' }})</span>{% if search %}<span class="rules-title-filter text-primary"> filtered by "{{ search }}"</span>{% endif %}</summary>
                         <div class="tech-section-body">
                         <div class="technique-status {{ 'status-covered' if coverage_state == 'active' else ('status-latent' if coverage_state == 'latent' else 'status-gap') }}">
@@ -231,8 +300,8 @@
                         </details>
                     </div>
                     {% else %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details open>
+                    <div class="card card-padded tech-section-card">
+                        <details open class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                         <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">(0 rules)</span></summary>
                         <div class="tech-section-body">
                         <div class="technique-status status-gap">
@@ -250,3 +319,4 @@
         </div>
     </div>
 </div>
+
