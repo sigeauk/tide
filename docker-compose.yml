@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
 
   tide-nginx:
-    image: nginx:alpine
+    image: nginx:latest
     container_name: tide-nginx
     ports:
       - "443:443"
