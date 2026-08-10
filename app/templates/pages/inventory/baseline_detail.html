@@ -305,7 +305,7 @@ document.addEventListener('click', function(e){
                 <button name="Delete Baseline" type="button" class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/{{ baseline.id }}"
                         hx-confirm="Delete this baseline and all its techniques?"
-                        hx-target="body" hx-push-url="/baselines"
+                        hx-swap="none"
                         style="margin-right:auto;">
                     {{ icon('trash-2', '14') }} Delete Baseline
                 </button>

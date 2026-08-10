@@ -144,6 +144,7 @@
 
         <form   name="Generate Baseline Form" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <input type="hidden" id="actor-bl-actors" name="actor_names" value="">
+            <input type="hidden" id="actor-bl-group-ids" name="actor_group_ids" value="">
             <div style="margin-bottom:1rem;">
                 <label style="display:block; font-size:0.75rem; font-weight:600;
                               color:var(--text-secondary,#8b949e); text-transform:uppercase;
@@ -183,8 +184,9 @@
 
 {% block scripts %}
 <script>
-    function openActorBaselineModal(actorName) {
+    function openActorBaselineModal(actorName, groupId) {
         document.getElementById('actor-bl-actors').value = actorName;
+        document.getElementById('actor-bl-group-ids').value = groupId || '';
         document.getElementById('actor-bl-name').value = actorName + ' Baseline';
         document.getElementById('actor-bl-desc').value = '';
         document.getElementById('actor-baseline-overlay').style.display = 'flex';

@@ -2959,6 +2959,7 @@ def generate_baseline_from_actor(
     ttps: list,
     technique_tactic_map: dict,
     technique_name_map: dict,
+    technique_description_map: Optional[Dict[str, str]] = None,
     baseline_name: str = "",
     description: str = "",
     client_id: str = None,
@@ -2972,6 +2973,7 @@ def generate_baseline_from_actor(
 
     name = baseline_name.strip() if baseline_name.strip() else f"{actor_name} Baseline"
     desc = description.strip() if description.strip() else f"Auto-generated from {actor_name} threat profile ({len(ttps)} techniques)."
+    technique_description_map = technique_description_map or {}
 
     sorted_ttps = sorted(set(t.strip().upper() for t in ttps if t.strip()))
 
@@ -2999,11 +3001,12 @@ def generate_baseline_from_actor(
             tech_name = technique_name_map.get(tech_id, tech_id)
             title = f"{tech_id} — {tech_name}" if tech_name != tech_id else tech_id
             tactic_val = tactic_display if tactic_display != "Other" else ""
+            step_description = (technique_description_map.get(tech_id) or "").strip()
 
             step_row = conn.execute(
                 "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-                [playbook.id, idx, title, tech_id, "", "", tactic_val],
+                [playbook.id, idx, title, tech_id, "", step_description, tactic_val],
             ).fetchone()
             step_id = step_row[0]
 

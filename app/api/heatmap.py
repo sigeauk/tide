@@ -708,6 +708,7 @@ def generate_baseline_from_heatmap(
     db: DbDep,
     user: CurrentUser, client_id: ActiveClient,
     actor_names: str = Form(...),
+    actor_group_ids: str = Form(""),
     baseline_name: str = Form(""),
     description: str = Form(""),
 ):
@@ -722,6 +723,83 @@ def generate_baseline_from_heatmap(
     selected = [a for a in all_actors if a.name in names]
     if not selected:
         raise HTTPException(status_code=404, detail="No matching actors found")
+
+    explicit_group_ids = [
+        gid.strip().upper()
+        for gid in actor_group_ids.split(",")
+        if gid and gid.strip()
+    ]
+
+    # Best effort: enrich baseline step descriptions with ATT&CK
+    # group-technique procedure text for the selected actor(s).
+    technique_description_map: Dict[str, str] = {}
+    try:
+        group_lookup: Dict[str, str] = {}
+        for grp in db.list_mitre_groups(domain="all"):
+            gid = (grp.get("id") or "").strip().upper()
+            if not gid:
+                continue
+
+            name_key = (grp.get("name") or "").strip().lower()
+            if name_key and name_key not in group_lookup:
+                group_lookup[name_key] = gid
+
+            aliases_raw = grp.get("aliases") or ""
+            for alias in str(aliases_raw).split(","):
+                alias_key = alias.strip().lower()
+                if alias_key and alias_key not in group_lookup:
+                    group_lookup[alias_key] = gid
+
+        selected_group_ids: List[str] = []
+        selected_group_seen: Set[str] = set()
+
+        for gid in explicit_group_ids:
+            if gid in group_lookup.values() and gid not in selected_group_seen:
+                selected_group_ids.append(gid)
+                selected_group_seen.add(gid)
+
+        if not selected_group_ids:
+            for actor in selected:
+                actor_keys = [(actor.name or "").strip().lower()]
+                if actor.aliases:
+                    actor_keys.extend(
+                        [a.strip().lower() for a in str(actor.aliases).split(",") if a.strip()]
+                    )
+                for key in actor_keys:
+                    gid = group_lookup.get(key)
+                    if gid and gid not in selected_group_seen:
+                        selected_group_ids.append(gid)
+                        selected_group_seen.add(gid)
+                        break
+
+        per_technique_descriptions: Dict[str, List[str]] = {}
+        for gid in selected_group_ids:
+            group_detail = db.get_mitre_group_detail(gid, domain="all") or {}
+            for technique in (group_detail.get("techniques") or []):
+                tid = str(technique.get("id") or "").strip().upper()
+                use_text = str(technique.get("use") or "").strip()
+                if not tid or not use_text:
+                    continue
+                values = per_technique_descriptions.setdefault(tid, [])
+                if use_text not in values:
+                    values.append(use_text)
+
+        technique_description_map = {
+            tid: "\n\n".join(values)
+            for tid, values in per_technique_descriptions.items()
+            if values
+        }
+        logger.info(
+            "Baseline generation: actors=%d groups=%d techniques_with_descriptions=%d",
+            len(selected),
+            len(selected_group_ids),
+            len(technique_description_map),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Baseline generation: failed to load MITRE group technique descriptions: %s",
+            exc,
+        )
 
     # Merge TTPs from all selected actors
     merged_ttps = []
@@ -738,6 +816,7 @@ def generate_baseline_from_heatmap(
         ttps=merged_ttps,
         technique_tactic_map=technique_tactic_map,
         technique_name_map=technique_name_map,
+        technique_description_map=technique_description_map,
         baseline_name=baseline_name,
         description=description,
         client_id=client_id,

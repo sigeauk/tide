@@ -1400,6 +1400,11 @@ async def api_import_baseline(
 @router.delete("/api/baselines/{baseline_id}", response_class=HTMLResponse)
 def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser, client_id: ActiveClient):
     delete_playbook(baseline_id, client_id=client_id)
+    hx_target = request.headers.get("HX-Target", "")
+    if not hx_target or hx_target == "body":
+        resp = HTMLResponse("")
+        resp.headers["HX-Redirect"] = "/baselines"
+        return resp
     baselines = get_baselines_overview(client_id=client_id)
     return _render("partials/baselines_list.html", request, {"baselines": baselines})
 

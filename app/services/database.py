@@ -6,6 +6,7 @@ Ported from the original Streamlit database.py to a FastAPI-friendly singleton p
 import duckdb
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -24,8 +25,51 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+_CONN_ERROR_LOCK = Lock()
+_CONN_ERROR_LAST_MSG = ""
+_CONN_ERROR_LAST_TS = 0.0
+_CONN_ERROR_SUPPRESSED = 0
 
-def _compact_exc_message(exc: Exception, max_len: int = 700) -> str:
+
+def _squash_null_runs(text: str) -> str:
+    """Compact long comma-separated NULL runs produced by DuckDB internals."""
+
+    def _replace(match: re.Match) -> str:
+        run = match.group(0)
+        null_count = run.upper().count("NULL")
+        return f"NULL, ... [{null_count - 1} NULLs omitted]"
+
+    # Keep small NULL lists intact; collapse only very long payload runs.
+    return re.sub(r"NULL(?:\s*,\s*NULL){8,}", _replace, text, flags=re.IGNORECASE)
+
+
+def _log_connection_error(prefix: str, exc: Exception, dedupe_window_s: float = 10.0) -> None:
+    """Log compact connection errors without flooding repeated identical lines."""
+    global _CONN_ERROR_LAST_MSG, _CONN_ERROR_LAST_TS, _CONN_ERROR_SUPPRESSED
+
+    msg = _compact_exc_message(exc)
+    now = time.time()
+    with _CONN_ERROR_LOCK:
+        if msg == _CONN_ERROR_LAST_MSG and (now - _CONN_ERROR_LAST_TS) < dedupe_window_s:
+            _CONN_ERROR_SUPPRESSED += 1
+            return
+
+        if _CONN_ERROR_SUPPRESSED > 0 and _CONN_ERROR_LAST_MSG:
+            logger.error(
+                "%s: repeated %d similar errors suppressed (last=%s)",
+                prefix,
+                _CONN_ERROR_SUPPRESSED,
+                _CONN_ERROR_LAST_MSG,
+            )
+            _CONN_ERROR_SUPPRESSED = 0
+
+        _CONN_ERROR_LAST_MSG = msg
+        _CONN_ERROR_LAST_TS = now
+
+    logger.error("%s: %s", prefix, msg)
+
+
+def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
     """Return a log-safe exception message.
 
     Some DuckDB failures include massive vector dumps (thousands of values)
@@ -33,6 +77,15 @@ def _compact_exc_message(exc: Exception, max_len: int = 700) -> str:
     real errors hard to find.
     """
     text = str(exc or "").replace("\n", " ").strip()
+    text = _squash_null_runs(text)
+    # DuckDB can append very large vector dumps after "Chunk:"; keep the
+    # actionable prefix and suppress the payload noise.
+    cut_tokens = (" Chunk:", " Chunk -", "\tChunk:")
+    for token in cut_tokens:
+        idx = text.find(token)
+        if idx != -1:
+            text = text[:idx].rstrip() + " ... [payload omitted]"
+            break
     if len(text) <= max_len:
         return text
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
@@ -183,7 +236,7 @@ class DatabaseService:
                 else:
                     raise
             except Exception as e:
-                logger.error("DB Connection failed: %s", _compact_exc_message(e))
+                _log_connection_error("DB Connection failed", e)
                 raise
         raise duckdb.IOException("Database locked by another process.")
 
@@ -210,10 +263,7 @@ class DatabaseService:
                 else:
                     raise
             except Exception as e:
-                logger.error(
-                    "Shared DB Connection failed: %s",
-                    _compact_exc_message(e),
-                )
+                _log_connection_error("Shared DB Connection failed", e)
                 raise
         raise duckdb.IOException("Shared database locked by another process.")
     
@@ -6015,6 +6065,7 @@ class DatabaseService:
             return {}
         include_all = (domain or "").strip().lower() == "all"
         where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+        where_mt_domain = "" if include_all else " AND LOWER(mt.domain) = LOWER(?)"
         where_domain_joined = "" if include_all else " AND LOWER(t.domain) = LOWER(?)"
         params = [tid] if include_all else [tid, domain]
         with self.get_connection() as conn:
@@ -6285,9 +6336,10 @@ class DatabaseService:
             return {}
         include_all = (domain or "").strip().lower() == "all"
         where_domain = "" if include_all else " AND LOWER(domain) = LOWER(?)"
+        where_mt_domain = "" if include_all else " AND LOWER(mt.domain) = LOWER(?)"
         params = [tid] if include_all else [tid, domain]
 
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 f"""
                 SELECT id, name, COALESCE(description, ''), COALESCE(tactic, ''), is_subtechnique
@@ -6355,7 +6407,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mtt.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mtt.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY t.tactic_id
                 ORDER BY t.tactic_id
                 """,
@@ -6372,7 +6424,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mgt.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mgt.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
@@ -6389,7 +6441,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mtm.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mtm.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY mm.mitigation_id, mm.name
                 ORDER BY mm.mitigation_id
                 """,
@@ -6411,7 +6463,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mst.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mst.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY ms.software_id, ms.name
                 ORDER BY ms.software_id
                 """,
@@ -6431,7 +6483,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mct.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mct.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY mc.campaign_id
                 ORDER BY mc.campaign_id
                 """,
@@ -6448,7 +6500,7 @@ class DatabaseService:
                                 JOIN mitre_techniques mt
                                     ON mt.stix_id = mgt.technique_stix_id
                                  AND LOWER(mt.domain) = LOWER(mgt.domain)
-                WHERE UPPER(mt.id) = ?{where_domain}
+                WHERE UPPER(mt.id) = ?{where_mt_domain}
                 GROUP BY mg.group_id, mg.name
                 ORDER BY mg.name
                 """,
@@ -6559,7 +6611,7 @@ class DatabaseService:
             where_clause += (" WHERE " if not where_clause else " AND ") + "(LOWER(mg.group_id) LIKE LOWER(?) OR LOWER(mg.name) LIKE LOWER(?) OR LOWER(COALESCE(mg.aliases, '')) LIKE LOWER(?))"
             params.extend([like, like, like])
 
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             rows = conn.execute(
                 f"""
                 SELECT
@@ -6609,7 +6661,7 @@ class DatabaseService:
         where_domain = "" if include_all else " AND LOWER(mg.domain) = LOWER(?)"
         params = [gid] if include_all else [gid, domain]
 
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 f"""
                 SELECT group_id, name, COALESCE(aliases, ''), COALESCE(description, '')
