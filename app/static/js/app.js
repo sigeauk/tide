@@ -490,6 +490,27 @@ console.debug('TIDE app.js loading...');
         }
     });
 
+    // Keep summary link navigation and card expansion separate across list/detail accordions.
+    document.addEventListener('pointerdown', function(event) {
+        var link = event.target.closest('details > summary a[href]');
+        if (!link) return;
+        event.stopPropagation();
+    }, true);
+
+    document.addEventListener('click', function(event) {
+        var link = event.target.closest('details > summary a[href]');
+        if (!link) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.metaKey || event.ctrlKey || event.shiftKey || link.target === '_blank' || event.button === 1) {
+            window.open(link.href, link.target || '_blank', 'noopener');
+            return;
+        }
+        window.location.assign(link.href);
+    }, true);
+
     /**
      * Execute page-specific initializers
      */

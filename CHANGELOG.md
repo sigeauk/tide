@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.12] - 2026-08-11
+
+### Changed
+- **MITRE detail pages now use a compact Source selector container.** Technique, Group, Software, Mitigation, and Campaign detail pages no longer render the oversized filter-box wrapper when only the Source dropdown is present.
+- **Rule Health cards now keep titles stable when many MITRE techniques are mapped.** Technique pills are now capped on the card with a `+N` indicator so long technique sets no longer push the rule title or SIEM/severity pills out of layout.
+- **Rule history modal header is now clean and consistent.** The duplicate rule title and extra `Rule History` subtitle were removed, and severity/scope pills now match the front-card color treatment.
+- **MITRE accordion interactions are now consistent across pages.** Clicking a card still expands it, while clicking a title link inside a card now navigates without unintentionally toggling expansion.
+- **Technique detail sub-techniques and procedure examples now follow card-first expansion behavior.** Clicking each sub-card expands to reveal description content, while clicking the item title still opens its full detail page.
+- **Rule history modal header layout now better matches operator workflow.** Severity and SIEM pills now sit directly under the rule title, and the Edit action is aligned to the top-right under the modal close control.
+- **Technique detail Software and NIST capability rows now use the same interaction model as the rest of MITRE cards.** Clicking each row expands inline details, while clicking the row title navigates to the corresponding detail page.
+- **Technique detail Sigma rows now follow the same card-title interaction pattern.** Sigma rows expand on card click, and the Sigma rule title now opens the targeted Sigma workflow route directly.
+- **All-source Tactics group cards now expose a direct title navigation path.** Clicking a grouped tactic title now opens the corresponding Techniques filter view while preserving card expand/collapse behavior.
+- **Technique sidebar modal cards now use the same interaction contract as MITRE detail cards.** Related entity rows now keep IDs/status as non-navigation labels and move navigation to the row title link so card click remains expand/collapse.
+- **Detection Rules remains the single intentional sidebar outlier.** It continues to act as the dedicated coverage/results section rather than a title-link relation card.
+
 ## [5.0.11] - 2026-08-10
 
 ### Added

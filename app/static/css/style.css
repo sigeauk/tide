@@ -979,6 +979,16 @@ a:hover { color: var(--color-primary); }
 
 .rule-pills-stack .mitre-pills-wrap { justify-content: flex-end; }
 
+.rule-pills-stack .mitre-pills-wrap {
+  flex-wrap: nowrap;
+  max-width: 235px;
+  overflow: hidden;
+}
+
+.rule-pills-stack .mitre-pill {
+  flex: 0 0 auto;
+}
+
 .mitre-pills-row {
   display: flex;
   justify-content: flex-end;
@@ -2936,6 +2946,22 @@ a:hover { color: var(--color-primary); }
   border-radius: var(--radius-lg);
   margin-bottom: 1.5rem;
   box-shadow: var(--shadow);
+}
+
+.source-switch-bar {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  padding: 0.65rem 0.8rem;
+  background: var(--color-bg-surface);
+  border: var(--border-card);
+  border-top: 1px solid var(--color-highlight-1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+}
+
+.source-switch-bar .filter-group {
+  min-width: 220px;
 }
 
 .filter-group {

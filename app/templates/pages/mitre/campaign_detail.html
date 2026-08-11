@@ -11,7 +11,7 @@
     <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
         <h1 class="page-title-hero">{{ campaign.id }} - {{ campaign.name }}</h1>
         <p class="page-subtitle">Campaign detail with related groups, techniques, and software.</p>
-        <form method="get" action="/mitre/campaigns/{{ campaign.id }}" class="filters-bar" style="margin-top:0.75rem;">
+        <form method="get" action="/mitre/campaigns/{{ campaign.id }}" class="source-switch-bar" style="margin-top:0.75rem;">
             <div class="filter-group" style="max-width:260px;">
                 <label class="form-label" for="mitre-campaign-detail-source">Source</label>
                 <select class="form-select" id="mitre-campaign-detail-source" name="src" onchange="this.form.submit()">

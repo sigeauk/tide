@@ -11,7 +11,7 @@
     <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
         <h1 class="page-title-hero">{{ group.id }} - {{ group.name }}</h1>
         <p class="page-subtitle">Group detail with associated groups, techniques, software, campaigns, and mitigations.</p>
-        <form method="get" action="/mitre/groups/{{ group.id }}" class="filters-bar" style="margin-top:0.75rem;">
+        <form method="get" action="/mitre/groups/{{ group.id }}" class="source-switch-bar" style="margin-top:0.75rem;">
             <div class="filter-group" style="max-width:260px;">
                 <label class="form-label" for="mitre-group-detail-source">Source</label>
                 <select class="form-select" id="mitre-group-detail-source" name="src" onchange="this.form.submit()">

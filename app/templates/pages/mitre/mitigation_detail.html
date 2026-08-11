@@ -11,7 +11,7 @@
     <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
         <h1 class="page-title-hero">{{ mitigation.id }} - {{ mitigation.name }}</h1>
         <p class="page-subtitle">Mitigation detail with mapped ATT&CK techniques.</p>
-        <form method="get" action="/mitre/mitigations/{{ mitigation.id }}" class="filters-bar" style="margin-top:0.75rem;">
+        <form method="get" action="/mitre/mitigations/{{ mitigation.id }}" class="source-switch-bar" style="margin-top:0.75rem;">
             <div class="filter-group" style="max-width:260px;">
                 <label class="form-label" for="mitre-mitigation-detail-source">Source</label>
                 <select class="form-select" id="mitre-mitigation-detail-source" name="src" onchange="this.form.submit()">

@@ -39,7 +39,7 @@
                 {{ sev_value | upper }}
             </div>
             {# MITRE Pills - use neutral blue style for Rule Health cards #}
-            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search) }}
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=6) }}
         </div>
     </div>
     

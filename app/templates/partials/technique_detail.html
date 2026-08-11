@@ -75,8 +75,8 @@
 {% macro relation_row(item_id, item_name, item_url, item_description='') %}
 <details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
     <summary>
-        <div class="cve-card-item__id"><a href="{{ item_url }}" onclick="event.stopPropagation();">{{ item_id }}</a></div>
-        <div class="cve-card-item__body"><div class="cve-card-item__name">{{ item_name }}</div></div>
+        <div class="cve-card-item__id">{{ item_id }}</div>
+        <div class="cve-card-item__body"><div class="cve-card-item__name"><a href="{{ item_url }}">{{ item_name }}</a></div></div>
     </summary>
     <div class="tech-rel-description md-content">
         {{ (item_description or 'No description available.') | md }}
@@ -249,14 +249,9 @@
                                 <details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
                                     <summary>
                                         <div class="cve-card-item__id">
-                                            <a href="/sigma?technique={{ technique.id | urlencode }}&rule={{ (srule.id or '') | urlencode }}"
-                                               class="{{ s_status_class }}"
-                                               onclick="event.stopPropagation();"
-                                               style="text-decoration:none;">
-                                                {{ s_status | upper }}
-                                            </a>
+                                            <span class="{{ s_status_class }}">{{ s_status | upper }}</span>
                                         </div>
-                                        <div class="cve-card-item__body"><div class="cve-card-item__name">{{ srule.title }}</div></div>
+                                        <div class="cve-card-item__body"><div class="cve-card-item__name"><a href="/sigma?technique={{ technique.id | urlencode }}&rule={{ (srule.id or '') | urlencode }}">{{ srule.title }}</a></div></div>
                                     </summary>
                                     <div class="tech-rel-description md-content">
                                         {{ (srule.description or 'No description available.') | md }}

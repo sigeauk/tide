@@ -52,7 +52,7 @@ Parameters:
 {% endmacro %}
 
 
-{% macro mitre_pills_row(mitre_ids, coverage_map=none, clickable=true, size='sm', show_empty=true, assume_covered=false, neutral=false, search_filter='') %}
+{% macro mitre_pills_row(mitre_ids, coverage_map=none, clickable=true, size='sm', show_empty=true, assume_covered=false, neutral=false, search_filter='', max_visible=none) %}
 {#
 Render a row of MITRE pills, all displayed with wrapping (no truncation).
 - mitre_ids: List of technique IDs
@@ -66,30 +66,36 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
 #}
 <div class="mitre-pills-wrap">
 {% if mitre_ids and mitre_ids | length > 0 %}
+    {% set visible_limit = max_visible | int if max_visible is not none else none %}
     {% for mid in mitre_ids %}
-        {% if neutral %}
-            {# Rule Health context - always use neutral blue pills #}
-            {{ mitre_pill(mid, neutral=true, clickable=clickable, size=size, search_filter=search_filter) }}
-        {% elif coverage_map and coverage_map[mid] %}
-            {{ mitre_pill(mid, covered=coverage_map[mid].covered, rule_count=coverage_map[mid].rule_count, clickable=clickable, size=size, search_filter=search_filter) }}
-        {% elif assume_covered %}
-            {# Rule card context - pill is covered by this rule #}
-            {{ mitre_pill(mid, covered=true, clickable=clickable, size=size, search_filter=search_filter) }}
-        {% else %}
-            {# No coverage data - render neutral pill #}
-            <span name="Open Technique Details" 
-                class="mitre-pill mitre-neutral mitre-{{ size }}"
-                {% if clickable %}
-                onpointerdown="event.preventDefault(); event.stopPropagation();"
-                onmousedown="event.preventDefault(); event.stopPropagation();"
-                onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
-                style="cursor: pointer;"
-                {% endif %}
-                title="{{ mid }}">
-                {{ mid }}
-            </span>
+        {% if visible_limit is none or loop.index <= visible_limit %}
+            {% if neutral %}
+                {# Rule Health context - always use neutral blue pills #}
+                {{ mitre_pill(mid, neutral=true, clickable=clickable, size=size, search_filter=search_filter) }}
+            {% elif coverage_map and coverage_map[mid] %}
+                {{ mitre_pill(mid, covered=coverage_map[mid].covered, rule_count=coverage_map[mid].rule_count, clickable=clickable, size=size, search_filter=search_filter) }}
+            {% elif assume_covered %}
+                {# Rule card context - pill is covered by this rule #}
+                {{ mitre_pill(mid, covered=true, clickable=clickable, size=size, search_filter=search_filter) }}
+            {% else %}
+                {# No coverage data - render neutral pill #}
+                <span name="Open Technique Details" 
+                    class="mitre-pill mitre-neutral mitre-{{ size }}"
+                    {% if clickable %}
+                    onpointerdown="event.preventDefault(); event.stopPropagation();"
+                    onmousedown="event.preventDefault(); event.stopPropagation();"
+                    onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
+                    style="cursor: pointer;"
+                    {% endif %}
+                    title="{{ mid }}">
+                    {{ mid }}
+                </span>
+            {% endif %}
         {% endif %}
     {% endfor %}
+    {% if visible_limit is not none and (mitre_ids | length) > visible_limit %}
+    <span class="mitre-pill mitre-more mitre-{{ size }}" title="{{ (mitre_ids | length) - visible_limit }} more MITRE techniques">+{{ (mitre_ids | length) - visible_limit }}</span>
+    {% endif %}
 {% elif show_empty %}
     <span class="mitre-pill mitre-none">No MITRE</span>
 {% endif %}

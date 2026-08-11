@@ -56,7 +56,7 @@
             <div class="cve-card-item__id"><span>{{ item.id }}</span></div>
             <div class="cve-card-item__body" style="flex:1;min-width:0;">
                 <div class="cve-card-item__name" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                    <span>{{ item.name }}</span>
+                    <a href="/mitre/technique?tactic={{ item.id }}&src=all">{{ item.name }}</a>
                     {% for src in item.sources %}
                     {% set src_meta = source_meta.get(src, {}) %}
                     <span class="source-pill {{ src_meta.get('pill_class', 'src-opencti') }}" title="{{ src_meta.get('label', src | upper) }}">{{ src_meta.get('code', src | upper) }}</span>

@@ -28,18 +28,10 @@
                 display: flex;
                 flex-wrap: wrap;
                 gap: 0.55rem;
+                align-items: center;
             }
             .history-pill {
-                display: inline-flex;
-                align-items: center;
-                gap: 0.35rem;
-                padding: 0.4rem 0.65rem;
-                border-radius: 999px;
-                border: 1px solid var(--color-border);
-                background: var(--color-bg-action);
-                color: var(--color-text);
-                font-size: 0.78rem;
-                font-weight: 600;
+                font-size: 0.72rem;
             }
             .history-toolbar {
                 display: grid;
@@ -307,9 +299,10 @@
         <div class="modal-body">
             <div class="rule-history-shell">
                 <div class="rule-history-top">
-                    <div>
-                        <h3 class="rule-history-heading">{{ rule.name }}</h3>
-                        <p class="rule-history-subtitle">Rule History</p>
+                    <div class="history-meta">
+                        {% set sev_value = (rule.severity | default('low')) | lower %}
+                        <span class="sev-pill sev-{{ sev_value }} history-pill">{{ sev_value | upper }}</span>
+                        <span class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %} history-pill">{{ icon_text('shield-check', scope_label, '12') }}</span>
                     </div>
                     <button name="Open Edit Form"
                         class="btn btn-primary btn-sm"
@@ -319,11 +312,6 @@
                         hx-include="unset">
                         {{ icon_text('edit-2', 'Edit Rule', '14') }}
                     </button>
-                </div>
-
-                <div class="history-meta">
-                    <span class="history-pill">{{ icon_text('alert-triangle', rule.severity | capitalize, '12') }}</span>
-                    <span class="history-pill">{{ icon_text('shield-check', scope_label, '12') }}</span>
                 </div>
 
                 <div class="history-toolbar">
