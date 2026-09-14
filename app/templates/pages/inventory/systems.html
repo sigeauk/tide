@@ -25,8 +25,55 @@
             </div>
         </aside>
         <div style="display:flex;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openSystemTransferModal('export')">{{ icon('download', '14') }} Export</button>
+            <button type="button" class="btn btn-secondary btn-sm" onclick="openSystemTransferModal('import')">{{ icon('upload', '14') }} Import</button>
             <button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById('nessus-upload-modal').style.display='flex'">{{ icon('upload', '14') }} Upload Nessus</button>
             <button type="button" class="btn btn-primary btn-sm" onclick="document.getElementById('add-env-modal').style.display='flex'">{{ icon('plus', '14') }} Add System</button>
+        </div>
+    </div>
+</div>
+
+<div id="system-transfer-modal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)this.style.display='none'">
+    <div class="modal-content modal-sm" style="max-width:560px;">
+        <div class="modal-header">
+            <h3 id="system-transfer-title" class="modal-title">System transfer</h3>
+            <button type="button" class="btn btn-icon" onclick="document.getElementById('system-transfer-modal').style.display='none'">&times;</button>
+        </div>
+        <div id="system-export-options" style="display:flex;flex-direction:column;gap:.75rem;">
+            <p class="rule-help">Select systems and the data to include in the JSON export.</p>
+            <div style="display:flex;flex-direction:column;gap:.35rem;max-height:12rem;overflow:auto;border:1px solid var(--color-border);padding:.6rem;border-radius:var(--radius-sm);">
+                {% for summary in summaries %}
+                <label style="display:flex;align-items:center;gap:.5rem;font-size:.82rem;">
+                    <input type="checkbox" name="export-system-id" value="{{ summary.system.id }}" checked>
+                    {{ summary.system.name }}
+                </label>
+                {% endfor %}
+            </div>
+            <label class="checkbox-group"><input id="transfer-include-baselines" type="checkbox" checked> Include assigned baselines</label>
+            <label class="checkbox-group"><input id="transfer-include-rules" type="checkbox" checked> Include mapped rules</label>
+            <label class="checkbox-group"><input id="transfer-include-devices" type="checkbox"> Include hosts and software</label>
+            <div style="display:flex;justify-content:flex-end;gap:.5rem;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('system-transfer-modal').style.display='none'">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="exportSelectedSystems()">Download JSON</button>
+            </div>
+        </div>
+        <div id="system-import-options" style="display:none;flex-direction:column;gap:.75rem;">
+            <p class="rule-help">Import a system JSON package into the current tenant.</p>
+            <input id="system-import-file" type="file" accept=".json,application/json" class="form-input">
+            <label class="checkbox-group"><input id="system-import-baselines" type="checkbox" checked> Import and assign baselines</label>
+            <label class="checkbox-group"><input id="system-import-rules" type="checkbox" checked> Import mapped rules</label>
+            <label class="checkbox-group"><input id="system-import-devices" type="checkbox"> Import hosts and software</label>
+            <div>
+                <label class="form-label" for="system-import-conflict">Duplicate names</label>
+                <select id="system-import-conflict" class="form-input">
+                    <option value="create">Create copy</option>
+                    <option value="override">Override existing</option>
+                </select>
+            </div>
+            <div style="display:flex;justify-content:flex-end;gap:.5rem;">
+                <button type="button" class="btn btn-secondary" onclick="document.getElementById('system-transfer-modal').style.display='none'">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="importSelectedSystems()">Import JSON</button>
+            </div>
         </div>
     </div>
 </div>
@@ -253,6 +300,49 @@ function toggleNewEnvForm(val) {
 function syncNewEnvField() {
     document.getElementById('new-env-name-hidden').value =
         document.getElementById('new-env-name').value;
+}
+
+function openSystemTransferModal(mode) {
+    document.getElementById('system-transfer-modal').style.display = 'flex';
+    document.getElementById('system-export-options').style.display = mode === 'export' ? 'flex' : 'none';
+    document.getElementById('system-import-options').style.display = mode === 'import' ? 'flex' : 'none';
+    document.getElementById('system-transfer-title').textContent = mode === 'export' ? 'Export systems' : 'Import systems';
+}
+
+function exportSelectedSystems() {
+    var selected = Array.from(document.querySelectorAll('input[name="export-system-id"]:checked'));
+    if (!selected.length) { alert('Select at least one system.'); return; }
+    var params = new URLSearchParams();
+    selected.forEach(function(input) { params.append('system_ids', input.value); });
+    params.set('include_baselines', document.getElementById('transfer-include-baselines').checked ? 'true' : 'false');
+    params.set('include_rules', document.getElementById('transfer-include-rules').checked ? 'true' : 'false');
+    params.set('include_devices', document.getElementById('transfer-include-devices').checked ? 'true' : 'false');
+    fetch('/api/systems/export.json?' + params.toString(), {credentials:'same-origin'})
+        .then(function(response) { if (!response.ok) throw new Error('System export failed (' + response.status + ')'); return response.blob(); })
+        .then(function(blob) {
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'tide-systems-export.json';
+            link.click();
+            URL.revokeObjectURL(link.href);
+            document.getElementById('system-transfer-modal').style.display = 'none';
+        }).catch(function(error) { alert(error.message); });
+}
+
+function importSelectedSystems() {
+    var input = document.getElementById('system-import-file');
+    if (!input.files || !input.files.length) { alert('Choose a JSON export first.'); return; }
+    var form = new FormData();
+    form.append('file', input.files[0]);
+    form.append('include_baselines', document.getElementById('system-import-baselines').checked ? 'true' : 'false');
+    form.append('include_rules', document.getElementById('system-import-rules').checked ? 'true' : 'false');
+    form.append('include_devices', document.getElementById('system-import-devices').checked ? 'true' : 'false');
+    form.append('conflict', document.getElementById('system-import-conflict').value);
+    fetch('/api/systems/import.json', {method:'POST', body:form, credentials:'same-origin'})
+        .then(function(response) {
+            if (!response.ok) throw new Error('System import failed (' + response.status + ')');
+            window.location.reload();
+        }).catch(function(error) { alert(error.message); });
 }
 </script>
 

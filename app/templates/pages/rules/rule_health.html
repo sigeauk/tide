@@ -35,7 +35,7 @@
                 type="button">
                 {{ icon('chevron-down', '14') }}
             </button>
-            <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-surface-elevated);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
+            <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-bg-layer-5);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
                 <button name="Sync with Mappings"
                     class="btn btn-secondary"
                     style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
@@ -72,6 +72,7 @@
 <div class="divider"></div>
 
 <!-- Filters Bar -->
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
 <div class="filters-bar">
     <div class="filter-group grow">
         <label class="form-label">Search</label>
@@ -84,7 +85,7 @@
             hx-trigger="keyup changed delay:300ms"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
+            hx-include="{{ rh_filter_include }}">
     </div>
     
     <div class="filter-group">
@@ -96,7 +97,7 @@
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
+            hx-include="{{ rh_filter_include }}">
             <option value="">All SIEMs</option>
             {% for space in spaces %}
             <option value="{{ space }}">{{ space_labels.get(space, space | capitalize) }}</option>
@@ -113,74 +114,116 @@
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
+            hx-include="{{ rh_filter_include }}">
             <option value="">All</option>
             <option value="true">Enabled</option>
             <option value="false">Disabled</option>
         </select>
     </div>
+
+    <div class="filter-group" style="position:relative;">
+        <label class="form-label">State</label>
+        <button type="button" id="rh-state-btn"
+            class="btn btn-secondary form-input form-select tide-filter-btn"
+            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-state-dropdown');">
+            <span id="rh-state-label">{{ "All states" if not state else (state | join(', ') | capitalize) }}</span>
+            {{ icon('chevron-down', '14') }}
+        </button>
+        <div id="rh-state-dropdown" class="tide-filter-dropdown" style="display:none;">
+            {% for opt in ['production', 'staging', 'migrated', 'deprecated'] %}
+            <label class="rh-checkbox-row">
+                <input type="checkbox" name="state" value="{{ opt }}" {% if opt in state %}checked{% endif %}
+                    hx-get="/api/rules"
+                    hx-trigger="change"
+                    hx-target="#rules-grid"
+                    hx-swap="innerHTML"
+                    hx-include="{{ rh_filter_include }}">
+                <span>{{ opt | capitalize }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
     
-    <div class="filter-group">
+    <div class="filter-group" style="position:relative;">
         <label class="form-label">Score</label>
-        <select 
-            name="sort_score" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']">
-            <option value="desc">High → Low</option>
-            <option value="asc">Low → High</option>
-            <option value="">Off</option>
-        </select>
+        <button type="button" id="rh-score-btn"
+            class="btn btn-secondary form-input form-select tide-filter-btn"
+            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-score-dropdown');">
+            <span id="rh-score-label">Score</span>
+            {{ icon('chevron-down', '14') }}
+        </button>
+        <div id="rh-score-dropdown" class="tide-filter-dropdown" style="display:none;">
+            <div class="tide-filter-section-label">Sort</div>
+            <select 
+                id="rh-sort-score"
+                name="sort_score" 
+                class="form-input form-select"
+                hx-get="/api/rules"
+                hx-trigger="change"
+                hx-target="#rules-grid"
+                hx-swap="innerHTML"
+                hx-include="{{ rh_filter_include }}">
+                <option value="desc" {% if sort_score == 'desc' %}selected{% endif %}>High → Low</option>
+                <option value="asc" {% if sort_score == 'asc' %}selected{% endif %}>Low → High</option>
+                <option value="" {% if not sort_score %}selected{% endif %}>Off</option>
+            </select>
+            <div class="tide-filter-section-label">Range</div>
+            <div class="tide-filter-range">
+                <input type="number" name="min_score" value="{{ min_score }}" placeholder="Min" class="form-input"
+                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
+                <input type="number" name="max_score" value="{{ max_score }}" placeholder="Max" class="form-input"
+                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
+            </div>
+        </div>
     </div>
 
-    <div class="filter-group">
-        <label class="form-label">Criticality</label>
-        <select 
-            name="sort_criticality" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_validated'], [name='sort_name']">
-            <option value="">Off</option>
-            <option value="desc">High → Low</option>
-            <option value="asc">Low → High</option>
-        </select>
-    </div>
-
-    <div class="filter-group">
+    <div class="filter-group" style="position:relative;">
         <label class="form-label">Validate</label>
-        <select 
-            name="sort_validated" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_name']">
-            <option value="">Off</option>
-            <option value="desc">Newest → Oldest</option>
-            <option value="asc">Oldest → Newest</option>
-        </select>
+        <button type="button" id="rh-validated-btn"
+            class="btn btn-secondary form-input form-select tide-filter-btn"
+            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-validated-dropdown');">
+            <span id="rh-validated-label">Validate</span>
+            {{ icon('chevron-down', '14') }}
+        </button>
+        <div id="rh-validated-dropdown" class="tide-filter-dropdown" style="display:none;">
+            <div class="tide-filter-section-label">Sort</div>
+            <select 
+                id="rh-sort-validated"
+                name="sort_validated" 
+                class="form-input form-select"
+                hx-get="/api/rules"
+                hx-trigger="change"
+                hx-target="#rules-grid"
+                hx-swap="innerHTML"
+                hx-include="{{ rh_filter_include }}">
+                <option value="" {% if not sort_validated %}selected{% endif %}>Off</option>
+                <option value="desc" {% if sort_validated == 'desc' %}selected{% endif %}>Newest → Oldest</option>
+                <option value="asc" {% if sort_validated == 'asc' %}selected{% endif %}>Oldest → Newest</option>
+            </select>
+            <div class="tide-filter-section-label">Date range</div>
+            <div class="tide-filter-range">
+                <input type="date" name="validated_from" value="{{ validated_from }}" class="form-input"
+                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
+                <input type="date" name="validated_to" value="{{ validated_to }}" class="form-input"
+                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
+            </div>
+        </div>
     </div>
 
     <div class="filter-group">
         <label class="form-label">Name</label>
         <select 
+            id="rh-sort-name"
             name="sort_name" 
             class="form-input form-select"
             hx-get="/api/rules"
             hx-trigger="change"
             hx-target="#rules-grid"
             hx-swap="innerHTML"
-            hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated']">
-            <option value="">Off</option>
-            <option value="asc">A → Z</option>
-            <option value="desc">Z → A</option>
+            hx-include="{{ rh_filter_include }}">
+            <option value="" {% if not sort_name %}selected{% endif %}>Off</option>
+            <option value="asc" {% if sort_name == 'asc' %}selected{% endif %}>A → Z</option>
+            <option value="desc" {% if sort_name == 'desc' %}selected{% endif %}>Z → A</option>
         </select>
     </div>
 </div>
@@ -189,7 +232,7 @@
 <div id="rules-grid"
      hx-get="/api/rules"
      hx-trigger="load, refreshRules from:body"
-    hx-include="[name='search'], [name='space'], [name='enabled'], [name='sort_score'], [name='sort_criticality'], [name='sort_validated'], [name='sort_name']"
+    hx-include="{{ rh_filter_include }}"
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading rules\u2026") }}
@@ -208,12 +251,70 @@
 
 {% block scripts %}
 <script>
-    // Close sync dropdown on outside click
+    // Close sync/filter dropdowns on outside click
     document.addEventListener('click', function(e) {
         document.querySelectorAll('.sync-dropdown').forEach(function(d) {
             if (!d.parentElement.contains(e.target)) d.style.display = 'none';
         });
+        document.querySelectorAll('.tide-filter-dropdown').forEach(function(d) {
+            if (!d.parentElement.contains(e.target)) d.style.display = 'none';
+        });
     });
+
+    // "Last selected wins" for the three mutually-exclusive sort selects:
+    // clearing the siblings in the CAPTURE phase guarantees this runs before
+    // htmx's own (bubble-phase) change listener reads their values via
+    // hx-include, so only the just-changed selector is ever sent as active.
+    document.addEventListener('change', function(e) {
+        var sortIds = ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'];
+        if (sortIds.indexOf(e.target.id) === -1) return;
+        sortIds.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el && el !== e.target) el.value = '';
+        });
+    }, true);
+
+    // Cosmetic: keep each dropdown button's label in sync with its filters.
+    function tideUpdateStateLabel() {
+        var checked = Array.prototype.slice.call(document.querySelectorAll("#rh-state-dropdown input[name='state']:checked"));
+        var label = document.getElementById('rh-state-label');
+        if (!label) return;
+        label.textContent = checked.length
+            ? checked.map(function(c) { return c.value.charAt(0).toUpperCase() + c.value.slice(1); }).join(', ')
+            : 'All states';
+    }
+    function tideUpdateScoreLabel() {
+        var label = document.getElementById('rh-score-label');
+        if (!label) return;
+        var sort = document.getElementById('rh-sort-score').value;
+        var min = document.querySelector("#rh-score-dropdown [name='min_score']").value;
+        var max = document.querySelector("#rh-score-dropdown [name='max_score']").value;
+        var parts = [];
+        if (sort === 'desc') parts.push('High → Low');
+        else if (sort === 'asc') parts.push('Low → High');
+        if (min || max) parts.push((min || '0') + '–' + (max || '100'));
+        label.textContent = parts.length ? parts.join(' · ') : 'Score';
+    }
+    function tideUpdateValidatedLabel() {
+        var label = document.getElementById('rh-validated-label');
+        if (!label) return;
+        var sort = document.getElementById('rh-sort-validated').value;
+        var from = document.querySelector("#rh-validated-dropdown [name='validated_from']").value;
+        var to = document.querySelector("#rh-validated-dropdown [name='validated_to']").value;
+        var parts = [];
+        if (sort === 'desc') parts.push('Newest → Oldest');
+        else if (sort === 'asc') parts.push('Oldest → Newest');
+        if (from || to) parts.push((from || '…') + ' – ' + (to || '…'));
+        label.textContent = parts.length ? parts.join(' · ') : 'Validate';
+    }
+    document.addEventListener('change', function(e) {
+        if (e.target.matches("#rh-state-dropdown input[name='state']")) tideUpdateStateLabel();
+        if (e.target.closest('#rh-score-dropdown')) tideUpdateScoreLabel();
+        if (e.target.closest('#rh-validated-dropdown')) tideUpdateValidatedLabel();
+    });
+    tideUpdateScoreLabel();
+    tideUpdateValidatedLabel();
+
 
     document.body.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'rules-grid' || 

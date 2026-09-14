@@ -248,6 +248,9 @@ async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin, clie
     per-tenant from the Client Detail page — the create form has no roles field.
     """
     form = await request.form()
+    delete_source_after_promotion = str(
+        form.get("delete_source_after_promotion") or ""
+    ).lower() in {"1", "true", "on", "yes"}
     username = str(form.get("new_username", "")).strip()
     email = str(form.get("new_email", "")).strip() or None
     full_name = str(form.get("new_full_name", "")).strip() or None
@@ -2142,6 +2145,10 @@ async def update_validation_thresholds(
     unchanged.
     """
     form = await request.form()
+    delete_source_after_promotion = any(
+        str(value).strip().lower() in {"1", "true", "on", "yes"}
+        for value in form.getlist("delete_source_after_promotion")
+    )
 
     mode = str(form.get("rule_validation_mode") or "master").strip().lower()
     if mode not in {"master", "criticality"}:
@@ -2196,11 +2203,13 @@ async def update_validation_thresholds(
         rule_validation_mode=mode,
         rule_validation_amber_weeks=amber,
         rule_validation_expired_weeks=expired,
+        delete_source_after_promotion=delete_source_after_promotion,
         **per_severity,
     )
     logger.info(
         f"Client {client_id} validation thresholds updated by "
-        f"{user.username}: mode={mode} amber={amber}, expired={expired}, per_severity={per_severity}"
+        f"{user.username}: mode={mode} amber={amber}, expired={expired}, "
+        f"delete_source_after_promotion={delete_source_after_promotion}, per_severity={per_severity}"
     )
     return _render_client_siems_partial(
         client_id, db, toast="Validation thresholds saved.",

@@ -4,6 +4,42 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.13] - 2026-09-14
+
+### Added
+- **Missing SIEM rules are now retained as deprecated records.** Rules that are absent after a successful sync remain visible with a grey `Deprecated` label so baseline links and migration history are preserved; they become active again when they reappear.
+- **Baselines and system configurations can be transferred as JSON.** Operators can export a baseline with its mapped rules or export the tenant system configuration, then import baseline copies with their original rule identities retained for replacement mapping.
+- **Rule migration actions are available in Edit Rule.** Operators can target-sync one rule, archive or delete it from TIDE, and move baseline references from an imported rule to its replacement in another SIEM and space.
+- **System configuration JSON exports now download and can be imported.** The Systems export dialog keeps PDF and Markdown reports and adds TIDE JSON for moving systems, baseline copies, assignments, and rule migration data between installations.
+- **Promotion now tracks copied rules across staging and production.** TIDE records the destination rule ID, derives `Staging`, `Migrated`, `Production`, or `Deprecated` lifecycle states, supports retaining the source rule, and lets operators compare versions and choose the master rule.
+- **Copy-only promotion now waits for sync reconciliation without deprecating the destination copy.** Generated Elastic IDs are retained correctly, so a successfully copied rule shows `Migrated` while the staging source remains available.
+- **Rule Health no longer renders stale source-ID aliases as duplicate rules.** Cross-SIEM copies now reconcile to their real Elastic IDs while legitimate same-name rules in different SIEM spaces remain distinct.
+- **Migrated rules now appear as one Rule Health card.** The card uses the production master’s enabled state and remains marked `Migrated`, while the Promotion page continues to show the staging copy for operator workflow.
+- **Existing staging/production pairs are now linked when the match is unambiguous.** Rule Health collapses them to one production-master card; duplicate names with multiple possible matches remain separate for explicit operator mapping.
+- **Promotion now respects the active Keep source selection.** The source rule is deleted by default when the client setting is enabled, while checking Keep source reliably preserves it.
+- **Client promotion settings are easier to read.** The source-deletion default now appears directly beneath Validation mode instead of beside the other validation controls.
+- **Deprecated rules can now be restored from Edit Rule.** Restore recreates the rule in the selected replacement SIEM/space, captures its new Elastic ID, and re-links the baseline references while retaining the old TIDE record for migration history.
+- **Restored rules now replace their old TIDE identity.** After recreation in Elastic, TIDE moves baseline references to the new rule ID and removes the old SIEM-scope cache row instead of creating a migration pair.
+- **Baseline rule remapping is now an explicit Merge rule action.** Merging creates one logical TIDE identity, moves all baseline links to the selected master rule, and requires both rule IDs to exist in their selected SIEM/space scopes.
+- **Imported baseline rules now preserve their original Elastic IDs.** TIDE can associate those IDs with newly discovered SIEM copies through the logical merge workflow without changing the baseline’s stable identity.
+- **Existing tenants now receive logical rule identity tables during startup.** Rule Health no longer fails while older tenant databases are upgraded to support baseline rule merging.
+- **Baseline and system JSON transfers now support selectable content.** Operators can include or omit mapped rules, baselines, and hosts/software; imported baselines are assigned to imported systems, duplicate names can create copies or override existing records, and older tenant schemas are repaired before baseline detections are imported.
+- **System migration export/import now lives on the Systems page.** Operators select the systems to export and choose baselines, mapped rules, or hosts/software; system detail keeps its existing report export only, and imports assign included baselines to imported systems.
+- **Imported systems and baselines now keep their original names unless the target tenant already has that name.** Baseline, Applied Systems, and Coverage Quest detection lists now show rule names while retaining rule IDs as the stored reference, and JSON transfers preserve the display label when rules move between clients.
+- **Rule editing now follows the rule lifecycle.** Normal rules update their current SIEM scope, migrated rules update both recorded copies with a partial-update warning when one side fails, and deprecated rules update TIDE only so restored content is available for the next Elastic recreation.
+- **Merged logical rules now synchronize edits across every member copy.** Rule edits use logical identity membership as well as legacy migration records, so both staging and production copies receive the change or return a clear partial-update error.
+- **Migrated rule edits now use each member’s Elastic `rule_id`.** This prevents the saved-object ID from being sent to the update endpoint and makes any remaining partial failure identify the exact SIEM, space, and target ID.
+- **Editing either side of a migrated rule now updates both members.** Opening the production master no longer skips the staging copy; both scopes are updated and any one-sided failure is reported explicitly.
+- **Field mapping scores no longer count query comments as fields.** `//` and `/* */` comments in KQL, Lucene, EQL, and ES|QL queries are now ignored when detecting field references, so annotated queries score accurately.
+- **Rules built on a Kibana data view now carry a portable index list.** TIDE resolves the underlying index pattern when a rule is synced, so promoting the rule to another space no longer leaves it pointing at a data view that doesn't exist there.
+- **Rule Health filters have been reworked for clarity.** Criticality sorting is replaced by a State checklist (Production, Staging, Migrated, Deprecated); Score and Validate now support min/max and date-range filtering alongside their sort direction; and only the most recently changed sort (Score, Validate, or Name) is applied at a time, instead of silently stacking with the others.
+- **Creating an EQL or ES|QL rule in TIDE no longer fails.** The rule type is now derived from the selected query language instead of always submitting a KQL-only rule type, so EQL and ES|QL rules save successfully.
+- **Rule Health's Score and Validate filters are now single-line dropdowns.** Each combines its sort direction with its range filter (score min/max, validated date range) behind one control instead of stacking extra rows in the filter bar; the same layout has been applied to the Promotion page, which also gains Score, Validate, and Name filtering to match Rule Health.
+- **Filter dropdown panels (State, Score, Validate) now render with a solid background.** They previously used an undefined style token that left the panel transparent, making the options hard to read against the page behind them.
+- **Validate sort now actually reorders Rule Health results.** Rules linked across staging and production were swapped for their counterpart after sorting, which could carry a different validation date and silently undo the requested order; the sort is now re-applied after that swap.
+- **Promotion now has the same State filter as Rule Health.** Staging rules can be filtered by Production, Staging, Migrated, or Deprecated state, matching the Rule Health filter bar.
+
+
 ## [5.0.12] - 2026-08-11
 
 ### Changed

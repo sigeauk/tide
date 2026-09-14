@@ -31,9 +31,11 @@ API routes (HTMX / JSON):
 
 from __future__ import annotations
 import logging
-from typing import Optional
+import json
+import uuid
+from typing import List, Optional
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from app.api.deps import ActiveClient, CurrentUser, RequireUser
 from app.inventory_engine import (
     add_classification, add_cve_technique_override, add_host, add_host_software,
@@ -68,6 +70,7 @@ from app.inventory_engine import (
     get_baseline_snapshots, delete_baseline_snapshot,
 )
 from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS
+from app.services.database import get_database_service
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["inventory"])
@@ -1107,12 +1110,10 @@ def _generate_baselines_from_sigma(
         tech = group["tech"]
         gkey = group["grouping_key"]
         baseline_name = group["name"]
-
-        # Fetch matching rule rows — identical predicates to _build_baseline_groups
         with db.get_shared_connection() as conn:
-            if gkey is not None:
+            if gkey:
                 rule_rows = conn.execute(f"""
-                    SELECT rule_id, title, file_path, techniques, tactics
+                    SELECT rule_id, title, file_path, attack_techniques, attack_tactics
                     FROM sigma_rules_index
                     WHERE {_TECH_COL} = ?
                       AND ({_GROUP_COL}) = ?
@@ -1122,7 +1123,7 @@ def _generate_baselines_from_sigma(
                 """, [tech, gkey]).fetchall()
             else:
                 rule_rows = conn.execute(f"""
-                    SELECT rule_id, title, file_path, techniques, tactics
+                    SELECT rule_id, title, file_path, attack_techniques, attack_tactics
                     FROM sigma_rules_index
                     WHERE {_TECH_COL} = ?
                       AND ({_GROUP_COL}) IS NULL
@@ -1185,7 +1186,7 @@ def _generate_baselines_from_sigma(
             # detections can be applied to systems for coverage (green).
             add_step_detection(
                 step.id,
-                rule_ref=title or rule_id,
+                rule_ref=rule_id,
                 note=f"Sigma rule {rule_id}",
                 source="sigma",
                 client_id=client_id,
@@ -1250,6 +1251,543 @@ def api_create_baseline(
     create_playbook(name, description, client_id=client_id)
     baselines = get_baselines_overview(client_id=client_id)
     return _render("partials/baselines_list.html", request, {"baselines": baselines})
+
+
+def _decode_rule_raw_data(raw_data):
+    if isinstance(raw_data, dict):
+        return raw_data
+    if isinstance(raw_data, str) and raw_data.strip():
+        try:
+            return json.loads(raw_data)
+        except Exception:
+            return {}
+    return {}
+
+
+def _rule_saved_object_id(rule_payload: dict) -> str:
+    raw_data = _decode_rule_raw_data(rule_payload.get("raw_data"))
+    return str(rule_payload.get("id") or raw_data.get("id") or "").strip()
+
+
+def _rule_reference_keys(rule_payload: dict) -> set[str]:
+    raw_data = _decode_rule_raw_data(rule_payload.get("raw_data"))
+    keys = {
+        str(rule_payload.get("id") or "").strip(),
+        str(rule_payload.get("rule_id") or "").strip(),
+        str(rule_payload.get("source_rule_id") or "").strip(),
+    }
+    if isinstance(raw_data, dict):
+        keys.add(str(raw_data.get("id") or "").strip())
+        keys.add(str(raw_data.get("rule_id") or "").strip())
+        params = raw_data.get("params") if isinstance(raw_data.get("params"), dict) else {}
+        keys.add(str(params.get("rule_id") or "").strip())
+    return {key for key in keys if key}
+
+
+def _rule_export_payloads_for_refs(conn, refs: set[str]) -> dict:
+    wanted = {str(ref).strip() for ref in refs if str(ref or "").strip()}
+    if not wanted:
+        return {}
+    rows = conn.execute("SELECT * FROM detection_rules ORDER BY siem_id, space, name").fetchall()
+    columns = [item[0] for item in conn.description]
+    found = {}
+    seen_rules = set()
+    for row in rows:
+        payload = dict(zip(columns, row))
+        matched_refs = wanted.intersection(_rule_reference_keys(payload))
+        if not matched_refs:
+            continue
+        rule_key = (payload.get("rule_id"), payload.get("siem_id"), payload.get("space"))
+        if rule_key in seen_rules:
+            continue
+        seen_rules.add(rule_key)
+        for ref in matched_refs:
+            found[ref] = payload
+    return found
+
+
+def _baseline_export_payload(baseline_id: str, client_id: str, include_rules: bool = True) -> dict:
+    baseline = get_playbook(baseline_id, client_id=client_id)
+    if not baseline:
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    refs = set()
+    steps = []
+    for step in baseline.tactics or []:
+        detections = [
+            {"rule_ref": det.rule_ref, "note": det.note, "source": det.source}
+            for det in (step.detections or [])
+        ]
+        refs.update(det["rule_ref"] for det in detections if det["rule_ref"])
+        steps.append({
+            "step_number": step.step_number,
+            "title": step.title,
+            "technique_id": step.technique_id,
+            "required_rule": step.required_rule,
+            "tactic": step.tactic,
+            "description": step.description,
+            "techniques": [tech.technique_id for tech in (step.techniques or [])],
+            "detections": detections,
+        })
+    rules = []
+    rules_by_ref = {}
+    if include_rules:
+        db = get_database_service()
+        with db.get_connection() as conn:
+            rules_by_ref = _rule_export_payloads_for_refs(conn, refs)
+            for ref in sorted(refs):
+                rule_payload = rules_by_ref.get(ref)
+                if rule_payload:
+                    rules.append(rule_payload)
+    for step in steps:
+        for detection in step.get("detections") or []:
+            rule_payload = rules_by_ref.get(detection.get("rule_ref")) or {}
+            display_name = rule_payload.get("name") or detection.get("note")
+            if display_name:
+                detection["display_name"] = display_name
+    return {
+        "tide_export_version": 1,
+        "export_type": "baseline",
+        "baseline_id": baseline.id,
+        "baseline": {"name": baseline.name, "description": baseline.description},
+        "steps": steps,
+        "rules": rules,
+    }
+
+
+def _ensure_baseline_import_schema(client_id: str) -> None:
+    db = get_database_service()
+    with db.get_connection() as conn:
+        try:
+            conn.execute("ALTER TABLE step_detections ADD COLUMN IF NOT EXISTS logical_rule_id VARCHAR")
+        except Exception:
+            logger.debug("step_detections logical identity column repair failed for %s", client_id, exc_info=True)
+
+
+def _import_name(source_name: str, existing_names: set[str]) -> str:
+    return f"{source_name} (copy)" if source_name in existing_names else source_name
+
+
+@router.get("/api/baselines/{baseline_id}/export.json")
+def export_baseline_json(
+    baseline_id: str,
+    client_id: ActiveClient,
+    include_rules: bool = Query(True),
+):
+    payload = _baseline_export_payload(baseline_id, client_id, include_rules=include_rules)
+    payload["include_rules"] = include_rules
+    return Response(
+        content=json.dumps(payload, default=str, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="baseline-{baseline_id}.json"'},
+    )
+
+
+@router.post("/api/baselines/import.json")
+async def import_baseline_json(
+    request: Request,
+    user: RequireUser,
+    client_id: ActiveClient,
+    file: UploadFile = File(...),
+    include_rules: bool = Form(False),
+    conflict: str = Form("create"),
+    target_baseline_id: str = Form(""),
+):
+    try:
+        payload = json.loads((await file.read()).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON export: {exc}")
+    if payload.get("tide_export_version") != 1 or payload.get("export_type") != "baseline":
+        raise HTTPException(status_code=422, detail="Unsupported TIDE baseline export")
+    _ensure_baseline_import_schema(client_id)
+    baseline_name = str((payload.get("baseline") or {}).get("name") or "Imported baseline")
+    existing = [item for item in (get_baselines_overview(client_id=client_id) or []) if item.get("name") == baseline_name]
+    if existing and conflict == "prompt":
+        return JSONResponse(
+            {"status": "conflict", "existing_id": existing[0].get("id"), "existing_name": baseline_name},
+            status_code=409,
+        )
+    if conflict == "override" and target_baseline_id:
+        # The current import remains copy-first; the target ID is returned so
+        # the operator can explicitly choose the existing baseline in the UI.
+        logger.info("Baseline import requested override for target %s", target_baseline_id)
+    source_rules = payload.get("rules") or [] if include_rules else []
+    db = get_database_service()
+    imported_ids = {}
+    logical_sources = []
+    with db.get_connection() as conn:
+        for source in source_rules:
+            original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
+            if not original_id:
+                continue
+            # Preserve the source Elastic ID across installations. The
+            # logical TIDE identity layer handles later merges to a new ID.
+            imported_id = original_id
+            imported_ids[original_id] = original_id
+            saved_object_id = _rule_saved_object_id(source)
+            if saved_object_id:
+                imported_ids[saved_object_id] = imported_id
+            logical_sources.append((original_id, source.get("siem_id") or "imported", source.get("space") or ""))
+            raw_data = source.get("raw_data") or {}
+            if not isinstance(raw_data, str):
+                raw_data = json.dumps(raw_data, default=str)
+            conn.execute(
+                """INSERT INTO detection_rules (
+                    rule_id, siem_id, name, severity, author, enabled, space,
+                    score, quality_score, meta_score, score_mapping, score_field_type,
+                    score_search_time, score_language, score_note, score_override,
+                    score_tactics, score_techniques, score_author, score_highlights,
+                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?)
+                ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
+                    name = EXCLUDED.name, severity = EXCLUDED.severity,
+                    author = EXCLUDED.author, enabled = EXCLUDED.enabled,
+                    raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
+                    deprecated = true, source_rule_id = EXCLUDED.source_rule_id
+                """,
+                [
+                    imported_id, source.get("siem_id") or "imported", source.get("name") or original_id,
+                    source.get("severity") or "low", source.get("author") or "Unknown",
+                    int(bool(source.get("enabled", True))), source.get("space") or "",
+                    source.get("score") or 0, source.get("quality_score") or 0, source.get("meta_score") or 0,
+                    source.get("score_mapping") or 0, source.get("score_field_type") or 0,
+                    source.get("score_search_time") or 0, source.get("score_language") or 0,
+                    source.get("score_note") or 0, source.get("score_override") or 0,
+                    source.get("score_tactics") or 0, source.get("score_techniques") or 0,
+                    source.get("score_author") or 0, source.get("score_highlights") or 0,
+                    source.get("last_updated"), source.get("mitre_ids") or [], raw_data,
+                    client_id, original_id,
+                ],
+            )
+    for original_id, source_siem_id, source_space in logical_sources:
+        db.ensure_logical_rule_identity(
+            original_id, original_id, source_siem_id, source_space
+        )
+    baseline_info = payload.get("baseline") or {}
+    if conflict == "override" and target_baseline_id:
+        baseline = get_playbook(target_baseline_id, client_id=client_id)
+        if not baseline:
+            raise HTTPException(status_code=404, detail="Target baseline not found")
+        with db.get_connection() as conn:
+            step_ids = [row[0] for row in conn.execute(
+                "SELECT id FROM playbook_steps WHERE playbook_id = ?", [baseline.id]
+            ).fetchall()]
+            if step_ids:
+                placeholders = ",".join("?" for _ in step_ids)
+                conn.execute(f"DELETE FROM step_detections WHERE step_id IN ({placeholders})", step_ids)
+                conn.execute(f"DELETE FROM step_techniques WHERE step_id IN ({placeholders})", step_ids)
+                conn.execute("DELETE FROM playbook_steps WHERE playbook_id = ?", [baseline.id])
+            conn.execute(
+                "UPDATE playbooks SET name = ?, description = ?, updated_at = now() WHERE id = ?",
+                [baseline_info.get("name") or baseline.name, baseline_info.get("description") or "", baseline.id],
+            )
+    else:
+        existing_names = {item.get("name") for item in (get_baselines_overview(client_id=client_id) or [])}
+        imported_name = _import_name(baseline_info.get("name") or "Imported baseline", existing_names)
+        baseline = create_playbook(
+            imported_name,
+            baseline_info.get("description") or "",
+            client_id=client_id,
+        )
+    for step_data in payload.get("steps") or []:
+        step = add_playbook_step(
+            baseline.id,
+            int(step_data.get("step_number") or 1),
+            step_data.get("title") or "Imported step",
+            technique_id=step_data.get("technique_id") or "",
+            required_rule=imported_ids.get(step_data.get("required_rule") or "", ""),
+            description=step_data.get("description") or "",
+            tactic=step_data.get("tactic") or "",
+            client_id=client_id,
+        )
+        for technique_id in step_data.get("techniques") or []:
+            add_step_technique(step.id, technique_id, client_id=client_id)
+        for detection in step_data.get("detections") or []:
+            add_step_detection(
+                step.id,
+                imported_ids.get(detection.get("rule_ref"), detection.get("rule_ref") or ""),
+                note=detection.get("display_name") or detection.get("note") or "",
+                source=detection.get("source") or "manual",
+                client_id=client_id,
+            )
+    return {"status": "ok", "baseline_id": baseline.id, "imported_rules": len(imported_ids)}
+
+
+@router.get("/api/systems/export.json")
+def export_system_configuration(
+    client_id: ActiveClient,
+    include_baselines: bool = Query(True),
+    include_rules: bool = Query(True),
+    include_devices: bool = Query(False),
+    system_ids: Optional[List[str]] = Query(None),
+):
+    """Export selected tenant systems, baselines, rules, and devices."""
+    db = get_database_service()
+    with db.get_connection() as conn:
+        selected_ids = [value for value in (system_ids or []) if value]
+        system_filter = ""
+        system_params = []
+        if selected_ids:
+            placeholders = ",".join("?" for _ in selected_ids)
+            system_filter = f" WHERE id IN ({placeholders})"
+            system_params = selected_ids
+        baseline_ids = []
+        assignments = [
+            {"system_id": row[0], "playbook_id": row[1], "applied_at": row[2]}
+            for row in conn.execute(
+                "SELECT system_id, playbook_id, applied_at FROM system_baselines"
+                + (f" WHERE system_id IN ({','.join('?' for _ in selected_ids)})" if selected_ids else ""),
+                system_params,
+            ).fetchall()
+        ]
+        if include_baselines:
+            baseline_ids = sorted({row["playbook_id"] for row in assignments})
+        system_rows = conn.execute("SELECT * FROM systems ORDER BY name").fetchall()
+        system_columns = [item[0] for item in conn.description]
+        systems = [dict(zip(system_columns, row)) for row in system_rows]
+        if selected_ids:
+            systems = [system for system in systems if system.get("id") in selected_ids]
+        if include_devices:
+            for system in systems:
+                hosts = conn.execute(
+                    "SELECT id, name, ip_address, os, hardware_vendor, model, source "
+                    "FROM hosts WHERE system_id = ? ORDER BY name",
+                    [system["id"]],
+                ).fetchall()
+                system["hosts"] = []
+                for host in hosts:
+                    host_data = dict(zip(
+                        ["id", "name", "ip_address", "os", "hardware_vendor", "model", "source"],
+                        host,
+                    ))
+                    software = conn.execute(
+                        "SELECT name, version, vendor, cpe, source FROM software_inventory "
+                        "WHERE host_id = ? ORDER BY name",
+                        [host_data["id"]],
+                    ).fetchall()
+                    host_data["software"] = [
+                        dict(zip(["name", "version", "vendor", "cpe", "source"], item))
+                        for item in software
+                    ]
+                    system["hosts"].append(host_data)
+    baselines = (
+        [_baseline_export_payload(item, client_id, include_rules=include_rules) for item in baseline_ids]
+        if include_baselines else []
+    )
+    return Response(
+        content=json.dumps({
+            "tide_export_version": 1,
+            "export_type": "system",
+            "include_baselines": include_baselines,
+            "include_rules": include_rules,
+            "include_devices": include_devices,
+            "systems": systems,
+            "assignments": assignments,
+            "baselines": baselines,
+        }, default=str, indent=2),
+        media_type="application/json",
+        headers={"Content-Disposition": 'attachment; filename="tide-system-export.json"'},
+    )
+
+
+async def _import_baseline_payload(payload: dict, client_id: str) -> str:
+    """Create an imported baseline copy and return its new ID."""
+    _ensure_baseline_import_schema(client_id)
+    source_rules = payload.get("rules") or []
+    db = get_database_service()
+    imported_ids = {}
+    logical_sources = []
+    with db.get_connection() as conn:
+        for source in source_rules:
+            original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
+            if not original_id:
+                continue
+            imported_id = original_id
+            imported_ids[original_id] = original_id
+            saved_object_id = _rule_saved_object_id(source)
+            if saved_object_id:
+                imported_ids[saved_object_id] = imported_id
+            logical_sources.append((original_id, source.get("siem_id") or "imported", source.get("space") or ""))
+            raw_data = source.get("raw_data") or {}
+            if not isinstance(raw_data, str):
+                raw_data = json.dumps(raw_data, default=str)
+            conn.execute(
+                """INSERT INTO detection_rules (
+                    rule_id, siem_id, name, severity, author, enabled, space,
+                    score, quality_score, meta_score, score_mapping, score_field_type,
+                    score_search_time, score_language, score_note, score_override,
+                    score_tactics, score_techniques, score_author, score_highlights,
+                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?)
+                ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
+                    name = EXCLUDED.name, severity = EXCLUDED.severity,
+                    author = EXCLUDED.author, enabled = EXCLUDED.enabled,
+                    raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
+                    deprecated = true, source_rule_id = EXCLUDED.source_rule_id
+                """,
+                [
+                    imported_id, source.get("siem_id") or "imported", source.get("name") or original_id,
+                    source.get("severity") or "low", source.get("author") or "Unknown",
+                    int(bool(source.get("enabled", True))), source.get("space") or "",
+                    source.get("score") or 0, source.get("quality_score") or 0, source.get("meta_score") or 0,
+                    source.get("score_mapping") or 0, source.get("score_field_type") or 0,
+                    source.get("score_search_time") or 0, source.get("score_language") or 0,
+                    source.get("score_note") or 0, source.get("score_override") or 0,
+                    source.get("score_tactics") or 0, source.get("score_techniques") or 0,
+                    source.get("score_author") or 0, source.get("score_highlights") or 0,
+                    source.get("last_updated"), source.get("mitre_ids") or [], raw_data,
+                    client_id, original_id,
+                ],
+            )
+    for original_id, source_siem_id, source_space in logical_sources:
+        db.ensure_logical_rule_identity(
+            original_id, original_id, source_siem_id, source_space
+        )
+    baseline_info = payload.get("baseline") or {}
+    existing_names = {item.get("name") for item in (get_baselines_overview(client_id=client_id) or [])}
+    imported_name = _import_name(baseline_info.get("name") or "Imported baseline", existing_names)
+    baseline = create_playbook(
+        imported_name,
+        baseline_info.get("description") or "",
+        client_id=client_id,
+    )
+    for step_data in payload.get("steps") or []:
+        step = add_playbook_step(
+            baseline.id,
+            int(step_data.get("step_number") or 1),
+            step_data.get("title") or "Imported step",
+            technique_id=step_data.get("technique_id") or "",
+            required_rule=imported_ids.get(step_data.get("required_rule") or "", ""),
+            description=step_data.get("description") or "",
+            tactic=step_data.get("tactic") or "",
+            client_id=client_id,
+        )
+        for technique_id in step_data.get("techniques") or []:
+            add_step_technique(step.id, technique_id, client_id=client_id)
+        for detection in step_data.get("detections") or []:
+            add_step_detection(
+                step.id,
+                imported_ids.get(detection.get("rule_ref"), detection.get("rule_ref") or ""),
+                note=detection.get("display_name") or detection.get("note") or "",
+                source=detection.get("source") or "manual",
+                client_id=client_id,
+            )
+    return baseline.id
+
+
+@router.post("/api/systems/import.json")
+async def import_system_configuration(
+    user: RequireUser,
+    client_id: ActiveClient,
+    file: UploadFile = File(...),
+    include_baselines: bool = Form(True),
+    include_rules: bool = Form(True),
+    include_devices: bool = Form(False),
+    conflict: str = Form("create"),
+):
+    """Import a system export as copies in the active tenant."""
+    try:
+        payload = json.loads((await file.read()).decode("utf-8"))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid JSON export: {exc}")
+    if payload.get("tide_export_version") != 1 or payload.get("export_type") != "system":
+        raise HTTPException(status_code=422, detail="Unsupported TIDE system export")
+    existing_system_names = {
+        item.system.name for item in (get_system_summaries(client_id=client_id) or [])
+    }
+    incoming_names = [str(item.get("name") or "Imported system") for item in payload.get("systems") or []]
+    conflicts = [name for name in incoming_names if name in existing_system_names]
+    if conflicts and conflict == "prompt":
+        return JSONResponse(
+            {"status": "conflict", "names": conflicts},
+            status_code=409,
+        )
+
+    system_ids = {}
+    existing_systems = {
+        summary.system.name: summary.system
+        for summary in (get_system_summaries(client_id=client_id) or [])
+    }
+    for source in payload.get("systems") or []:
+        source_name = str(source.get("name") or "Imported system")
+        existing_system = existing_systems.get(source_name) if conflict == "override" else None
+        if existing_system:
+            created = edit_system(
+                existing_system.id,
+                SystemUpdate(
+                    name=source_name,
+                    description=source.get("description") or "",
+                    classification=source.get("classification"),
+                ),
+                client_id=client_id,
+            )
+        else:
+            created_name = _import_name(source_name, set(existing_systems))
+            created = add_system(
+                SystemCreate(
+                    name=created_name,
+                    description=source.get("description") or "",
+                    classification=source.get("classification"),
+                ),
+                client_id=client_id,
+            )
+        system_ids[source.get("id")] = created.id
+        if include_devices:
+            for host in source.get("hosts") or []:
+                imported_host = add_host(
+                    created.id,
+                    HostCreate(
+                        name=host.get("name") or "Imported host",
+                        ip_address=host.get("ip_address"),
+                        os=host.get("os"),
+                        hardware_vendor=host.get("hardware_vendor"),
+                        model=host.get("model"),
+                        source=host.get("source") or "manual",
+                    ),
+                    client_id=client_id,
+                )
+                for software in host.get("software") or []:
+                    add_host_software(
+                        imported_host.id,
+                        created.id,
+                        SoftwareCreate(
+                            name=software.get("name") or "Imported software",
+                            version=software.get("version"),
+                            vendor=software.get("vendor"),
+                            cpe=software.get("cpe"),
+                            source=software.get("source") or "manual",
+                        ),
+                        client_id=client_id,
+                    )
+
+    baseline_ids = {}
+    if include_baselines:
+        for baseline_payload in payload.get("baselines") or []:
+            source_baseline_id = baseline_payload.get("baseline_id")
+            imported = await _import_baseline_payload(
+                baseline_payload if include_rules else {**baseline_payload, "rules": []},
+                client_id,
+            )
+            baseline_ids[source_baseline_id] = imported
+
+    db = get_database_service()
+    assignments_created = 0
+    with db.get_connection() as conn:
+        for assignment in payload.get("assignments") or [] if include_baselines else []:
+            new_system_id = system_ids.get(assignment.get("system_id"))
+            new_baseline_id = baseline_ids.get(assignment.get("playbook_id"))
+            if not new_system_id or not new_baseline_id:
+                continue
+            conn.execute(
+                "INSERT INTO system_baselines (system_id, playbook_id) VALUES (?, ?)",
+                [new_system_id, new_baseline_id],
+            )
+            assignments_created += 1
+    return {
+        "status": "ok",
+        "systems": len(system_ids),
+        "baselines": len(baseline_ids),
+        "assignments": assignments_created,
+    }
 
 
 @router.post("/api/baselines/import", response_class=HTMLResponse)
@@ -1749,7 +2287,7 @@ def api_update_tactic_technique(
 
 
 def _build_rule_name_lookup(client_id: str = None) -> dict:
-    """Build rule_name -> {rule_id, space} lookup for clickable rule names.
+    """Build rule name/id -> display metadata for clickable rule names.
 
     NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
     shared schema no longer carries a `client_id` column. The table is already
@@ -1758,9 +2296,18 @@ def _build_rule_name_lookup(client_id: str = None) -> dict:
     current schema."""
     with _get_conn_inline() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name, space FROM detection_rules"
+            "SELECT rule_id, name, space, raw_data FROM detection_rules"
         ).fetchall()
-    return {r[1]: {"rule_id": r[0], "space": r[2] or "default"} for r in rows}
+    lookup = {}
+    for rule_id, name, space, raw_data in rows:
+        info = {"rule_id": rule_id, "name": name or rule_id, "space": space or "default"}
+        if name:
+            lookup[name] = info
+        if rule_id:
+            lookup[rule_id] = info
+        for raw_key in _rule_reference_keys({"raw_data": raw_data}):
+            lookup[raw_key] = info
+    return lookup
 
 
 def _render_detection_section(request, step, client_id=None):

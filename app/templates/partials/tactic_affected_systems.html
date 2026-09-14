@@ -52,8 +52,9 @@
             {% if sys.applied_dets %}
             <div style="display:flex;flex-wrap:wrap;gap:0.3rem;margin-top:0.35rem;">
                 {% for ad in sys.applied_dets %}
+                {% set ad_label = 'Unresolved rule' if '-' in ad.label and ad.label | length >= 32 else ad.label %}
                 <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
-                    {{ icon('check','10') }} {{ ad.label[:30] }}
+                    {{ icon('check','10') }} {{ ad_label[:30] }}
                     <button name="Delete Apply System" class="btn btn-danger btn-sm"
                             hx-delete="/api/baselines/tactics/{{ step_id }}/detections/{{ ad.id }}/apply-system/{{ sys.system_id }}"
                             hx-target="#step-affected-section"
@@ -79,7 +80,8 @@
                     {% if sys.unapplied_dets %}
                     <optgroup label="Apply Detection Rule">
                     {% for ud in sys.unapplied_dets %}
-                    <option value="rule:{{ ud.id }}">{{ ud.label[:35] }}</option>
+                    {% set ud_label = 'Unresolved rule' if '-' in ud.label and ud.label | length >= 32 else ud.label %}
+                    <option value="rule:{{ ud.id }}">{{ ud_label[:35] }}</option>
                     {% endfor %}
                     </optgroup>
                     {% endif %}

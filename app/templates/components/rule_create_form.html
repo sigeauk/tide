@@ -285,6 +285,46 @@
         <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
       </div>
     </form>
+    {% if mode == 'edit' %}
+      <div class="rule-help" style="margin-top:1rem;">Lifecycle actions affect TIDE only. Elastic is never changed by archive, delete, or remapping.</div>
+      <div style="display:flex; flex-wrap:wrap; gap:0.5rem; margin-top:0.6rem;">
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-post="/api/rules/{{ rule.rule_id }}/sync?siem_id={{ siem_id }}&space={{ space }}"
+                hx-target="#rule-action-result">Sync rule</button>
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-post="/api/rules/{{ rule.rule_id }}/archive?siem_id={{ siem_id }}&space={{ space }}"
+                hx-target="#rule-action-result">Archive in TIDE</button>
+        {% if rule.deprecated %}
+        <button type="button" class="btn btn-secondary btn-sm"
+          hx-post="/api/rules/{{ rule.rule_id }}/restore?siem_id={{ siem_id }}&space={{ space }}"
+          hx-target="#rule-action-result"
+          hx-include="#replacement-scope"
+          hx-confirm="Recreate this rule in the selected Replacement SIEM / space?">Restore in Elastic</button>
+        {% endif %}
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-delete="/api/rules/{{ rule.rule_id }}?siem_id={{ siem_id }}&space={{ space }}"
+                hx-target="#rule-action-result"
+                hx-confirm="Delete this rule from TIDE? Elastic will not be changed.">Delete from TIDE</button>
+      </div>
+      <div class="form-section" style="margin-top:0.75rem;">
+        <label for="replacement-rule-id">Merge rule ID</label>
+        <div style="display:flex; gap:0.5rem;">
+          <input class="rule-form-control" id="replacement-rule-id" name="replacement_rule_id" form="rule-remap-form" placeholder="New Elastic rule ID">
+        </div>
+        <label for="replacement-scope" style="margin-top:0.5rem;">Replacement SIEM / space</label>
+        <div style="display:flex; gap:0.5rem;">
+          <select class="rule-form-select" id="replacement-scope" name="replacement_scope" form="rule-remap-form">
+            {% for s in scope_options %}
+              <option value="{{ s.siem_id }}|{{ s.space }}">{{ s.label }} - {{ s.space }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" form="rule-remap-form" class="btn btn-secondary btn-sm">Merge rule</button>
+        </div>
+        <div class="rule-help">Merges this rule with the selected rule and moves all baseline links to the selected master.</div>
+      </div>
+      <form id="rule-remap-form" hx-post="/api/rules/{{ rule.rule_id }}/merge?siem_id={{ siem_id }}&space={{ space }}" hx-target="#rule-action-result"></form>
+      <div id="rule-action-result" class="rule-help" style="margin-top:0.5rem;"></div>
+    {% endif %}
   </div>
 </div>
 

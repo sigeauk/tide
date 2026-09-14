@@ -41,7 +41,7 @@
                     <polyline points="7 10 12 15 17 10"/>
                     <line x1="12" y1="15" x2="12" y2="3"/>
                 </svg>
-                Export Report
+                Export
             </button>
             <button name="Open Edit Env Modal" class="btn btn-secondary btn-sm"
                     onclick="document.getElementById('edit-env-modal').style.display='flex'">
@@ -384,7 +384,6 @@ function toggleAllHeatmapBaselines(allCb) {
         </div>
     </div>
 </div>
-
 <!-- Required for mitre_pill slide panel -->
 <div id="slide-panel-container"></div>
 
@@ -417,9 +416,5 @@ function confirmExport() {
     closeExportModal();
     window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
 }
-document.addEventListener('click', function(e) {
-    var overlay = document.getElementById('export-modal-overlay');
-    if (overlay && e.target === overlay) closeExportModal();
-});
 </script>
 {% endblock %}

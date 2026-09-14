@@ -20,6 +20,11 @@
     <div class="rule-header">
         <div class="rule-name" title="{{ rule.name }}">{{ rule.name }}</div>
         <div class="rule-pills-stack">
+            {% if rule.deprecated %}
+            <div class="status-pill status-disabled" title="This rule was not found in the SIEM during a successful sync.">
+                Deprecated
+            </div>
+            {% else %}
             <div class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
                 {% if rule.enabled %}
                 <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -35,9 +40,14 @@
                   or space_labels.get(rule.space | default('default'), (rule.space | default('default')) | capitalize)
                 }}
             </div>
+            {% endif %}
             <div class="sev-pill sev-{{ sev_value }}">
                 {{ sev_value | upper }}
             </div>
+            {% set lifecycle_key = rule.rule_id ~ '|' ~ (rule.siem_id or '') ~ '|' ~ (rule.space or '') %}
+            <span class="tide-lifecycle tide-lifecycle-{{ (lifecycle_states.get(lifecycle_key, 'Deprecated') | lower) | replace(' ', '-') }}">
+                {{ lifecycle_states.get(lifecycle_key, 'Deprecated') }}
+            </span>
             {# MITRE Pills - use neutral blue style for Rule Health cards #}
             {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=6) }}
         </div>

@@ -71,6 +71,8 @@ class DetectionRule(BaseModel):
     mitre_ids: List[str] = Field(default_factory=list)
     last_updated: Optional[datetime] = None
     raw_data: Optional[Dict[str, Any]] = None
+    deprecated: bool = False
+    source_rule_id: Optional[str] = None
     
     # Computed fields (set during retrieval)
     validation_date: Optional[datetime] = None
@@ -174,10 +176,16 @@ class RuleFilters(BaseModel):
     severity: Optional[Severity] = None
     min_score: Optional[int] = None
     max_score: Optional[int] = None
+    # Lifecycle state checklist: any of "production", "staging", "migrated",
+    # "deprecated" (case-insensitive). Empty list = no state filtering.
+    state: List[str] = Field(default_factory=list)
+    validated_from: Optional[datetime] = None
+    validated_to: Optional[datetime] = None
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc
-    # Independent multi-sort selectors ("asc" / "desc" / "").
+    # Independent sort selectors ("asc" / "desc" / ""). The UI only ever
+    # keeps one of these non-empty at a time — selecting a new sort clears
+    # the others — so "last selected" is naturally the effective sort.
     sort_score: str = ""
-    sort_criticality: str = ""
     sort_validated: str = ""
     sort_name: str = ""
     page: int = 1

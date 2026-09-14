@@ -18,6 +18,8 @@
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
             {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
+            {% set unresolved_label = 'Unresolved SIEM rule' if '-' in d.rule_ref and d.rule_ref | length >= 32 else d.rule_ref %}
+            {% set rule_label = rule_info.name if rule_info.name is defined and rule_info.name else (d.note or unresolved_label) %}
             <div style="font-size:0.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
                 {{ icon('file-code','13') }}
                 {% if rule_info.rule_id %}
@@ -25,15 +27,15 @@
                       hx-get="/api/rules/{{ rule_info.rule_id }}/detail?space={{ rule_info.space | default('default') }}"
                       hx-target="#modal-container"
                       hx-swap="innerHTML"
-                      title="View rule details">{{ d.rule_ref }}</span>
+                      title="View rule details">{{ rule_label }}</span>
                 {% else %}
-                {{ d.rule_ref }}
+                {{ rule_label }}
                 {% endif %}
             </div>
             {% endif %}
             <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
                 <span class="badge badge-success" style="font-size:0.62rem;padding:0.1rem 0.35rem;">{{ icon('shield-check','9') }} SIEM</span>
-                {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
+                {% if d.note and d.note != rule_label %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
             </div>
         </div>
         <button name="Delete Detections" class="btn btn-danger btn-sm"
@@ -52,8 +54,10 @@
     <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-info);">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
+            {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
             <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
-                {{ icon('file-text','13') }} {{ d.rule_ref }}
+                {% set unresolved_label = 'Unresolved rule' if '-' in d.rule_ref and d.rule_ref | length >= 32 else d.rule_ref %}
+                {{ icon('file-text','13') }} {{ rule_info.name if rule_info.name is defined and rule_info.name else unresolved_label }}
             </div>
             {% endif %}
             <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
@@ -77,8 +81,10 @@
     <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-warning);opacity:0.85;">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
+            {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
             <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
-                {{ icon('file-text','13') }} {{ d.rule_ref }}
+                {% set unresolved_label = 'Unresolved Sigma rule' if '-' in d.rule_ref and d.rule_ref | length >= 32 else d.rule_ref %}
+                {{ icon('file-text','13') }} {{ rule_info.name if rule_info.name is defined and rule_info.name else (d.note or unresolved_label) }}
             </div>
             {% endif %}
             <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
@@ -205,12 +211,14 @@
     </div>
 
     <script>
-    function selectSiemRule(btn, title) {
-        document.getElementById('siem-det-rule-ref').value = title;
+    function selectSiemRule(btn, ruleId, ruleName) {
+        document.getElementById('siem-det-rule-ref').value = ruleId;
+        document.querySelector('#add-siem-det-form input[name="note"]').value = ruleName || '';
         htmx.trigger(document.getElementById('add-siem-det-form'), 'submit');
     }
-    function selectSigmaRule(btn, title) {
-        document.getElementById('sigma-det-rule-ref').value = title;
+    function selectSigmaRule(btn, ruleId, ruleName) {
+        document.getElementById('sigma-det-rule-ref').value = ruleId;
+        document.querySelector('#add-sigma-det-form input[name="note"]').value = ruleName || '';
         htmx.trigger(document.getElementById('add-sigma-det-form'), 'submit');
     }
     </script>

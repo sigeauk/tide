@@ -77,13 +77,19 @@
 <hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
 <form name="Submit Validation Thresholds" hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
       hx-target="#client-siems-section" hx-swap="innerHTML"
-      style="display:flex;gap:0.75rem;align-items:flex-end;flex-wrap:wrap;padding:0 0.25rem;">
+    style="display:flex;gap:0.75rem;align-items:flex-start;flex-wrap:wrap;padding:0 0.25rem;">
     <div style="flex:0 0 auto;min-width:10rem;">
         <label class="form-label" style="font-size:0.78rem;">Validation mode</label>
         <select name="rule_validation_mode" class="form-input" style="width:10rem;" onchange="window.__toggleValidationModeFields(this.value)">
             <option value="master" {% if client.rule_validation_mode != 'criticality' %}selected{% endif %}>Master cadence</option>
             <option value="criticality" {% if client.rule_validation_mode == 'criticality' %}selected{% endif %}>By criticality</option>
         </select>
+        <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.72rem;margin-top:0.45rem;white-space:nowrap;">
+            <input type="hidden" name="delete_source_after_promotion" value="false">
+            <input type="checkbox" name="delete_source_after_promotion" value="true"
+                   {% if client.delete_source_after_promotion is not defined or client.delete_source_after_promotion %}checked{% endif %}>
+            Delete source after promotion by default
+        </label>
     </div>
     <div style="flex:0 0 auto;">
         <label class="form-label" style="font-size:0.78rem;">Master amber after (weeks)</label>
@@ -111,7 +117,7 @@
         </div>
         {% endfor %}
     </div>
-    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm">Save thresholds</button>
+    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm" style="margin-top:1.45rem;">Save thresholds</button>
     <span style="flex-basis:100%;color:var(--color-text-muted);font-size:0.72rem;">
         Leave blank to inherit the global default. Criticality mode stores overrides per severity.
     </span>

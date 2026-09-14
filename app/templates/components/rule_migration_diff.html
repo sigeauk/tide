@@ -1,0 +1,30 @@
+<div class="modal-overlay" onclick="if(event.target===this)this.remove()">
+  <div class="modal-content" onclick="event.stopPropagation()" style="max-width:900px;">
+    <div class="modal-header">
+      <h2>Rule migration comparison</h2>
+      <button type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+    </div>
+    <p class="rule-help">Volatile execution and timestamp fields are excluded. Production is the current master unless changed below.</p>
+    {% if diffs %}
+    <div style="display:grid;gap:0.5rem;max-height:50vh;overflow:auto;">
+      {% for diff in diffs %}
+      <div class="card card-padded" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;">
+        <strong>{{ diff.field }}</strong>
+        <pre style="white-space:pre-wrap;margin:0;">{{ diff.source | tojson(indent=2) }}</pre>
+        <pre style="white-space:pre-wrap;margin:0;">{{ diff.production | tojson(indent=2) }}</pre>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state-text">No meaningful differences found.</p>
+    {% endif %}
+    <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
+      <button type="button" class="btn btn-secondary"
+              hx-post="/api/promotion/{{ migration.source_rule_id }}/master"
+              hx-vals='{"master":"staging"}' hx-target="#modal-container">Make staging master</button>
+      <button type="button" class="btn btn-primary"
+              hx-post="/api/promotion/{{ migration.source_rule_id }}/master"
+              hx-vals='{"master":"production"}' hx-target="#modal-container">Make production master</button>
+    </div>
+  </div>
+</div>

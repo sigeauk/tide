@@ -473,7 +473,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                       f"space={space!r}  ERROR: {type(e).__name__}: {e}")
 
 
-# Canonical detection_rules columns expected in the TENANT DB (24 columns).
+# Canonical detection_rules columns expected in the TENANT DB (26 columns).
 # Mirrors _TENANT_DETECTION_RULES_COLUMNS in app/services/sync.py — keep in sync.
 _TENANT_DR_COLS = (
     "rule_id", "siem_id", "name", "severity", "author", "enabled", "space",
@@ -482,7 +482,7 @@ _TENANT_DR_COLS = (
     "score_language", "score_note", "score_override",
     "score_tactics", "score_techniques", "score_author", "score_highlights",
     "last_updated", "mitre_ids", "raw_data",
-    "client_id",   # added post-4.0.13 — the column missing in the 23-col failure
+    "client_id", "deprecated", "source_rule_id",
 )
 
 # Canonical detection_rules columns expected in the SHARED DB (23 columns —

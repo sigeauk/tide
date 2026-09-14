@@ -22,6 +22,10 @@
         <div class="promo-pills">
             {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true) }}
             <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
+            {% set lifecycle_key = rule.rule_id ~ '|' ~ (rule.siem_id or '') ~ '|' ~ (rule.space or '') %}
+            <span class="tide-lifecycle tide-lifecycle-{{ (lifecycle_states.get(lifecycle_key, 'Staging') | lower) | replace(' ', '-') }}">
+                {{ lifecycle_states.get(lifecycle_key, 'Staging') }}
+            </span>
             <span class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
                 {% if rule.enabled %}
                 <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -141,9 +145,14 @@
             </button>
             <button  name="Promote" 
                 class="btn btn-primary btn-sm"
-                onclick="showPromoteConfirm('{{ rule.rule_id }}', '{{ rule.name | replace("'", "\\'") | replace('"', '\\"') }}', '{{ rule.siem_id | default('') }}')">
+                onclick="showPromoteConfirm('{{ rule.rule_id }}', '{{ rule.name | replace("'", "\\'") | replace('"', '\\"') }}', '{{ rule.siem_id | default('') }}', {{ 'true' if delete_source_default else 'false' }})">
                 {{ icon_text('arrow-up-right', 'Promote', '14') }}
             </button>
+            {% if lifecycle_states.get(lifecycle_key) == 'Migrated' %}
+            <button name="Compare Rule Versions" class="btn btn-secondary btn-sm"
+                    hx-get="/api/promotion/{{ rule.rule_id }}/diff"
+                    hx-target="#modal-container" hx-swap="innerHTML">Compare</button>
+            {% endif %}
         </div>
     </div>
 </div>

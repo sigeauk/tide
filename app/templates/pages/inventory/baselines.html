@@ -124,6 +124,33 @@
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
             Upload a CSV or Excel file with columns: <strong>Title</strong>, <strong>Tactic</strong> (Kill Chain Phase), <strong>Technique</strong> (MITRE ID), <strong>Description</strong>.
         </p>
+        <form id="tide-json-baseline-import" method="post" action="/api/baselines/import.json" enctype="multipart/form-data" onsubmit="return submitTideBaselineImport(event)" style="display:flex;gap:0.5rem;align-items:center;margin-bottom:0.75rem;">
+            <input type="file" name="file" accept=".json,application/json" required class="form-input">
+            <label style="display:flex;align-items:center;gap:0.35rem;font-size:0.78rem;white-space:nowrap;">
+                <input type="checkbox" name="include_rules" value="true" checked> Include rules
+            </label>
+            <button type="submit" class="btn btn-secondary btn-sm">Import TIDE JSON</button>
+        </form>
+        <script>
+        async function submitTideBaselineImport(event) {
+            event.preventDefault();
+            var form = event.target;
+            var data = new FormData(form);
+            data.set('conflict', 'prompt');
+            var response = await fetch(form.action, {method:'POST', body:data, credentials:'same-origin'});
+            if (response.status === 409) {
+                var conflict = await response.json();
+                var choice = window.prompt('Baseline "' + conflict.existing_name + '" already exists. Enter CREATE for a new copy or OVERRIDE to replace it.', 'CREATE');
+                if (!choice) return false;
+                data.set('conflict', choice.toLowerCase() === 'override' ? 'override' : 'create');
+                if (choice.toLowerCase() === 'override') data.set('target_baseline_id', conflict.existing_id);
+                response = await fetch(form.action, {method:'POST', body:data, credentials:'same-origin'});
+            }
+            if (!response.ok) { alert('Baseline import failed (' + response.status + ').'); return false; }
+            window.location.reload();
+            return false;
+        }
+        </script>
         <form name="Submit Import" method="post" hx-post="/api/baselines/import"
               hx-target="#baselines-list"
               hx-swap="innerHTML"

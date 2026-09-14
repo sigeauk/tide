@@ -31,6 +31,7 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from app.api.deps import ActiveClient, RequireUser
+from app.services.database import get_database_service
 from app.services import quest as quest_service
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,23 @@ def _set_cookie(response: Response, quest_id: str) -> None:
 
 def _clear_cookie(response: Response) -> None:
     response.delete_cookie(quest_service.QUEST_COOKIE, path="/")
+
+
+def _build_rule_name_lookup(client_id: str = None) -> dict:
+    try:
+        db = get_database_service()
+        with db.get_connection() as conn:
+            rows = conn.execute("SELECT rule_id, name, space FROM detection_rules").fetchall()
+    except Exception:
+        return {}
+    lookup = {}
+    for rule_id, name, space in rows:
+        info = {"rule_id": rule_id, "name": name or rule_id, "space": space or "default"}
+        if name:
+            lookup[name] = info
+        if rule_id:
+            lookup[rule_id] = info
+    return lookup
 
 
 def _hx_redirect(request: Request, target: str) -> Response:
@@ -221,6 +239,7 @@ def _render_walker(
             "prev_tech": prev_tech,
             "next_tech": next_tech,
             "coverage": coverage,
+            "rule_name_lookup": _build_rule_name_lookup(),
             "completed_count": covered_count,
             "current_covered": current["covered"],
         },

@@ -112,7 +112,9 @@
         {% for det in coverage %}
         <li style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.4rem 0.5rem;background:var(--color-bg-elevated,#1c2128);border-radius:0.3rem;">
           {{ icon('check-circle','12') }}
-          <span style="flex:1;">{{ det.rule_ref }}</span>
+          {% set rule_info = rule_name_lookup.get(det.rule_ref, {}) if rule_name_lookup is defined else {} %}
+          {% set unresolved_label = 'Unresolved rule' if '-' in det.rule_ref and det.rule_ref | length >= 32 else det.rule_ref %}
+          <span style="flex:1;" title="{{ det.rule_ref }}">{{ rule_info.name if rule_info.name is defined and rule_info.name else (det.note or unresolved_label) }}</span>
           <span class="badge" style="font-size:0.6rem;text-transform:uppercase;
                 {% if det.source == 'siem' %}background:rgba(34,197,94,.12);color:var(--color-success);
                 {% elif det.source == 'sigma' %}background:rgba(234,179,8,.12);color:var(--color-warning);

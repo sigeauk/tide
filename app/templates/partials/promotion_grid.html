@@ -1,5 +1,8 @@
 <!-- Promotion Grid Partial -->
 {% from "macros/icons.html" import icon, icon_text %}
+{% set state = state | default([]) %}
+{% set pm_pagination_qs = "search=" ~ (search | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) %}
+{% for s in state %}{% set pm_pagination_qs = pm_pagination_qs ~ "&state=" ~ (s | urlencode) %}{% endfor %}
 
 {% if rules and rules | length > 0 %}
 <div class="promotion-list">
@@ -12,7 +15,7 @@
     {% if page > 1 %}
     <button name="← Previous" 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/promotion?page={{ page - 1 }}&search={{ search }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-get="/api/promotion?page={{ page - 1 }}&{{ pm_pagination_qs }}"
         hx-target="#promotion-grid"
         hx-swap="innerHTML">
         ← Previous
@@ -28,7 +31,7 @@
     {% if page < total_pages %}
     <button name="Next →" 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/promotion?page={{ page + 1 }}&search={{ search }}&enabled={{ enabled }}&sort_by={{ sort_by }}"
+        hx-get="/api/promotion?page={{ page + 1 }}&{{ pm_pagination_qs }}"
         hx-target="#promotion-grid"
         hx-swap="innerHTML">
         Next →

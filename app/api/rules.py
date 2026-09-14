@@ -3,6 +3,7 @@ API routes for Detection Rules (Rule Health page).
 """
 
 import json
+from datetime import datetime, timedelta
 from urllib.parse import unquote
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks
@@ -15,6 +16,56 @@ from app.models.rules import RuleFilters
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_date_bound(raw_value: Optional[str], end_of_day: bool) -> Optional[datetime]:
+    """Parse a ``<input type=date>`` value (``YYYY-MM-DD``) into a bound.
+
+    ``end_of_day`` pushes the bound to 23:59:59.999999 so a "to" date
+    filter includes the whole day rather than only midnight.
+    """
+    if not raw_value:
+        return None
+    try:
+        parsed = datetime.strptime(raw_value.strip()[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+    if end_of_day:
+        parsed = parsed + timedelta(days=1) - timedelta(microseconds=1)
+    return parsed
+
+
+def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: str, sort_by: str) -> list:
+    """Re-apply the active sort after any post-fetch substitution.
+
+    ``list_rules`` swaps some rows for their migrated "master" counterpart
+    after ``db.get_rules`` already sorted the pre-swap rows — the master can
+    carry a different score/validation date/name, silently breaking the
+    requested order (e.g. Validate sort). Cheap to redo in Python since the
+    page is already fully materialized here.
+    """
+    legacy_map = {
+        "score_asc": ("score", "asc"), "score_desc": ("score", "desc"),
+        "validated_asc": ("validated", "asc"), "validated_desc": ("validated", "desc"),
+        "name_asc": ("name", "asc"), "name_desc": ("name", "desc"),
+    }
+    if sort_validated in ("asc", "desc"):
+        field, direction = "validated", sort_validated
+    elif sort_score in ("asc", "desc"):
+        field, direction = "score", sort_score
+    elif sort_name in ("asc", "desc"):
+        field, direction = "name", sort_name
+    else:
+        field, direction = legacy_map.get(sort_by, ("score", "desc"))
+
+    reverse = direction == "desc"
+    if field == "validated":
+        rules.sort(key=lambda r: getattr(r, "validation_date", None) or datetime.min, reverse=reverse)
+    elif field == "score":
+        rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
+    elif field == "name":
+        rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower(), reverse=reverse)
+    return rules
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -228,6 +279,8 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         "mode": "edit" if rule else "create",
         "scope_locked": scope_locked,
         "rule": rule,
+        "siem_id": getattr(rule, "siem_id", "") if rule else "",
+        "space": getattr(rule, "space", "default") if rule else "default",
     }
 
 
@@ -240,11 +293,24 @@ def _severity_to_risk_score(severity: str) -> int:
     }.get((severity or "medium").lower(), 47)
 
 
+# Kibana's detection_engine/rules API validates ``language`` against a
+# different enum per rule ``type`` (e.g. the "query" type only accepts
+# kuery/lucene) — sending type="query" with language="eql"/"esql" 400s.
+_RULE_TYPE_BY_LANGUAGE = {
+    "kuery": "query",
+    "lucene": "query",
+    "eql": "eql",
+    "esql": "esql",
+}
+
+
 def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_author: str) -> tuple[dict, str, str, list[str]]:
+    from app.elastic_helper import normalize_rule_language
+
     rule_name = (form_data.get("name") or "").strip()
     description = (form_data.get("description") or "").strip()
     query = (form_data.get("query") or "").strip()
-    language = (form_data.get("language") or "kuery").strip().lower()
+    language = normalize_rule_language(form_data.get("language") or "kuery")
     severity = (form_data.get("severity") or "medium").strip().lower()
     enabled = str(form_data.get("enabled") or "true").lower() == "true"
     author_value = (form_data.get("author") or "").strip() or default_author
@@ -285,11 +351,18 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
         "note": note,
         "interval": interval,
         "from": lookback,
-        "type": (form_data.get("type") or "query").strip() or "query",
+        # Ignore any submitted "type" (the form carries a stale hidden
+        # <input name="type" value="query"> left over from prefill) — the
+        # rule type is fully determined by the query language.
+        "type": _RULE_TYPE_BY_LANGUAGE.get(language, "query"),
         "mitre_ids": mitre_ids,
         "index": index_patterns,
         "timestamp_override": timestamp_override,
     }
+    if language == "esql":
+        # ES|QL rules source their index from the query's FROM clause —
+        # Kibana's esql rule schema doesn't accept a separate "index" field.
+        payload.pop("index", None)
     if highlighted_fields:
         payload["investigation_fields"] = {"field_names": highlighted_fields}
     if reason:
@@ -670,9 +743,13 @@ def list_rules(
     search: Optional[str] = Query(None),
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
+    state: list[str] = Query([]),
+    min_score: Optional[str] = Query(None),
+    max_score: Optional[str] = Query(None),
+    validated_from: Optional[str] = Query(None),
+    validated_to: Optional[str] = Query(None),
     sort_by: str = Query("score_desc"),
     sort_score: str = Query("desc"),
-    sort_criticality: str = Query(""),
     sort_validated: str = Query(""),
     sort_name: str = Query(""),
     page: int = Query(1, ge=1),
@@ -680,6 +757,10 @@ def list_rules(
 ):
     """List detection rules with filtering and pagination."""
     try:
+        validated_from_dt = _parse_date_bound(validated_from, end_of_day=False)
+        validated_to_dt = _parse_date_bound(validated_to, end_of_day=True)
+        min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
+        max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
         # Tenant isolation is handled by the ActiveClient dep, which pins
         # the request to the tenant's DuckDB file. Detection rules are
         # per-tenant since 4.1.13 — no allowed_scopes filter needed.
@@ -687,9 +768,13 @@ def list_rules(
             search=search if search else None,
             space=space if space else None,
             enabled=None if not enabled else (enabled.lower() == 'true'),
+            state=[s for s in state if s],
+            min_score=min_score_int,
+            max_score=max_score_int,
+            validated_from=validated_from_dt,
+            validated_to=validated_to_dt,
             sort_by=sort_by,
             sort_score=sort_score,
-            sort_criticality=sort_criticality,
             sort_validated=sort_validated,
             sort_name=sort_name,
             page=page,
@@ -700,7 +785,45 @@ def list_rules(
             filters=filters,
             client_id=client_id,
         )
+        staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
+        production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
+        db.backfill_unique_rule_migrations(staging_scopes, production_scopes)
+        # Rule Health is a master-rule view. A tracked staging/production
+        # pair renders once using the production copy, whose enabled state is
+        # authoritative. Promotion continues to list the staging copy.
+        display_rules = []
+        seen_migrations = set()
+        for rule in rules:
+            migration = db.get_rule_migration_for_rule(rule.rule_id)
+            logical = db.get_logical_rule_identity_for_rule(
+                rule.rule_id, rule.siem_id, rule.space
+            )
+            identity_key = (migration or logical or {}).get("id")
+            if identity_key:
+                if identity_key in seen_migrations:
+                    continue
+                master_rule_id = (migration or logical).get("target_rule_id") or (logical or {}).get("master_rule_id")
+                master_siem_id = (migration or logical).get("target_siem_id") or (logical or {}).get("master_siem_id")
+                master_space = (migration or logical).get("target_space") or (logical or {}).get("master_space")
+                target = db.get_rule_by_id(
+                    master_rule_id,
+                    master_space,
+                    siem_id=master_siem_id,
+                    client_id=client_id,
+                ) if master_rule_id and master_siem_id and master_space else None
+                if target and not target.deprecated:
+                    display_rules.append(target)
+                    seen_migrations.add(identity_key)
+                    continue
+            display_rules.append(rule)
+        rules = _resort_rules(display_rules, sort_score, sort_validated, sort_name, sort_by)
         total_pages = max(1, (total + page_size - 1) // page_size)
+        lifecycle_states = {
+            f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
+                rule.rule_id, staging_scopes, production_scopes
+            )
+            for rule in rules
+        }
         
         logger.info(f"Fetched {len(rules)} rules (total: {total}, page: {page}/{total_pages})")
         
@@ -714,14 +837,19 @@ def list_rules(
             "search": search or "",
             "space": space or "",
             "enabled": enabled or "",
+            "state": [s for s in state if s],
+            "min_score": min_score if min_score is not None else "",
+            "max_score": max_score if max_score is not None else "",
+            "validated_from": validated_from or "",
+            "validated_to": validated_to or "",
             "sort_by": sort_by,
             "sort_score": sort_score,
-            "sort_criticality": sort_criticality,
             "sort_validated": sort_validated,
             "sort_name": sort_name,
             "space_labels": _build_space_labels(db, client_id),
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
             "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
+            "lifecycle_states": lifecycle_states,
         }
         return templates.TemplateResponse(request, "partials/rules_grid.html", context)
     except Exception as e:
@@ -1350,15 +1478,76 @@ async def edit_rule(
     if new_name:
         payload["name"] = new_name
 
-    success, message = elastic_helper.update_detection_rule(
-        rule_id=rule_id,
-        rule_data=payload,
-        space=space,
-        kibana_url=siem.get("kibana_url"),
-        api_key=siem.get("api_token_enc"),
-    )
-    if not success:
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+    # TIDE may retain a logical/source identity after Elastic generated a new
+    # ID during restore or promotion. Kibana updates must use the payload's
+    # actual Elastic ID, while TIDE history continues to use rule_id.
+    elastic_rule_id = str(old_payload.get("rule_id") or old_payload.get("id") or rule_id)
+    migration = db.get_rule_migration_for_rule(rule_id)
+    logical = db.get_logical_rule_identity_for_rule(rule_id, actual_siem_id, space)
+    if rule.deprecated:
+        if not db.update_cached_rule(rule_id, actual_siem_id, space, payload):
+            return HTMLResponse('<div class="empty-state-text">TIDE-only rule update failed.</div>', status_code=400)
+        update_message = "Deprecated rule updated in TIDE only."
+    else:
+        update_targets = [(actual_siem_id, space, elastic_rule_id, siem)]
+        if migration:
+            migration_members = [
+                (migration["source_rule_id"], migration["source_siem_id"], migration["source_space"]),
+                (migration["target_rule_id"], migration["target_siem_id"], migration["target_space"]),
+            ]
+            for member_rule_id, member_siem_id, member_space in migration_members:
+                if (member_siem_id, member_space) == (actual_siem_id, space):
+                    continue
+                member_siem = next(
+                    (item for item in (db.get_client_siems(client_id) or []) if item.get("id") == member_siem_id),
+                    None,
+                )
+                member_rule = db.get_rule_by_id(
+                    member_rule_id, member_space,
+                    siem_id=member_siem_id, client_id=client_id,
+                )
+                if member_siem and member_rule:
+                    member_payload = member_rule.raw_data or {}
+                    update_targets.append(
+                        (member_siem_id, member_space, str(member_payload.get("rule_id") or member_payload.get("id") or member_rule.rule_id), member_siem)
+                    )
+        elif logical:
+            for member in db.get_logical_rule_members(logical["id"]):
+                if (member["siem_id"], member["space"]) == (actual_siem_id, space):
+                    continue
+                member_siem = next(
+                    (item for item in (db.get_client_siems(client_id) or []) if item.get("id") == member["siem_id"]),
+                    None,
+                )
+                member_rule = db.get_rule_by_id(
+                    member["rule_id"], member["space"],
+                    siem_id=member["siem_id"], client_id=client_id,
+                )
+                if member_siem and member_rule:
+                    member_payload = member_rule.raw_data or {}
+                    update_targets.append(
+                        (member["siem_id"], member["space"], str(member_payload.get("rule_id") or member_payload.get("id") or member_rule.rule_id), member_siem)
+                    )
+        failures = []
+        for target_siem_id, target_space, target_rule_id, target in update_targets:
+            success, message = elastic_helper.update_detection_rule(
+                rule_id=target_rule_id, rule_data=payload, space=target_space,
+                kibana_url=target.get("kibana_url"), api_key=target.get("api_token_enc"),
+            )
+            if not success:
+                logger.error(
+                    "Rule edit update failed: rule_id=%s siem_id=%s space=%s "
+                    "target_rule_id=%s message=%s",
+                    rule_id, target_siem_id, target_space, target_rule_id, message,
+                )
+                failures.append(f"{target.get('label', target_siem_id)} / {target_space}: {message}")
+        if failures:
+            return HTMLResponse(
+                '<div class="empty-state-text">Rule update was partial. '
+                + ' | '.join(failures) + '</div>',
+                status_code=409,
+            )
+        update_message = "Rule updated in all applicable SIEM scopes."
 
     change_message, changed_fields, field_diffs = _summarize_rule_changes(old_payload, payload)
     db.record_rule_history(
@@ -1370,7 +1559,7 @@ async def edit_rule(
         actor_user_id=user.id,
         actor_name=user.username,
         detail={
-            "message": change_message,
+            "message": update_message + " " + change_message,
             "reason": reason,
             "changed_fields": changed_fields,
             "field_diffs": field_diffs,
@@ -1383,6 +1572,206 @@ async def edit_rule(
         'htmx.ajax("POST","/api/rules/sync",{target:"#sync-status",swap:"outerHTML"});'
         '</script>'
     )
+
+
+@router.post("/{rule_id}/sync", response_class=HTMLResponse)
+def sync_one_rule(
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Check one rule directly against its configured SIEM scope."""
+    from app import elastic_helper
+
+    if not siem_id:
+        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+    siem = next((item for item in (db.get_client_siems(client_id) or []) if item.get("id") == siem_id), None)
+    if not siem:
+        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+    full = db.get_siem_inventory_item(siem_id) or siem
+    try:
+        frame = elastic_helper.fetch_detection_rules(
+            kibana_url=full.get("kibana_url") or siem.get("kibana_url"),
+            api_key=full.get("api_token_enc"),
+            spaces=[space],
+            check_mappings=True,
+            known_rule_keys=set(),
+            elasticsearch_url=full.get("elasticsearch_url") or siem.get("elasticsearch_url"),
+        )
+        matches = [] if frame is None or frame.empty else frame[
+            frame["rule_id"].astype(str) == str(rule_id)
+        ].to_dict("records")
+        if matches:
+            matches[0]["siem_id"] = siem_id
+            db.save_audit_results(matches, client_id=client_id)
+            action = "synced"
+            message = "Rule found in Elastic and refreshed."
+            detail = {"message": message, "targeted": True}
+            db.set_rule_deprecated(rule_id, siem_id, space, False)
+        else:
+            db.set_rule_deprecated(rule_id, siem_id, space, True)
+            action = "deprecated"
+            message = "Rule was not found in Elastic and is marked deprecated."
+            detail = {"message": message, "targeted": True}
+        db.record_rule_history(
+            rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
+            action=action, actor_user_id=user.id, actor_name=user.username,
+            detail=detail,
+        )
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>')
+    except Exception as exc:
+        logger.exception("Targeted rule sync failed for %s", rule_id)
+        return HTMLResponse(f'<div class="empty-state-text">Targeted sync failed: {exc}</div>', status_code=400)
+
+
+@router.post("/{rule_id}/archive", response_class=HTMLResponse)
+def archive_rule(
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Archive a rule in TIDE without changing Elastic."""
+    if not siem_id or not db.set_rule_deprecated(rule_id, siem_id, space, True):
+        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+    db.record_rule_history(
+        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
+        action="deprecated", actor_user_id=user.id, actor_name=user.username,
+        detail={"message": "Rule archived in TIDE."},
+    )
+    return HTMLResponse('<div class="empty-state-text">Rule archived in TIDE.</div>')
+
+
+@router.post("/{rule_id}/restore", response_class=HTMLResponse)
+async def restore_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Recreate a deprecated rule in the selected replacement SIEM scope."""
+    if not siem_id:
+        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule or not rule.raw_data:
+        return HTMLResponse('<div class="empty-state-text">Rule data is unavailable.</div>', status_code=404)
+    form = await request.form()
+    replacement_siem_id, replacement_space = _parse_scope_pair(
+        str(form.get("replacement_scope") or "")
+    )
+    if not replacement_siem_id or not replacement_space:
+        return HTMLResponse('<div class="empty-state-text">Select a Replacement SIEM / space first.</div>', status_code=400)
+    target = next(
+        (item for item in (db.get_client_siems(client_id) or [])
+         if item.get("id") == replacement_siem_id
+         and (item.get("space") or "default") == replacement_space),
+        None,
+    )
+    if not target:
+        return HTMLResponse('<div class="empty-state-text">Replacement SIEM / space is not linked to this client.</div>', status_code=400)
+
+    from app import elastic_helper
+    full_target = db.get_siem_inventory_item(replacement_siem_id) or target
+    success, message, new_rule_id = elastic_helper.create_detection_rule(
+        rule.raw_data,
+        space=replacement_space,
+        kibana_url=full_target.get("kibana_url") or target.get("kibana_url"),
+        api_key=full_target.get("api_token_enc"),
+    )
+    if not success or not new_rule_id:
+        return HTMLResponse(f'<div class="empty-state-text">Restore failed: {message}</div>', status_code=400)
+
+    # Refresh the tenant cache so the new Elastic ID exists before moving
+    # baseline references and recording the migration pair.
+    import asyncio
+    from app.services.sync import run_elastic_sync
+    await asyncio.get_running_loop().run_in_executor(
+        None, lambda: run_elastic_sync(client_id)
+    )
+    db.remap_rule_references(
+        rule_id, new_rule_id, client_id,
+        siem_id, space,
+        replacement_siem_id, replacement_space,
+    )
+    # Restore is an identity replacement, not a migration mapping. The new
+    # synced row is the sole TIDE record; remove the old SIEM-scope cache row
+    # after baseline references have been moved to the recreated ID.
+    db.delete_rule(rule_id, siem_id, space)
+    db.record_rule_history(
+        rule_id=new_rule_id, siem_id=replacement_siem_id, space=replacement_space, client_id=client_id,
+        action="restored", actor_user_id=user.id, actor_name=user.username,
+        detail={
+            "message": "Rule recreated in Elastic from a deprecated TIDE copy.",
+            "source_rule_id": rule_id,
+            "replacement_siem_id": replacement_siem_id,
+            "replacement_space": replacement_space,
+            "identity_replaced": True,
+        },
+    )
+    return HTMLResponse(
+        f'<div class="empty-state-text">Rule recreated in Elastic as {new_rule_id}.</div>'
+    )
+
+
+@router.delete("/{rule_id}", response_class=HTMLResponse)
+def delete_rule(
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Delete a rule from TIDE only; Elastic is never modified."""
+    if not siem_id or not db.delete_rule(rule_id, siem_id, space):
+        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+    db.record_rule_history(
+        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
+        action="deleted", actor_user_id=user.id, actor_name=user.username,
+        detail={"message": "Rule deleted from TIDE."},
+    )
+    return HTMLResponse('<div class="empty-state-text">Rule deleted from TIDE.</div>')
+
+
+@router.post("/{rule_id}/merge", response_class=HTMLResponse)
+async def merge_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Merge two rule IDs into one logical TIDE rule identity."""
+    form = await request.form()
+    replacement_id = str(form.get("replacement_rule_id") or "").strip()
+    replacement_scope = str(form.get("replacement_scope") or "").strip()
+    replacement_siem_id, replacement_space = _parse_scope_pair(replacement_scope)
+    replacement_siem_id = replacement_siem_id or str(siem_id or "").strip()
+    replacement_space = replacement_space if replacement_scope else ""
+    if not siem_id or not replacement_id or not replacement_siem_id or not replacement_space:
+        return HTMLResponse('<div class="empty-state-text">Replacement rule ID, SIEM, and space are required.</div>', status_code=400)
+    logical_id = db.merge_logical_rule_identity(
+        rule_id, replacement_id, siem_id, space,
+        replacement_siem_id, replacement_space, user.username,
+    )
+    if not logical_id:
+        return HTMLResponse('<div class="empty-state-text">Both rules must exist in their selected SIEM and space.</div>', status_code=400)
+    db.record_rule_history(
+        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
+        action="merged", actor_user_id=user.id, actor_name=user.username,
+        detail={"message": "Rules merged into one logical identity.", "replacement_rule_id": replacement_id, "replacement_siem_id": replacement_siem_id, "replacement_space": replacement_space, "logical_rule_id": logical_id},
+    )
+    return HTMLResponse(f'<div class="empty-state-text">Rules merged. Baselines now follow {replacement_id}.</div>')
 
 
 @router.post("/{rule_id}/enable", response_class=HTMLResponse)

@@ -1,6 +1,9 @@
 <!-- Rules Grid Partial -->
 
 {% from "macros/icons.html" import icon, icon_text %}
+{% set state = state | default([]) %}
+{% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) %}
+{% for s in state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (s | urlencode) %}{% endfor %}
 {% if rules and rules | length > 0 %}
 <div class="rules-grid">
     {% for rule in rules %}
@@ -12,7 +15,7 @@
     {% if page > 1 %}
     <button name="← Previous" 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page - 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
+        hx-get="/api/rules?page={{ page - 1 }}&{{ pagination_qs }}"
         hx-target="#rules-grid"
         hx-swap="innerHTML">
         ← Previous
@@ -28,7 +31,7 @@
     {% if page < total_pages %}
     <button name="Next →" 
         class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page + 1 }}&search={{ search }}&space={{ space }}&enabled={{ enabled }}&sort_by={{ sort_by }}&sort_score={{ sort_score }}&sort_criticality={{ sort_criticality }}&sort_validated={{ sort_validated }}&sort_name={{ sort_name }}"
+        hx-get="/api/rules?page={{ page + 1 }}&{{ pagination_qs }}"
         hx-target="#rules-grid"
         hx-swap="innerHTML">
         Next →

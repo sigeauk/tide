@@ -1579,6 +1579,18 @@ def create_app() -> FastAPI:
                 "space_labels": space_labels,
                 "scope_labels": scope_labels,
                 "last_sync_time": get_last_sync_time(),
+                "search": "",
+                "space": "",
+                "enabled": "",
+                "state": [],
+                "min_score": "",
+                "max_score": "",
+                "validated_from": "",
+                "validated_to": "",
+                "sort_by": "score_desc",
+                "sort_score": "desc",
+                "sort_validated": "",
+                "sort_name": "",
             }
         )
     
@@ -2491,6 +2503,17 @@ def create_app() -> FastAPI:
                 "staging_spaces": staging_spaces,
                 "production_spaces": production_spaces,
                 "last_sync_time": get_last_sync_time(),
+                "search": "",
+                "enabled": "",
+                "state": [],
+                "min_score": "",
+                "max_score": "",
+                "validated_from": "",
+                "validated_to": "",
+                "sort_by": "score_asc",
+                "sort_score": "",
+                "sort_validated": "",
+                "sort_name": "",
             }
         )
     

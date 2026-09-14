@@ -433,8 +433,53 @@ def _extract_dissect_grok_aliases(pattern: str):
     return aliases
 
 
+def strip_query_comments(query):
+    """Strip ``//`` line comments and ``/* */`` block comments from a query string.
+
+    Analysts sometimes annotate KQL/EQL/ES|QL rule queries with comments.
+    Left unstripped, the comment text gets tokenized by the field extractors
+    below and mistaken for field references, corrupting the mapping score.
+    Comment markers found inside quoted strings are left untouched.
+    """
+    if not query:
+        return query
+    out = []
+    i = 0
+    n = len(query)
+    in_quote = None
+    while i < n:
+        ch = query[i]
+        if in_quote:
+            out.append(ch)
+            if ch == '\\' and i + 1 < n:
+                out.append(query[i + 1])
+                i += 2
+                continue
+            if ch == in_quote:
+                in_quote = None
+            i += 1
+            continue
+        if ch in ('"', "'"):
+            in_quote = ch
+            out.append(ch)
+            i += 1
+            continue
+        if ch == '/' and i + 1 < n and query[i + 1] == '/':
+            while i < n and query[i] not in ('\n', '\r'):
+                i += 1
+            continue
+        if ch == '/' and i + 1 < n and query[i + 1] == '*':
+            end = query.find('*/', i + 2)
+            i = end + 2 if end != -1 else n
+            continue
+        out.append(ch)
+        i += 1
+    return ''.join(out)
+
+
 def extract_kuery_lucene(query):
     if not query: return set()
+    query = strip_query_comments(query)
     fields_colon = re.findall(r'\b([\w.\-]+)\s*:', query)
     fields_compare = re.findall(r'\b([a-zA-Z_][\w.\-]*)\s*(?:==|!=|<=|>=|<|>)\s*', query)
     keywords = {"and", "or", "not", "true", "false", "in", "by", "from", "where"}
@@ -559,6 +604,8 @@ def extract_esql(query):
     """
     if not query:
         return set()
+
+    query = strip_query_comments(query)
 
     emitted: set = set()
     referenced: set = set()
@@ -783,6 +830,7 @@ def _split_top_level_commas(text: str):
 
 def extract_eql(query):
     if not query: return set(), []
+    query = strip_query_comments(query)
     event_cats = re.findall(r'\b([a-zA-Z0-9_\-]+)\s+where\b', query, re.IGNORECASE)
     fields = re.findall(r'\b([a-zA-Z0-9_\-\.]+)\s*(?:==|!=|<=|>=|<|>|:|in\b)', query)
     func_fields = re.findall(r'\b(?:length|concat|indexOf|stringContains)\s*\(\s*([a-zA-Z0-9_\-\.]+)', query, re.IGNORECASE)
@@ -796,6 +844,7 @@ def extract_eql(query):
 
 def get_esql_index(query):
     if not query: return []
+    query = strip_query_comments(query)
     match = re.search(r'(?:^|\|\s*)\s*FROM\s+(.*?)(?=\s*\||$|\n)', query, re.IGNORECASE)
     if not match: return []
     raw_indices_str = match.group(1).strip()
@@ -1490,14 +1539,30 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
             except Exception:
                 search_time = 0
             indices = r.get('index', []) or []
+            resolved_from_data_view = False
             if not indices:
                 # Use pre-resolved data view indices (fetched in parallel above)
                 indices = dv_results.get(i, [])
+                if indices:
+                    resolved_from_data_view = True
             if language == "esql":
                 esql_indices = get_esql_index(query)
                 if esql_indices: indices = esql_indices
 
             clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
+
+            # Convert data-view-backed rules to concrete index patterns at pull
+            # time. ``data_view_id`` is a Kibana-space-scoped object — copying
+            # a rule that still carries one into another space (promotion)
+            # references a data view that doesn't exist there, and the rule
+            # fails to run. Persisting resolved ``index`` onto the raw payload
+            # here means every downstream consumer (mapping, promotion,
+            # preview) sees a portable index list instead of a dangling
+            # data_view_id.
+            if resolved_from_data_view and clean_indices:
+                r['index'] = clean_indices
+                r.pop('data_view_id', None)
+                r.pop('dataViewId', None)
 
             # Lazy Mapping: skip mapping check for rules already in DB
             rule_key = (r.get('rule_id'), r.get('space_id', 'default'))
@@ -1964,7 +2029,15 @@ def get_space_rule_ids(space, session, base_url):
             break
         page += 1
     
-    return {rule["rule_id"] for rule in all_rules}
+    # Kibana's _find response uses ``id`` for rule identity on some
+    # versions and includes ``rule_id`` on others. Accept both so a retry of
+    # an already-created target is treated as an update, not a duplicate
+    # create that blocks source deletion with HTTP 409.
+    return {
+        rule.get("rule_id") or rule.get("id")
+        for rule in all_rules
+        if rule.get("rule_id") or rule.get("id")
+    }
 
 
 def get_exception_list(list_id, source_space, session, base_url):
@@ -2237,7 +2310,8 @@ def disable_detection_rule(
 
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
                                source_kibana_url=None, source_api_key=None,
-                               target_kibana_url=None, target_api_key=None):
+                               target_kibana_url=None, target_api_key=None,
+                               delete_source=True):
     """
     Promote a rule from source space to target space, potentially across different SIEMs.
 
@@ -2259,7 +2333,11 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     tgt_base = target_kibana_url.rstrip("/")
     
     rule = rule_data.copy()
-    rule_id = rule.get("rule_id")
+    # Kibana payloads use ``id`` as the live Elastic identity. TIDE's
+    # logical/source ``rule_id`` may differ after restore or migration.
+    source_elastic_id = rule.get("id")
+    source_rule_id = rule.get("rule_id")
+    rule_id = source_rule_id or source_elastic_id
     rule_name = rule.get("name")
     
     log_info(f"Promoting rule '{rule_name}' from {source_space}@{src_base} to {target_space}@{tgt_base}")
@@ -2273,8 +2351,27 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     rule.pop("id", None)
     rule.pop("execution_summary", None)
     
-    # Get existing rule IDs in target space
+    # Get existing rule IDs in target space. Kibana versions may expose the
+    # identity as ``id`` or ``rule_id``; also resolve an exact-name match so a
+    # retry after a partially completed promotion updates the existing copy
+    # instead of creating a 409 duplicate.
     existing_ids = get_space_rule_ids(target_space, session=tgt_session, base_url=tgt_base)
+    target_existing_id = rule_id if rule_id in existing_ids else None
+    tgt_prefix = _space_api_prefix(tgt_base, target_space)
+    if target_existing_id is None:
+        find_resp = tgt_session.get(
+            f"{tgt_prefix}/api/detection_engine/rules/_find",
+            params={"search": rule_name, "per_page": 100},
+        )
+        if find_resp.status_code == 200:
+            exact = next(
+                (item for item in (find_resp.json().get("data", []) or [])
+                 if item.get("name") == rule_name),
+                None,
+            )
+            if exact:
+                target_existing_id = exact.get("rule_id") or exact.get("id")
+                existing_ids.add(target_existing_id)
     
     # Handle exception lists
     if rule.get("exceptions_list"):
@@ -2303,7 +2400,8 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
     url = f"{tgt_prefix}/api/detection_engine/rules"
     
-    if rule_id in existing_ids:
+    if target_existing_id:
+        rule["rule_id"] = target_existing_id
         response = tgt_session.put(url, json=rule)
         action = "Updated"
     else:
@@ -2315,12 +2413,41 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
         log_error(error_msg)
         return False, error_msg
     
-    log_info(f"{action} rule '{rule_name}' in {target_space}")
+    try:
+        response_rule = response.json() or {}
+    except Exception:
+        response_rule = {}
+    target_rule_id = response_rule.get("rule_id") or response_rule.get("id") or rule_id
+    log_info(f"{action} rule '{rule_name}' in {target_space} as {target_rule_id}")
+
+    # Copy-only promotion is non-destructive by contract. Kibana can take a
+    # moment to expose a newly-created rule through its lookup endpoint, but
+    # the successful create response is sufficient to retain the source and
+    # let the next tenant sync reconcile the destination copy.
+    if not delete_source:
+        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_rule_id
     
     # ── Verify the rule actually exists in the target before deleting from source ──
     verify_prefix = _space_api_prefix(tgt_base, target_space)
-    verify_url = f"{verify_prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    verify_url = f"{verify_prefix}/api/detection_engine/rules?rule_id={target_rule_id}"
     verify_resp = tgt_session.get(verify_url)
+    if verify_resp.status_code != 200:
+        # Kibana versions differ on the single-rule GET endpoint after a
+        # cross-space create. Use _find as the authoritative confirmation,
+        # matching the exact rule name and accepting either returned ID key.
+        find_resp = tgt_session.get(
+            f"{verify_prefix}/api/detection_engine/rules/_find",
+            params={"search": rule_name, "per_page": 100},
+        )
+        if find_resp.status_code == 200:
+            candidates = find_resp.json().get("data", []) or []
+            match = next(
+                (item for item in candidates if item.get("name") == rule_name),
+                None,
+            )
+            if match and (match.get("rule_id") or match.get("id")):
+                target_rule_id = match.get("rule_id") or match.get("id")
+                verify_resp = type("Verification", (), {"status_code": 200})()
     if verify_resp.status_code != 200:
         error_msg = (
             f"Rule appeared to be {action.lower()} in {target_space} but verification "
@@ -2331,13 +2458,15 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     
     # ── DELETE from source ──
     src_prefix = _space_api_prefix(src_base, source_space)
-    delete_url = f"{src_prefix}/api/detection_engine/rules?rule_id={rule_id}"
+    source_query_key = "rule_id" if source_rule_id else "id"
+    source_query_value = source_rule_id or source_elastic_id
+    delete_url = f"{src_prefix}/api/detection_engine/rules?{source_query_key}={source_query_value}"
     delete_response = src_session.delete(delete_url)
     
     if delete_response.status_code not in (200, 204):
         warning_msg = f"Rule promoted but failed to delete from {source_space}: {delete_response.status_code}"
         log_error(warning_msg)
-        return True, f"{action} in {target_space}, but failed to remove from {source_space}"
+        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_rule_id
     
     log_info(f"Deleted rule '{rule_name}' from {source_space}")
-    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}"
+    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_rule_id

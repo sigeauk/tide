@@ -265,6 +265,28 @@ console.debug('TIDE app.js loading...');
     // Expose TIDE namespace for debugging
     window.TIDE = TIDE;
 
+    /**
+     * Toggle a "[name]-filter-dropdown" style panel (Rule Health / Promotion
+     * filter bar). Flips it to right-anchored when it would otherwise
+     * overflow the right edge of the viewport, since these panels sit in a
+     * flex-wrapped bar and can land anywhere left-to-right on the page.
+     */
+    window.tideToggleFilterDropdown = function(id) {
+        var dd = document.getElementById(id);
+        if (!dd) return;
+        var opening = dd.style.display === 'none' || !dd.style.display;
+        dd.style.display = opening ? 'block' : 'none';
+        dd.style.left = '';
+        dd.style.right = '';
+        if (opening) {
+            var rect = dd.getBoundingClientRect();
+            if (rect.right > window.innerWidth) {
+                dd.style.left = 'auto';
+                dd.style.right = '0';
+            }
+        }
+    };
+
     // ========================================
     // PAGE INITIALIZATION FUNCTIONS
     // ========================================

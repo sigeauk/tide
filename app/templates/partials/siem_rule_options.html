@@ -13,7 +13,7 @@
     <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;background:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted);"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.name | e }}')">
+            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}')">
         <div style="flex:1;min-width:0;">
             <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
                 {{ rule.name }}
@@ -52,7 +52,7 @@
     <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;background:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted);"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.name | e }}')">
+            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}')">
         <div style="flex:1;min-width:0;">
             <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
                 {{ rule.name }}

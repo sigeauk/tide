@@ -7,6 +7,7 @@ SIEM configuration via ``client_siem_map.environment_role``, not hardcoded.
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
+import json
 from typing import Optional, List
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
@@ -18,6 +19,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/promotion", tags=["promotion"])
 
+_VOLATILE_DIFF_KEYS = {
+    "execution_summary", "last_execution", "last_execution_at", "search_time",
+    "updated_at", "created_at", "last_updated", "revision", "revision_id",
+}
+
+
+def _diff_rule_payloads(source: dict, target: dict) -> list[dict]:
+    def clean(value):
+        if isinstance(value, dict):
+            return {
+                key: clean(item) for key, item in value.items()
+                if key not in _VOLATILE_DIFF_KEYS
+            }
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        return value
+
+    left = clean(source or {})
+    right = clean(target or {})
+    fields = sorted(set(left) | set(right))
+    return [
+        {"field": field, "source": left.get(field), "production": right.get(field)}
+        for field in fields if left.get(field) != right.get(field)
+    ]
+
 
 @router.get("", response_class=HTMLResponse)
 def list_staging_rules(
@@ -27,18 +53,40 @@ def list_staging_rules(
     client_id: ActiveClient,
     search: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
+    state: list[str] = Query([]),
+    min_score: Optional[str] = Query(None),
+    max_score: Optional[str] = Query(None),
+    validated_from: Optional[str] = Query(None),
+    validated_to: Optional[str] = Query(None),
     sort_by: str = Query("score_asc"),
+    sort_score: str = Query(""),
+    sort_validated: str = Query(""),
+    sort_name: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
 ):
     """List detection rules from the client's staging environment-role spaces."""
+    from app.api.rules import _parse_date_bound
+
     staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
+    validated_from_dt = _parse_date_bound(validated_from, end_of_day=False)
+    validated_to_dt = _parse_date_bound(validated_to, end_of_day=True)
+    min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
+    max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
 
     filters = RuleFilters(
         search=search if search else None,
         space=None,
         enabled=None if not enabled else (enabled.lower() == 'true'),
+        state=[s for s in state if s],
+        min_score=min_score_int,
+        max_score=max_score_int,
+        validated_from=validated_from_dt,
+        validated_to=validated_to_dt,
         sort_by=sort_by,
+        sort_score=sort_score,
+        sort_validated=sort_validated,
+        sort_name=sort_name,
         page=page,
         page_size=page_size,
         # Composite (siem_id, space) pairs — a space-only allow-list would
@@ -47,12 +95,27 @@ def list_staging_rules(
         allowed_scopes=staging_scopes if staging_scopes else [],
     )
     
-    rules, total, last_sync = db.get_rules(filters=filters)
+    rules, total, last_sync = db.get_rules(filters=filters, client_id=client_id)
     total_pages = max(1, (total + page_size - 1) // page_size)
+    production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
+    lifecycle_states = {
+        f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
+            rule.rule_id, staging_scopes, production_scopes
+        )
+        for rule in rules
+    }
     
     logger.info(f"Fetched {len(rules)} staging rules (total: {total}, page: {page}/{total_pages})")
     
     templates = request.app.state.templates
+    delete_source_default = bool(
+        (db.get_client(client_id) or {}).get("delete_source_after_promotion", True)
+    )
+    logger.info(
+        "Promotion source-delete default client_id=%s value=%s",
+        client_id,
+        delete_source_default,
+    )
     context = {
         "rules": rules,
         "total": total,
@@ -61,7 +124,17 @@ def list_staging_rules(
         "total_pages": total_pages,
         "search": search or "",
         "enabled": enabled or "",
+        "state": [s for s in state if s],
+        "min_score": min_score if min_score is not None else "",
+        "max_score": max_score if max_score is not None else "",
+        "validated_from": validated_from or "",
+        "validated_to": validated_to or "",
         "sort_by": sort_by,
+        "sort_score": sort_score,
+        "sort_validated": sort_validated,
+        "sort_name": sort_name,
+        "lifecycle_states": lifecycle_states,
+        "delete_source_default": delete_source_default,
     }
     return templates.TemplateResponse(request, "partials/promotion_grid.html", context)
 
@@ -153,6 +226,77 @@ def get_promotion_rule_detail(
     )
 
 
+@router.get("/{rule_id}/diff", response_class=HTMLResponse)
+def get_promotion_rule_diff(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: CurrentUser,
+    client_id: ActiveClient,
+    siem_id: Optional[str] = Query(None),
+):
+    migration = db.get_rule_migration_for_rule(rule_id)
+    if not migration:
+        return HTMLResponse('<div class="empty-state-text">No migrated counterpart is recorded.</div>', status_code=404)
+    source = db.get_rule_by_id(
+        migration["source_rule_id"], migration["source_space"],
+        siem_id=migration["source_siem_id"], client_id=client_id,
+    )
+    target = db.get_rule_by_id(
+        migration["target_rule_id"], migration["target_space"],
+        siem_id=migration["target_siem_id"], client_id=client_id,
+    )
+    diffs = _diff_rule_payloads(
+        getattr(source, "raw_data", None) if source else {},
+        getattr(target, "raw_data", None) if target else {},
+    )
+    templates = request.app.state.templates
+    return templates.TemplateResponse(
+        request,
+        "components/rule_migration_diff.html",
+        {"migration": migration, "source": source, "target": target, "diffs": diffs},
+    )
+
+
+@router.post("/{rule_id}/master", response_class=HTMLResponse)
+async def set_promotion_master(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+):
+    form = await request.form()
+    side = str(form.get("master") or "production").lower()
+    migration = db.get_rule_migration_for_rule(rule_id)
+    if not migration or side not in {"staging", "production"}:
+        return HTMLResponse('<div class="empty-state-text">Migration or master selection is invalid.</div>', status_code=400)
+    if side == "staging":
+        master_id = migration["source_rule_id"]
+        master_siem = migration["source_siem_id"]
+        master_space = migration["source_space"]
+        old_id = migration["target_rule_id"]
+    else:
+        master_id = migration["target_rule_id"]
+        master_siem = migration["target_siem_id"]
+        master_space = migration["target_space"]
+        old_id = migration["source_rule_id"]
+    db.remap_rule_references(
+        old_id, master_id, client_id,
+        migration["source_siem_id"] if side == "production" else migration["target_siem_id"],
+        migration["source_space"] if side == "production" else migration["target_space"],
+        master_siem, master_space,
+    )
+    db.set_rule_migration_master(migration["id"], master_id, master_siem, master_space)
+    db.record_rule_history(
+        rule_id=master_id, siem_id=master_siem, space=master_space,
+        client_id=client_id, action="master_selected", actor_user_id=user.id,
+        actor_name=user.username,
+        detail={"migration_id": migration["id"], "master": side, "previous_master": migration["master_rule_id"]},
+    )
+    return HTMLResponse('<div class="empty-state-text">Master rule updated and baseline references re-linked.</div>')
+
+
 @router.post("/{rule_id}/promote", response_class=HTMLResponse)
 async def promote_rule(
     request: Request,
@@ -168,6 +312,24 @@ async def promote_rule(
     """
     import asyncio
     from app.elastic_helper import promote_rule_to_production
+    form = await request.form()
+    keep_source = str(form.get("keep_source") or "").lower() in {"1", "true", "on", "yes"}
+    client = db.get_client(client_id) or {}
+    explicit_delete = form.get("delete_source")
+    if explicit_delete is not None:
+        delete_source = str(explicit_delete).lower() in {"1", "true", "on", "yes"}
+    else:
+        delete_source = bool(client.get("delete_source_after_promotion", True)) and not keep_source
+    logger.info(
+        "Promotion decision client_id=%s rule_id=%s explicit_delete=%r "
+        "client_default=%r keep_source=%r delete_source=%r",
+        client_id,
+        rule_id,
+        explicit_delete,
+        client.get("delete_source_after_promotion", True),
+        keep_source,
+        delete_source,
+    )
     
     staging_siems = db.get_client_siems(client_id, environment_role="staging")
     production_siems = db.get_client_siems(client_id, environment_role="production")
@@ -264,7 +426,7 @@ async def promote_rule(
         _src_key = source_siem.get("api_token_enc")
         _tgt_url = target_siem.get("kibana_url")
         _tgt_key = target_siem.get("api_token_enc")
-        success, message = await loop.run_in_executor(
+        promotion_result = await loop.run_in_executor(
             None,
             lambda: promote_rule_to_production(
                 rule_data=rule.raw_data,
@@ -274,8 +436,11 @@ async def promote_rule(
                 source_api_key=_src_key,
                 target_kibana_url=_tgt_url,
                 target_api_key=_tgt_key,
+                delete_source=delete_source,
             )
         )
+        success, message = promotion_result[:2]
+        target_rule_id = promotion_result[2] if len(promotion_result) > 2 else rule_id
         
         if success:
             # Save validation record
@@ -288,9 +453,26 @@ async def promote_rule(
             # the stale row from source_siem and add the fresh one under
             # target_siem \u2014 the optimistic local move is still useful for
             # single-SIEM deployments (source==target) which is the common case.
-            db.move_rule_space(
-                rule_id, source_space, target_space,
-                siem_id=source_siem.get("id"),
+            db.set_rule_deprecated(rule_id, source_siem.get("id"), source_space, delete_source)
+            db.remap_rule_references(
+                rule_id,
+                target_rule_id,
+                client_id,
+                source_siem.get("id"),
+                source_space,
+                target_siem.get("id"),
+                target_space,
+            )
+            db.record_rule_migration(
+                source_rule_id=rule_id,
+                source_siem_id=source_siem.get("id"),
+                source_space=source_space,
+                target_rule_id=target_rule_id,
+                target_siem_id=target_siem.get("id"),
+                target_space=target_space,
+                source_retained=not delete_source,
+                actor_user_id=user.id,
+                actor_name=username,
             )
             
             logger.info(f"Promoted rule '{rule.name}' from {source_space} to {target_space} by {username}")
@@ -312,6 +494,7 @@ async def promote_rule(
             response = HTMLResponse(
                 f'<div class="toast toast-success" onclick="this.remove()">' 
                 f'Successfully promoted "{rule.name}" to production environment'
+                f' as {target_rule_id}'
                 f'</div>'
             )
             response.headers["HX-Trigger"] = "refreshPromotion"

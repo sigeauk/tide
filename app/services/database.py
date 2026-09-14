@@ -91,7 +91,7 @@ def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
 # Schema version for migrations
-SCHEMA_VERSION = 59
+SCHEMA_VERSION = 61
 
 
 def _scope_predicate(
@@ -2840,6 +2840,31 @@ class DatabaseService:
                 "Migration 59: seeded explicit MITRE page permissions in per-client role templates."
             )
 
+        # Migration 60: tenant detection-rule lifecycle metadata. Tenant
+        # files are repaired lazily by sync schema bootstrap because rules
+        # are stored per tenant, not in the shared database.
+        if current_version < 60:
+            self._set_schema_version(conn, 60)
+            logger.info(
+                "Migration 60: tenant detection-rule lifecycle columns are "
+                "managed by the per-tenant schema repair."
+            )
+
+        if current_version < 61:
+            conn.execute(
+                "ALTER TABLE clients ADD COLUMN IF NOT EXISTS "
+                "delete_source_after_promotion BOOLEAN DEFAULT true"
+            )
+            conn.execute(
+                "UPDATE clients SET delete_source_after_promotion = true "
+                "WHERE delete_source_after_promotion IS NULL"
+            )
+            self._set_schema_version(conn, 61)
+            logger.info(
+                "Migration 61: added the client default for deleting source rules after promotion."
+            )
+            conn.execute("FORCE CHECKPOINT")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     def _validate_legacy_tables(self, conn):
@@ -3495,10 +3520,11 @@ class DatabaseService:
             # Kibana space name (AGENTS.md \u00a78.2 g4 / \u00a78.3).
             if filters.allowed_scopes is not None:
                 if not filters.allowed_scopes:
-                    return [], 0, "Never"
-                frag, scope_params = _scope_predicate(filters.allowed_scopes)
-                query += f" AND {frag}"
-                params.extend(scope_params)
+                    query += " AND COALESCE(deprecated, false) = true"
+                else:
+                    frag, scope_params = _scope_predicate(filters.allowed_scopes)
+                    query += f" AND ({frag} OR COALESCE(deprecated, false) = true)"
+                    params.extend(scope_params)
             
             # Apply filters
             if filters.space:
@@ -3538,11 +3564,13 @@ class DatabaseService:
 
             # Build effective sort specification from independent sort selectors
             # and fall back to legacy sort_by when no independent sort is set.
+            # Only ONE selector should ever be non-empty at a time — the UI
+            # clears sibling sort selects whenever the operator picks a new
+            # one, so "last selected wins" instead of the old behaviour where
+            # every active selector stacked together in a fixed field order.
             sort_spec = []
             if (filters.sort_score or "") in ("asc", "desc"):
                 sort_spec.append(("score", filters.sort_score))
-            if (filters.sort_criticality or "") in ("asc", "desc"):
-                sort_spec.append(("criticality", filters.sort_criticality))
             if (filters.sort_validated or "") in ("asc", "desc"):
                 sort_spec.append(("validated", filters.sort_validated))
             if (filters.sort_name or "") in ("asc", "desc"):
@@ -3552,8 +3580,6 @@ class DatabaseService:
                 legacy_map = {
                     "score_asc": [("score", "asc")],
                     "score_desc": [("score", "desc")],
-                    "criticality_desc": [("criticality", "desc")],
-                    "criticality_asc": [("criticality", "asc")],
                     "validated_desc": [("validated", "desc")],
                     "validated_asc": [("validated", "asc")],
                     "name_asc": [("name", "asc")],
@@ -3563,6 +3589,17 @@ class DatabaseService:
             
             # Check if sorting by validation date (Python-side sort needed)
             is_validation_sort = any(field == "validated" for field, _ in sort_spec)
+
+            # ``state`` (production/staging/migrated/deprecated) and the
+            # validated-timestamp range are not plain DB columns — state is
+            # derived from rule_migrations/logical_rule_identities and the
+            # validated date comes from the JSON validation file — so both
+            # require a Python-side pass after row hydration, same as the
+            # validation-date sort above.
+            needs_state_filter = bool(filters.state)
+            needs_validated_range = filters.validated_from is not None or filters.validated_to is not None
+            needs_post_filter = needs_state_filter or needs_validated_range
+            fetch_all = is_validation_sort or needs_post_filter
             
             # Apply sorting (DB-side for DB columns)
             # Use COALESCE to eliminate NULL-handling edge cases across DuckDB versions
@@ -3572,20 +3609,14 @@ class DatabaseService:
                     dir_sql = "DESC" if direction == "desc" else "ASC"
                     if field == "score":
                         order_parts.append(f"COALESCE(score, 0) {dir_sql}")
-                    elif field == "criticality":
-                        order_parts.append(
-                            "CASE LOWER(COALESCE(severity, 'low')) "
-                            "WHEN 'critical' THEN 4 WHEN 'high' THEN 3 WHEN 'medium' THEN 2 ELSE 1 END "
-                            f"{dir_sql}"
-                        )
                     elif field == "name":
                         order_parts.append(f"COALESCE(name, '') {dir_sql}")
                 if not any(field == "name" for field, _ in sort_spec):
                     order_parts.append("COALESCE(name, '') ASC")
                 query += f" ORDER BY {', '.join(order_parts)}"
             
-            if is_validation_sort:
-                # Fetch ALL matching rows for Python-side sort, then paginate
+            if fetch_all:
+                # Fetch ALL matching rows for Python-side sort/filter, then paginate
                 df = conn.execute(query, params).df()
             else:
                 # Pagination (DB-side)
@@ -3616,23 +3647,36 @@ class DatabaseService:
                 rule_id = row.get('rule_id', '?')
                 space = row.get('space', '?')
                 logger.warning(f"Skipping rule {rule_id} (space={space}): {e}")
+
+        # Post-filter by state and/or validated-date range (see fetch_all above).
+        if needs_post_filter:
+            if needs_validated_range:
+                lo = filters.validated_from
+                hi = filters.validated_to
+                rules = [
+                    r for r in rules
+                    if r.validation_date
+                    and (lo is None or r.validation_date >= lo)
+                    and (hi is None or r.validation_date <= hi)
+                ]
+            if needs_state_filter:
+                wanted_states = {s.strip().lower() for s in filters.state if s and s.strip()}
+                staging_scopes = self.get_client_siem_scopes(client_id, environment_role="staging") if client_id else []
+                production_scopes = self.get_client_siem_scopes(client_id, environment_role="production") if client_id else []
+                rules = [
+                    r for r in rules
+                    if self.get_rule_lifecycle_state(r.rule_id, staging_scopes, production_scopes).lower() in wanted_states
+                ]
+            total = len(rules)
         
         # Python-side sort for any order involving validation date.
-        if is_validation_sort:
-            severity_rank = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-
-            # Apply stable sorts from lowest priority to highest priority.
+        if fetch_all:
             for field, direction in reversed(sort_spec):
                 reverse = direction == "desc"
                 if field == "validated":
                     rules.sort(key=lambda r: r.validation_date or datetime.min, reverse=reverse)
                 elif field == "score":
                     rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
-                elif field == "criticality":
-                    rules.sort(
-                        key=lambda r: severity_rank.get(str(getattr(r, "severity", "low") or "low").lower(), 1),
-                        reverse=reverse,
-                    )
                 elif field == "name":
                     rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower(), reverse=reverse)
 
@@ -3779,6 +3823,461 @@ class DatabaseService:
                 )
 
         return None
+
+    def set_rule_deprecated(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        deprecated: bool,
+    ) -> bool:
+        """Archive or restore one tenant rule without touching Elastic."""
+        with self.get_connection() as conn:
+            updated = conn.execute(
+                "UPDATE detection_rules SET deprecated = ? "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
+                [deprecated, rule_id, siem_id, space],
+            ).fetchone()
+        return updated is not None
+
+    def update_cached_rule(
+        self,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        payload: Dict[str, Any],
+    ) -> bool:
+        """Update a TIDE-only rule cache row without contacting Elastic."""
+        raw_json = json.dumps(payload, default=str)
+        name = payload.get("name")
+        severity = payload.get("severity")
+        enabled = payload.get("enabled")
+        mitre_ids = payload.get("mitre_ids") or []
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "UPDATE detection_rules SET name = COALESCE(?, name), "
+                "severity = COALESCE(?, severity), enabled = COALESCE(?, enabled), "
+                "mitre_ids = ?, raw_data = ?, last_updated = now() "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
+                [name, severity, enabled, mitre_ids, raw_json, rule_id, siem_id, space],
+            ).fetchone()
+        return row is not None
+
+    def delete_rule(self, rule_id: str, siem_id: str, space: str) -> bool:
+        """Permanently delete one rule from TIDE only."""
+        with self.get_connection() as conn:
+            deleted = conn.execute(
+                "DELETE FROM detection_rules "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
+                [rule_id, siem_id, space],
+            ).fetchone()
+        return deleted is not None
+
+    def replace_rule_id(
+        self,
+        old_rule_id: str,
+        new_rule_id: str,
+        siem_id: str,
+        space: str,
+    ) -> bool:
+        """Replace a cached rule ID while retaining the original source ID."""
+        if not old_rule_id or not new_rule_id or old_rule_id == new_rule_id:
+            return True
+        with self.get_connection() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM detection_rules WHERE rule_id = ? "
+                "AND siem_id = ? AND space = ? LIMIT 1",
+                [new_rule_id, siem_id, space],
+            ).fetchone()
+            if existing:
+                conn.execute(
+                    "DELETE FROM detection_rules WHERE rule_id = ? "
+                    "AND siem_id = ? AND space = ?",
+                    [old_rule_id, siem_id, space],
+                )
+                return True
+            updated = conn.execute(
+                "UPDATE detection_rules SET rule_id = ?, "
+                "source_rule_id = COALESCE(source_rule_id, ?) "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
+                [new_rule_id, old_rule_id, old_rule_id, siem_id, space],
+            ).fetchone()
+        return updated is not None
+
+    def remap_rule_references(
+        self,
+        old_rule_id: str,
+        new_rule_id: str,
+        client_id: str,
+        old_siem_id: str,
+        old_space: str,
+        new_siem_id: str,
+        new_space: str,
+    ) -> int:
+        """Move baseline references to a replacement rule and retain the old row."""
+        if not old_rule_id or not new_rule_id or old_rule_id == new_rule_id:
+            return 0
+        with self.get_connection() as conn:
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                old_exists = conn.execute(
+                    "SELECT 1 FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                    [old_rule_id, old_siem_id, old_space],
+                ).fetchone()
+                if not old_exists:
+                    conn.execute("ROLLBACK")
+                    return 0
+                changed = conn.execute(
+                    "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? RETURNING id",
+                    [new_rule_id, old_rule_id],
+                ).fetchall()
+                conn.execute(
+                    "UPDATE detection_rules SET deprecated = true "
+                    "WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                    [old_rule_id, old_siem_id, old_space],
+                )
+                conn.execute("COMMIT")
+                return len(changed)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    def ensure_logical_rule_identity(
+        self,
+        canonical_rule_id: str,
+        rule_id: str,
+        siem_id: str,
+        space: str,
+        master: bool = False,
+    ) -> str:
+        """Create or extend a stable TIDE logical rule identity."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM logical_rule_identities WHERE canonical_rule_id = ? "
+                "ORDER BY created_at LIMIT 1",
+                [canonical_rule_id],
+            ).fetchone()
+            if row:
+                logical_id = row[0]
+            else:
+                logical_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO logical_rule_identities (id, canonical_rule_id) VALUES (?, ?)",
+                    [logical_id, canonical_rule_id],
+                )
+            conn.execute(
+                "INSERT INTO logical_rule_members "
+                "(logical_rule_id, rule_id, siem_id, space) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT DO NOTHING",
+                [logical_id, rule_id, siem_id, space],
+            )
+            if master:
+                conn.execute(
+                    "UPDATE logical_rule_identities SET master_rule_id = ?, "
+                    "master_siem_id = ?, master_space = ?, state = 'active', "
+                    "updated_at = now() WHERE id = ?",
+                    [rule_id, siem_id, space, logical_id],
+                )
+        return logical_id
+
+    def merge_logical_rule_identity(
+        self,
+        source_rule_id: str,
+        target_rule_id: str,
+        source_siem_id: str,
+        source_space: str,
+        target_siem_id: str,
+        target_space: str,
+        actor_name: str,
+    ) -> Optional[str]:
+        """Merge two rule IDs into one logical identity and move baseline links."""
+        with self.get_connection() as conn:
+            source = conn.execute(
+                "SELECT logical_rule_id FROM logical_rule_members "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? LIMIT 1",
+                [source_rule_id, source_siem_id, source_space],
+            ).fetchone()
+            target = conn.execute(
+                "SELECT logical_rule_id FROM logical_rule_members "
+                "WHERE rule_id = ? AND siem_id = ? AND space = ? LIMIT 1",
+                [target_rule_id, target_siem_id, target_space],
+            ).fetchone()
+            if not source or not target:
+                return None
+            logical_id = (target or source or [None])[0]
+            if not logical_id:
+                logical_id = str(uuid.uuid4())
+                conn.execute(
+                    "INSERT INTO logical_rule_identities (id, canonical_rule_id) VALUES (?, ?)",
+                    [logical_id, source_rule_id],
+                )
+            conn.execute(
+                "INSERT INTO logical_rule_members "
+                "(logical_rule_id, rule_id, siem_id, space, relation) VALUES (?, ?, ?, ?, 'merged') "
+                "ON CONFLICT DO NOTHING",
+                [logical_id, source_rule_id, source_siem_id, source_space],
+            )
+            conn.execute(
+                "INSERT INTO logical_rule_members "
+                "(logical_rule_id, rule_id, siem_id, space, relation) VALUES (?, ?, ?, ?, 'merged') "
+                "ON CONFLICT DO NOTHING",
+                [logical_id, target_rule_id, target_siem_id, target_space],
+            )
+            conn.execute(
+                "UPDATE step_detections SET rule_ref = ?, logical_rule_id = ? "
+                "WHERE rule_ref = ? OR logical_rule_id IN (?, ?)",
+                [target_rule_id, logical_id, source_rule_id, logical_id, logical_id],
+            )
+            conn.execute(
+                "UPDATE logical_rule_identities SET master_rule_id = ?, "
+                "master_siem_id = ?, master_space = ?, state = 'active', "
+                "updated_at = now() WHERE id = ?",
+                [target_rule_id, target_siem_id, target_space, logical_id],
+            )
+            return logical_id
+
+    def normalize_baseline_rule_refs(self, client_id: Optional[str] = None) -> Dict[str, int]:
+        """Resolve unique SIEM rule-name references to authoritative rule IDs.
+
+        Sigma references are intentionally left unchanged because Sigma IDs are
+        already authoritative and are not rows in ``detection_rules``.
+        Ambiguous names remain untouched for operator review.
+        """
+        changed = 0
+        ambiguous = 0
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, rule_ref, source FROM step_detections "
+                "WHERE COALESCE(source, 'manual') != 'sigma' "
+                "AND rule_ref IS NOT NULL AND trim(rule_ref) != ''"
+            ).fetchall()
+            for detection_id, rule_ref, _source in rows:
+                matches = conn.execute(
+                    "SELECT DISTINCT rule_id FROM detection_rules WHERE name = ?",
+                    [rule_ref],
+                ).fetchall()
+                ids = {row[0] for row in matches if row[0]}
+                if len(ids) == 1 and rule_ref not in ids:
+                    conn.execute(
+                        "UPDATE step_detections SET rule_ref = ? WHERE id = ?",
+                        [next(iter(ids)), detection_id],
+                    )
+                    changed += 1
+                elif len(ids) > 1:
+                    ambiguous += 1
+        return {"changed": changed, "ambiguous": ambiguous}
+
+    def record_rule_migration(
+        self,
+        source_rule_id: str,
+        source_siem_id: str,
+        source_space: str,
+        target_rule_id: str,
+        target_siem_id: str,
+        target_space: str,
+        source_retained: bool,
+        actor_user_id: Optional[str],
+        actor_name: str,
+    ) -> str:
+        """Record an old-to-new SIEM identity mapping and current master."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                """INSERT INTO rule_migrations (
+                    source_rule_id, source_siem_id, source_space,
+                    target_rule_id, target_siem_id, target_space,
+                    master_rule_id, master_siem_id, master_space,
+                    source_retained, actor_user_id, actor_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+                [
+                    source_rule_id, source_siem_id, source_space,
+                    target_rule_id, target_siem_id, target_space,
+                    target_rule_id, target_siem_id, target_space,
+                    source_retained, actor_user_id, actor_name,
+                ],
+            ).fetchone()
+        return row[0]
+
+    def get_rule_lifecycle_state(
+        self,
+        rule_id: str,
+        staging_scopes: List[Tuple[str, str]],
+        production_scopes: List[Tuple[str, str]],
+    ) -> str:
+        """Resolve the TIDE migration state from current scoped rule presence."""
+        with self.get_connection() as conn:
+            migrations = conn.execute(
+                "SELECT source_rule_id, source_siem_id, source_space, "
+                "target_rule_id, target_siem_id, target_space "
+                "FROM rule_migrations WHERE source_rule_id = ? OR target_rule_id = ? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                [rule_id, rule_id],
+            ).fetchall()
+            migration = migrations[0] if migrations else None
+            logical = None
+            if not migration:
+                logical_row = conn.execute(
+                    "SELECT l.master_rule_id, l.master_siem_id, l.master_space "
+                    "FROM logical_rule_identities l "
+                    "JOIN logical_rule_members m ON m.logical_rule_id = l.id "
+                    "WHERE m.rule_id = ? ORDER BY l.updated_at DESC LIMIT 1",
+                    [rule_id],
+                ).fetchone()
+                logical = logical_row
+
+            def present(scopes: List[Tuple[str, str]], candidate_id: str) -> bool:
+                if not scopes or not candidate_id:
+                    return False
+                predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
+                params: List[Any] = []
+                for sid, sp in scopes:
+                    params.extend([sid, sp])
+                params.append(candidate_id)
+                return conn.execute(
+                    f"SELECT 1 FROM detection_rules WHERE ({predicate}) "
+                    "AND rule_id = ? AND COALESCE(deprecated, false) = false LIMIT 1",
+                    params,
+                ).fetchone() is not None
+
+            source_id = migration[0] if migration else rule_id
+            target_id = migration[3] if migration else (logical[0] if logical else rule_id)
+            source_present = present(staging_scopes, source_id)
+            target_present = present(production_scopes, target_id)
+            if source_present and target_present:
+                return "Migrated"
+            if target_present:
+                return "Production"
+            if source_present:
+                return "Staging"
+            return "Deprecated"
+
+    def get_rule_migration_for_rule(self, rule_id: str) -> Optional[Dict[str, Any]]:
+        """Return the latest migration record containing a rule identity."""
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM rule_migrations "
+                "WHERE source_rule_id = ? OR target_rule_id = ? "
+                "ORDER BY updated_at DESC LIMIT 1",
+                [rule_id, rule_id],
+            ).fetchone()
+            if not row:
+                return None
+            columns = [desc[0] for desc in conn.description]
+            return dict(zip(columns, row))
+
+    def get_logical_rule_identity_for_rule(
+        self, rule_id: str, siem_id: Optional[str] = None, space: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+            if "logical_rule_identities" not in tables or "logical_rule_members" not in tables:
+                return None
+            query = (
+                "SELECT l.* FROM logical_rule_identities l "
+                "JOIN logical_rule_members m ON m.logical_rule_id = l.id "
+                "WHERE m.rule_id = ?"
+            )
+            params: List[Any] = [rule_id]
+            if siem_id is not None:
+                query += " AND m.siem_id = ?"
+                params.append(siem_id)
+            if space is not None:
+                query += " AND m.space = ?"
+                params.append(space)
+            query += " ORDER BY l.updated_at DESC LIMIT 1"
+            row = conn.execute(query, params).fetchone()
+            if not row:
+                return None
+            return dict(zip([desc[0] for desc in conn.description], row))
+
+    def get_logical_rule_members(self, logical_id: str) -> List[Dict[str, Any]]:
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT rule_id, siem_id, space, relation FROM logical_rule_members "
+                "WHERE logical_rule_id = ? ORDER BY created_at",
+                [logical_id],
+            ).fetchall()
+            return [
+                dict(zip(["rule_id", "siem_id", "space", "relation"], row))
+                for row in rows
+            ]
+
+    def backfill_unique_rule_migrations(
+        self,
+        staging_scopes: List[Tuple[str, str]],
+        production_scopes: List[Tuple[str, str]],
+        actor_name: str = "migration-backfill",
+    ) -> int:
+        """Link unambiguous same-name staging/production copies.
+
+        Names are used only to discover legacy pairs when each side has one
+        matching rule. Rule IDs remain the stored authoritative identities;
+        ambiguous names are intentionally skipped for manual mapping.
+        """
+        if not staging_scopes or not production_scopes:
+            return 0
+        with self.get_connection() as conn:
+            def rows_for(scopes):
+                predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
+                params = [value for scope in scopes for value in scope]
+                return conn.execute(
+                    f"SELECT rule_id, siem_id, space, name FROM detection_rules "
+                    f"WHERE ({predicate}) AND COALESCE(deprecated, false) = false",
+                    params,
+                ).fetchall()
+
+            staging = rows_for(staging_scopes)
+            production = rows_for(production_scopes)
+            by_name_staging: Dict[str, List[Tuple[str, str, str]]] = {}
+            by_name_production: Dict[str, List[Tuple[str, str, str]]] = {}
+            for rule_id, siem_id, space, name in staging:
+                by_name_staging.setdefault(name or "", []).append((rule_id, siem_id, space))
+            for rule_id, siem_id, space, name in production:
+                by_name_production.setdefault(name or "", []).append((rule_id, siem_id, space))
+
+            created = 0
+            for name, source_rows in by_name_staging.items():
+                target_rows = by_name_production.get(name, [])
+                if not name or len(source_rows) != 1 or len(target_rows) != 1:
+                    continue
+                source = source_rows[0]
+                target = target_rows[0]
+                exists = conn.execute(
+                    "SELECT 1 FROM rule_migrations WHERE source_rule_id = ? "
+                    "AND target_rule_id = ? LIMIT 1",
+                    [source[0], target[0]],
+                ).fetchone()
+                if exists:
+                    continue
+                conn.execute(
+                    """INSERT INTO rule_migrations (
+                        source_rule_id, source_siem_id, source_space,
+                        target_rule_id, target_siem_id, target_space,
+                        master_rule_id, master_siem_id, master_space,
+                        source_retained, actor_name
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?)""",
+                    [
+                        source[0], source[1], source[2],
+                        target[0], target[1], target[2],
+                        target[0], target[1], target[2], actor_name,
+                    ],
+                )
+                created += 1
+            return created
+
+    def set_rule_migration_master(
+        self,
+        migration_id: str,
+        master_rule_id: str,
+        master_siem_id: str,
+        master_space: str,
+    ) -> bool:
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "UPDATE rule_migrations SET master_rule_id = ?, master_siem_id = ?, "
+                "master_space = ?, updated_at = now() WHERE id = ? RETURNING id",
+                [master_rule_id, master_siem_id, master_space, migration_id],
+            ).fetchone()
+        return row is not None
     
     @staticmethod
     def _safe_int(val, default=0):
@@ -3928,6 +4427,8 @@ class DatabaseService:
             mitre_ids=mitre_ids,
             last_updated=self._safe_dt(row.get('last_updated')),
             raw_data=raw_data,
+            deprecated=bool(row.get('deprecated') or False),
+            source_rule_id=_ss(row.get('source_rule_id')) or None,
             validation_date=validation_date,
             validated_by=validated_by,
             validation_status=validation_status,
@@ -7583,6 +8084,22 @@ class DatabaseService:
             return 0
         
         df = pd.DataFrame(audit_list)
+
+        # Kibana creates a new ID when a rule is copied across SIEMs or
+        # spaces. The fetched payload's ``id`` is authoritative for that
+        # destination row; the outer record can still carry the source ID
+        # from promotion metadata. Persist the actual Elastic identity.
+        def normalize_rule_id(row):
+            raw = row.get("raw_data")
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except Exception:
+                    raw = {}
+            return (raw or {}).get("id") or row.get("rule_id")
+
+        if "rule_id" in df.columns:
+            df["rule_id"] = df.apply(normalize_rule_id, axis=1)
         
         df['enabled'] = df['enabled'].apply(lambda x: 1 if x else 0)
         
@@ -7652,7 +8169,7 @@ class DatabaseService:
             'score_mapping', 'score_field_type', 'score_search_time', 
             'score_language', 'score_note', 'score_override', 'score_tactics',
             'score_techniques', 'score_author', 'score_highlights',
-            'last_updated', 'mitre_ids', 'raw_data'
+            'last_updated', 'mitre_ids', 'raw_data', 'deprecated', 'source_rule_id'
         ]
         
         # Ensure all columns exist
@@ -7661,6 +8178,58 @@ class DatabaseService:
                 df[col] = None
         
         df_final = df[target_cols].copy()
+
+        # A cross-space Elastic create can temporarily leave the source ID in
+        # the fetched record while ``raw_data.id`` contains the generated
+        # destination ID. Repair any existing cache alias before the upsert so
+        # one real Elastic rule cannot render twice in the same SIEM/space.
+        with self.get_connection() as conn:
+            for row in df_final.to_dict(orient='records'):
+                raw = row.get('raw_data') or {}
+                if isinstance(raw, str):
+                    try:
+                        raw = json.loads(raw)
+                    except Exception:
+                        raw = {}
+                canonical_id = (raw or {}).get('id')
+                stale_id = row.get('rule_id')
+                scope_siem = row.get('siem_id')
+                scope_space = row.get('space') or 'default'
+                if not canonical_id or not stale_id or canonical_id == stale_id:
+                    continue
+                source_migration = conn.execute(
+                    "SELECT 1 FROM rule_migrations WHERE source_rule_id = ? "
+                    "AND source_siem_id = ? AND source_space = ? LIMIT 1",
+                    [stale_id, scope_siem, scope_space],
+                ).fetchone()
+                if source_migration:
+                    # The source identity is the migration key even when the
+                    # staging Elastic payload has a generated internal ID.
+                    continue
+                canonical_exists = conn.execute(
+                    "SELECT 1 FROM detection_rules WHERE rule_id = ? "
+                    "AND siem_id = ? AND space = ? LIMIT 1",
+                    [canonical_id, scope_siem, scope_space],
+                ).fetchone()
+                if canonical_exists:
+                    conn.execute(
+                        "DELETE FROM detection_rules WHERE rule_id = ? "
+                        "AND siem_id = ? AND space = ?",
+                        [stale_id, scope_siem, scope_space],
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE detection_rules SET rule_id = ? "
+                        "WHERE rule_id = ? AND siem_id = ? AND space = ? "
+                        "AND raw_data->>'id' = ?",
+                        [canonical_id, stale_id, scope_siem, scope_space, canonical_id],
+                    )
+                df_final.loc[
+                    (df_final['rule_id'] == stale_id)
+                    & (df_final['siem_id'] == scope_siem)
+                    & (df_final['space'] == scope_space),
+                    'rule_id',
+                ] = canonical_id
         
         # Check for duplicates within the incoming data. The PK is
         # (rule_id, siem_id, space) since 4.1.12 (Migration 44) — the same
@@ -7890,26 +8459,34 @@ class DatabaseService:
                         item = dict(zip(target_cols, row))
                         existing_by_key[(item.get("rule_id"), item.get("siem_id"), item.get("space"))] = item
                 
-                # Delete existing rules from synced (siem_id, space) scopes so
-                # rules removed upstream don't persist as ghosts. Scoped by
-                # siem_id since 4.0.13 — a sync of SIEM A must NEVER touch
-                # SIEM B's rows even if both share the same space name.
-                for siem_id_v, space in synced_scopes:
-                    conn.execute(
-                        "DELETE FROM detection_rules "
-                        "WHERE space = ? AND siem_id = ?",
-                        [space, siem_id_v]
-                    )
-                    logger.debug(
-                        f"Cleared rules from siem_id={siem_id_v} space='{space}'"
-                    )
-                
                 # Insert fresh rules
                 conn.register('rules_source', df_final)
                 col_list = ', '.join(target_cols)
                 conn.execute(f"""
                     INSERT INTO detection_rules ({col_list})
                     SELECT {col_list} FROM rules_source
+                    ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        severity = EXCLUDED.severity,
+                        author = EXCLUDED.author,
+                        enabled = EXCLUDED.enabled,
+                        score = EXCLUDED.score,
+                        quality_score = EXCLUDED.quality_score,
+                        meta_score = EXCLUDED.meta_score,
+                        score_mapping = EXCLUDED.score_mapping,
+                        score_field_type = EXCLUDED.score_field_type,
+                        score_search_time = EXCLUDED.score_search_time,
+                        score_language = EXCLUDED.score_language,
+                        score_note = EXCLUDED.score_note,
+                        score_override = EXCLUDED.score_override,
+                        score_tactics = EXCLUDED.score_tactics,
+                        score_techniques = EXCLUDED.score_techniques,
+                        score_author = EXCLUDED.score_author,
+                        score_highlights = EXCLUDED.score_highlights,
+                        last_updated = EXCLUDED.last_updated,
+                        mitre_ids = EXCLUDED.mitre_ids,
+                        raw_data = EXCLUDED.raw_data,
+                        deprecated = false
                 """)
                 
                 conn.execute("COMMIT")
@@ -8090,6 +8667,37 @@ class DatabaseService:
         
         return total_deleted
 
+    def deprecate_rules_for_scope(
+        self,
+        siem_id: str,
+        space: str,
+        keep_rule_ids: Optional[set] = None,
+    ) -> int:
+        """Mark rules missing from a completed Elastic scope as deprecated."""
+        if not siem_id or not space:
+            return 0
+        with self.get_connection() as conn:
+            params: List[Any] = [siem_id, space]
+            query = (
+                "UPDATE detection_rules SET deprecated = true "
+                "WHERE siem_id = ? AND space = ?"
+            )
+            if keep_rule_ids:
+                placeholders = ",".join(["?"] * len(keep_rule_ids))
+                query += f" AND rule_id NOT IN ({placeholders})"
+                params.extend(keep_rule_ids)
+            before = conn.execute(
+                query.replace("UPDATE detection_rules SET deprecated = true", "SELECT COUNT(*) FROM detection_rules"),
+                params,
+            ).fetchone()[0]
+            if before:
+                conn.execute(query, params)
+                logger.info(
+                    "Marked %d missing rule(s) deprecated for siem_id=%s space='%s'",
+                    before, siem_id, space,
+                )
+            return before
+
 
     def reconcile_rules_for_siem_space(
         self,
@@ -8097,68 +8705,43 @@ class DatabaseService:
         space: str,
         keep_rule_ids: set,
     ) -> int:
-        """Delete every detection_rules row for ``(siem_id, space)`` whose
-        ``rule_id`` is NOT in ``keep_rule_ids``.
+        """Deprecate every rule missing from a clean ``(siem_id, space)`` fetch.
 
         Used as the second half of mirror-Kibana sync: after a *complete*
-        per-space fetch (advertised total == fetched count), any DB row in
-        that (siem, space) that did not appear in the fetched set must have
-        been deleted in Kibana since the last sync, so we delete it here too.
+        per-space fetch, any DB row in that (siem, space) that did not appear
+        in the fetched set is retained for baseline traceability and marked
+        deprecated.
 
-        The caller MUST only invoke this for spaces with a clean fetch — a
-        partial fetch would produce false orphans and silently delete
-        healthy rules.
+        The caller MUST only invoke this for spaces with a clean fetch.
         """
         if not siem_id or not space:
             return 0
         with self.get_connection() as conn:
             try:
-                if not keep_rule_ids:
-                    # Empty space confirmed by Kibana — drop everything for
-                    # this (siem, space).
-                    before = conn.execute(
-                        "SELECT COUNT(*) FROM detection_rules "
-                        "WHERE siem_id = ? AND space = ?",
-                        [siem_id, space],
-                    ).fetchone()[0]
-                    if before:
-                        conn.execute(
-                            "DELETE FROM detection_rules "
-                            "WHERE siem_id = ? AND space = ?",
-                            [siem_id, space],
-                        )
-                        logger.info(
-                            f"Mirror sync: deleted {before} rules from "
-                            f"siem_id={siem_id} space='{space}' (Kibana returned 0)"
-                        )
-                        conn.execute("CHECKPOINT")
-                    return before
-
-                # DuckDB parameterised IN list.
-                placeholders = ",".join(["?"] * len(keep_rule_ids))
-                params = [siem_id, space, *keep_rule_ids]
-                orphans = conn.execute(
-                    f"SELECT rule_id FROM detection_rules "
-                    f"WHERE siem_id = ? AND space = ? "
-                    f"AND rule_id NOT IN ({placeholders})",
-                    params,
-                ).fetchall()
-                if not orphans:
-                    return 0
-                conn.execute(
-                    f"DELETE FROM detection_rules "
-                    f"WHERE siem_id = ? AND space = ? "
-                    f"AND rule_id NOT IN ({placeholders})",
-                    params,
+                params: List[Any] = [siem_id, space]
+                query = (
+                    "UPDATE detection_rules SET deprecated = true "
+                    "WHERE siem_id = ? AND space = ?"
                 )
-                logger.info(
-                    f"Mirror sync: deleted {len(orphans)} orphan rule(s) from "
-                    f"siem_id={siem_id} space='{space}' "
-                    f"(no longer in Kibana): {[o[0] for o in orphans][:5]}"
-                    f"{'...' if len(orphans) > 5 else ''}"
-                )
-                conn.execute("CHECKPOINT")
-                return len(orphans)
+                if keep_rule_ids:
+                    placeholders = ",".join(["?"] * len(keep_rule_ids))
+                    query += f" AND rule_id NOT IN ({placeholders})"
+                    params.extend(keep_rule_ids)
+                missing = conn.execute(
+                    query.replace(
+                        "UPDATE detection_rules SET deprecated = true",
+                        "SELECT COUNT(*) FROM detection_rules",
+                    ),
+                    params,
+                ).fetchone()[0]
+                if missing:
+                    conn.execute(query, params)
+                    logger.info(
+                        "Mirror sync: marked %d missing rule(s) deprecated from "
+                        "siem_id=%s space='%s'",
+                        missing, siem_id, space,
+                    )
+                return missing
             except Exception as e:
                 logger.error(
                     f"reconcile_rules_for_siem_space failed for "
@@ -8320,6 +8903,7 @@ class DatabaseService:
                 "rule_validation_medium_amber_weeks, rule_validation_medium_expired_weeks, "
                 "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
                 "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
+                "delete_source_after_promotion, "
                 "created_at, updated_at "
                 "FROM clients ORDER BY is_default DESC, name"
             ).fetchall()
@@ -8330,6 +8914,7 @@ class DatabaseService:
                     "rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks",
                     "rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks",
                     "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
+                    "delete_source_after_promotion",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -8344,6 +8929,7 @@ class DatabaseService:
                 "rule_validation_medium_amber_weeks, rule_validation_medium_expired_weeks, "
                 "rule_validation_high_amber_weeks, rule_validation_high_expired_weeks, "
                 "rule_validation_critical_amber_weeks, rule_validation_critical_expired_weeks, "
+                "delete_source_after_promotion, "
                 "created_at, updated_at "
                 "FROM clients WHERE id = ?", [client_id]
             ).fetchone()
@@ -8357,6 +8943,7 @@ class DatabaseService:
                  "rule_validation_medium_amber_weeks", "rule_validation_medium_expired_weeks",
                  "rule_validation_high_amber_weeks", "rule_validation_high_expired_weeks",
                  "rule_validation_critical_amber_weeks", "rule_validation_critical_expired_weeks",
+                 "delete_source_after_promotion",
                  "created_at", "updated_at"], row
             ))
 
@@ -8409,6 +8996,7 @@ class DatabaseService:
         allowed = {
             "name", "description",
             "rule_validation_mode",
+            "delete_source_after_promotion",
             "rule_validation_amber_weeks",
             "rule_validation_expired_weeks",
             "rule_validation_low_amber_weeks",

@@ -416,6 +416,8 @@ def _create_tenant_schema(conn):
             mitre_ids VARCHAR[],
             raw_data JSON,
             client_id VARCHAR,
+            deprecated BOOLEAN DEFAULT false,
+            source_rule_id VARCHAR,
             PRIMARY KEY (rule_id, siem_id, space)
         )
     """)
@@ -455,8 +457,51 @@ def _create_tenant_schema(conn):
             id VARCHAR PRIMARY KEY DEFAULT (uuid()),
             step_id VARCHAR NOT NULL,
             rule_ref VARCHAR DEFAULT '',
+            logical_rule_id VARCHAR,
             note VARCHAR DEFAULT '',
             source VARCHAR DEFAULT 'manual'
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_migrations (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            source_rule_id VARCHAR NOT NULL,
+            source_siem_id VARCHAR NOT NULL,
+            source_space VARCHAR NOT NULL,
+            target_rule_id VARCHAR NOT NULL,
+            target_siem_id VARCHAR NOT NULL,
+            target_space VARCHAR NOT NULL,
+            master_rule_id VARCHAR NOT NULL,
+            master_siem_id VARCHAR NOT NULL,
+            master_space VARCHAR NOT NULL,
+            source_retained BOOLEAN DEFAULT false,
+            actor_user_id VARCHAR,
+            actor_name VARCHAR,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS logical_rule_identities (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            canonical_rule_id VARCHAR NOT NULL,
+            master_rule_id VARCHAR,
+            master_siem_id VARCHAR,
+            master_space VARCHAR,
+            state VARCHAR DEFAULT 'deprecated',
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS logical_rule_members (
+            logical_rule_id VARCHAR NOT NULL,
+            rule_id VARCHAR NOT NULL,
+            siem_id VARCHAR NOT NULL,
+            space VARCHAR NOT NULL,
+            relation VARCHAR DEFAULT 'associated',
+            created_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY (logical_rule_id, rule_id, siem_id, space)
         )
     """)
     conn.execute("""
@@ -728,6 +773,52 @@ def sync_shared_data(
                                 logger.warning(
                                     f"Sync {table} into {db_filename} failed: {e}"
                                 )
+                        shared_conn.execute(f"""
+                            CREATE TABLE IF NOT EXISTS {tenant_alias}.rule_migrations (
+                                id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                                source_rule_id VARCHAR NOT NULL,
+                                source_siem_id VARCHAR NOT NULL,
+                                source_space VARCHAR NOT NULL,
+                                target_rule_id VARCHAR NOT NULL,
+                                target_siem_id VARCHAR NOT NULL,
+                                target_space VARCHAR NOT NULL,
+                                master_rule_id VARCHAR NOT NULL,
+                                master_siem_id VARCHAR NOT NULL,
+                                master_space VARCHAR NOT NULL,
+                                source_retained BOOLEAN DEFAULT false,
+                                actor_user_id VARCHAR,
+                                actor_name VARCHAR,
+                                created_at TIMESTAMP DEFAULT now(),
+                                updated_at TIMESTAMP DEFAULT now()
+                            )
+                        """)
+                        shared_conn.execute(f"""
+                            CREATE TABLE IF NOT EXISTS {tenant_alias}.logical_rule_identities (
+                                id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                                canonical_rule_id VARCHAR NOT NULL,
+                                master_rule_id VARCHAR,
+                                master_siem_id VARCHAR,
+                                master_space VARCHAR,
+                                state VARCHAR DEFAULT 'deprecated',
+                                created_at TIMESTAMP DEFAULT now(),
+                                updated_at TIMESTAMP DEFAULT now()
+                            )
+                        """)
+                        shared_conn.execute(f"""
+                            CREATE TABLE IF NOT EXISTS {tenant_alias}.logical_rule_members (
+                                logical_rule_id VARCHAR NOT NULL,
+                                rule_id VARCHAR NOT NULL,
+                                siem_id VARCHAR NOT NULL,
+                                space VARCHAR NOT NULL,
+                                relation VARCHAR DEFAULT 'associated',
+                                created_at TIMESTAMP DEFAULT now(),
+                                PRIMARY KEY (logical_rule_id, rule_id, siem_id, space)
+                            )
+                        """)
+                        shared_conn.execute(
+                            f"ALTER TABLE {tenant_alias}.step_detections "
+                            "ADD COLUMN IF NOT EXISTS logical_rule_id VARCHAR"
+                        )
                         synced += 1
                     finally:
                         shared_conn.execute(f"DETACH {tenant_alias}")

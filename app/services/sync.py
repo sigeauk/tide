@@ -39,6 +39,8 @@ _TENANT_DETECTION_RULES_COLUMNS: tuple = (
     ("mitre_ids",          "VARCHAR[]"),
     ("raw_data",           "JSON"),
     ("client_id",          "VARCHAR"),
+    ("deprecated",         "BOOLEAN"),
+    ("source_rule_id",     "VARCHAR"),
 )
 
 
@@ -153,6 +155,28 @@ def _ensure_tenant_detection_rules_schema(
         if n not in existing
     ]
     if not missing:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS rule_migrations (
+                    id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                    source_rule_id VARCHAR NOT NULL,
+                    source_siem_id VARCHAR NOT NULL,
+                    source_space VARCHAR NOT NULL,
+                    target_rule_id VARCHAR NOT NULL,
+                    target_siem_id VARCHAR NOT NULL,
+                    target_space VARCHAR NOT NULL,
+                    master_rule_id VARCHAR NOT NULL,
+                    master_siem_id VARCHAR NOT NULL,
+                    master_space VARCHAR NOT NULL,
+                    source_retained BOOLEAN DEFAULT false,
+                    actor_user_id VARCHAR,
+                    actor_name VARCHAR,
+                    created_at TIMESTAMP DEFAULT now(),
+                    updated_at TIMESTAMP DEFAULT now()
+                )
+            """)
+        except Exception:
+            logger.debug("Tenant rule_migrations table creation deferred", exc_info=True)
         return
     for name, ddl_type in missing:
         try:
@@ -166,6 +190,55 @@ def _ensure_tenant_detection_rules_schema(
                 label, name, ddl_type, exc,
             )
             raise
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS rule_migrations (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            source_rule_id VARCHAR NOT NULL,
+            source_siem_id VARCHAR NOT NULL,
+            source_space VARCHAR NOT NULL,
+            target_rule_id VARCHAR NOT NULL,
+            target_siem_id VARCHAR NOT NULL,
+            target_space VARCHAR NOT NULL,
+            master_rule_id VARCHAR NOT NULL,
+            master_siem_id VARCHAR NOT NULL,
+            master_space VARCHAR NOT NULL,
+            source_retained BOOLEAN DEFAULT false,
+            actor_user_id VARCHAR,
+            actor_name VARCHAR,
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS logical_rule_identities (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            canonical_rule_id VARCHAR NOT NULL,
+            master_rule_id VARCHAR,
+            master_siem_id VARCHAR,
+            master_space VARCHAR,
+            state VARCHAR DEFAULT 'deprecated',
+            created_at TIMESTAMP DEFAULT now(),
+            updated_at TIMESTAMP DEFAULT now()
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS logical_rule_members (
+            logical_rule_id VARCHAR NOT NULL,
+            rule_id VARCHAR NOT NULL,
+            siem_id VARCHAR NOT NULL,
+            space VARCHAR NOT NULL,
+            relation VARCHAR DEFAULT 'associated',
+            created_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY (logical_rule_id, rule_id, siem_id, space)
+        )
+    """)
+    try:
+        conn.execute(
+            f"ALTER TABLE {table_ref.replace('.detection_rules', '')}.step_detections "
+            "ADD COLUMN IF NOT EXISTS logical_rule_id VARCHAR"
+        )
+    except Exception:
+        logger.debug("step_detections logical identity column repair deferred", exc_info=True)
     # Surface stray columns as a warning \u2014 they're harmless for INSERT
     # (we name every column explicitly) but indicate schema drift the
     # operator should know about.
@@ -586,6 +659,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
             set_tenant_context(_tenant_path)
             logger.info(f"Starting Elastic sync for client_id={client_id} → {_tenant_path}")
             _t_start = _time.perf_counter()
+            try:
+                result = db.normalize_baseline_rule_refs(client_id=client_id)
+                if result.get("changed") or result.get("ambiguous"):
+                    logger.info("Baseline rule identity normalization: %s", result)
+            except Exception:
+                logger.warning("Baseline rule identity normalization failed", exc_info=True)
 
             # Lazy Mapping: get existing rule data from THIS TENANT's DB
             # so we can skip mapping for known rules.
@@ -818,6 +897,25 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                             continue
                         # Clean fetch — authoritative reconcile.
                         keep_ids = space_diag.get("rule_ids") or set()
+                        # Cross-space creates can return a source rule_id in
+                        # the fetch bookkeeping while the payload carries
+                        # Elastic's generated destination id. Reconcile on
+                        # the payload identity so the new production copy is
+                        # not immediately marked deprecated.
+                        for fetched in audit_records:
+                            fetched_space = fetched.get("space") or fetched.get("space_id") or "default"
+                            if fetched.get("siem_id") != siem_id or fetched_space != space:
+                                continue
+                            raw = fetched.get("raw_data") or {}
+                            if isinstance(raw, str):
+                                try:
+                                    import json as _json
+                                    raw = _json.loads(raw)
+                                except Exception:
+                                    raw = {}
+                            if isinstance(raw, dict) and raw.get("id"):
+                                keep_ids = set(keep_ids)
+                                keep_ids.add(raw["id"])
                         if space in synced and keep_ids:
                             removed = db.reconcile_rules_for_siem_space(
                                 siem_id=siem_id,
@@ -830,14 +928,18 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                                     f"'{space}' removed {removed} orphan(s)."
                                 )
                         else:
-                            # Confirmed empty by Kibana — drop all rows for
-                            # this (siem, space).
+                            # Confirmed empty by Kibana — retain rows for
+                            # baseline traceability and mark them deprecated.
                             logger.info(
                                 f"Mirror sync: SIEM '{siem_label}' space "
                                 f"'{space}' returned 0 rules (clean fetch); "
-                                f"clearing TIDE rows for that (siem, space)."
+                                f"marking TIDE rows deprecated for that (siem, space)."
                             )
-                            db.delete_rules_for_spaces([space], siem_id=siem_id)
+                            db.reconcile_rules_for_siem_space(
+                                siem_id=siem_id,
+                                space=space,
+                                keep_rule_ids=set(),
+                            )
 
                 # ── Orphan-mapping sweep ────────────────────────────────
                 # The mirror reconcile above only visits (siem_id, space)

@@ -3180,10 +3180,21 @@ def get_system_baselines(
         try:
             with _get_conn() as conn:
                 rrows = conn.execute(
-                    "SELECT rule_id, name, space FROM detection_rules ORDER BY name"
+                    "SELECT rule_id, name, space, raw_data FROM detection_rules ORDER BY name"
                 ).fetchall()
-            for rid, rname, rspace in rrows:
-                rule_name_lookup[rname] = {"rule_id": rid, "space": rspace or "default"}
+            for rid, rname, rspace, raw_data in rrows:
+                info = {"rule_id": rid, "name": rname or rid, "space": rspace or "default"}
+                if rname:
+                    rule_name_lookup[rname] = info
+                if rid:
+                    rule_name_lookup[rid] = info
+                try:
+                    raw = json.loads(raw_data) if isinstance(raw_data, str) and raw_data.strip() else (raw_data or {})
+                    raw_id = str(raw.get("id") or "").strip() if isinstance(raw, dict) else ""
+                    if raw_id:
+                        rule_name_lookup[raw_id] = info
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -3238,7 +3249,9 @@ def get_system_baselines(
                         continue  # sigma rules are not appliable
                     label = d.rule_ref or d.note or "Rule"
                     rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
+                    display_label = rule_info.get("name") if rule_info else label
                     entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
+                             "display_label": display_label,
                              "rule_id": rule_info["rule_id"] if rule_info else None,
                              "space": rule_info["space"] if rule_info else None}
                     if d.id in applied_step_det_ids:
@@ -3471,10 +3484,16 @@ def update_step_technique(technique_row_id: str, technique_id: str, client_id: s
 
 def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual", client_id: str = None) -> StepDetection:
     with _get_conn() as conn:
+        logical_row = conn.execute(
+            "SELECT id FROM logical_rule_identities WHERE canonical_rule_id = ? "
+            "ORDER BY created_at LIMIT 1",
+            [rule_ref],
+        ).fetchone()
+        logical_rule_id = logical_row[0] if logical_row else None
         r = conn.execute(
-            "INSERT INTO step_detections (step_id, rule_ref, note, source) VALUES (?, ?, ?, ?) "
+            "INSERT INTO step_detections (step_id, rule_ref, logical_rule_id, note, source) VALUES (?, ?, ?, ?, ?) "
             "RETURNING id, step_id, rule_ref, note, source",
-            [step_id, rule_ref, note, source],
+            [step_id, rule_ref, logical_rule_id, note, source],
         ).fetchone()
     return StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual")
 
@@ -3552,8 +3571,38 @@ def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]
     if not rows:
         return []
 
-    # Gather all detection rule refs for this step
-    det_rule_refs = {d.rule_ref.lower() for d in step.detections if d.rule_ref}
+    rule_name_lookup: Dict[str, str] = {}
+    with _get_conn() as conn:
+        try:
+            rule_rows = conn.execute(
+                "SELECT rule_id, name, raw_data FROM detection_rules"
+            ).fetchall()
+        except Exception:
+            rule_rows = []
+    for rule_id, rule_name, raw_data in rule_rows:
+        keys = {str(rule_id or "").strip()}
+        try:
+            raw = json.loads(raw_data) if isinstance(raw_data, str) and raw_data.strip() else (raw_data or {})
+            if isinstance(raw, dict):
+                keys.add(str(raw.get("id") or "").strip())
+                keys.add(str(raw.get("rule_id") or "").strip())
+                params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
+                keys.add(str(params.get("rule_id") or "").strip())
+        except Exception:
+            pass
+        for key in keys:
+            if key and rule_name:
+                rule_name_lookup[key] = rule_name
+
+    def detection_label(detection: StepDetection) -> str:
+        ref = detection.rule_ref or ""
+        if ref and ref in rule_name_lookup:
+            return rule_name_lookup[ref]
+        if detection.note:
+            return detection.note
+        if ref and "-" in ref and len(ref) >= 32:
+            return "Unresolved SIEM rule" if (detection.source or "manual") == "siem" else "Unresolved rule"
+        return ref or "Rule"
 
     # Pre-load applied_detections for this step's detection IDs
     det_ids = [d.id for d in step.detections]
@@ -3593,10 +3642,11 @@ def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]
                 continue  # sigma rules are not appliable
             det_hosts = applied_host_map.get(d.id, set())
             det_systems = applied_sys_map.get(d.id, set())
+            label = detection_label(d)
             if (host_ids and (det_hosts & host_ids)) or (system_id in det_systems):
-                sys_applied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
+                sys_applied.append({"id": d.id, "label": label})
             else:
-                sys_unapplied.append({"id": d.id, "label": d.rule_ref or d.note or "Rule"})
+                sys_unapplied.append({"id": d.id, "label": label})
 
         # Check for blind spot on this system — distinguish gap vs na
         sys_blind_spots = [bs for bs in blind_spots if bs.system_id == system_id]

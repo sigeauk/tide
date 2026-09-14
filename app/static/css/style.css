@@ -270,6 +270,24 @@ a:hover { color: var(--color-primary); }
   border-color: var(--color-border);
 }
 
+.tide-lifecycle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-action);
+  color: var(--color-text-secondary);
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.tide-lifecycle-staging { color: var(--color-warning-text); border-color: var(--color-warning); background: var(--color-warning-glow); }
+.tide-lifecycle-migrated { color: var(--color-info-text); border-color: var(--color-info); background: var(--color-info-glow); }
+.tide-lifecycle-production { color: var(--color-success-text); border-color: var(--color-success); background: var(--color-success-glow); }
+.tide-lifecycle-deprecated { color: var(--color-text-muted); border-color: var(--color-border); background: var(--color-bg-base); }
+
 .status-dot {
   display: inline-flex;
   align-items: center;
@@ -2973,6 +2991,61 @@ a:hover { color: var(--color-primary); }
 .filter-group.grow {
   flex: 1;
   min-width: 200px;
+}
+
+/* ── Filter dropdown (Rule Health / Promotion "Score", "Validate", "State") ──
+ * Consolidates a sort selector + range/checklist inputs behind one
+ * single-line trigger button instead of stacking extra rows in the bar. */
+.tide-filter-btn {
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.4rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tide-filter-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background: var(--color-bg-layer-5);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  z-index: 50;
+  min-width: 210px;
+  padding: 0.6rem;
+}
+
+.tide-filter-dropdown .tide-filter-section-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  margin: 0.4rem 0 0.3rem;
+}
+
+.tide-filter-dropdown .tide-filter-section-label:first-child {
+  margin-top: 0;
+}
+
+.tide-filter-dropdown .tide-filter-range {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.tide-filter-dropdown label.rh-checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.4rem;
+  cursor: pointer;
+  font-size: 0.875rem;
 }
 
 

@@ -106,6 +106,7 @@
                 <button name="Add Technique" class="btn btn-secondary btn-sm" onclick="document.getElementById('add-tactic-modal').style.display='flex'">{{ icon('plus', '14') }} Add Technique</button>
                 <button name="Import Techniques" class="btn btn-secondary btn-sm" onclick="document.getElementById('import-techniques-modal').style.display='flex'">{{ icon('upload', '14') }} Import</button>
                 <button name="Export Report" class="btn btn-secondary btn-sm" onclick="document.getElementById('bl-export-modal').style.display='flex'">Export Report</button>
+                <button name="Export Baseline JSON" class="btn btn-secondary btn-sm" onclick="document.getElementById('bl-export-modal').style.display='flex'">Export Baseline JSON</button>
                 <button name="Edit Baseline" class="btn btn-primary btn-sm" onclick="document.getElementById('edit-baseline-modal').style.display='flex'">{{ icon('pencil', '14') }} Edit</button>
             </div>
         </div>
@@ -353,7 +354,14 @@ document.addEventListener('click', function(e){
                            cursor:pointer;">
                 <option value="pdf">PDF</option>
                 <option value="markdown">Markdown</option>
+                <option value="json">TIDE JSON</option>
             </select>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.82rem;color:var(--text-primary,#e6edf3);">
+                <input id="bl-include-rules" type="checkbox" checked>
+                Include mapped rules in JSON export
+            </label>
         </div>
         <div style="margin-bottom:1rem;">
             <label style="display:block; font-size:0.75rem; font-weight:600;
@@ -402,6 +410,20 @@ function confirmBaselineExport() {
     params.set('format', format);
     params.set('classification', classification);
     document.getElementById('bl-export-modal').style.display = 'none';
+    if (format === 'json') {
+        var jsonUrl = '/api/baselines/{{ baseline.id }}/export.json?include_rules=' + (document.getElementById('bl-include-rules').checked ? 'true' : 'false');
+        fetch(jsonUrl, {credentials: 'same-origin'}).then(function(response) {
+            if (!response.ok) throw new Error('Baseline export failed (' + response.status + ')');
+            return response.blob();
+        }).then(function(blob) {
+            var link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'baseline-{{ baseline.id }}.json';
+            link.click();
+            URL.revokeObjectURL(link.href);
+        }).catch(function(error) { alert(error.message); });
+        return;
+    }
     window.location.href = '/api/baselines/{{ baseline.id }}/report?' + params.toString();
 }
 </script>
