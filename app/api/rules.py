@@ -67,6 +67,49 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
         rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower(), reverse=reverse)
     return rules
 
+
+def _pick_display_rule(db, migration: Optional[dict], logical: Optional[dict], identity_key, fallback_rule, client_id: str):
+    """Resolve the single row to render for a migrated/merged rule identity.
+
+    Prefers the production/master copy. If that copy is itself deprecated
+    (e.g. deleted from production) this MUST fall back to the live staging/
+    source copy instead of leaving both rows in the result — the caller only
+    calls this once per ``identity_key``, so whatever it returns is the only
+    card rendered for this identity. Previously the fallback only happened
+    when a master substitution *succeeded*, so a deprecated master left the
+    staging row unsubstituted AND still separately iterated into the output,
+    showing a "Deprecated" card next to a "Staging" card for the same rule.
+    """
+    def fetch(rule_id, space, siem_id):
+        if not (rule_id and space and siem_id):
+            return None
+        return db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+
+    info = migration or logical or {}
+    master = fetch(
+        info.get("target_rule_id") or info.get("master_rule_id"),
+        info.get("target_space") or info.get("master_space"),
+        info.get("target_siem_id") or info.get("master_siem_id"),
+    )
+    if master and not master.deprecated:
+        return master
+
+    if migration:
+        source = fetch(migration.get("source_rule_id"), migration.get("source_space"), migration.get("source_siem_id"))
+        if source and not source.deprecated:
+            return source
+    elif logical:
+        master_rule_id = info.get("master_rule_id")
+        for member in db.get_logical_rule_members(identity_key) or []:
+            if member.get("rule_id") == master_rule_id:
+                continue
+            candidate = fetch(member.get("rule_id"), member.get("space"), member.get("siem_id"))
+            if candidate and not candidate.deprecated:
+                return candidate
+
+    # Both sides deprecated/unresolvable — show whatever we have.
+    return master or fallback_rule
+
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
 MITRE_TACTIC_MAP = {
@@ -790,7 +833,8 @@ def list_rules(
         db.backfill_unique_rule_migrations(staging_scopes, production_scopes)
         # Rule Health is a master-rule view. A tracked staging/production
         # pair renders once using the production copy, whose enabled state is
-        # authoritative. Promotion continues to list the staging copy.
+        # authoritative, falling back to the staging copy if production was
+        # deleted. Promotion continues to list the staging copy.
         display_rules = []
         seen_migrations = set()
         for rule in rules:
@@ -802,19 +846,9 @@ def list_rules(
             if identity_key:
                 if identity_key in seen_migrations:
                     continue
-                master_rule_id = (migration or logical).get("target_rule_id") or (logical or {}).get("master_rule_id")
-                master_siem_id = (migration or logical).get("target_siem_id") or (logical or {}).get("master_siem_id")
-                master_space = (migration or logical).get("target_space") or (logical or {}).get("master_space")
-                target = db.get_rule_by_id(
-                    master_rule_id,
-                    master_space,
-                    siem_id=master_siem_id,
-                    client_id=client_id,
-                ) if master_rule_id and master_siem_id and master_space else None
-                if target and not target.deprecated:
-                    display_rules.append(target)
-                    seen_migrations.add(identity_key)
-                    continue
+                seen_migrations.add(identity_key)
+                display_rules.append(_pick_display_rule(db, migration, logical, identity_key, rule, client_id))
+                continue
             display_rules.append(rule)
         rules = _resort_rules(display_rules, sort_score, sort_validated, sort_name, sort_by)
         total_pages = max(1, (total + page_size - 1) // page_size)

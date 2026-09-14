@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.14] - 2026-09-14
+
+### Fixed
+- **Deleting a promoted rule from production no longer leaves a duplicate card.** Rule Health showed both a `Deprecated` card and a `Staging` card for the same rule when only the production copy was removed; it now correctly collapses to the one live copy, matching the existing behavior when the staging copy is removed instead.
+
 ## [5.0.13] - 2026-09-14
 
 ### Added
@@ -38,7 +43,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Filter dropdown panels (State, Score, Validate) now render with a solid background.** They previously used an undefined style token that left the panel transparent, making the options hard to read against the page behind them.
 - **Validate sort now actually reorders Rule Health results.** Rules linked across staging and production were swapped for their counterpart after sorting, which could carry a different validation date and silently undo the requested order; the sort is now re-applied after that swap.
 - **Promotion now has the same State filter as Rule Health.** Staging rules can be filtered by Production, Staging, Migrated, or Deprecated state, matching the Rule Health filter bar.
-
 
 ## [5.0.12] - 2026-08-11
 
