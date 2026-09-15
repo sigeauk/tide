@@ -262,6 +262,59 @@ console.debug('TIDE app.js loading...');
         }, 3000);
     };
 
+    function slidePanelWidthKey() {
+        var userId = (document.body && document.body.dataset.userId) || 'anonymous';
+        return 'tide.slidePanel.width.' + userId;
+    }
+
+    function clampSlidePanelWidth(width) {
+        var min = Math.min(360, window.innerWidth);
+        var max = Math.max(min, Math.floor(window.innerWidth * 0.9));
+        return Math.max(min, Math.min(max, Math.round(width)));
+    }
+
+    window.initTechniqueSlidePanel = function(root) {
+        root = root || document;
+        var panel = root.querySelector ? root.querySelector('.slide-panel') : null;
+        if (!panel || panel.dataset.resizableReady === 'true') return;
+        panel.dataset.resizableReady = 'true';
+
+        if (window.innerWidth > 980) {
+            var stored = parseInt(localStorage.getItem(slidePanelWidthKey()) || '', 10);
+            if (stored) panel.style.setProperty('--slide-panel-width', clampSlidePanelWidth(stored) + 'px');
+        }
+
+        var handle = panel.querySelector('[data-slide-panel-resize]');
+        if (!handle) return;
+        handle.addEventListener('pointerdown', function(event) {
+            if (window.innerWidth <= 980) return;
+            event.preventDefault();
+            event.stopPropagation();
+            handle.setPointerCapture(event.pointerId);
+            panel.classList.add('is-resizing');
+            document.body.classList.add('is-resizing-slide-panel');
+
+            function onMove(moveEvent) {
+                var width = clampSlidePanelWidth(window.innerWidth - moveEvent.clientX);
+                panel.style.setProperty('--slide-panel-width', width + 'px');
+            }
+
+            function onUp(upEvent) {
+                handle.releasePointerCapture(upEvent.pointerId);
+                panel.classList.remove('is-resizing');
+                document.body.classList.remove('is-resizing-slide-panel');
+                localStorage.setItem(slidePanelWidthKey(), Math.round(panel.getBoundingClientRect().width));
+                handle.removeEventListener('pointermove', onMove);
+                handle.removeEventListener('pointerup', onUp);
+                handle.removeEventListener('pointercancel', onUp);
+            }
+
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+            handle.addEventListener('pointercancel', onUp);
+        });
+    };
+
     // Expose TIDE namespace for debugging
     window.TIDE = TIDE;
 
@@ -549,6 +602,7 @@ console.debug('TIDE app.js loading...');
         if (typeof Prism !== 'undefined') {
             setTimeout(function() { Prism.highlightAll(); }, 100);
         }
+        window.initTechniqueSlidePanel(document);
         
         document.dispatchEvent(new CustomEvent('tide:pageReady'));
     }
@@ -608,6 +662,9 @@ console.debug('TIDE app.js loading...');
 
         // Also listen for htmx:load
         document.addEventListener('htmx:load', function(event) {
+            if (event.detail.elt) {
+                window.initTechniqueSlidePanel(event.detail.elt);
+            }
             if (typeof Prism !== 'undefined' && event.detail.elt) {
                 setTimeout(function() {
                     Prism.highlightAllUnder(event.detail.elt);

@@ -1202,9 +1202,11 @@ def create_app() -> FastAPI:
     import json as _json
     _manifest_path = os.path.join(static_path, "manifest.json")
     _asset_manifest: dict = {}
+    _asset_manifest_mtime: float | None = None
     try:
         with open(_manifest_path, "r", encoding="utf-8") as _mf:
             _asset_manifest = _json.load(_mf)
+        _asset_manifest_mtime = os.path.getmtime(_manifest_path)
         logger.info(f"Asset manifest loaded: {len(_asset_manifest)} bundle(s)")
     except FileNotFoundError:
         logger.warning(
@@ -1228,6 +1230,19 @@ def create_app() -> FastAPI:
           2. _ASSET_FALLBACK with ?v=<version> (dev hot-reload, missing build)
           3. /static/<name> as a last resort
         """
+        nonlocal _asset_manifest, _asset_manifest_mtime
+        try:
+            current_mtime = os.path.getmtime(_manifest_path)
+            if _asset_manifest_mtime != current_mtime:
+                with open(_manifest_path, "r", encoding="utf-8") as _mf:
+                    _asset_manifest = _json.load(_mf)
+                _asset_manifest_mtime = current_mtime
+                logger.info(f"Asset manifest reloaded: {len(_asset_manifest)} bundle(s)")
+        except FileNotFoundError:
+            _asset_manifest = {}
+            _asset_manifest_mtime = None
+        except Exception as _exc:
+            logger.warning(f"Asset manifest reload failed ({_exc}); using cached paths")
         if name in _asset_manifest:
             return _asset_manifest[name]
         if name in _ASSET_FALLBACK:

@@ -87,6 +87,7 @@
 <!-- Technique Detail Slide-Over Panel -->
 <div name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
     <div name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
+        <div class="slide-panel-resize-handle" data-slide-panel-resize title="Resize panel" aria-hidden="true"></div>
         <div class="slide-panel-header">
             <div style="min-width:0;">
                 {% if parent_technique %}

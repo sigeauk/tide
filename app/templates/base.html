@@ -39,7 +39,7 @@
     
     {% block head %}{% endblock %}
 </head>
-<body   name="Breadcrumb" hx-boost="true" hx-ext="head-support">
+<body   name="Breadcrumb" hx-boost="true" hx-ext="head-support" data-user-id="{{ user.id if user else '' }}">
     <!-- App Layout Container -->
     <div class="app-layout{% if not user %} no-sidebar{% endif %}">
         <!-- Sidebar -->

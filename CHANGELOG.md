@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.15] - 2026-09-15
+
+### Changed
+- **Technique detail panels now open at a smaller width and can be resized.** Operators can drag the panel edge to choose a comfortable width, and TIDE remembers that preference for the signed-in user.
+- **Rule Health cards now give MITRE pills more space.** Only migrated or deprecated lifecycle states are shown on the card, while MITRE technique pills wrap cleanly instead of being clipped on the right side.
+- **Expandable sidebar headings now render without divider lines.** The grouped navigation titles look cleaner whether the sidebar is expanded or collapsed.
+
 ## [5.0.14] - 2026-09-14
 
 ### Fixed
