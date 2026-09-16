@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.16] - 2026-09-16
+
+### Fixed
+- **Rule validation now completes and refreshes the Rule Health card.** Operators no longer see an error after validating a rule.
+
 ## [5.0.15] - 2026-09-15
 
 ### Changed

@@ -978,7 +978,9 @@ def validate_rule(
 ):
     """Mark a rule as validated by the current user."""
     thresholds = db.get_client_validation_thresholds(client_id)
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    rule = db.get_rule_by_id(
+        rule_id, space, siem_id=siem_id, thresholds=thresholds, client_id=client_id
+    )
     
     if not rule:
         return HTMLResponse('<div class="empty-state">Rule not found</div>', status_code=404)
@@ -1000,11 +1002,20 @@ def validate_rule(
             )
         except Exception:
             logger.exception("Failed to write validation history for rule %s", rule_id)
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    rule = db.get_rule_by_id(
+        rule_id, space, siem_id=siem_id, thresholds=thresholds, client_id=client_id
+    )
     
     templates = request.app.state.templates
 
     _sl = _build_space_labels(db, client_id) if client_id else {}
+    staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
+    production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
+    lifecycle_states = {
+        f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
+            rule.rule_id, staging_scopes, production_scopes
+        )
+    }
 
     # If called from the modal, re-render the modal instead of the card
     if request.headers.get("X-Return-Modal") == "true":
@@ -1025,6 +1036,7 @@ def validate_rule(
             "space_labels": _sl,
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
             "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
+            "lifecycle_states": lifecycle_states,
             "env": settings,
         }
     )
