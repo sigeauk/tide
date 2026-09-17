@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.17] - 2026-09-17
+
+### Added
+- **Rule Health stats cards now reflect the active filters.** Total rules, enabled/disabled, validation, quality, and severity counts update to match the current search, SIEM, status, state, score, and validated-date filters instead of always showing the whole tenant's totals.
+- **Rule Health filters and pagination now survive a page refresh.** Reopening or reloading the page restores the last-applied filters instead of resetting to the unfiltered view, and moving between result pages scrolls back to the top of the list.
+
+### Fixed
+- **Validating a rule no longer reverts the stats cards to unfiltered totals.** The metrics refresh triggered by a validation now keeps the currently applied filters.
+- **Rule Health stats no longer overcount rules that have both a staging and production copy.** Counts now match the number of cards actually shown, instead of counting each linked copy separately.
+- **The Validated stats card no longer counts rules that are due for revalidation as validated.** It now only counts rules that are currently in-policy, with a new "due soon" figure alongside expired and never-validated counts.
+- **Rule Health pagination and sorting are now correct across multiple pages.** Linked staging/production rule pairs are now collapsed to a single card before pages are built, so a pair can no longer be split across two pages and double-counted, the "Page X of Y" total now matches the stats cards, and sorting by score or validation date is now applied across the whole result set instead of only within each page.
+
 ## [5.0.16] - 2026-09-16
 
 ### Fixed

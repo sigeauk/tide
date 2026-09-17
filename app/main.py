@@ -1548,16 +1548,68 @@ def create_app() -> FastAPI:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
 
-        # Per-tenant since 4.1.13 — tenant context is set above; rule
-        # health metrics read directly from the tenant DB.
-        metrics = db.get_rule_health_metrics(
+        # Re-hydrate the last-applied grid filters from the query string so
+        # a browser refresh (or bookmarked link) restores the same view
+        # instead of always resetting to the unfiltered grid. The client
+        # keeps this query string in sync via history.replaceState — see
+        # the htmx:afterRequest listener in rule_health.html.
+        from app.api.rules import (
+            _prune_orphan_scopes,
+            _parse_date_bound,
+            _get_filtered_deduped_rules,
+            _metrics_from_rules,
+        )
+        from app.models.rules import RuleFilters
+        qp = request.query_params
+        search_q = qp.get("search") or ""
+        space_q = qp.get("space") or ""
+        enabled_q = qp.get("enabled") or ""
+        state_q = [s for s in qp.getlist("state") if s]
+        min_score_q = qp.get("min_score") or ""
+        max_score_q = qp.get("max_score") or ""
+        validated_from_q = qp.get("validated_from") or ""
+        validated_to_q = qp.get("validated_to") or ""
+        sort_score_q = qp.get("sort_score") or "desc"
+        sort_validated_q = qp.get("sort_validated") or ""
+        sort_name_q = qp.get("sort_name") or ""
+        min_score_int = int(min_score_q) if min_score_q.strip().lstrip('-').isdigit() else None
+        max_score_int = int(max_score_q) if max_score_q.strip().lstrip('-').isdigit() else None
+
+        # Unfiltered metrics purely to populate the SIEM filter dropdown —
+        # this must NOT reflect the active filters below, otherwise
+        # options for spaces excluded by the current filter would vanish
+        # from the dropdown until the next full page load.
+        metrics_all = db.get_rule_health_metrics(
             thresholds=db.get_client_validation_thresholds(_cid),
+            client_id=_cid,
+        )
+        _prune_orphan_scopes(metrics_all, db, _cid)
+
+        # Per-tenant since 4.1.13 — tenant context is set above; rule
+        # health stats are computed from the same deduplicated rule list
+        # the grid renders (see _get_filtered_deduped_rules), so a
+        # migrated/merged identity's staging and production copies aren't
+        # double-counted against the grid's single card.
+        metrics = _metrics_from_rules(
+            _get_filtered_deduped_rules(
+                db,
+                RuleFilters(
+                    search=search_q or None,
+                    space=space_q or None,
+                    enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
+                    state=state_q,
+                    min_score=min_score_int,
+                    max_score=max_score_int,
+                    validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
+                    validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
+                ),
+                _cid,
+            )
         )
         # Hide orphan space buckets (rules whose (siem_id, space) is no
         # longer in client_siem_map after a mapping change). The sync
         # path eventually deletes the rows; this keeps the metrics card
         # honest in the meantime.
-        from app.api.rules import _prune_orphan_scopes
         _prune_orphan_scopes(metrics, db, _cid)
         # Build (siem_id, space)-keyed labels — keying by space alone
         # collapses two SIEMs that share a Kibana space-name into one
@@ -1577,10 +1629,10 @@ def create_app() -> FastAPI:
             # last-writer-wins for the legacy dict (intentionally lossy)
             space_labels[sp] = label
 
-        # Derive scope keys from the composite metric. Fall back to
-        # space-only keys for templates that haven't migrated.
-        scopes = sorted(metrics.rules_by_scope.keys()) if metrics.rules_by_scope else []
-        spaces = sorted(metrics.rules_by_space.keys()) if metrics.rules_by_space else []
+        # Derive scope keys from the composite (unfiltered) metric. Fall
+        # back to space-only keys for templates that haven't migrated.
+        scopes = sorted(metrics_all.rules_by_scope.keys()) if metrics_all.rules_by_scope else []
+        spaces = sorted(metrics_all.rules_by_space.keys()) if metrics_all.rules_by_space else []
         
         return render_template(
             "pages/rules/rule_health.html",
@@ -1594,18 +1646,18 @@ def create_app() -> FastAPI:
                 "space_labels": space_labels,
                 "scope_labels": scope_labels,
                 "last_sync_time": get_last_sync_time(),
-                "search": "",
-                "space": "",
-                "enabled": "",
-                "state": [],
-                "min_score": "",
-                "max_score": "",
-                "validated_from": "",
-                "validated_to": "",
+                "search": search_q,
+                "space": space_q,
+                "enabled": enabled_q,
+                "state": state_q,
+                "min_score": min_score_q,
+                "max_score": max_score_q,
+                "validated_from": validated_from_q,
+                "validated_to": validated_to_q,
                 "sort_by": "score_desc",
-                "sort_score": "desc",
-                "sort_validated": "",
-                "sort_name": "",
+                "sort_score": sort_score_q,
+                "sort_validated": sort_validated_q,
+                "sort_name": sort_name_q,
             }
         )
     

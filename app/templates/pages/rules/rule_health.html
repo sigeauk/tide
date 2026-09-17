@@ -60,11 +60,13 @@
         </button>
     </div>
 </div>
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
 
 <!-- Metrics Row -->
 <div name="Open Metrics" class="metrics-grid" id="metrics-container"
      hx-get="/api/rules/metrics"
-     hx-trigger="refreshRules from:body"
+     hx-trigger="refreshRules from:body, rulesFiltered from:body"
+     hx-include="{{ rh_filter_include }}"
      hx-swap="innerHTML">
     {% include "partials/metrics_row.html" %}
 </div>
@@ -72,13 +74,14 @@
 <div class="divider"></div>
 
 <!-- Filters Bar -->
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
+
 <div class="filters-bar">
     <div class="filter-group grow">
         <label class="form-label">Search</label>
         <input 
             type="text" 
             name="search"
+            value="{{ search }}"
             class="form-input" 
             placeholder="Rule name, Author, ID, MITRE (T1078)..."
             hx-get="/api/rules"
@@ -88,6 +91,7 @@
             hx-include="{{ rh_filter_include }}">
     </div>
     
+    {% set current_space = space %}
     <div class="filter-group">
         <label class="form-label">SIEM</label>
         <select 
@@ -98,9 +102,9 @@
             hx-target="#rules-grid"
             hx-swap="innerHTML"
             hx-include="{{ rh_filter_include }}">
-            <option value="">All SIEMs</option>
+            <option value="" {% if not current_space %}selected{% endif %}>All SIEMs</option>
             {% for space in spaces %}
-            <option value="{{ space }}">{{ space_labels.get(space, space | capitalize) }}</option>
+            <option value="{{ space }}" {% if space == current_space %}selected{% endif %}>{{ space_labels.get(space, space | capitalize) }}</option>
             {% endfor %}
         </select>
     </div>
@@ -115,9 +119,9 @@
             hx-target="#rules-grid"
             hx-swap="innerHTML"
             hx-include="{{ rh_filter_include }}">
-            <option value="">All</option>
-            <option value="true">Enabled</option>
-            <option value="false">Disabled</option>
+            <option value="" {% if not enabled %}selected{% endif %}>All</option>
+            <option value="true" {% if enabled == 'true' %}selected{% endif %}>Enabled</option>
+            <option value="false" {% if enabled == 'false' %}selected{% endif %}>Disabled</option>
         </select>
     </div>
 
@@ -315,14 +319,28 @@
     tideUpdateScoreLabel();
     tideUpdateValidatedLabel();
 
-
+    // Rule-card-level mutations (validate, edit, sync, archive, restore)
+    // only swap the one card, not #rules-grid, so they don't get the
+    // "rulesFiltered" HX-Trigger the grid fetch emits. Re-trigger the
+    // metrics container directly here — it already carries its own
+    // hx-include, so the refetch honors whatever filters are active
+    // instead of reverting the stats cards to unfiltered totals.
     document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'rules-grid' || 
-            event.target.classList.contains('rule-card')) {
-            htmx.ajax('GET', '/api/rules/metrics', {target: '#metrics-container', swap: 'innerHTML'});
+        if (event.target.classList && event.target.classList.contains('rule-card')) {
+            htmx.trigger(document.getElementById('metrics-container'), 'rulesFiltered');
         }
     });
-    
+
+    // Keep the address bar (and therefore a page refresh) in sync with
+    // the last-applied grid filters/pagination.
+    document.body.addEventListener('htmx:afterRequest', function(event) {
+        if (!event.detail.successful || !event.detail.target || event.detail.target.id !== 'rules-grid') return;
+        var reqPath = event.detail.pathInfo && (event.detail.pathInfo.requestPath || event.detail.pathInfo.finalRequestPath);
+        if (reqPath && reqPath.indexOf('/api/rules') === 0) {
+            window.history.replaceState(null, '', '/rules' + reqPath.slice('/api/rules'.length));
+        }
+    });
+
     document.body.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'toast-container') {
             const toasts = event.detail.target.querySelectorAll('.toast');

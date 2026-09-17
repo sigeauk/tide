@@ -4440,12 +4440,21 @@ class DatabaseService:
         thresholds: Optional[Tuple[int, int]] = None,
         client_id: Optional[str] = None,
     ) -> RuleHealthMetrics:
-        """Calculate comprehensive rule health metrics.
+        """Calculate comprehensive rule health metrics across ALL rows.
 
         Tenant scoping is by composite ``(siem_id, space)`` pairs from
         :py:meth:`get_client_siem_scopes`. Space-name-only filtering would
         leak rules between two SIEMs that share a Kibana space name
-        (AGENTS.md §8.2 g4)."""
+        (AGENTS.md §8.2 g4).
+
+        This is unfiltered/un-deduplicated by design (used only for the
+        dashboard widget and to populate filter dropdown option lists).
+        Callers needing counts scoped to the Rule Health grid's active
+        filters must use ``app.api.rules._get_filtered_deduped_rules`` +
+        ``_metrics_from_rules`` instead — a migrated/merged rule's staging
+        and production copies both match the same raw-SQL filters here,
+        which would double-count it against the grid's single card.
+        """
         with self.get_connection() as conn:
             if allowed_scopes is not None:
                 if not allowed_scopes:
@@ -4460,7 +4469,7 @@ class DatabaseService:
                 df = conn.execute(
                     "SELECT enabled, score, siem_id, space, severity, name, raw_data FROM detection_rules"
                 ).df()
-            
+
             if df.empty:
                 return RuleHealthMetrics()
             

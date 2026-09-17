@@ -145,6 +145,12 @@ class RuleHealthMetrics(BaseModel):
     max_score: int = 0
     
     validated_count: int = 0
+    # Validated-but-approaching-expiry (status "amber"). A distinct bucket
+    # from ``validated_count`` since 5.0.17 — the Rule Health stats card
+    # only counts currently-in-policy ("valid"/green) rules as "Validated"
+    # so it matches what an operator visually counts on the grid; amber
+    # rows are surfaced here instead of being silently folded in.
+    validation_amber_count: int = 0
     validation_expired_count: int = 0
     never_validated_count: int = 0
     

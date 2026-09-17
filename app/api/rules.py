@@ -8,10 +8,10 @@ from urllib.parse import unquote
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
-from app.models.rules import RuleFilters
+from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule
 
 import logging
 
@@ -109,6 +109,117 @@ def _pick_display_rule(db, migration: Optional[dict], logical: Optional[dict], i
 
     # Both sides deprecated/unresolvable — show whatever we have.
     return master or fallback_rule
+
+
+def _dedupe_display_rules(db, rules: List["DetectionRule"], client_id: str) -> List["DetectionRule"]:
+    """Collapse migrated/merged identities to the single card Rule Health
+    would render for each — one row per (staging, production) pair or
+    logical merge group, preferring the production/master copy (see
+    ``_pick_display_rule``). Any aggregate computed straight from
+    un-deduped rows (e.g. raw SQL counts) double-counts these pairs, since
+    both the staging and production copy independently match the same
+    filters."""
+    display_rules = []
+    seen_migrations = set()
+    for rule in rules:
+        migration = db.get_rule_migration_for_rule(rule.rule_id)
+        logical = db.get_logical_rule_identity_for_rule(
+            rule.rule_id, rule.siem_id, rule.space
+        )
+        identity_key = (migration or logical or {}).get("id")
+        if identity_key:
+            if identity_key in seen_migrations:
+                continue
+            seen_migrations.add(identity_key)
+            display_rules.append(_pick_display_rule(db, migration, logical, identity_key, rule, client_id))
+            continue
+        display_rules.append(rule)
+    return display_rules
+
+
+def _metrics_from_rules(rules: List["DetectionRule"]) -> RuleHealthMetrics:
+    """Aggregate Rule Health stats from an already-filtered, already-
+    deduplicated rule list — i.e. exactly the cards the grid would render
+    across every page. Computing stats from raw (pre-dedup) SQL rows
+    overcounts any migrated/merged identity, since its staging and
+    production copies both independently satisfy the same filters."""
+    if not rules:
+        return RuleHealthMetrics()
+
+    total_rules = len(rules)
+    enabled_rules = sum(1 for r in rules if r.enabled)
+    scores = [int(r.score or 0) for r in rules]
+    avg_score = round(sum(scores) / total_rules, 1) if scores else 0.0
+
+    rules_by_space: Dict[str, int] = {}
+    rules_by_scope: Dict[str, int] = {}
+    severity_breakdown: Dict[str, int] = {}
+    language_breakdown: Dict[str, int] = {}
+    validated_count = 0
+    validation_amber_count = 0
+    validation_expired_count = 0
+    never_validated_count = 0
+
+    for r in rules:
+        if r.space:
+            rules_by_space[r.space] = rules_by_space.get(r.space, 0) + 1
+        if r.siem_id and r.space:
+            scope_key = f"{r.siem_id}|{str(r.space).lower()}"
+            rules_by_scope[scope_key] = rules_by_scope.get(scope_key, 0) + 1
+        sev = str(getattr(r.severity, "value", r.severity) or "low").lower()
+        severity_breakdown[sev] = severity_breakdown.get(sev, 0) + 1
+        lang = r.language or "unknown"
+        language_breakdown[lang] = language_breakdown.get(lang, 0) + 1
+        # "Validated" is deliberately only the currently in-policy
+        # ("valid"/green) rows — matching what an operator can actually
+        # count on the grid. Amber (due soon) and expired rows had a
+        # timestamp too, but folding them into the headline number made
+        # it read higher than the visibly-validated card count.
+        if r.validation_status == "valid":
+            validated_count += 1
+        elif r.validation_status == "amber":
+            validation_amber_count += 1
+        elif r.validation_status == "expired":
+            validation_expired_count += 1
+        else:
+            never_validated_count += 1
+
+    return RuleHealthMetrics(
+        total_rules=total_rules,
+        enabled_rules=enabled_rules,
+        disabled_rules=total_rules - enabled_rules,
+        avg_score=avg_score,
+        min_score=min(scores) if scores else 0,
+        max_score=max(scores) if scores else 0,
+        validated_count=validated_count,
+        validation_amber_count=validation_amber_count,
+        validation_expired_count=validation_expired_count,
+        never_validated_count=never_validated_count,
+        low_quality_count=sum(1 for s in scores if s < 50),
+        high_quality_count=sum(1 for s in scores if s >= 80),
+        quality_excellent=sum(1 for s in scores if s >= 80),
+        quality_good=sum(1 for s in scores if 70 <= s < 80),
+        quality_fair=sum(1 for s in scores if 50 <= s < 70),
+        quality_poor=sum(1 for s in scores if s < 50),
+        rules_by_space=rules_by_space,
+        rules_by_scope=rules_by_scope,
+        severity_breakdown=severity_breakdown,
+        language_breakdown=language_breakdown,
+    )
+
+
+def _get_filtered_deduped_rules(db, filters: RuleFilters, client_id: str) -> List["DetectionRule"]:
+    """Fetch every rule matching ``filters`` (unpaginated) and collapse
+    migrated/merged identities to one row each — the same rule set the
+    grid would render across all of its pages combined."""
+    all_filters = filters.model_copy(update={"page": 1, "page_size": 1_000_000})
+    rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id)
+    db.backfill_unique_rule_migrations(
+        db.get_client_siem_scopes(client_id, environment_role="staging"),
+        db.get_client_siem_scopes(client_id, environment_role="production"),
+    )
+    return _dedupe_display_rules(db, rules, client_id)
+
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -824,34 +935,22 @@ def list_rules(
             page_size=page_size,
         )
         
-        rules, total, last_sync = db.get_rules(
-            filters=filters,
-            client_id=client_id,
-        )
+        # Rule Health is a master-rule view: a tracked staging/production
+        # pair renders once using the production copy (falling back to
+        # staging if production was deleted). Dedup must happen on the
+        # FULL filtered set before pagination — deduping only the current
+        # page's slice lets a pair split across two pages render as two
+        # separate cards, and makes the pagination total disagree with
+        # the stats cards (which are computed the same way).
+        all_rules = _get_filtered_deduped_rules(db, filters, client_id)
+        all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by)
+        total = len(all_rules)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        offset = (page - 1) * page_size
+        rules = all_rules[offset:offset + page_size]
+
         staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
         production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
-        db.backfill_unique_rule_migrations(staging_scopes, production_scopes)
-        # Rule Health is a master-rule view. A tracked staging/production
-        # pair renders once using the production copy, whose enabled state is
-        # authoritative, falling back to the staging copy if production was
-        # deleted. Promotion continues to list the staging copy.
-        display_rules = []
-        seen_migrations = set()
-        for rule in rules:
-            migration = db.get_rule_migration_for_rule(rule.rule_id)
-            logical = db.get_logical_rule_identity_for_rule(
-                rule.rule_id, rule.siem_id, rule.space
-            )
-            identity_key = (migration or logical or {}).get("id")
-            if identity_key:
-                if identity_key in seen_migrations:
-                    continue
-                seen_migrations.add(identity_key)
-                display_rules.append(_pick_display_rule(db, migration, logical, identity_key, rule, client_id))
-                continue
-            display_rules.append(rule)
-        rules = _resort_rules(display_rules, sort_score, sort_validated, sort_name, sort_by)
-        total_pages = max(1, (total + page_size - 1) // page_size)
         lifecycle_states = {
             f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
                 rule.rule_id, staging_scopes, production_scopes
@@ -885,7 +984,12 @@ def list_rules(
             "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
             "lifecycle_states": lifecycle_states,
         }
-        return templates.TemplateResponse(request, "partials/rules_grid.html", context)
+        response = templates.TemplateResponse(request, "partials/rules_grid.html", context)
+        # Lets the stats cards re-fetch with the same active filters (see
+        # #metrics-container in rule_health.html) so they never drift from
+        # what the grid is currently showing.
+        response.headers["HX-Trigger"] = "rulesFiltered"
+        return response
     except Exception as e:
         logger.exception(f"Failed to list rules (sort={sort_by}, space={space}): {e}")
         return HTMLResponse(
@@ -902,13 +1006,38 @@ def get_metrics(
     db: DbDep,
     user: CurrentUser,
     client_id: ActiveClient,
+    search: Optional[str] = Query(None),
+    space: Optional[str] = Query(None),
+    enabled: Optional[str] = Query(None),
+    state: list[str] = Query([]),
+    min_score: Optional[str] = Query(None),
+    max_score: Optional[str] = Query(None),
+    validated_from: Optional[str] = Query(None),
+    validated_to: Optional[str] = Query(None),
 ):
-    """Get rule health metrics."""
+    """Get rule health metrics, scoped to the same filters as the rules grid."""
     from app.main import get_last_sync_time
-    # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
-    metrics = db.get_rule_health_metrics(
-        client_id=client_id,
+
+    min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
+    max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
+    filters = RuleFilters(
+        search=search if search else None,
+        space=space if space else None,
+        enabled=None if not enabled else (enabled.lower() == 'true'),
+        state=[s for s in state if s],
+        min_score=min_score_int,
+        max_score=max_score_int,
+        validated_from=_parse_date_bound(validated_from, end_of_day=False),
+        validated_to=_parse_date_bound(validated_to, end_of_day=True),
     )
+
+    # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
+    # Computed from the deduplicated rule list (matching what the grid
+    # renders) rather than raw SQL rows — a migrated/merged identity's
+    # staging and production copies both satisfy the same filters, which
+    # would otherwise double-count it against the grid's single card.
+    deduped_rules = _get_filtered_deduped_rules(db, filters, client_id)
+    metrics = _metrics_from_rules(deduped_rules)
     # Hide orphan space buckets (rules whose (siem_id, space) is no
     # longer in client_siem_map after a mapping change).
     _prune_orphan_scopes(metrics, db, client_id)
