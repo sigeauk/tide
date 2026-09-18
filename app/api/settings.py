@@ -360,15 +360,15 @@ def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
     </tr>"""
 
 
-def _render_user_table(db) -> str:
-    """Render the full users table HTML."""
+def _render_user_table(db, client_id: str) -> str:
+    """Render the users table with roles from the active client only."""
     users = db.get_all_users()
     all_roles = db.get_all_roles()
     if not users:
         return '<p class="text-muted" style="font-size:0.85rem;">No users found.</p>'
     rows = ""
     for u in users:
-        user_roles = db.get_user_roles(u["id"])
+        user_roles = db.get_user_roles(u["id"], client_id=client_id)
         rows += _render_user_row(u, all_roles, user_roles)
     return f"""
     <table class="mapping-table">
@@ -381,13 +381,13 @@ def _render_user_table(db) -> str:
 
 
 @router.get("/users", response_class=HTMLResponse)
-def list_users(request: Request, db: DbDep, user: RequireAdmin):
+def list_users(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
     """Return the users list as an HTML partial (ADMIN only)."""
-    return HTMLResponse(_render_user_table(db))
+    return HTMLResponse(_render_user_table(db, client_id))
 
 
 @router.post("/users", response_class=HTMLResponse)
-async def create_user(request: Request, db: DbDep, user: RequireAdmin):
+async def create_user(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
     """Create a new local user (ADMIN only)."""
     form = await request.form()
     username = str(form.get("new_username", "")).strip()
@@ -420,10 +420,11 @@ async def create_user(request: Request, db: DbDep, user: RequireAdmin):
     pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     uid = db.create_user(username=username, email=email, full_name=full_name,
                          password_hash=pw_hash, auth_provider="local")
+    db.assign_user_to_client(uid, client_id, is_default=True)
     if roles:
-        db.set_user_roles(uid, roles)
+        db.set_user_roles(uid, roles, client_id=client_id)
 
-    html = _render_user_table(db)
+    html = _render_user_table(db, client_id)
     return HTMLResponse(f"""
     <div hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">User '{username}' created.</div>
@@ -432,23 +433,25 @@ async def create_user(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.post("/users/{user_id}/roles", response_class=HTMLResponse)
-async def update_user_roles(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Update roles for a user (ADMIN only)."""
+async def update_user_roles(request: Request, user_id: str, db: DbDep,
+                            user: RequireAdmin, client_id: ActiveClient):
+    """Update roles for a user in the active client only (ADMIN only)."""
     form = await request.form()
     roles = form.getlist("roles")
-    db.set_user_roles(user_id, roles)
-    return HTMLResponse(_render_user_table(db))
+    db.set_user_roles(user_id, roles, client_id=client_id)
+    return HTMLResponse(_render_user_table(db, client_id))
 
 
 @router.post("/users/{user_id}/toggle-active", response_class=HTMLResponse)
-def toggle_user_active(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+def toggle_user_active(request: Request, user_id: str, db: DbDep,
+                       user: RequireAdmin, client_id: ActiveClient):
     """Toggle user active status (ADMIN only)."""
     db_user = db.get_user_by_id(user_id)
     if not db_user:
-        return HTMLResponse(_render_user_table(db))
+        return HTMLResponse(_render_user_table(db, client_id))
     new_status = not db_user.get("is_active", True)
     db.update_user(user_id, is_active=new_status)
-    return HTMLResponse(_render_user_table(db))
+    return HTMLResponse(_render_user_table(db, client_id))
 
 
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse)
@@ -489,7 +492,8 @@ async def reset_user_password(request: Request, user_id: str, db: DbDep, user: R
 
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse)
-def delete_user(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
+def delete_user(request: Request, user_id: str, db: DbDep,
+                user: RequireAdmin, client_id: ActiveClient):
     """Delete a user (ADMIN only). Cannot delete yourself."""
     if user_id == user.id:
         return HTMLResponse("""
@@ -497,7 +501,7 @@ def delete_user(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
             <div class="toast toast-warning">You cannot delete your own account.</div>
         </div>""")
     db.delete_user(user_id)
-    return HTMLResponse(_render_user_table(db))
+    return HTMLResponse(_render_user_table(db, client_id))
 
 
 # ── Permissions Management (ADMIN only) ─────────────────────────────────────

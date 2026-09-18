@@ -3151,10 +3151,10 @@ class DatabaseService:
                                      is_superadmin: Optional[bool] = None) -> Dict:
         """Provision/refresh a Keycloak-backed user record.
 
-        - `kc_role` (one of ADMIN / ENGINEER / ANALYST) is applied to the user's
-          Primary Client only. Other tenant assignments are left untouched so a
-          TIDE admin can grant additional access without it being overwritten on
-          every login. Pass `None` to skip role sync.
+                - `kc_role` (one of ADMIN / ENGINEER / ANALYST) seeds the user's Primary
+                    Client role only when the account is first provisioned. Existing
+                    per-client roles are owned by TIDE and are never overwritten by an
+                    authentication refresh.
         - `is_superadmin` reflects membership of the Keycloak `superadmin` group.
           Pass `None` to leave the flag untouched.
         """
@@ -3163,7 +3163,6 @@ class DatabaseService:
             self.update_user(existing["id"], email=email, full_name=full_name, last_login=datetime.now())
             if is_superadmin is not None:
                 self.set_user_superadmin(existing["id"], is_superadmin)
-            self._sync_kc_role_to_primary(existing["id"], kc_role)
             return self.get_user_by_keycloak_id(keycloak_id)
         # Link existing account by username only if it is already SSO-capable.
         # Local-only accounts must never be auto-upgraded by SSO login.

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.18] - 2026-09-18
+
+### Changed
+- **Rule Health and Promotion now load rules continuously as operators scroll.** Statistics and search, sort, and filter controls remain fixed while the rule cards scroll independently.
+
+### Fixed
+- **Promotion statistics now reflect the active filters.** Counts stay aligned with the staging rules shown, including migrated rules, without including deprecated copies from non-staging SIEM mappings.
+- **Promotion score and validation sorting now follows the selected direction.** Sorting remains correct when lifecycle or validation filters require the staging rule list to be processed before display.
+- **Per-client user roles now remain stable after Keycloak sign-in.** TIDE-managed role changes are no longer replaced by the user's initial Keycloak role, and role editors show and update only the active client's assignment.
+- **Rule sync and promotion permissions now fail cleanly when access is denied.** Read permissions control page visibility, write permissions control page actions, and an administrator role in one client no longer grants actions in another client.
+
 ## [5.0.17] - 2026-09-17
 
 ### Added

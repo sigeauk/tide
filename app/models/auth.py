@@ -144,17 +144,17 @@ class User(BaseModel):
 
         - Superadmins always return True.
         - With `client_id`: only True when ADMIN role is assigned in that tenant.
-        - Without `client_id`: True when ADMIN is assigned in ANY tenant the user
-          can see (used by management routes that gate on "can the user reach
-          the management panel at all"). Per-tenant write checks must always
-          pass an explicit `client_id`.
+        - Without `client_id`: use the active tenant when one is selected.
+          Only tenantless contexts fall back to checking all assigned tenants.
         """
         if self.is_superadmin:
             return True
+        if client_id is None and self.active_client_id:
+            client_id = self.active_client_id
         if client_id is not None:
             roles = self.client_roles.get(client_id, [])
             return any(r.upper() == "ADMIN" for r in roles)
-        # Either the active tenant's roles (loaded into self.roles) or any tenant.
+        # No active tenant: accept a role loaded directly or from any assignment.
         if any(r.upper() == "ADMIN" for r in self.roles):
             return True
         for roles in self.client_roles.values():

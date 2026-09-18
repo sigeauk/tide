@@ -908,6 +908,7 @@ def list_rules(
     sort_name: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
+    append: bool = Query(False),
 ):
     """List detection rules with filtering and pagination."""
     try:
@@ -983,12 +984,14 @@ def list_rules(
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
             "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
             "lifecycle_states": lifecycle_states,
+            "append": append,
         }
         response = templates.TemplateResponse(request, "partials/rules_grid.html", context)
         # Lets the stats cards re-fetch with the same active filters (see
         # #metrics-container in rule_health.html) so they never drift from
         # what the grid is currently showing.
-        response.headers["HX-Trigger"] = "rulesFiltered"
+        if not append:
+            response.headers["HX-Trigger"] = "rulesFiltered"
         return response
     except Exception as e:
         logger.exception(f"Failed to list rules (sort={sort_by}, space={space}): {e}")

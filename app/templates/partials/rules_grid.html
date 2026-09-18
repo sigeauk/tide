@@ -4,45 +4,40 @@
 {% set state = state | default([]) %}
 {% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) %}
 {% for s in state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (s | urlencode) %}{% endfor %}
-{% if rules and rules | length > 0 %}
+{% if append %}
+    {% for rule in rules %}
+        {% include "components/rule_card.html" %}
+    {% endfor %}
+    {% if page < total_pages %}
+    <div class="infinite-scroll-sentinel"
+         hx-get="/api/rules?page={{ page + 1 }}&append=true&{{ pagination_qs }}"
+         hx-trigger="tideLoadMore once"
+         hx-target="this"
+         hx-swap="outerHTML">
+        <span class="loading-spinner"></span>
+        <span>Loading more rules...</span>
+    </div>
+    {% else %}
+    <div class="infinite-scroll-end">All {{ total }} rules loaded</div>
+    {% endif %}
+{% elif rules and rules | length > 0 %}
 <div class="rules-grid">
     {% for rule in rules %}
         {% include "components/rule_card.html" %}
     {% endfor %}
-</div>
-
-<div class="pagination">
-    {% if page > 1 %}
-    <button name="← Previous" 
-        class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page - 1 }}&{{ pagination_qs }}"
-        hx-target="#rules-grid"
-        hx-swap="innerHTML"
-        onclick="window.scrollTo({top:0,behavior:'instant'});">
-        ← Previous
-    </button>
-    {% else %}
-    <button name="← Previous" class="btn btn-secondary btn-sm" disabled>← Previous</button>
-    {% endif %}
-    
-    <span class="pagination-info">
-        Page {{ page }} of {{ total_pages }} ({{ total }} rules)
-    </span>
-    
     {% if page < total_pages %}
-    <button name="Next →" 
-        class="btn btn-secondary btn-sm"
-        hx-get="/api/rules?page={{ page + 1 }}&{{ pagination_qs }}"
-        hx-target="#rules-grid"
-        hx-swap="innerHTML"
-        onclick="window.scrollTo({top:0,behavior:'instant'});">
-        Next →
-    </button>
+    <div class="infinite-scroll-sentinel"
+         hx-get="/api/rules?page={{ page + 1 }}&append=true&{{ pagination_qs }}"
+         hx-trigger="tideLoadMore once"
+         hx-target="this"
+         hx-swap="outerHTML">
+        <span class="loading-spinner"></span>
+        <span>Loading more rules...</span>
+    </div>
     {% else %}
-    <button name="Next →" class="btn btn-secondary btn-sm" disabled>Next →</button>
+    <div class="infinite-scroll-end">All {{ total }} rules loaded</div>
     {% endif %}
 </div>
-
 {% else %}
 <div class="empty-state">
     <div class="empty-state-icon">{{ icon('clipboard-list', '48') }}</div>

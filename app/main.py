@@ -657,6 +657,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
+        "/api/rules": "page:rules",
+        "/api/promotion": "page:promotion",
+        "/api/sigma": "page:sigma",
+        "/api/inventory": "page:systems",
+        "/api/settings": "page:settings",
+        "/api/clients": "page:clients",
+        "/api/management": "page:management",
+    }
+
+    API_WRITE_RESOURCE_MAP = {
+        "/api/heatmap": "page:heatmap",
+        "/api/threats": "page:threats",
+        "/api/rules": "page:rules",
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
         "/api/inventory": "page:systems",
@@ -679,10 +692,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 response.headers["Pragma"] = "no-cache"
                 response.headers["Expires"] = "0"
             return response
+
+        def _scope_user_to_active_client(user):
+            """Load roles and permissions for the tenant selected by this request."""
+            if not user:
+                return user
+            from app.api.deps import scope_user_to_request_client
+            from app.services.database import get_database_service
+
+            db = get_database_service()
+            return scope_user_to_request_client(request, user, db=db)
         
         def _check_page_permission(user):
             """Check if user has permission to access this path. Returns 403 response or None."""
-            if not user or user.is_admin():
+            user = _scope_user_to_active_client(user)
+            if not user or user.is_superadmin:
+                return None
+            if user.active_client_id and user.is_admin(user.active_client_id):
                 return None
             # Page-level read check
             resource = self.PATH_RESOURCE_MAP.get(path)
@@ -2547,10 +2573,24 @@ def create_app() -> FastAPI:
 
         staging_scopes = db.get_client_siem_scopes(_cid, environment_role="staging") if _cid else []
         production_scopes = db.get_client_siem_scopes(_cid, environment_role="production") if _cid else []
-        
-        metrics = db.get_promotion_metrics(
-            staging_scopes=staging_scopes or None,
-            production_scopes=production_scopes or None,
+
+        from app.api.promotion import (
+            _build_promotion_filters,
+            _get_filtered_staging_rules,
+            _promotion_metrics_from_rules,
+        )
+        base_metrics = db.get_promotion_metrics(
+            staging_scopes=staging_scopes,
+            production_scopes=production_scopes,
+        )
+        promotion_rules = _get_filtered_staging_rules(
+            db,
+            _build_promotion_filters(db, _cid, page_size=1_000_000),
+            _cid,
+        )
+        metrics = _promotion_metrics_from_rules(
+            promotion_rules,
+            base_metrics["production_total"],
         )
 
         # Template historically received flat space-name lists for

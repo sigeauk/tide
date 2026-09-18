@@ -8,7 +8,7 @@ SIEM configuration via ``client_siem_map.environment_role``, not hardcoded.
 from fastapi import APIRouter, Request, Query, BackgroundTasks
 from fastapi.responses import HTMLResponse
 import json
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.models.rules import RuleFilters
@@ -45,6 +45,96 @@ def _diff_rule_payloads(source: dict, target: dict) -> list[dict]:
     ]
 
 
+def _build_promotion_filters(
+    db,
+    client_id: str,
+    search: Optional[str] = None,
+    enabled: Optional[str] = None,
+    state: Optional[List[str]] = None,
+    min_score: Optional[str] = None,
+    max_score: Optional[str] = None,
+    validated_from: Optional[str] = None,
+    validated_to: Optional[str] = None,
+    sort_by: str = "score_asc",
+    sort_score: str = "",
+    sort_validated: str = "",
+    sort_name: str = "",
+    page: int = 1,
+    page_size: int = 10,
+) -> RuleFilters:
+    from app.api.rules import _parse_date_bound
+
+    staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
+    return RuleFilters(
+        search=search or None,
+        enabled=None if not enabled else (enabled.lower() == "true"),
+        state=[value for value in (state or []) if value],
+        min_score=int(min_score) if min_score and min_score.strip().lstrip("-").isdigit() else None,
+        max_score=int(max_score) if max_score and max_score.strip().lstrip("-").isdigit() else None,
+        validated_from=_parse_date_bound(validated_from, end_of_day=False),
+        validated_to=_parse_date_bound(validated_to, end_of_day=True),
+        sort_by=sort_by,
+        sort_score=sort_score,
+        sort_validated=sort_validated,
+        sort_name=sort_name,
+        page=page,
+        page_size=page_size,
+        allowed_scopes=staging_scopes if staging_scopes else [],
+    )
+
+
+def _promotion_metrics_from_rules(rules, production_total: int) -> Dict[str, Any]:
+    scores = [int(rule.score or 0) for rule in rules]
+    severity: Dict[str, int] = {}
+    for rule in rules:
+        value = str(getattr(rule.severity, "value", rule.severity) or "low").lower()
+        severity[value] = severity.get(value, 0) + 1
+
+    validated = sum(1 for rule in rules if rule.validation_status != "never")
+    expired = sum(1 for rule in rules if rule.validation_status == "expired")
+    total = len(rules)
+    return {
+        "staging_total": total,
+        "staging_enabled": sum(1 for rule in rules if rule.enabled),
+        "staging_avg_score": round(sum(scores) / total, 1) if total else 0,
+        "staging_min_score": min(scores) if scores else 0,
+        "staging_max_score": max(scores) if scores else 0,
+        "staging_low_quality": sum(1 for score in scores if score < 50),
+        "staging_high_quality": sum(1 for score in scores if score >= 80),
+        "staging_quality_excellent": sum(1 for score in scores if score >= 80),
+        "staging_quality_good": sum(1 for score in scores if 70 <= score < 80),
+        "staging_quality_fair": sum(1 for score in scores if 50 <= score < 70),
+        "staging_quality_poor": sum(1 for score in scores if score < 50),
+        "staging_severity": severity,
+        "staging_validated": validated,
+        "staging_validation_expired": expired,
+        "staging_never_validated": total - validated,
+        "production_total": production_total,
+    }
+
+
+def _get_filtered_staging_rules(db, filters: RuleFilters, client_id: str):
+    from app.api.rules import _resort_rules
+
+    all_filters = filters.model_copy(update={"page": 1, "page_size": 1_000_000})
+    rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id)
+    staging_scopes = {
+        (str(siem_id), str(space).lower())
+        for siem_id, space in (filters.allowed_scopes or [])
+    }
+    staging_rules = [
+        rule for rule in rules
+        if (str(rule.siem_id), str(rule.space).lower()) in staging_scopes
+    ]
+    return _resort_rules(
+        staging_rules,
+        filters.sort_score or "",
+        filters.sort_validated or "",
+        filters.sort_name or "",
+        filters.sort_by or "score_asc",
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 def list_staging_rules(
     request: Request,
@@ -64,39 +154,21 @@ def list_staging_rules(
     sort_name: str = Query(""),
     page: int = Query(1, ge=1),
     page_size: int = Query(10, ge=1, le=50),
+    append: bool = Query(False),
 ):
     """List detection rules from the client's staging environment-role spaces."""
-    from app.api.rules import _parse_date_bound
-
     staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
-    validated_from_dt = _parse_date_bound(validated_from, end_of_day=False)
-    validated_to_dt = _parse_date_bound(validated_to, end_of_day=True)
-    min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
-    max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
-
-    filters = RuleFilters(
-        search=search if search else None,
-        space=None,
-        enabled=None if not enabled else (enabled.lower() == 'true'),
-        state=[s for s in state if s],
-        min_score=min_score_int,
-        max_score=max_score_int,
-        validated_from=validated_from_dt,
-        validated_to=validated_to_dt,
-        sort_by=sort_by,
-        sort_score=sort_score,
-        sort_validated=sort_validated,
-        sort_name=sort_name,
-        page=page,
-        page_size=page_size,
-        # Composite (siem_id, space) pairs — a space-only allow-list would
-        # leak production-tagged rules into the staging view when two SIEMs
-        # share a Kibana space name (AGENTS.md §8.2 g4).
-        allowed_scopes=staging_scopes if staging_scopes else [],
+    filters = _build_promotion_filters(
+        db, client_id, search, enabled, state, min_score, max_score,
+        validated_from, validated_to, sort_by, sort_score, sort_validated,
+        sort_name, page, page_size,
     )
     
-    rules, total, last_sync = db.get_rules(filters=filters, client_id=client_id)
+    all_rules = _get_filtered_staging_rules(db, filters, client_id)
+    total = len(all_rules)
     total_pages = max(1, (total + page_size - 1) // page_size)
+    offset = (page - 1) * page_size
+    rules = all_rules[offset:offset + page_size]
     production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
     lifecycle_states = {
         f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
@@ -135,6 +207,7 @@ def list_staging_rules(
         "sort_name": sort_name,
         "lifecycle_states": lifecycle_states,
         "delete_source_default": delete_source_default,
+        "append": append,
     }
     return templates.TemplateResponse(request, "partials/promotion_grid.html", context)
 
@@ -145,15 +218,28 @@ def get_promotion_metrics(
     db: DbDep,
     user: CurrentUser,
     client_id: ActiveClient,
+    search: Optional[str] = Query(None),
+    enabled: Optional[str] = Query(None),
+    state: list[str] = Query([]),
+    min_score: Optional[str] = Query(None),
+    max_score: Optional[str] = Query(None),
+    validated_from: Optional[str] = Query(None),
+    validated_to: Optional[str] = Query(None),
 ):
-    """Get metrics for staging rules only."""
+    """Get metrics for the same filtered staging rules as the card list."""
     from app.main import get_last_sync_time
     staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
     production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
-    metrics = db.get_promotion_metrics(
+    base_metrics = db.get_promotion_metrics(
         staging_scopes=staging_scopes,
         production_scopes=production_scopes,
     )
+    filters = _build_promotion_filters(
+        db, client_id, search, enabled, state, min_score, max_score,
+        validated_from, validated_to, page=1, page_size=1_000_000,
+    )
+    rules = _get_filtered_staging_rules(db, filters, client_id)
+    metrics = _promotion_metrics_from_rules(rules, base_metrics["production_total"])
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,

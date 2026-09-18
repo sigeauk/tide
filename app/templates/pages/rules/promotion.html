@@ -6,6 +6,7 @@
 {% block head %}{% endblock %}
 
 {% block content %}
+<div class="rule-browser-page">
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
         <h1 class="page-title-hero">Rule Promotion</h1>
@@ -50,10 +51,13 @@
     </div>
 </div>
 
+{% set pm_filter_include = "[name='search'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
 <!-- Metrics Row -->
+<div class="rule-browser-controls">
 <div name="Open Metrics" class="metrics-grid" id="promotion-metrics"
      hx-get="/api/promotion/metrics"
-     hx-trigger="refreshPromotion from:body"
+    hx-trigger="refreshPromotion from:body, promotionFiltered from:body, change from:.filters-bar, keyup changed delay:300ms from:input[name='search']"
+    hx-include="{{ pm_filter_include }}"
      hx-swap="innerHTML">
     {% include "partials/promotion_metrics.html" %}
 </div>
@@ -61,7 +65,6 @@
 <div class="divider"></div>
 
 <!-- Filters Bar -->
-{% set pm_filter_include = "[name='search'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
 <div class="filters-bar">
     <div class="filter-group grow">
         <label class="form-label">Search</label>
@@ -200,8 +203,10 @@
     </div>
     
 </div>
+</div>
 
 <!-- Promotion Grid - Load on page load via HTMX -->
+<div class="rule-scroll-region">
 <div name="Open Promotion" id="promotion-grid"
      hx-get="/api/promotion"
      hx-trigger="load, refreshPromotion from:body"
@@ -209,6 +214,8 @@
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading staging rules\u2026") }}
+</div>
+</div>
 </div>
 
 <!-- Slide Panel Container for MITRE technique details -->
@@ -287,13 +294,6 @@
     tideUpdateScoreLabel();
     tideUpdateValidatedLabel();
 
-    // Auto-refresh page after promotion sync
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'promotion-grid') {
-            htmx.ajax('GET', '/api/promotion/metrics', {target: '#promotion-metrics', swap: 'innerHTML'});
-        }
-    });
-    
     // Toast auto-dismiss
     document.body.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'toast-container') {
@@ -388,8 +388,8 @@
                 setTimeout(function() { card.remove(); }, 300);
             }
             
-            // Refresh metrics (lightweight) without full grid reload
-            htmx.ajax('GET', '/api/promotion/metrics', {target: '#promotion-metrics', swap: 'innerHTML'});
+            // Refresh metrics with the currently active filters.
+            htmx.trigger(document.getElementById('promotion-metrics'), 'promotionFiltered');
         })
         .catch(err => {
             btn.disabled = false;

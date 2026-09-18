@@ -340,6 +340,31 @@ console.debug('TIDE app.js loading...');
         }
     };
 
+    window.tideInitInfiniteScroll = function(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        var sentinels = Array.prototype.slice.call(
+            scope.querySelectorAll('.infinite-scroll-sentinel:not([data-observed])')
+        );
+        if (scope.matches && scope.matches('.infinite-scroll-sentinel:not([data-observed])')) {
+            sentinels.unshift(scope);
+        }
+        sentinels.forEach(function(sentinel) {
+            sentinel.dataset.observed = 'true';
+            var scrollRegion = sentinel.closest('.rule-scroll-region');
+            var usesInnerScroll = scrollRegion && getComputedStyle(scrollRegion).overflowY !== 'visible';
+            var observer = new IntersectionObserver(function(entries) {
+                if (!entries.some(function(entry) { return entry.isIntersecting; })) return;
+                observer.disconnect();
+                htmx.trigger(sentinel, 'tideLoadMore');
+            }, {
+                root: usesInnerScroll ? scrollRegion : null,
+                rootMargin: '0px 0px 600px 0px',
+                threshold: 0
+            });
+            observer.observe(sentinel);
+        });
+    };
+
     // ========================================
     // PAGE INITIALIZATION FUNCTIONS
     // ========================================
@@ -664,6 +689,7 @@ console.debug('TIDE app.js loading...');
         document.addEventListener('htmx:load', function(event) {
             if (event.detail.elt) {
                 window.initTechniqueSlidePanel(event.detail.elt);
+                window.tideInitInfiniteScroll(event.detail.elt);
             }
             if (typeof Prism !== 'undefined' && event.detail.elt) {
                 setTimeout(function() {

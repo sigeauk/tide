@@ -6,6 +6,7 @@
 {% block head %}{% endblock %}
 
 {% block content %}
+<div class="rule-browser-page">
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
     <div>
         <h1 class="page-title-hero">
@@ -62,6 +63,7 @@
 </div>
 {% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
 
+<div class="rule-browser-controls">
 <!-- Metrics Row -->
 <div name="Open Metrics" class="metrics-grid" id="metrics-container"
      hx-get="/api/rules/metrics"
@@ -231,8 +233,10 @@
         </select>
     </div>
 </div>
+</div>
 
 <!-- Rules Grid - Load on page load via HTMX -->
+<div class="rule-scroll-region">
 <div id="rules-grid"
      hx-get="/api/rules"
      hx-trigger="load, refreshRules from:body"
@@ -240,6 +244,8 @@
      hx-swap="innerHTML">
     {% from "components/ui/loading_state.html" import loading_state %}
     {{ loading_state("Loading rules\u2026") }}
+</div>
+</div>
 </div>
 
 <!-- Slide Panel Container for MITRE technique details -->

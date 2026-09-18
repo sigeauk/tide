@@ -436,8 +436,8 @@ class AuthService:
                         is_superadmin=is_super,
                     )
                 else:
-                    # Existing SSO/hybrid user — re-sync KC role + superadmin flag
-                    # so demoting in Keycloak takes effect on the next login.
+                    # Existing SSO/hybrid user — refresh profile and superadmin
+                    # state only. TIDE owns per-client role assignments.
                     if token_data is not None:
                         db.jit_provision_keycloak_user(
                             keycloak_id=db_user.get("keycloak_id") or token_data.sub,

@@ -34,6 +34,36 @@ async def get_auth() -> AuthService:
     return get_auth_service()
 
 
+def scope_user_to_request_client(
+    request: Request,
+    user: User,
+    db: Optional[DatabaseService] = None,
+) -> User:
+    """Hydrate a user with roles and permissions for the selected tenant."""
+    db = db or get_database_service()
+    client_id = request.headers.get("X-Client-ID") or request.cookies.get("active_client_id")
+    if not client_id:
+        with db.get_shared_connection() as conn:
+            row = conn.execute(
+                "SELECT client_id FROM user_clients "
+                "WHERE user_id = ? AND is_default = true LIMIT 1",
+                [user.id],
+            ).fetchone()
+        client_id = row[0] if row else None
+
+    user.active_client_id = client_id
+    if user.is_superadmin:
+        user.roles = ["ADMIN"]
+        user.permissions = {}
+    elif client_id:
+        user.roles = list(user.client_roles.get(client_id, []))
+        user.permissions = db.get_user_permissions(user.id, client_id=client_id)
+    else:
+        user.roles = []
+        user.permissions = {}
+    return user
+
+
 async def get_current_user(
     request: Request,
     credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(bearer_scheme)] = None,
@@ -69,13 +99,13 @@ async def get_current_user(
     if token:
         user = auth_service.get_user_from_token(token)
         if user:
-            return user
+            return scope_user_to_request_client(request, user)
     
     # Fall back to local session cookie
     if session_token:
         user = auth_service.get_user_from_session(session_token)
         if user:
-            return user
+            return scope_user_to_request_client(request, user)
     
     return None
 
