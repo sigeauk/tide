@@ -121,14 +121,14 @@ def build() -> dict:
         (out_dir / out_name).write_bytes(content)
 
         manifest[logical_name] = f"{url_prefix}/{out_name}"
-        print(f"  built {logical_name} → {manifest[logical_name]} ({len(content)} bytes)")
+        print(f"  built {logical_name} -> {manifest[logical_name]} ({len(content)} bytes)")
 
     MANIFEST_PATH.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
-    print(f"  manifest → {MANIFEST_PATH}")
+    print(f"  manifest -> {MANIFEST_PATH}")
     return manifest
 
 
 if __name__ == "__main__":
-    print("Building TIDE asset bundles…")
+    print("Building TIDE asset bundles...")
     build()
     print("Done.")

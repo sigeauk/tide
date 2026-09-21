@@ -666,20 +666,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
             except Exception:
                 logger.warning("Baseline rule identity normalization failed", exc_info=True)
 
-            # Lazy Mapping: get existing rule data from THIS TENANT's DB
-            # so we can skip mapping for known rules.
-            existing_rule_data = db.get_existing_rule_data()
+            # Recent search durations per rule, for the search-time median. Field mappings come from the
+            # per-SIEM field catalogue; ``force_mapping`` refreshes it instead of re-asking for every rule.
+            search_history = db.get_search_time_history()
+            scoring_weights = db.get_client_scoring(client_id)["weights"]
             if force_mapping:
-                existing_rule_keys = set()  # Force full mapping for all rules
-                logger.info(f"[perf] Force mapping enabled — will re-check all rules")
-            else:
-                # Only skip mapping for rules that actually HAVE stored results
-                existing_rule_keys = set()
-                for key, data in existing_rule_data.items():
-                    raw = data.get('raw_data', {})
-                    if isinstance(raw, dict) and raw.get('results'):
-                        existing_rule_keys.add(key)
-            logger.info(f"[perf] Loaded {len(existing_rule_data)} existing rules, {len(existing_rule_keys)} with mapping data, in {(_time.perf_counter() - _t_start)*1000:.0f}ms")
+                logger.info("[perf] Force mapping enabled — refreshing the field catalogue for every index pattern")
 
             # Active SIEMs filtered to this tenant's mappings.
             siems = [
@@ -757,31 +749,25 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                     continue
                 siem_id = siem["id"]
                 siem_spaces_attempted[siem_id] = set(spaces)
-                # Per-SIEM lazy-mapping keys: only pass keys that belong to this
-                # SIEM, otherwise the fetcher would think a rule already has
-                # mapping data when really another SIEM owns that row.
-                per_siem_known = {
-                    rid for (rid, sid, _sp) in existing_rule_keys if sid == siem_id
+                siem_search_history = {
+                    (rid, sp): samples for (rid, sid, sp), samples in search_history.items() if sid == siem_id
                 }
                 logger.info(
                     f"Fetching from SIEM '{siem.get('label')}' (siem_id={siem_id}) "
                     f"@ {kurl} spaces={spaces}"
                 )
                 try:
-                    # When force_mapping is on, drop the per-pattern mapping
-                    # cache so the re-check actually re-hits Elastic.
-                    if force_mapping:
-                        try:
-                            elastic_helper.invalidate_mapping_cache()
-                        except AttributeError:
-                            pass
+                    from app.services.mapping_catalogue import MappingCatalogue
                     siem_df = elastic_helper.fetch_detection_rules(
                         kibana_url=kurl,
                         api_key=token,
                         spaces=spaces,
                         check_mappings=True,
-                        known_rule_keys=per_siem_known,
+                        catalogue=MappingCatalogue(db, siem_id),
                         elasticsearch_url=es_url,
+                        force_catalogue=force_mapping,
+                        search_time_history=siem_search_history,
+                        weights=scoring_weights,
                     )
                     # Pull per-space drift diagnostics so the subtractive
                     # passes below can be skipped for any (siem, space) where
@@ -818,39 +804,21 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                 _t_save = _time.perf_counter()
                 logger.info(f"[perf] fetch_detection_rules (per-SIEM) completed in {(_t_save - _t_fetch)*1000:.0f}ms")
                 audit_records = df.to_dict('records')
-                
-                # Lazy Mapping: restore scores and mapping data for rules that were skipped.
-                # Key by (rule_id, siem_id, space) since 4.1.12 (Migration 44) — a single
-                # rule_id can exist in multiple SIEMs and the same rule can be exposed in
-                # multiple spaces of one SIEM, each requiring its own restored row.
-                restored_count = 0
-                for rec in audit_records:
-                    key = (
-                        rec.get('rule_id'),
-                        rec.get('siem_id'),
-                        rec.get('space') or rec.get('space_id') or 'default',
-                    )
-                    if key in existing_rule_data and not rec.get('results'):
-                        existing = existing_rule_data[key]
-                        # Restore mapping results from existing raw_data
-                        existing_raw = existing.get('raw_data', {})
-                        if isinstance(existing_raw, dict) and existing_raw.get('results'):
-                            rec['results'] = existing_raw['results']
-                        # Recalculate all scores so dynamic metrics (e.g. search_time) stay fresh
-                        rec = elastic_helper.calculate_score(rec)
-                        restored_count += 1
-                
-                if restored_count:
-                    logger.info(f"[perf] Lazy mapping: restored scores/mappings for {restored_count} existing rules")
-                
+
                 count = db.save_audit_results(audit_records, client_id=client_id)
+                try:
+                    db.record_search_time_samples([
+                        {**rec["search_sample"], "siem_id": rec.get("siem_id")}
+                        for rec in audit_records if isinstance(rec.get("search_sample"), dict)
+                    ])
+                except Exception:
+                    logger.warning("Failed to record rule search-time samples", exc_info=True)
                 logger.info(f"[perf] save_audit_results completed in {(_time.perf_counter() - _t_save)*1000:.0f}ms")
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
                 # Bootstrap lifecycle history for newly synced rules
                 try:
-                    for rec in audit_records:
-                        db.bootstrap_rule_history_from_elastic(rec, client_id)
+                    db.bootstrap_rule_history_bulk(audit_records, client_id)
                     logger.info("Bootstrapped rule lifecycle history from Elastic metadata")
                 except Exception as _exc:
                     logger.warning(f"Failed to bootstrap rule history: {_exc!r}")

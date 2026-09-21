@@ -1,0 +1,33 @@
+{# Bulk promote progress. Context: job. Polls while running and stops when the job ends. #}
+<div id="bulk-promote-status"{% if job.state == 'running' %} hx-get="/api/promotion/bulk/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
+    <h2 class="modal-section-title">Bulk promote</h2>
+    {% set pct = (job.done * 100 // job.total) if job.total else 100 %}
+    <div style="height:8px;background:var(--color-bg-layer-4);border-radius:4px;overflow:hidden;margin-bottom:0.6rem;">
+        <div style="width:{{ pct }}%;height:100%;background:var(--color-primary);transition:width 0.3s;"></div>
+    </div>
+    <p class="text-secondary mb-sm">
+        {{ job.done }} of {{ job.total }} · <span class="text-success">{{ job.ok }} promoted</span>{% if job.failed %} · <span class="text-danger">{{ job.failed }} failed</span>{% endif %}
+    </p>
+    {% if job.state == 'running' %}
+        <p class="text-muted mb-md" style="font-size:0.8rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Promoting: {{ job.current }}</p>
+        <div class="modal-actions">
+            <button name="Stop Bulk Promote" type="button" class="btn btn-secondary"
+                    hx-post="/api/promotion/bulk/cancel" hx-target="#bulk-promote-status" hx-swap="outerHTML">Stop after this rule</button>
+        </div>
+    {% else %}
+        <p class="mb-md">
+            {% if job.state == 'cancelled' %}Stopped early. The rules already promoted stay promoted.
+            {% elif job.state == 'error' %}The run stopped because of an error.
+            {% elif job.total == 0 %}No rules matched.
+            {% else %}Finished.{% endif %}
+        </p>
+        {% if job.errors %}
+        <ul class="text-danger mb-md" style="font-size:0.78rem;padding-left:1.1rem;max-height:9rem;overflow:auto;">
+            {% for e in job.errors %}<li>{{ e }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        <div class="modal-actions">
+            <button name="Close and refresh" type="button" class="btn btn-primary" onclick="window.location.reload()">Close and refresh</button>
+        </div>
+    {% endif %}
+</div>

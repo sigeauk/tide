@@ -9,8 +9,6 @@ services:
     environment:
       - PYTHONPATH=/app
       - DB_PATH=/app/data/tide.duckdb
-      - TRIGGER_DIR=/app/data/triggers
-      - VALIDATION_FILE=/app/data/checkedRule.json
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
       - ELASTIC_APM_SERVICE_NAME=${ELASTIC_APM_SERVICE_NAME:-TIDE}
@@ -40,7 +38,7 @@ services:
     restart: unless-stopped
 
   tide-nginx:
-    image: nginx:latest
+    image: nginx:alpine
     container_name: tide-nginx
     ports:
       - "443:443"

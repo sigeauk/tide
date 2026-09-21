@@ -1,10 +1,65 @@
-<!-- Rules Grid Partial -->
+<!-- Rules Grid Partial: card grid (view=cards) or sortable table (view=table). One data set, two renderings. -->
 
 {% from "macros/icons.html" import icon, icon_text %}
 {% set state = state | default([]) %}
-{% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) %}
+{% set view = view | default('cards') %}
+{% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
 {% for s in state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (s | urlencode) %}{% endfor %}
-{% if append %}
+
+{% macro sort_arrow(current) -%}
+    {%- if current == 'desc' %}<span class="rt-sort" aria-hidden="true">▼</span>{% elif current == 'asc' %}<span class="rt-sort" aria-hidden="true">▲</span>{% endif -%}
+{%- endmacro %}
+
+{% if view == 'table' %}
+    {# ───────────────────────── TABLE VIEW ───────────────────────── #}
+    {% if append %}
+        {% for rule in rules %}{% include "components/rule_row.html" %}{% endfor %}
+        {% if page < total_pages %}
+        <tr class="infinite-scroll-sentinel"
+            hx-get="/api/rules?page={{ page + 1 }}&append=true&{{ pagination_qs }}"
+            hx-trigger="tideLoadMore once"
+            hx-target="this"
+            hx-swap="outerHTML">
+            <td colspan="9"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+        </tr>
+        {% else %}
+        <tr class="infinite-scroll-end"><td colspan="9">All {{ total }} rules loaded</td></tr>
+        {% endif %}
+    {% elif rules and rules | length > 0 %}
+    <table class="rules-table">
+        <thead>
+            <tr>
+                {# Sortable columns: data-sort-select drives the existing sort filters; data-sort-col drives the
+                   table-only sorts (sort_col/sort_dir). Arrow = current sort. #}
+                <th class="rt-th--sortable" data-sort-select="rh-sort-score" data-sort-default="desc" title="Sort by score">Score {{ sort_arrow(sort_score if not sort_col else '') }}</th>
+                <th class="rt-th--sortable" data-sort-select="rh-sort-name" data-sort-default="asc" title="Sort by name">Rule {{ sort_arrow(sort_name if not sort_col else '') }}</th>
+                <th class="rt-th--sortable" data-sort-col="siem" data-sort-default="asc" title="Sort by SIEM">SIEM {{ sort_arrow(sort_dir if sort_col == 'siem' else '') }}</th>
+                <th class="rt-th--sortable" data-sort-col="state" data-sort-default="asc" title="Sort by state (production, migrated, staging, deprecated)">State {{ sort_arrow(sort_dir if sort_col == 'state' else '') }}</th>
+                <th class="rt-th--sortable" data-sort-col="severity" data-sort-default="desc" title="Sort by severity">Severity {{ sort_arrow(sort_dir if sort_col == 'severity' else '') }}</th>
+                <th class="rt-th--sortable" data-sort-select="rh-sort-validated" data-sort-default="desc" title="Sort by validation date">Validated {{ sort_arrow(sort_validated if not sort_col else '') }}</th>
+                <th class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
+                <th>MITRE</th>
+                <th class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
+            </tr>
+        </thead>
+        <tbody data-rule-list>
+            {% for rule in rules %}{% include "components/rule_row.html" %}{% endfor %}
+            {% if page < total_pages %}
+            <tr class="infinite-scroll-sentinel"
+                hx-get="/api/rules?page={{ page + 1 }}&append=true&{{ pagination_qs }}"
+                hx-trigger="tideLoadMore once"
+                hx-target="this"
+                hx-swap="outerHTML">
+                <td colspan="9"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+            </tr>
+            {% else %}
+            <tr class="infinite-scroll-end"><td colspan="9">All {{ total }} rules loaded</td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+    {% endif %}
+
+{% elif append %}
     {% for rule in rules %}
         {% include "components/rule_card.html" %}
     {% endfor %}
@@ -21,7 +76,7 @@
     <div class="infinite-scroll-end">All {{ total }} rules loaded</div>
     {% endif %}
 {% elif rules and rules | length > 0 %}
-<div class="rules-grid">
+<div class="rules-grid" data-rule-list>
     {% for rule in rules %}
         {% include "components/rule_card.html" %}
     {% endfor %}
@@ -38,7 +93,9 @@
     <div class="infinite-scroll-end">All {{ total }} rules loaded</div>
     {% endif %}
 </div>
-{% else %}
+{% endif %}
+
+{% if not (rules and rules | length > 0) and not append %}
 <div class="empty-state">
     <div class="empty-state-icon">{{ icon('clipboard-list', '48') }}</div>
     <div class="empty-state-title">No rules found in database</div>
@@ -49,7 +106,7 @@
             Sync detection rules from Elastic Security to see them here.
         {% endif %}
     </p>
-    <button name="Submit Sync" 
+    <button name="Submit Sync"
         class="btn btn-primary mt-md"
         hx-post="/api/rules/sync"
         hx-target="#toast-container"

@@ -47,7 +47,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Threat Intel — {{ client.name }}</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-opencti-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -57,7 +57,7 @@
                 <label class="form-label">Current Instances</label>
                 <div style="display:flex;flex-direction:column;gap:0.35rem;">
                     {% for o in client_opencti %}
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
                         <span>{{ o.label }}</span>
                         <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/opencti/{{ o.id }}"

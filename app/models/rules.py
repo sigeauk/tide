@@ -163,10 +163,17 @@ class RuleHealthMetrics(BaseModel):
     quality_fair: int = 0       # 50-69
     quality_poor: int = 0       # < 50
     
+    # Lifecycle split of the (deduplicated) rules shown: Production / Staging /
+    # Migrated (present in both) / Deprecated (in neither).
+    state_production: int = 0
+    state_staging: int = 0
+    state_migrated: int = 0
+    state_deprecated: int = 0
+
     rules_by_space: Dict[str, int] = Field(default_factory=dict)
     # Composite-keyed counts: ``{f"{siem_id}|{space}": count}``. The
     # space-only ``rules_by_space`` collapses two SIEMs that share a Kibana
-    # space-name into one bucket (AGENTS.md §8.2 g4). Templates should
+    # space-name into one bucket (CLAUDE.md §8.2 g4). Templates should
     # prefer this map and fall back to ``rules_by_space`` only for legacy
     # single-SIEM views.
     rules_by_scope: Dict[str, int] = Field(default_factory=dict)
@@ -198,7 +205,7 @@ class RuleFilters(BaseModel):
     page_size: int = 24
     # Composite (siem_id, space) allow-list — the ONLY safe tenant-scoping
     # primitive when two SIEMs share a Kibana space name. Use
-    # DatabaseService.get_client_siem_scopes() to populate. See AGENTS.md
+    # DatabaseService.get_client_siem_scopes() to populate. See CLAUDE.md
     # §8.2 guarantee 4 / §8.3 anti-patterns.
     allowed_scopes: Optional[List[Tuple[str, str]]] = None
 

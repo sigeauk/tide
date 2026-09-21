@@ -105,14 +105,14 @@
     </summary>
     <div style="margin-top:0.85rem;">
         <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color);margin:0 0 1rem;">
-            <button name="Baselines" id="tab-baselines" class="btn btn-sm"
+            <button name="Baselines" id="tab-baselines" class="btn btn-sm u-bg-transparent"
                     onclick="switchToBaselines()"
-                    style="border:none;border-bottom:2px solid var(--color-primary);margin-bottom:-2px;border-radius:0;font-weight:600;color:var(--color-primary);background:transparent;padding:0.4rem 1rem;font-size:0.85rem;">
+                    style="border:none;border-bottom:2px solid var(--color-primary);margin-bottom:-2px;border-radius:0;font-weight:600;color:var(--color-primary);padding:0.4rem 1rem;font-size:0.85rem">
                 {{ icon('shield','14') }} Baselines
             </button>
-            <button name="Audit History" id="tab-audit-history" class="btn btn-sm"
+            <button name="Audit History" id="tab-audit-history" class="btn btn-sm u-bg-transparent"
                     onclick="switchToAuditHistory()"
-                    style="border:none;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;font-weight:500;color:var(--color-muted);background:transparent;padding:0.4rem 1rem;font-size:0.85rem;">
+                    style="border:none;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;font-weight:500;color:var(--color-muted);padding:0.4rem 1rem;font-size:0.85rem">
                 {{ icon('clock','14') }} Audit History
             </button>
         </div>
@@ -231,7 +231,7 @@ function toggleAllHeatmapBaselines(allCb) {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Add Device</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('add-host-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Hosts" hx-post="/api/inventory/systems/{{ system.id }}/hosts"
@@ -268,7 +268,7 @@ function toggleAllHeatmapBaselines(allCb) {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Edit System</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-env-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Update Systems" hx-put="/api/inventory/systems/{{ system.id }}"
@@ -311,18 +311,18 @@ function toggleAllHeatmapBaselines(allCb) {
 </div>
 <!-- ── Export Report Modal ────────────────────────────────────── -->
 <div id="export-modal-overlay"
-     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
-            z-index:1000; align-items:center; justify-content:center;">
-    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+     class="u-bg-rgb-0-0-0-65" style="display:none; position:fixed; inset:0;
+            z-index:1000; align-items:center; justify-content:center">
+    <div class="u-bg-surface" style="border:1px solid var(--border-color,#30363d);
                 border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
-                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+                box-shadow:0 20px 60px rgba(0,0,0,0.6)">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
             <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
                 Export System Report
             </h3>
             <button name="Close Export Modal" onclick="closeExportModal()"
-                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
-                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    class="u-bg-none" style="border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem"
                     title="Close">&#x2715;</button>
         </div>
         <div style="margin-bottom:1rem;">
@@ -330,10 +330,9 @@ function toggleAllHeatmapBaselines(allCb) {
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
             <select name="PDF Markdown" id="modal-format"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 <option value="pdf">PDF</option>
                 <option value="markdown">Markdown</option>
             </select>
@@ -343,10 +342,9 @@ function toggleAllHeatmapBaselines(allCb) {
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
             <select name="Modal Classification" id="modal-classification"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 {% for clf in classification_options %}
                 <option value="{{ clf }}"{% if system.classification and system.classification == clf %} selected{% endif %}>{{ clf }}</option>
                 {% endfor %}
@@ -357,10 +355,9 @@ function toggleAllHeatmapBaselines(allCb) {
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Audience</label>
             <select name="Executive / CISO Technical / Engineer" id="modal-audience"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 <option value="executive">Executive / CISO</option>
                 <option value="technical">Technical / Engineer</option>
             </select>

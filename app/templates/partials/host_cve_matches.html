@@ -12,13 +12,13 @@
 <div class="det-color-key">
     <span class="det-color-key__label">Color Key:</span>
     <span class="det-color-key__item">
-        <span class="det-color-key__swatch" style="background:var(--color-success);"></span> Detection in place
+        <span class="det-color-key__swatch u-bg-success"></span> Detection in place
     </span>
     <span class="det-color-key__item">
-        <span class="det-color-key__swatch" style="background:var(--color-danger);"></span> No detection (Ransomware)
+        <span class="det-color-key__swatch u-bg-danger"></span> No detection (Ransomware)
     </span>
     <span class="det-color-key__item">
-        <span class="det-color-key__swatch" style="background:var(--color-border-strong);"></span> No detection
+        <span class="det-color-key__swatch u-bg-border-strong"></span> No detection
     </span>
 </div>
 
@@ -53,7 +53,7 @@
             {% endif %}
 
             {% if vuln.known_ransomware %}
-            <span class="status-pill" style="font-size:0.69rem;padding:0.1rem 0.4rem;background:var(--color-warning-bg);color:var(--color-warning-text);border-color:var(--color-warning);">
+            <span class="status-pill u-bg-warning-bg" style="font-size:0.69rem;padding:0.1rem 0.4rem;color:var(--color-warning-text);border-color:var(--color-warning)">
                 {{ icon('zap', '10') }} Ransomware
             </span>
             {% endif %}

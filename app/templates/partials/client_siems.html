@@ -43,6 +43,18 @@
                 <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
             </span>
             {% endif %}
+            <form name="Change SIEM Role" hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/role"
+                  hx-target="#client-siems-section"
+                  hx-swap="innerHTML"
+                  hx-confirm="Switch this SIEM to {{ 'Staging' if s.environment_role == 'production' else 'Production' }}? Its rules, scores and validations stay in place."
+                  style="display:inline-flex;margin-top:0.35rem;">
+                <input type="hidden" name="from_role" value="{{ s.environment_role }}">
+                <input type="hidden" name="to_role" value="{{ 'staging' if s.environment_role == 'production' else 'production' }}">
+                <button name="Change Role" type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;"
+                        title="Re-tag this SIEM without unlinking it">
+                    {{ icon('refresh-cw', '12') }} Switch to {{ 'Staging' if s.environment_role == 'production' else 'Production' }}
+                </button>
+            </form>
             <form name="Submit Default Index" hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/default-index"
                   hx-target="#client-siems-section"
                   hx-swap="innerHTML"
@@ -122,6 +134,10 @@
         Leave blank to inherit the global default. Criticality mode stores overrides per severity.
     </span>
 </form>
+
+{# Per-client rule scoring weights: loaded on demand so the section works wherever this partial is rendered. #}
+<hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
+<div id="client-scoring" hx-get="/api/management/clients/{{ client.id }}/scoring" hx-trigger="load" hx-swap="outerHTML"></div>
 </div>
 
 <!-- Edit SIEMs Modal -->
@@ -130,7 +146,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage SIEMs — {{ client.name }}</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-siems-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -140,7 +156,7 @@
                 <label class="form-label">Current SIEMs</label>
                 <div style="display:flex;flex-direction:column;gap:0.35rem;">
                     {% for s in client_siems %}
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
                         <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.environment_role }}</span></span>
                         <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?environment_role={{ s.environment_role }}"
@@ -185,7 +201,7 @@
                     <small id="add-siem-space-hint"
                            style="display:block;margin-top:0.25rem;font-size:0.7rem;color:var(--color-text-muted);"></small>
                     {# One <datalist> per SIEM so each SIEM only offers its
-                       own spaces (AGENTS.md §8.2 guarantee 1). The input's
+                       own spaces (CLAUDE.md §8.2 guarantee 1). The input's
                        ``list`` attribute is rewritten in JS when the SIEM
                        dropdown changes; the rule-count hint below also
                        updates from the same per-SIEM map. #}
@@ -219,7 +235,7 @@
 
 <script>
 // Per-SIEM rule-count map for the "default — 412 rules" hint shown
-// underneath the space input. Keyed by siem_id → space → total. AGENTS.md
+// underneath the space input. Keyed by siem_id → space → total. CLAUDE.md
 // §8.2 guarantee 4: never key by space alone.
 window.__siemSpaceCounts = {{ (siem_space_counts | default({})) | tojson }};
 
@@ -248,17 +264,49 @@ function onAddSiemChange(sel) {
         input.value = '';
     }
     var counts = (window.__siemSpaceCounts || {})[siemId] || {};
-    var spaces = Object.keys(counts);
-    if (hint) {
-        if (spaces.length === 0) {
-            hint.textContent = 'No rules cached for this SIEM yet — type the Kibana space ID.';
-        } else {
-            spaces.sort(function (a, b) { return (counts[b].total || 0) - (counts[a].total || 0); });
-            hint.textContent =
-                'Spaces with rules on this SIEM: ' +
-                spaces.map(function (s) { return s + ' (' + counts[s].total + ')'; }).join(', ');
-        }
-    }
+    // Spaces are fetched from the SIEM on demand so the list is always fresh,
+    // and present even when this page was rendered before the SIEM existed.
+    if (hint) hint.textContent = 'Loading spaces from the SIEM…';
+    var requested = siemId;
+    fetch('/api/management/siems/' + encodeURIComponent(siemId) + '/spaces', {credentials: 'same-origin'})
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (data) {
+            if (document.getElementById('add-siem-select').value !== requested) return;  // selection moved on
+            var spaces = (data && data.spaces) || [];
+            var listId = 'known-spaces-' + requested;
+            var list = document.getElementById(listId);
+            if (!list) {
+                list = document.createElement('datalist');
+                list.id = listId;
+                field.appendChild(list);
+            }
+            list.innerHTML = '';
+            spaces.forEach(function (sp) {
+                var o = document.createElement('option');
+                o.value = sp;
+                if (counts[sp]) o.label = counts[sp].total + ' rules';
+                list.appendChild(o);
+            });
+            input.setAttribute('list', listId);
+            hint.textContent = '';
+            if (!spaces.length) {
+                hint.textContent = ((data && data.message) || 'No spaces found.') + ' Type the Kibana space ID.';
+                return;
+            }
+            hint.appendChild(document.createTextNode('Spaces on this SIEM — click to use: '));
+            spaces.forEach(function (sp) {
+                var b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'btn btn-secondary btn-sm';
+                b.style.cssText = 'padding:0 0.4rem;margin:0 0.25rem 0.25rem 0;font-size:0.7rem;';
+                b.textContent = sp + (counts[sp] ? ' (' + counts[sp].total + ')' : '');
+                b.onclick = function () { input.value = sp; };
+                hint.appendChild(b);
+            });
+        })
+        .catch(function () {
+            if (hint) hint.textContent = 'Could not load spaces from the server. Type the Kibana space ID.';
+        });
 }
 
 // Back-compat shim — older callers still wire ``onchange="toggleSpaceField(this)"``.

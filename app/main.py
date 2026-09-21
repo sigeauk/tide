@@ -133,14 +133,24 @@ def _update_sync_status(state: str, message: str = "", rule_count: int = 0):
         _sync_status["rule_count"] = rule_count
 
 
-def get_last_sync_time() -> str:
-    """Return human-readable last sync time, or 'Never' if no sync completed."""
-    ts = _sync_status.get("finished_at")
-    if ts is None:
-        return "Never"
+def get_last_sync_time(rules=None) -> str:
+    """Return human-readable last sync time, or 'Never' if no sync completed.
+
+    ``_sync_status`` lives in process memory, so it is empty after every
+    restart/reload (and per worker). Fall back to the newest ``last_updated``
+    on the given rules, which the sync writes to the database.
+    """
     from datetime import datetime
-    dt = datetime.fromtimestamp(ts)
-    return dt.strftime("%d %b %H:%M")
+    ts = _sync_status.get("finished_at") if _sync_status.get("state") == "complete" else None
+    if ts is not None:
+        return datetime.fromtimestamp(ts).strftime("%d %b %H:%M")
+    stamps = [r.last_updated for r in (rules or []) if getattr(r, "last_updated", None)]
+    if stamps:
+        try:
+            return max(stamps).strftime("%d %b %H:%M")
+        except Exception:
+            pass
+    return "Never"
 
 
 async def scheduled_sync(force_mapping=False, client_id: str | None = None):
@@ -152,7 +162,7 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None):
     no-ops so any leftover startup/timer hook fails loud-but-safe rather
     than silently iterating every SIEM × every space.
 
-    Triggers: manual ``Sync`` button on /rules and /promotion, the
+    Triggers: manual ``Sync`` button on /rules, the
     post-promote refresh in ``api/promotion.py:promote_rule``, and the
     post-deploy refresh in ``api/sigma.py:deploy_to_siem``.
     """
@@ -171,14 +181,7 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None):
     
     try:
         # Import here to avoid circular imports
-        from app.services.database import get_database_service
         from app.services.sync import trigger_sync
-        
-        db = get_database_service()
-        
-        # Check for manual trigger
-        if db.check_and_clear_trigger("sync_elastic"):
-            logger.info("Manual sync trigger detected")
         
         _update_sync_status("running", "Fetching detection rules...")
         
@@ -206,35 +209,6 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
-
-    # Build-time style MITRE KB refresh: load local ATT&CK files once on
-    # startup when source files change. This is intentionally decoupled from
-    # runtime threat sync actions.
-    try:
-        from app.services.mitre_kb import load_mitre_kb_from_files
-        mitre_state = load_mitre_kb_from_files(force=False)
-        logger.info(
-            "MITRE KB startup load: updated=%s files=%s errors=%s reason=%s",
-            mitre_state.get("updated"),
-            mitre_state.get("processed_files"),
-            len(mitre_state.get("errors") or []),
-            mitre_state.get("reason"),
-        )
-    except Exception as _mitre_exc:
-        logger.error("MITRE KB startup load failed: %s", _mitre_exc, exc_info=True)
-
-    try:
-        from app.services.nist_kb import load_nist_kb_from_files
-        nist_state = load_nist_kb_from_files(force=False)
-        logger.info(
-            "NIST KB startup load: updated=%s files=%s errors=%s reason=%s",
-            nist_state.get("updated"),
-            nist_state.get("processed_files"),
-            len(nist_state.get("errors") or []),
-            nist_state.get("reason"),
-        )
-    except Exception as _nist_exc:
-        logger.error("NIST KB startup load failed: %s", _nist_exc, exc_info=True)
 
     # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
     # ``cti_connectors`` has been retired. It was useful for the 4.1.20
@@ -290,16 +264,21 @@ async def lifespan(app: FastAPI):
         refresh_tenant_cache(settings.data_dir, settings.db_path)
         sync_shared_data(settings.data_dir, settings.db_path)
 
-        # 4.1.2 — recover per-client rows that were written into the
-        # *shared* DB before per-tenant routing was wired up. Idempotent:
-        # only copies rows for tables that are currently empty in the
-        # tenant DB, so subsequent edits made post-backfill are never
-        # duplicated. See tenant_manager.backfill_legacy_tenant_data.
+        # Open every tenant DB once so legacy reference-table copies are dropped.
         try:
-            from app.services.tenant_manager import backfill_legacy_tenant_data
-            backfill_legacy_tenant_data(settings.data_dir)
+            from app.services.tenant_manager import _tenant_db_cache, tenant_context_for
+            for _cid in list(_tenant_db_cache):
+                with tenant_context_for(_cid), db.get_connection():
+                    pass
         except Exception as _e:
-            logger.warning(f"Legacy data backfill skipped: {_e}")
+            logger.warning(f"Tenant DB warm-up skipped: {_e}")
+
+        # Rule validations moved from a shared JSON file into each tenant DB.
+        try:
+            from app.services.tenant_manager import import_legacy_validation_file
+            import_legacy_validation_file(settings.data_dir)
+        except Exception as _e:
+            logger.warning(f"Legacy validation import skipped: {_e}")
 
         # Detection rules are per-tenant since 4.1.13 — there is no shared
         # → tenant copy step on startup. Each tenant repopulates its own
@@ -415,12 +394,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Tenant cache init failed (legacy single-DB mode): {e}")
 
-    # Seed default baselines if not already present
-    try:
-        from app.inventory_engine import seed_default_playbooks as seed_default_baselines
-        seed_default_baselines()
-    except Exception as e:
-        logger.warning(f"Failed to seed default baselines: {e}")
     
     # Pre-load Sigma rules cache to avoid slow first page load
     # This takes ~6 seconds but happens during startup, not during user request
@@ -431,13 +404,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to pre-load Sigma rules: {e}")
 
-    # Index Sigma rule metadata into the shared DB for fast SQL queries
-    try:
-        indexed = sigma_helper.index_sigma_rules()
-        logger.info(f"Sigma rules indexed: {indexed} rows in sigma_rules_index")
-    except Exception as e:
-        logger.warning(f"Sigma index build failed (non-fatal): {e}")
-    
     # Warm up Sigma backends / pipelines so first conversion is instant
     try:
         sigma_helper.warm_up_backends()
@@ -459,7 +425,7 @@ async def lifespan(app: FastAPI):
     logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
 
     # 5.0.x — CTI connector auto-sync scheduler. This is the only
-    # background ticker TIDE owns; per AGENTS.md §2 it is the
+    # background ticker TIDE owns; per CLAUDE.md §2 it is the
     # sanctioned exception to the "operator-triggered only" rule.
     # The scheduler wakes once a minute, asks the shared DB which
     # cti_connectors rows are due (per the new sync_interval_minutes
@@ -646,7 +612,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/cve-overview": "page:cve_overview",
         "/baselines": "page:baselines",
         "/rules": "page:rules",
-        "/promotion": "page:promotion",
         "/sigma": "page:sigma",
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
@@ -654,6 +619,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/mitre/tactic": "page:mitre_tactic",
         "/mitre/technique": "page:mitre_technique",
         "/mitre/groups": "page:mitre_groups",
+        "/mitre/software": "page:mitre_software",
+        "/mitre/campaigns": "page:mitre_campaigns",
+        "/mitre/mitigations": "page:mitre_mitigations",
+        "/cti/indicators": "page:cti_indicators",
+        "/cti/actors": "page:cti_actors",
+        "/cti/reports": "page:cti_reports",
 
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
@@ -1102,6 +1073,40 @@ def create_app() -> FastAPI:
                 return response
             return RedirectResponse(url=login_url, status_code=302)
         
+        # Unknown browser pages get the app's "Not Found" page instead of bare JSON/HTML.
+        if (
+            exc.status_code == 404
+            and request.method == "GET"
+            and not request.url.path.startswith(("/api/", "/static/"))
+            and not request.headers.get("HX-Request")
+            and "text/html" in request.headers.get("accept", "")
+        ):
+            _nf_user = None
+            try:
+                from app.services.auth import get_auth_service
+                _auth = get_auth_service()
+                if settings.auth_disabled:
+                    _nf_user = _auth.get_dev_user()
+                elif request.cookies.get("session_token"):
+                    _nf_user = _auth.get_user_from_session(request.cookies["session_token"])
+            except Exception:
+                _nf_user = None
+            try:
+                page = render_template(
+                    "pages/core/placeholder.html",
+                    request,
+                    {
+                        "user": _nf_user,
+                        "active_page": "",
+                        "page_title": "Page Not Found",
+                        "page_subtitle": "No page exists at this address.",
+                    },
+                )
+                page.status_code = 404
+                return page
+            except Exception:
+                logger.warning("Could not render the 404 page", exc_info=True)
+
         # Default handling for other errors
         return HTMLResponse(
             content=f"<h1>Error {exc.status_code}</h1><p>{exc.detail}</p>",
@@ -1127,18 +1132,56 @@ def create_app() -> FastAPI:
         if path.startswith("/static/css/dist/") or path.startswith("/static/js/dist/"):
             response.headers["Cache-Control"] = "public, immutable, max-age=31536000"
         return response
-    
+
+    # A browser can keep an ``active_client_id`` cookie for a client that has
+    # since been deleted. Every tenant route then answered "Client not found"
+    # (404) and the whole UI looked wiped. Drop such a cookie before routing so
+    # every downstream resolver falls back to the user's default client, and
+    # expire it in the response.
+    _client_ids_seen: dict = {"at": 0.0, "ids": set()}
+
+    def _client_exists(client_id: str) -> bool:
+        now = time.time()
+        if now - _client_ids_seen["at"] > 5:
+            try:
+                from app.services.database import get_database_service
+                with get_database_service().get_shared_connection() as conn:
+                    _client_ids_seen["ids"] = {r[0] for r in conn.execute("SELECT id FROM clients").fetchall()}
+                _client_ids_seen["at"] = now
+            except Exception:
+                return True  # cannot tell: never strip a cookie on a lookup failure
+        return client_id in _client_ids_seen["ids"]
+
+    @app.middleware("http")
+    async def _drop_stale_active_client(request: Request, call_next):
+        if request.url.path.startswith("/static/"):
+            return await call_next(request)
+        cid = request.cookies.get("active_client_id")
+        stale = bool(cid) and not _client_exists(cid)
+        if stale:
+            headers = []
+            for k, v in request.scope["headers"]:
+                if k == b"cookie":
+                    kept = [p for p in v.decode("latin-1").split(";")
+                            if p.split("=", 1)[0].strip() != "active_client_id"]
+                    if kept:
+                        headers.append((k, ";".join(kept).encode("latin-1")))
+                else:
+                    headers.append((k, v))
+            request.scope["headers"] = headers
+        response = await call_next(request)
+        if stale:
+            response.delete_cookie("active_client_id")
+        return response
+
     # Setup templates
     templates_path = os.path.join(os.path.dirname(__file__), "templates")
     templates = Jinja2Templates(directory=templates_path)
-    # Disable Jinja2 LRUCache — template globals contain dicts which are unhashable
-    class _NoCache:
-        def get(self, key, default=None): return default
-        def __setitem__(self, key, value): pass
-        def __delitem__(self, key): pass
-        def __contains__(self, key): return False
-        def clear(self): pass
-    templates.env.cache = _NoCache()
+    # Jinja's default template cache stays ON: it was previously replaced by a
+    # no-op, which re-parsed and recompiled every template on every request
+    # (≈2s of a 24-card Rule Health render). Verified identical output across
+    # all pages with the cache enabled. ``auto_reload`` (default) still picks
+    # up template edits in dev.
     app.state.templates = templates
     
     # --- Custom Jinja2 filter for query syntax highlighting ---
@@ -1243,20 +1286,60 @@ def create_app() -> FastAPI:
     except Exception as _exc:
         logger.warning(f"Asset manifest unreadable ({_exc}); using fallback paths")
 
-    _ASSET_FALLBACK = {
-        "styles.css": f"/static/css/style.css?v={settings.tide_version}",
-        "app.js": f"/static/js/app.js?v={settings.tide_version}",
-    }
+    def _source_signature() -> tuple:
+        """mtime+size of every bundle source. Changes whenever CSS/JS is edited."""
+        from app.scripts.build_assets import BUNDLES
+        sig = []
+        for _bundle in BUNDLES.values():
+            for _src in _bundle["sources"]:
+                _st = os.stat(_src)
+                sig.append((str(_src), _st.st_mtime_ns, _st.st_size))
+        return tuple(sig)
+
+    _built_signature: tuple | None = None
+
+    def _ensure_bundles_fresh() -> None:
+        """Rebuild the hashed bundles + manifest when sources changed.
+
+        dist/ and manifest.json are git-ignored, so a fresh checkout, a
+        bind-mounted source tree or a `git pull` leaves them missing or
+        stale, and pages then render new templates against old CSS/JS.
+        Rebuilding here keeps the served bundle in step with the source.
+        """
+        nonlocal _built_signature
+        try:
+            sig = _source_signature()
+            if sig == _built_signature:
+                return
+            from app.scripts.build_assets import build as _build_assets
+            _build_assets()
+            _built_signature = sig
+        except Exception as _exc:
+            # Read-only FS or missing source: fall through to manifest/fallback.
+            _built_signature = None
+            logger.warning(f"Asset rebuild failed ({_exc}); using existing manifest/fallback")
+
+    _ensure_bundles_fresh()
+
+    def _fallback_url(name: str) -> str:
+        """Un-hashed source URL, cache-busted by mtime (not release version)."""
+        path = "css/style.css" if name == "styles.css" else "js/app.js"
+        try:
+            v = os.stat(os.path.join(static_path, path)).st_mtime_ns
+        except OSError:
+            v = settings.tide_version
+        return f"/static/{path}?v={v}"
 
     def asset(name: str) -> str:
         """Resolve a logical asset name to its URL.
 
         Order of resolution:
-          1. manifest.json (production / post-build)
-          2. _ASSET_FALLBACK with ?v=<version> (dev hot-reload, missing build)
+          1. manifest.json (rebuilt automatically when sources change)
+          2. mtime-versioned source path (build impossible, e.g. read-only FS)
           3. /static/<name> as a last resort
         """
         nonlocal _asset_manifest, _asset_manifest_mtime
+        _ensure_bundles_fresh()
         try:
             current_mtime = os.path.getmtime(_manifest_path)
             if _asset_manifest_mtime != current_mtime:
@@ -1271,11 +1354,32 @@ def create_app() -> FastAPI:
             logger.warning(f"Asset manifest reload failed ({_exc}); using cached paths")
         if name in _asset_manifest:
             return _asset_manifest[name]
-        if name in _ASSET_FALLBACK:
-            return _ASSET_FALLBACK[name]
+        if name in ("styles.css", "app.js"):
+            return _fallback_url(name)
         return f"/static/{name}"
 
     templates.env.globals["asset"] = asset
+
+    # MITRE technique id -> name for pill tooltips ("T1059 - Command and Scripting Interpreter").
+    # Technique names are global MITRE data, so one process-wide cache with a short TTL is enough.
+    _mitre_names: dict = {"at": 0.0, "names": {}}
+
+    def mitre_name(technique_id) -> str:
+        import time as _time
+        now = _time.monotonic()
+        if not _mitre_names["names"] or now - _mitre_names["at"] > 600:
+            try:
+                from app.services.database import get_database_service
+                _mitre_names["names"] = {
+                    str(t["id"]).upper(): t["name"]
+                    for t in get_database_service().get_mitre_techniques()
+                }
+                _mitre_names["at"] = now
+            except Exception:
+                logger.warning("MITRE technique names unavailable for pill tooltips", exc_info=True)
+        return _mitre_names["names"].get(str(technique_id or "").upper(), "")
+
+    templates.env.globals["mitre_name"] = mitre_name
 
     # 4.1.0 P5 — route-metadata-driven breadcrumbs. Templates use
     # `{{ crumbs(request) }}` (or implicitly via the breadcrumb macro)
@@ -1581,8 +1685,10 @@ def create_app() -> FastAPI:
         # the htmx:afterRequest listener in rule_health.html.
         from app.api.rules import (
             _prune_orphan_scopes,
+            _apply_lifecycle_counts,
             _parse_date_bound,
             _get_filtered_deduped_rules,
+            _get_filtered_rules,
             _metrics_from_rules,
         )
         from app.models.rules import RuleFilters
@@ -1595,7 +1701,14 @@ def create_app() -> FastAPI:
         max_score_q = qp.get("max_score") or ""
         validated_from_q = qp.get("validated_from") or ""
         validated_to_q = qp.get("validated_to") or ""
-        sort_score_q = qp.get("sort_score") or "desc"
+        # Table-header column sort (siem / state / severity / author / language) — when
+        # active it replaces the score default so the filter selects don't claim a sort.
+        from app.api.rules import _COLUMN_SORTS
+        sort_col_q = qp.get("sort_col") if qp.get("sort_col") in _COLUMN_SORTS else ""
+        sort_dir_q = qp.get("sort_dir") if (sort_col_q and qp.get("sort_dir") in ("asc", "desc")) else ""
+        if not sort_dir_q:
+            sort_col_q = ""
+        sort_score_q = qp.get("sort_score") or ("" if sort_col_q else "desc")
         sort_validated_q = qp.get("sort_validated") or ""
         sort_name_q = qp.get("sort_name") or ""
         min_score_int = int(min_score_q) if min_score_q.strip().lstrip('-').isdigit() else None
@@ -1616,30 +1729,30 @@ def create_app() -> FastAPI:
         # the grid renders (see _get_filtered_deduped_rules), so a
         # migrated/merged identity's staging and production copies aren't
         # double-counted against the grid's single card.
-        metrics = _metrics_from_rules(
-            _get_filtered_deduped_rules(
-                db,
-                RuleFilters(
-                    search=search_q or None,
-                    space=space_q or None,
-                    enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
-                    state=state_q,
-                    min_score=min_score_int,
-                    max_score=max_score_int,
-                    validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
-                    validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
-                ),
-                _cid,
-            )
+        _all_rules, _deduped_rules = _get_filtered_rules(
+            db,
+            RuleFilters(
+                search=search_q or None,
+                space=space_q or None,
+                enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
+                state=state_q,
+                min_score=min_score_int,
+                max_score=max_score_int,
+                validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
+                validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
+            ),
+            _cid,
         )
+        metrics = _metrics_from_rules(_deduped_rules, _all_rules)
         # Hide orphan space buckets (rules whose (siem_id, space) is no
         # longer in client_siem_map after a mapping change). The sync
         # path eventually deletes the rows; this keeps the metrics card
         # honest in the meantime.
         _prune_orphan_scopes(metrics, db, _cid)
+        _apply_lifecycle_counts(metrics, db, _cid, _deduped_rules)
         # Build (siem_id, space)-keyed labels — keying by space alone
         # collapses two SIEMs that share a Kibana space-name into one
-        # legend entry (AGENTS.md §8.2 g4 / §8.3 Bug C). The legacy
+        # legend entry (CLAUDE.md §8.2 g4 / §8.3 Bug C). The legacy
         # space-only ``space_labels`` is preserved for any partial that
         # has not been migrated yet.
         client_siems = db.get_client_siems(_cid) if _cid else []
@@ -1671,7 +1784,7 @@ def create_app() -> FastAPI:
                 "scopes": scopes,
                 "space_labels": space_labels,
                 "scope_labels": scope_labels,
-                "last_sync_time": get_last_sync_time(),
+                "last_sync_time": get_last_sync_time(_all_rules),
                 "search": search_q,
                 "space": space_q,
                 "enabled": enabled_q,
@@ -1684,6 +1797,9 @@ def create_app() -> FastAPI:
                 "sort_score": sort_score_q,
                 "sort_validated": sort_validated_q,
                 "sort_name": sort_name_q,
+                "sort_col": sort_col_q,
+                "sort_dir": sort_dir_q,
+                "view": qp.get("view") if qp.get("view") in ("cards", "table") else "",
             }
         )
     
@@ -2551,79 +2667,11 @@ def create_app() -> FastAPI:
             },
         )
     
-    @app.get("/promotion", response_class=HTMLResponse)
-    def promotion_page(request: Request, user: CurrentUser):
-        """Promotion page - Promote staging rules to production."""
-        from app.services.database import get_database_service
-        db = get_database_service()
-        
-        # Resolve active client (same pattern as sigma_page / rule_health_page)
-        _cid = request.cookies.get("active_client_id")
-        if not _cid and user:
-            with db.get_shared_connection() as conn:
-                row = conn.execute(
-                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
-                    [user.id],
-                ).fetchone()
-                if row:
-                    _cid = row[0]
-        if not _cid:
-            _cid = db.get_default_client_id()
-        _activate_page_tenant(request, user, db, _cid)
+    @app.get("/promotion", include_in_schema=False)
+    def promotion_page_moved():
+        """Promotion is now an action in the rule modal on /rules."""
+        return RedirectResponse(url="/rules", status_code=301)
 
-        staging_scopes = db.get_client_siem_scopes(_cid, environment_role="staging") if _cid else []
-        production_scopes = db.get_client_siem_scopes(_cid, environment_role="production") if _cid else []
-
-        from app.api.promotion import (
-            _build_promotion_filters,
-            _get_filtered_staging_rules,
-            _promotion_metrics_from_rules,
-        )
-        base_metrics = db.get_promotion_metrics(
-            staging_scopes=staging_scopes,
-            production_scopes=production_scopes,
-        )
-        promotion_rules = _get_filtered_staging_rules(
-            db,
-            _build_promotion_filters(db, _cid, page_size=1_000_000),
-            _cid,
-        )
-        metrics = _promotion_metrics_from_rules(
-            promotion_rules,
-            base_metrics["production_total"],
-        )
-
-        # Template historically received flat space-name lists for
-        # display/filter dropdowns. Derive them from the composite scopes
-        # so the contract is preserved without re-introducing space-only
-        # tenant filtering (AGENTS.md §8.2 g4).
-        staging_spaces = sorted({sp for _, sp in staging_scopes})
-        production_spaces = sorted({sp for _, sp in production_scopes})
-        
-        return render_template(
-            "pages/rules/promotion.html",
-            request,
-            {
-                "user": user,
-                "active_page": "promotion",
-                "metrics": metrics,
-                "staging_spaces": staging_spaces,
-                "production_spaces": production_spaces,
-                "last_sync_time": get_last_sync_time(),
-                "search": "",
-                "enabled": "",
-                "state": [],
-                "min_score": "",
-                "max_score": "",
-                "validated_from": "",
-                "validated_to": "",
-                "sort_by": "score_asc",
-                "sort_score": "",
-                "sort_validated": "",
-                "sort_name": "",
-            }
-        )
-    
     @app.get("/sigma", response_class=HTMLResponse)
     def sigma_page(
         request: Request,
@@ -2754,7 +2802,7 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_page(request: Request, user: CurrentUser, db: DbDep):
+    def settings_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
         """Settings page - configure integrations, logging, and system health."""
         import os
         from app import sigma_helper as sigma_mod
@@ -2782,7 +2830,7 @@ def create_app() -> FastAPI:
                 "env": env_settings,
                 "repo_status": repo_status,
                 "sigma_indices": sigma_mod.get_elastic_indices(),
-                "classifications": list_classifications(),
+                "classifications": list_classifications(client_id=client_id),
             }
         )
     

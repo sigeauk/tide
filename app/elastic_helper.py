@@ -296,8 +296,13 @@ ESQL_FUNCTIONS = {
 
 ESQL_RESERVED = {
     "and", "or", "not", "true", "false", "null", "in", "as", "by", "with", "on",
-    "asc", "desc", "nulls", "first", "last",
+    "asc", "desc", "nulls", "first", "last", "is",
 }
+
+# ES|QL time-span literals (``30 minutes``) and ``::type`` casts are grammar, not field names.
+_ESQL_TIME_LITERAL_RE = re.compile(
+    r"\b\d+\s*(?:milliseconds?|seconds?|minutes?|hours?|days?|weeks?|months?|quarters?|years?)\b", re.IGNORECASE)
+_ESQL_CAST_RE = re.compile(r"::\s*[A-Za-z_]\w*")
 
 # Backwards-compat alias (kept for any external importers).
 ESQL_KEYWORDS = ESQL_COMMANDS | ESQL_FUNCTIONS | ESQL_RESERVED
@@ -311,10 +316,40 @@ _IDENT_RE = re.compile(r"[A-Za-z_@][A-Za-z0-9_@.\-]*")
 # --- 1. PARSERS ---
 # ==========================================
 
-def _strip_string_literals(text: str) -> str:
-    """Replace ``"..."`` and ``'...'`` literals with whitespace so the regex
-    pass below cannot mistake string contents for field identifiers. Length is
-    preserved so any positional logic stays intact (none today, but cheap)."""
+def _string_end(text: str, i: int, triple: bool = True) -> int:
+    """Index just past the string literal that opens at ``text[i]`` (a quote character).
+
+    Understands ES|QL / EQL raw strings (triple-quoted, no escapes, may contain
+    quotes and pipes) and ordinary quoted strings with backslash escapes. An
+    unterminated string runs to the end of the text. Shared by the string
+    masker, the comment stripper and the ES|QL pipe splitter so they can never
+    disagree about where a string ends.
+    """
+    n = len(text)
+    q = text[i]
+    if triple and q == '"' and text.startswith('"""', i):
+        j = text.find('"""', i + 3)
+        return n if j == -1 else j + 3
+    j = i + 1
+    while j < n:
+        c = text[j]
+        if c == '\\' and j + 1 < n:
+            j += 2
+            continue
+        if c == q:
+            return j + 1
+        j += 1
+    return n
+
+
+def _strip_string_literals(text: str, quotes=('"', "'"), triple: bool = True) -> str:
+    """Replace quoted literals with whitespace so the regex pass below cannot
+    mistake string contents for field identifiers. Length is preserved.
+
+    ``quotes`` are the characters that open/close a string in the language:
+    KQL and Lucene only use ``"`` (an apostrophe in an unquoted value such as
+    ``O'Brien`` is just a character) and have no raw-string syntax
+    (``triple=False``); ES|QL/EQL callers keep the defaults."""
     if not text:
         return text
     out = []
@@ -322,21 +357,10 @@ def _strip_string_literals(text: str) -> str:
     n = len(text)
     while i < n:
         ch = text[i]
-        if ch in ('"', "'"):
-            quote = ch
-            out.append(' ')
-            i += 1
-            while i < n and text[i] != quote:
-                # honour simple backslash escapes
-                if text[i] == '\\' and i + 1 < n:
-                    out.append('  ')
-                    i += 2
-                    continue
-                out.append(' ')
-                i += 1
-            if i < n:
-                out.append(' ')
-                i += 1
+        if ch in quotes:
+            end = _string_end(text, i, triple and ch == '"')
+            out.append(' ' * (end - i))
+            i = end
         else:
             out.append(ch)
             i += 1
@@ -345,29 +369,22 @@ def _strip_string_literals(text: str) -> str:
 
 def _split_esql_pipes(query: str):
     """Split an ES|QL query on top-level ``|`` characters, ignoring any pipes
-    inside quoted string literals. Returns the list of stage strings (stripped,
-    empties dropped)."""
+    inside quoted string literals (including triple-quoted raw strings). Returns the
+    list of stage strings (stripped, empties dropped)."""
     if not query:
         return []
     stages = []
     buf = []
-    in_str = None
     i = 0
     n = len(query)
     while i < n:
         ch = query[i]
-        if in_str:
-            buf.append(ch)
-            if ch == '\\' and i + 1 < n:
-                buf.append(query[i + 1])
-                i += 2
-                continue
-            if ch == in_str:
-                in_str = None
-        elif ch in ('"', "'"):
-            in_str = ch
-            buf.append(ch)
-        elif ch == '|':
+        if ch in ('"', "'"):
+            end = _string_end(query, i)
+            buf.append(query[i:end])
+            i = end
+            continue
+        if ch == '|':
             stages.append(''.join(buf).strip())
             buf = []
         else:
@@ -383,9 +400,29 @@ def _candidate_idents(text: str):
     pure numbers, ES|QL grammar/function names, or boolean/null literals."""
     if not text:
         return []
-    cleaned = _strip_string_literals(text)
+    cleaned = _ESQL_CAST_RE.sub(' ', _ESQL_TIME_LITERAL_RE.sub(' ', _strip_string_literals(text)))
     out = []
-    for tok in _IDENT_RE.findall(cleaned):
+    # A reserved word used as ONE SEGMENT of a dotted name is backtick-quoted in place:
+    # ``source.`as`.organization.name`` is the field ``source.as.organization.name``.
+    cleaned = re.sub(r"(?<=\.)`(\w+)`|`(\w+)`(?=\.)", lambda m: m.group(1) or m.group(2), cleaned)
+    # Backtick-quoted names are how ES|QL spells fields containing special characters
+    # (``kubernetes.audit.annotations.authorization_k8s_io/decision``): one field, not several tokens.
+    for m in re.finditer(r'`([^`]+)`', cleaned):
+        quoted = m.group(1).strip()
+        if quoted and not quoted.startswith('_'):
+            out.append(quoted)
+    cleaned = re.sub(r'`[^`]*`', ' ', cleaned)
+    for m in _IDENT_RE.finditer(cleaned):
+        tok = m.group(0).rstrip('.-')      # a trailing '.' is sentence/statement punctuation, never part of a field name
+        if not tok:
+            continue
+        # ``source.*`` / ``*_suffix`` are wildcard PATTERNS (KEEP/DROP), not fields.
+        if cleaned[m.end():m.end() + 1] == '*' or (m.start() > 0 and cleaned[m.start() - 1] == '*'):
+            continue
+        # A name directly followed by '(' is a function call (KQL(), match(), space(), mv_contains() ...),
+        # whether or not it is in the known-function list.
+        if re.match(r'\s*\(', cleaned[m.end():]):
+            continue
         low = tok.lower()
         if low in ESQL_RESERVED or low in ESQL_COMMANDS or low in ESQL_FUNCTIONS:
             continue
@@ -397,8 +434,6 @@ def _candidate_idents(text: str):
         # bare in another query language.
         if tok.startswith('_'):
             continue
-        # tokens that look like commands followed by `(` are functions we
-        # haven't registered yet — skip when they precede `(` in the source.
         out.append(tok)
     return out
 
@@ -446,23 +481,12 @@ def strip_query_comments(query):
     out = []
     i = 0
     n = len(query)
-    in_quote = None
     while i < n:
         ch = query[i]
-        if in_quote:
-            out.append(ch)
-            if ch == '\\' and i + 1 < n:
-                out.append(query[i + 1])
-                i += 2
-                continue
-            if ch == in_quote:
-                in_quote = None
-            i += 1
-            continue
         if ch in ('"', "'"):
-            in_quote = ch
-            out.append(ch)
-            i += 1
+            end = _string_end(query, i)          # comment markers inside strings are data
+            out.append(query[i:end])
+            i = end
             continue
         if ch == '/' and i + 1 < n and query[i + 1] == '/':
             while i < n and query[i] not in ('\n', '\r'):
@@ -477,14 +501,41 @@ def strip_query_comments(query):
     return ''.join(out)
 
 
+# A field reference: optional leading ``@`` (``@timestamp``), then an identifier that may contain
+# dots and hyphens. Digit-leading tokens (``4688``, ``2020-01-01T00``) can never be fields.
+_FIELD_NAME = r'@?[A-Za-z_][\w.\-]*'
+# KQL / Lucene field names may also contain '/' (``kubernetes.audit.annotations.authorization_k8s_io/decision``).
+_KQL_FIELD_NAME = r'@?[A-Za-z_][\w.\-/]*'
+_KQL_KEYWORDS = {"and", "or", "not", "true", "false", "in", "by", "from", "where", "to"}
+
+
+def _mask_query_literals(query: str, quotes=('"',)) -> str:
+    """Blank string literals and Lucene ``/regex/`` values.
+
+    Everything between quotes is data, not field names: ``"C:\\Windows\\*"``,
+    ``"http://host:8080"`` and ``"12:30:00"`` all contain ``word:`` sequences that a
+    field regex would happily report as fields (``C``, ``http``, ``12``...). Each
+    phantom field is a guaranteed mapping miss on every index, dragging the
+    mapping score down. This is structural (what is inside quotes), not a
+    hardcoded exclusion list of field names.
+    """
+    masked = _strip_string_literals(query, quotes=quotes, triple=False)
+    # Lucene regex value: field:/.../  (body may contain ':' and other operators)
+    return re.sub(r'(?<=:)\s*/(?:\\.|[^/\\\n])*/', lambda m: ' ' * len(m.group(0)), masked)
+
+
 def extract_kuery_lucene(query):
+    """Field names referenced by a KQL or Lucene query (string contents excluded)."""
     if not query: return set()
     query = strip_query_comments(query)
-    fields_colon = re.findall(r'\b([\w.\-]+)\s*:', query)
-    fields_compare = re.findall(r'\b([a-zA-Z_][\w.\-]*)\s*(?:==|!=|<=|>=|<|>)\s*', query)
-    keywords = {"and", "or", "not", "true", "false", "in", "by", "from", "where"}
+    masked = _mask_query_literals(query, quotes=('"',))
+    fields_colon = re.findall(r'(?<![\w.@])(' + _KQL_FIELD_NAME + r')\s*:(?!:)', masked)
+    fields_compare = re.findall(r'(?<![\w.@])(' + _KQL_FIELD_NAME + r')\s*(?:==|!=|<=|>=|<|>)', masked)
     fields = set(fields_colon + fields_compare)
-    return {f for f in fields if f.lower() not in keywords and not f[0].isdigit()}
+    # Lucene existence syntax: ``_exists_:field`` — the argument is the field, ``_exists_`` is grammar.
+    fields.update(re.findall(r'\b_(?:exists|missing)_\s*:\s*(' + _KQL_FIELD_NAME + r')', masked))
+    fields = {f for f in fields if f.lower() not in ("_exists_", "_missing_")}
+    return {f for f in fields if f.lower() not in _KQL_KEYWORDS and not f[0].isdigit()}
 
 
 def extract_filter_fields(filters):
@@ -504,7 +555,7 @@ def extract_filter_fields(filters):
     canonical repro). This helper walks both ``meta.key`` and the
     Elasticsearch DSL ``query`` body (recursing through ``bool.{must,
     should,must_not,filter}``) and returns the union of referenced field
-    names. Per AGENTS.md it adds no hardcoded field exclusion lists —
+    names. Per CLAUDE.md it adds no hardcoded field exclusion lists —
     grammar/operator keys (``bool``, ``minimum_should_match`` …) are
     skipped, everything else discovered dynamically is treated as a field.
     """
@@ -599,7 +650,7 @@ def extract_esql(query):
 
     The returned set is ``referenced − emitted − grammar/function tokens``.
 
-    See AGENTS.md (no hardcoded field exclusion lists). The filter set is
+    See CLAUDE.md (no hardcoded field exclusion lists). The filter set is
     grammar tokens only; field names are still discovered dynamically.
     """
     if not query:
@@ -828,19 +879,52 @@ def _split_top_level_commas(text: str):
     return out
 
 
+# EQL functions whose arguments can be field references (grammar, not field names).
+_EQL_FUNCTIONS = (
+    "add", "arrayContains", "arrayCount", "arraySearch", "between", "cidrMatch", "concat", "divide",
+    "endsWith", "indexOf", "length", "match", "modulo", "multiply", "number", "startsWith", "string",
+    "stringContains", "substring", "subtract", "toString", "wildcard",
+)
+_EQL_KEYWORDS = {
+    "and", "or", "not", "true", "false", "null", "in", "like", "regex", "by", "where", "sequence",
+    "sample", "join", "until", "with", "runs", "maxspan", "of", "child", "descendant", "any",
+    "process", "file", "network", "registry", "dns", "library", "driver", "image",
+}
+
+
+def _balanced_args(text: str, open_idx: int) -> str:
+    """Text inside the parenthesis that opens at ``open_idx`` (up to its matching close)."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == '(':
+            depth += 1
+        elif text[i] == ')':
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1:i]
+    return text[open_idx + 1:]
+
+
 def extract_eql(query):
+    """Returns ``(fields, event_categories)`` for an EQL query (string contents excluded)."""
     if not query: return set(), []
     query = strip_query_comments(query)
-    event_cats = re.findall(r'\b([a-zA-Z0-9_\-]+)\s+where\b', query, re.IGNORECASE)
-    fields = re.findall(r'\b([a-zA-Z0-9_\-\.]+)\s*(?:==|!=|<=|>=|<|>|:|in\b)', query)
-    func_fields = re.findall(r'\b(?:length|concat|indexOf|stringContains)\s*\(\s*([a-zA-Z0-9_\-\.]+)', query, re.IGNORECASE)
-    keywords = {
-        "and", "or", "not", "true", "false", "in", "by", "where", 
-        "process", "file", "network", "registry", "sequence", "descendant", "child", "of"
-    }
-    all_fields = set(fields + func_fields)
-    clean_fields = {f for f in all_fields if f.lower() not in keywords and not f[0].isdigit()}
+    masked = _strip_string_literals(query)          # EQL strings: double or single quotes
+    event_cats = re.findall(r'\b([a-zA-Z0-9_\-]+)\s+where\b', masked, re.IGNORECASE)
+    ident = r'\??(' + _FIELD_NAME + r')'          # ``?field`` marks an optional field
+    fields = set(re.findall(r'(?<![\w.@])' + ident + r'\s*(?:==|!=|<=|>=|<|>|:|(?:in|like|regex)~?(?![\w.]))', masked))
+    # sequence / join / sample keys:  ``sequence by host.id, user.name [ ... ]``
+    for m in re.finditer(r'\bby\s+(' + ident + r'(?:\s*,\s*' + ident + r')*)', masked):
+        fields.update(re.findall(_FIELD_NAME, m.group(1).replace('?', '')))
+    # field arguments of EQL functions:  wildcard(process.executable, "..."), length(process.args) ...
+    for m in re.finditer(r'(?<![\w.])(?:' + '|'.join(_EQL_FUNCTIONS) + r')~?\s*\(', masked, re.IGNORECASE):
+        inner = _balanced_args(masked, m.end() - 1)
+        for tok in re.finditer(r'(?<![\w.@])\??(' + _FIELD_NAME + r')(\s*~?\s*\()?', inner):
+            if not tok.group(2):                    # a name followed by '(' is a nested function, not a field
+                fields.add(tok.group(1))
+    clean_fields = {f for f in fields if f.lower() not in _EQL_KEYWORDS and not f[0].isdigit()}
     return clean_fields, event_cats
+
 
 def get_esql_index(query):
     if not query: return []
@@ -896,53 +980,8 @@ def get_data_view_indices(session, base_url, space, rule):
         log_debug(f"Data view lookup exception for rule '{rule.get('name', '-')}' ({data_view_id}): {e}")
         return []
 
-def resolve_latest_index(session, base_url, pattern, direct_es=None):
-    # 1. If the pattern is already concrete, return it
-    if "*" not in pattern:
-        return pattern
-
-    # 2. STRATEGY A: _cat/indices (Sorts by date)
-    try:
-        path = f"/_cat/indices/{pattern}?s=creation.date:desc&h=index&format=json"
-        if direct_es:
-            res = session.get(f"{direct_es}{path}", verify=False, timeout=5)
-        else:
-            proxy_url = f"{base_url}/api/console/proxy"
-            res = session.post(proxy_url, params={"path": path, "method": "GET"}, verify=False, timeout=5)
-        
-        if res.status_code == 200:
-            indices = res.json()
-            if indices and isinstance(indices, list) and len(indices) > 0:
-                return indices[0].get('index')
-    except: pass 
-
-    # 3. STRATEGY B: _resolve/index
-    try:
-        resolve_path = f"/_resolve/index/{pattern}"
-        if direct_es:
-            res = session.get(f"{direct_es}{resolve_path}", verify=False, timeout=5)
-        else:
-            proxy_url = f"{base_url}/api/console/proxy"
-            res = session.post(proxy_url, params={"path": resolve_path, "method": "GET"}, verify=False, timeout=5)
-
-        if res.status_code == 200:
-            data = res.json()
-            candidates = data.get('indices', []) + data.get('data_streams', []) + data.get('aliases', [])
-            if candidates: return candidates[0].get('name')
-    except: pass
-
-    # 4. STRATEGY C: "DUMMY STACK" FALLBACK (The Fix)
-    # If API resolution failed, we guess the name based on your seeder logic.
-    # Pattern: logs-endpoint.events.process* -> logs-endpoint.events.process-default
-    
-    # Remove the * and trailing characters, then append -default
-    clean_base = pattern.replace('*', '').rstrip('-.') 
-    guess_index = f"{clean_base}-default"
-    
-    return guess_index
-
 # ==========================================
-# --- 2. MAPPING LOGIC (FULL FETCH) ---
+# --- 2. INDEX MAPPINGS ---
 # ==========================================
 
 def flatten_properties(props, prefix=""):
@@ -957,347 +996,342 @@ def flatten_properties(props, prefix=""):
     return fields
 
 
-# Module-level TTL cache for resolved per-pattern field mappings. Keyed by
-# ``(es_direct_url or base_url, pattern)`` so two SIEMs pointing at different
-# clusters never share a cache entry. TTL is short (5 min) so a mapping change
-# in Elastic surfaces on the next sync; ``force_mapping=True`` upstream
-# bypasses the cache by clearing entries via ``invalidate_mapping_cache``.
-_MAPPING_CACHE_TTL_S = 300
-_mapping_cache: dict = {}
-_mapping_cache_lock = _threading.Lock()
+def _es_get(session, base_url, es_direct_url, path, timeout=60):
+    """GET an Elasticsearch path directly, or through the Kibana console proxy."""
+    if es_direct_url:
+        return session.get(f"{es_direct_url}{path}", verify=False, timeout=timeout)
+    return session.post(f"{base_url}/api/console/proxy", params={"path": path, "method": "GET"},
+                        verify=False, timeout=timeout)
 
 
-def invalidate_mapping_cache():
-    """Drop every entry from the per-pattern mapping cache. Called by the
-    sync orchestrator when ``force_mapping=True`` so a forced re-check
-    actually re-hits Elastic."""
-    with _mapping_cache_lock:
-        _mapping_cache.clear()
+def fetch_field_caps(session, base_url, pattern, es_direct_url=None):
+    """Ask the SIEM what an index pattern maps, in ONE call covering every matching index.
 
-
-def _cached_mapping_get(cache_key):
-    with _mapping_cache_lock:
-        entry = _mapping_cache.get(cache_key)
-        if not entry:
-            return None
-        ts, value = entry
-        if (_time.time() - ts) > _MAPPING_CACHE_TTL_S:
-            _mapping_cache.pop(cache_key, None)
-            return None
-        return value
-
-
-def _cached_mapping_put(cache_key, value):
-    with _mapping_cache_lock:
-        _mapping_cache[cache_key] = (_time.time(), value)
-
-
-def get_batch_mappings(session, base_url, index_field_map, es_direct_url=None):
-    """Fetch field mappings for a batch of index patterns.
-
-    ``es_direct_url`` (optional) bypasses the Kibana console proxy and queries
-    Elasticsearch directly. It is resolved per-tenant from
-    ``siem_inventory.elasticsearch_url`` by callers — the global
-    ``ELASTICSEARCH_URL`` env var fallback was removed in 4.0.10.
-
-    Performance:
-      * Per-pattern TTL cache (5 min) avoids re-hitting Elastic when the same
-        pattern is requested by another rule on the same sync run, or by a
-        re-trigger inside the TTL window.
-      * Uses ``GET <index>/_mapping/field/<csv>`` so only the fields we care
-        about come back over the wire (10–100× smaller payload than the full
-        ``_mapping`` for `logs-*`-shaped indices).
+    Returns ``("ok", fields)``, ``("no_indices", {})`` when the pattern matches nothing,
+    or ``("error", message)`` when the SIEM could not answer. ``fields`` maps a field name
+    to ``[type, aggregatable, searchable, type_conflict]``. Used by the field catalogue
+    (``app.services.mapping_catalogue``), which decides when to call it.
     """
-    global_cache = {}
+    from urllib.parse import quote
+    path = f"/{quote(pattern, safe='*,-:.')}/_field_caps"
+    query = "?fields=*&ignore_unavailable=true&allow_no_indices=true"
+    res = None
+    # ``filters`` (skip metadata / object parents) needs Elasticsearch 7.13+; retry without it on a 400.
+    for extra in ("&filters=-metadata,-parent", ""):
+        res = _es_get(session, base_url, es_direct_url, path + query + extra)
+        if res.status_code != 400:
+            break
+    if res.status_code == 404:
+        return "no_indices", {}
+    if res.status_code != 200:
+        return "error", f"HTTP {res.status_code}"
+    data = res.json() or {}
+    if not data.get("indices"):
+        return "no_indices", {}
+    fields = {}
+    for name, by_type in (data.get("fields") or {}).items():
+        types = {t: i for t, i in (by_type or {}).items() if t != "unmapped" and not (i or {}).get("metadata_field")}
+        if not types:
+            continue
+        primary = "keyword" if "keyword" in types else sorted(types)[0]
+        infos = list(types.values())
+        fields[name] = [
+            primary,
+            int(all(i.get("aggregatable") for i in infos)),
+            int(all(i.get("searchable") for i in infos)),
+            int(len(types) > 1),
+        ]
+    return "ok", fields
 
-    unique_patterns = [i for i in index_field_map.keys() if i]
-    valid_patterns = [
-        p for p in unique_patterns
-        if p and not p.startswith('_') and p.lower() not in IGNORED_INDICES
-    ]
 
-    cluster_key = (es_direct_url or base_url).rstrip('/')
+def make_field_caps_fetcher(session, base_url, es_direct_url=None):
+    """A ``pattern -> (status, fields)`` callable for ``MappingCatalogue.ensure``."""
+    return lambda pattern: fetch_field_caps(session, base_url, pattern, es_direct_url)
 
-    def _fetch_mapping_for_pattern(pattern):
-        """Fetch and validate field mappings for a single index pattern."""
-        fields_to_check = sorted(index_field_map.get(pattern, set()))
-        if not fields_to_check:
-            return pattern, {}
-
-        # Cache key includes the requested fields so a subsequent caller
-        # asking for a SUPERSET of fields will still trigger a refetch (and
-        # populate the larger entry). For the common case of identical
-        # field-sets this is a clean hit.
-        cache_key = (cluster_key, pattern, tuple(fields_to_check))
-        cached = _cached_mapping_get(cache_key)
-        if cached is not None:
-            log_debug(f"   [cache hit] {pattern} ({len(cached)}/{len(fields_to_check)} fields)")
-            return pattern, cached
-
-        target_index = resolve_latest_index(session, base_url, pattern, es_direct_url)
-        # Use the field-filtered mapping endpoint (Elastic 7.x+).
-        # Handles dotted paths transparently — ES returns one object per
-        # leaf with ``mapping[<leaf-name>].type``.
-        fields_csv = ",".join(fields_to_check)
-
-        try:
-            if es_direct_url:
-                full_url = (
-                    f"{es_direct_url}/{target_index}/_mapping/field/{fields_csv}"
-                )
-                response = session.get(
-                    full_url,
-                    params={"ignore_unavailable": "true",
-                            "allow_no_indices": "true",
-                            "include_defaults": "false"},
-                    verify=False,
-                    timeout=30,
-                )
-            else:
-                path = (
-                    f"/{target_index}/_mapping/field/{fields_csv}"
-                    f"?ignore_unavailable=true&allow_no_indices=true"
-                )
-                proxy_url = f"{base_url}/api/console/proxy"
-                response = session.post(
-                    proxy_url,
-                    params={"path": path, "method": "GET"},
-                    verify=False,
-                    timeout=30,
-                )
-
-            found_mappings = {}
-
-            if response.status_code == 200:
-                data = response.json() or {}
-                # Response shape:
-                #   { "<concrete-index>": { "mappings": {
-                #       "<dotted.field.name>": {
-                #           "full_name": "...",
-                #           "mapping": { "<leaf>": { "type": "..." } } } } } }
-                for concrete_index, index_data in data.items():
-                    fmap = (index_data or {}).get('mappings', {}) or {}
-                    for full_name, info in fmap.items():
-                        leaves = (info or {}).get('mapping', {}) or {}
-                        if not leaves:
-                            continue
-                        # Pick the first leaf — for non-multi-field types
-                        # there's exactly one entry keyed by the field's
-                        # short name.
-                        leaf = next(iter(leaves.values()), {}) or {}
-                        ftype = leaf.get('type', 'unknown')
-                        # Prefer the ``full_name`` Elastic returns (handles
-                        # the dotted vs. nested ambiguity); fall back to the
-                        # outer key.
-                        canonical = (info or {}).get('full_name') or full_name
-                        # Only record fields the caller actually asked for.
-                        if canonical in fields_to_check:
-                            found_mappings[canonical] = ftype
-
-            elif response.status_code == 404:
-                log_debug(f"   Index not found (404): {target_index}")
-            else:
-                log_error(f"   Failed mapping fetch for {pattern}: {response.status_code}")
-
-            _cached_mapping_put(cache_key, found_mappings)
-            return pattern, found_mappings
-
-        except Exception as e:
-            log_error(f"   Exception for {pattern}: {e}")
-            return pattern, {}
-
-    # Fetch all index mappings in parallel (requests.Session is thread-safe for reads)
-    workers = min(20, len(valid_patterns)) if valid_patterns else 1
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_fetch_mapping_for_pattern, p): p for p in valid_patterns}
-        for fut in as_completed(futures):
-            try:
-                pattern, mappings = fut.result()
-                global_cache[pattern] = mappings
-            except Exception as e:
-                pattern = futures[fut]
-                log_error(f"   Thread exception for {pattern}: {e}")
-                global_cache[pattern] = {}
-
-    return global_cache
 
 # ==========================================
 # --- 3. SCORING & FETCH ---
 # ==========================================
 
-def calculate_score(rule_data):
-    """Calculate rule quality score matching rules.py logic."""
-    score = 0
-    quality_score = 0
-    meta_score = 0
-    results = rule_data.get('results', [])
-    
-    # Data Quality Scores
-    
-    # Mapping score (max 20)
-    score_mapping = 0
-    if results:
-        valid_lines = len([r for r in results if r[2] == "Yes"])
-        score_mapping = (valid_lines / len(results)) * 20
-        score += score_mapping
-        quality_score += score_mapping
+def calculate_score(rule_data, weights=None):
+    """Score one rule. The model and its version live in ``app.scoring``; ``weights`` are the client's points per check."""
+    from app.scoring import score_rule
+    return score_rule(rule_data, weights)
 
-    # Field type score (max 11)
-    score_field_type = 0
-    field_type_scores = {
-        "keyword": 1,
-        "wildcard": 0.8,
-        "boolean": 0.3,
-        "integer": 0.5,
-        "long": 0.5,
-        "float": 0.4,
-        "double": 0.4,
-        "text": 0.5,
-        "ip": 0.7,
-        "date": 0.8,
-        "object": 0.6,
-        "nested": 0.7,
-        "geo_point": 0.5,
-        "geo_shape": 0.4
-    }
-    if results:
-        valid_types = sum(field_type_scores.get(str(r[3]), 0) for r in results)
-        score_field_type = (valid_types / len(results)) * 11
-        score += score_field_type
-        quality_score += score_field_type
 
-    # Search time score (max 10)
-    search_time = rule_data.get('search_time', 0)
-    score_search_time = 0
-    if search_time == 0:
-        score_search_time = 0  # Rule hasn't run yet
-    elif search_time <= 200:
-        score_search_time = 10
-    elif search_time <= 400:
-        score_search_time = 8
-    elif search_time <= 1000:
-        score_search_time = 6
-    elif search_time <= 2000:
-        score_search_time = 4
-    elif search_time <= 2500:
-        score_search_time = 2
-    score += score_search_time
-    quality_score += score_search_time
-    
-    # Language score (max ~9) - detection * 0.6 + performance * 0.4
-    language_scores = {
-        "kuery": {"detection": 7, "performance": 9},
-        "lucene": {"detection": 6, "performance": 9},
-        "eql": {"detection": 10, "performance": 7},
-        "esql": {"detection": 9, "performance": 7},
-        "dsl": {"detection": 9, "performance": 8},
-    }
-    lang = normalize_rule_language(rule_data.get('language', 'kuery'))
-    lang_score = language_scores.get(lang, {"detection": 0, "performance": 0})
-    score_language = round(lang_score['detection'] * 0.6 + lang_score['performance'] * 0.4, 4)
-    score += score_language
-    quality_score += score_language
-
-    # META Data Scores
-    
-    # Note score (max 20)
-    score_note = 20 if rule_data.get('note_exists') == "Yes" else 0
-    score += score_note
-    meta_score += score_note
-
-    # Timestamp override score (max 5)
-    score_override = 5 if rule_data.get('timestamp_override') == "event.ingested" else 0
-    score += score_override
-    meta_score += score_override
-
-    # Tactics score (max 3)
-    score_tactics = 3 if (rule_data.get('tactics') and rule_data.get('tactics') != "-") else 0
-    score += score_tactics
-    meta_score += score_tactics
-
-    # Techniques score (max 7)
-    score_techniques = 7 if (rule_data.get('techniques') and rule_data.get('techniques') != "-") else 0
-    score += score_techniques
-    meta_score += score_techniques
-    
-    # Author score (max 5)
-    score_author = 5 if (rule_data.get('author_str') and rule_data.get('author_str') != "-") else 0
-    score += score_author
-    meta_score += score_author
-
-    # Highlights score (max 10)
-    score_highlights = 10 if (rule_data.get('highlighted_str') and rule_data.get('highlighted_str') != "-") else 0
-    score += score_highlights
-    meta_score += score_highlights
-
-    # Update rule_data with all scores
-    rule_data.update({
-        'score': int(round(score, 0)),
-        'quality_score': int(round(quality_score, 0)),
-        'meta_score': int(round(meta_score, 0)),
-        'score_mapping': int(round(score_mapping, 0)),
-        'score_field_type': int(round(score_field_type, 0)),
-        'score_search_time': int(score_search_time),
-        'score_language': int(round(score_language, 0)),
-        'score_note': int(score_note),
-        'score_override': int(score_override),
-        'score_tactics': int(score_tactics),
-        'score_techniques': int(score_techniques),
-        'score_author': int(score_author),
-        'score_highlights': int(score_highlights)
+def _new_session(api_key):
+    """Requests session for one SIEM's Kibana, sized for the parallel lookups below."""
+    # NOTE (4.1.14 Fix 15): Do NOT add `Connection: close` here. Combined with a large thread pool it
+    # caused TCP port exhaustion against the default urllib3 pool of 10, surfacing as
+    # `urllib3.connectionpool is full` and SSL `Max retries exceeded` redirect storms. The
+    # HTTPAdapter below sizes the pool to absorb the parallelism instead.
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=3)
+    session.mount('http://', adapter)
+    session.mount('https://', adapter)
+    session.headers.update({
+        "kbn-xsrf": "true",
+        "Authorization": f"ApiKey {api_key}",
+        "Content-Type": "application/json",
     })
-    return rule_data
+    session.verify = False
+    return session
 
-def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
-                          known_rule_keys=None, elasticsearch_url=None):
+
+def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=None,
+                   elasticsearch_url=None, force_catalogue=False, search_time_history=None, weights=None):
+    """Turn raw Kibana rule payloads into scored rows.
+
+    Field checks read the SIEM's field catalogue; the SIEM is only asked about index
+    patterns the catalogue does not know yet, that are older than its refresh window, or
+    when ``force_catalogue`` is set. ``search_time_history`` maps ``(rule_id, space)`` to
+    ``[(executed_at, ms), ...]`` (this SIEM's recent runs) for the search-time median.
+    """
+    from app.services.mapping_catalogue import MappingCatalogue
+    if check_mappings and catalogue is None:
+        catalogue = MappingCatalogue(None, "")
+    search_time_history = search_time_history or {}
+
+    # --- Batch data view resolution: resolve all data-view rules in parallel ---
+    dv_tasks = []
+    for i, r in enumerate(all_rules):
+        has_explicit_index = r.get('index') and len(r.get('index', [])) > 0
+        if not has_explicit_index and (r.get('data_view_id') or r.get('dataViewId')):
+            dv_tasks.append((i, r.get('space_id', 'default'), r))
+
+    dv_results = {}
+    if dv_tasks:
+        workers = min(10, len(dv_tasks))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(get_data_view_indices, session, base_url, space, rule): idx
+                for idx, space, rule in dv_tasks
+            }
+            for fut in as_completed(futures):
+                rule_idx = futures[fut]
+                try:
+                    dv_results[rule_idx] = fut.result()
+                except Exception:
+                    dv_results[rule_idx] = []
+        log_info(f"[perf] Resolved {len(dv_tasks)} data view lookups in parallel")
+
+    rule_meta_list = []
+    wanted_patterns = set()
+    for i, r in enumerate(all_rules):
+        query = r.get('query', '')
+        language = normalize_rule_language(r.get('language', 'kuery'))
+        # Last execution: its search duration feeds the search-time median.
+        sample = None
+        try:
+            last_exec = (r.get('execution_summary', {}) or {}).get('last_execution', {}) or {}
+            ms = int((last_exec.get('metrics', {}) or {}).get('total_search_duration_ms', 0) or 0)
+            if ms > 0 and last_exec.get('date'):
+                sample = {"rule_id": r.get('id') or r.get('rule_id'), "space": r.get('space_id', 'default'),
+                          "executed_at": str(last_exec['date']), "search_ms": ms}
+        except Exception:
+            sample = None
+        indices = r.get('index', []) or []
+        resolved_from_data_view = False
+        if not indices:
+            # Use pre-resolved data view indices (fetched in parallel above)
+            indices = dv_results.get(i, [])
+            if indices:
+                resolved_from_data_view = True
+        if language == "esql":
+            esql_indices = get_esql_index(query)
+            if esql_indices:
+                indices = esql_indices
+
+        clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
+
+        # Convert data-view-backed rules to concrete index patterns at pull
+        # time. ``data_view_id`` is a Kibana-space-scoped object — copying
+        # a rule that still carries one into another space (promotion)
+        # references a data view that doesn't exist there, and the rule
+        # fails to run. Persisting resolved ``index`` onto the raw payload
+        # here means every downstream consumer (mapping, promotion,
+        # preview) sees a portable index list instead of a dangling
+        # data_view_id.
+        if resolved_from_data_view and clean_indices:
+            r['index'] = clean_indices
+            r.pop('data_view_id', None)
+            r.pop('dataViewId', None)
+
+        fields = set()
+        if check_mappings:
+            if language in ["kuery", "lucene"]:
+                fields = extract_kuery_lucene(query)
+            elif language == "esql":
+                fields = extract_esql(query)
+            elif language == "eql":
+                fields = extract_eql(query)[0]
+
+            # UI-built rules can have an empty ``query`` and put every
+            # selection criterion into ``filters`` (the rule named
+            # ``'host rules '`` is the canonical repro — see CHANGELOG
+            # 4.1.18). Always union filter-derived fields into the
+            # mapping set, regardless of query language, so those rules
+            # are validated the same way as standard query rules.
+            filter_fields = extract_filter_fields(r.get("filters"))
+            if filter_fields:
+                fields = fields | filter_fields
+            wanted_patterns.update(
+                p for p in clean_indices if not p.startswith(('_', '-')) and p.lower() not in IGNORED_INDICES
+            )
+
+        rule_meta_list.append({"raw": r, "fields": fields, "indices": clean_indices, "sample": sample})
+
+    if check_mappings and wanted_patterns:
+        stats = catalogue.ensure(wanted_patterns, make_field_caps_fetcher(session, base_url, elasticsearch_url),
+                                 force=force_catalogue)
+        log_info(f"[perf] Field catalogue: {stats['cached']} cached, {stats['refreshed']} fetched, "
+                 f"{stats['failed']} failed of {stats['patterns']} index patterns")
+
+    processed_rules = []
+    for meta in rule_meta_list:
+        r = meta["raw"]
+        rule_language = normalize_rule_language(r.get('language', 'kuery'))
+        space_id = r.get('space_id', 'default')
+
+        # Fields the rule groups, suppresses or highlights on live outside its query but still have to exist.
+        suppression = r.get('alert_suppression', {})
+        aggregate_fields = list(suppression.get('group_by', []) or []) if isinstance(suppression, dict) else []
+        threshold = r.get('threshold')
+        if isinstance(threshold, dict):
+            tf = threshold.get('field')
+            aggregate_fields += [tf] if isinstance(tf, str) else list(tf or [])
+        new_terms = r.get('new_terms_fields')
+        if isinstance(new_terms, list):
+            aggregate_fields += new_terms
+        aggregate_fields = [str(f) for f in aggregate_fields if f]
+
+        # Extract investigation/highlighted fields (alert suppression is NOT a highlight).
+        investigation_fields_obj = r.get('investigation_fields', {})
+        investigation_fields = (investigation_fields_obj.get('field_names', []) or []
+                                if isinstance(investigation_fields_obj, dict) else [])
+        highlighted_str = ",".join(investigation_fields) if investigation_fields else "-"
+
+        results, field_facts, aux_facts = [], None, {}
+        if check_mappings:
+            field_facts, results = catalogue.check(meta["indices"], meta["fields"])
+            aux = set(aggregate_fields) | {str(f) for f in investigation_fields}
+            if r.get('timestamp_override') == 'event.ingested':
+                aux.add('event.ingested')
+            aux_facts, _ = catalogue.check(meta["indices"], aux - set(meta["fields"]))
+            aux_facts.update({f: v for f, v in field_facts.items() if f in aux})
+
+        # Search-time median: this run plus the recent runs TIDE has already recorded.
+        key = ((r.get('id') or r.get('rule_id')), space_id)
+        runs = dict(search_time_history.get(key, []))
+        if meta["sample"]:
+            runs.setdefault(meta["sample"]["executed_at"], meta["sample"]["search_ms"])
+        search_times = [ms for _, ms in sorted(runs.items(), reverse=True)]
+
+        threats = r.get('threat', [])
+        mitre_ids = []
+        tactics = []
+        techniques = []
+        if isinstance(threats, list):
+            for t in threats:
+                if not isinstance(t, dict):
+                    continue
+                if 'tactic' in t:
+                    tactics.append(t['tactic'].get('name', ''))
+                for tech in t.get('technique', []):
+                    if tech.get('id'):
+                        mitre_ids.append(tech.get('id'))
+                    techniques.append(f"{tech.get('id')} {tech.get('name')}")
+
+        rule_data = {
+            "rule_id": r.get('rule_id'),
+            "name": r.get('name'),
+            "enabled": r.get('enabled'),
+            "author_str": str(r.get('author', [])),
+            "severity": r.get('severity'),
+            "risk_score": r.get('risk_score'),
+            "timestamp_override": r.get('timestamp_override', "-"),
+            "note_exists": "Yes" if r.get('note') else "-",
+            "note": r.get('note', ''),
+            "tactics": ",".join(tactics),
+            "techniques": ",".join(techniques),
+            "highlighted_str": highlighted_str,
+            "highlight_fields": list(investigation_fields),
+            "aggregate_fields": aggregate_fields,
+            "search_time": search_times[0] if search_times else 0,
+            "search_times_ms": search_times,
+            "search_sample": meta["sample"],
+            "language": rule_language,
+            "indices": meta["indices"],
+            "fields": list(meta["fields"]),
+            "results": results,
+            "field_facts": field_facts,
+            "aux_facts": aux_facts,
+            "query": r.get('query', ''),
+            "mitre_ids": list(set(mitre_ids)),
+            "raw_data": r,
+            "space_id": space_id,
+        }
+        calculate_score(rule_data, weights)
+        rule_data.pop("field_facts", None)
+        rule_data.pop("aux_facts", None)
+        processed_rules.append(rule_data)
+    return processed_rules
+
+
+def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elasticsearch_url=None,
+                      force_catalogue=True, search_time_history=None, weights=None):
+    """Fetch and score ONE rule from its SIEM, without listing the space.
+
+    Returns a one-row DataFrame, or ``None`` when Kibana says the rule does not exist.
+    Raises on any network or HTTP failure so an outage is never mistaken for a deleted rule.
+    """
+    base_url = kibana_url.rstrip('/')
+    session = _new_session(api_key)
+    endpoint = f"{base_url}/s/{space}/api/detection_engine/rules"
+    rule = None
+    for param in ("id", "rule_id"):
+        res = session.get(endpoint, params={param: rule_id}, timeout=60)
+        if res.status_code == 200:
+            rule = res.json()
+            break
+        if res.status_code != 404:
+            raise RuntimeError(f"Kibana returned HTTP {res.status_code} for space '{space}'")
+    if not isinstance(rule, dict) or not rule:
+        return None
+    rule['space_id'] = rule.get('space_id') or space
+    rows = _process_rules(session, base_url, [rule], True, catalogue, elasticsearch_url,
+                          force_catalogue, search_time_history, weights)
+    return pd.DataFrame(rows)
+
+
+def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, catalogue=None,
+                          elasticsearch_url=None, force_catalogue=False, search_time_history=None,
+                          weights=None):
     """Fetch detection rules from a single SIEM's Kibana instance.
 
-    All connection parameters are now mandatory and resolved per-tenant from
-    ``siem_inventory`` / ``client_siem_map``. The legacy ``ELASTIC_URL`` /
-    ``ELASTIC_API_KEY`` / ``KIBANA_SPACES`` env-var fallbacks were removed in
-    4.0.10 — every call site must pass real values.
+    All connection parameters are mandatory and resolved per-tenant from
+    ``siem_inventory`` / ``client_siem_map``.
 
     Args:
         kibana_url: Base Kibana URL for this SIEM (from ``siem_inventory.kibana_url``).
         api_key: Kibana API key (from ``siem_inventory.api_token_enc``).
         spaces: List of Kibana spaces to fetch rules from for this SIEM.
-        check_mappings: When True, validate field mappings against ES.
-        known_rule_keys: ``(rule_id, space)`` tuples already in DB — mapping is
-            skipped for these (lazy mapping).
+        check_mappings: When True, check the rules' fields against the SIEM's field catalogue.
+        catalogue: ``MappingCatalogue`` for this SIEM (default: an in-memory one).
         elasticsearch_url: Optional direct Elasticsearch URL (from
             ``siem_inventory.elasticsearch_url``) used to bypass the Kibana
             console proxy when fetching index mappings.
+        force_catalogue: Refresh every index pattern in the catalogue, not just new or stale ones.
+        search_time_history: ``{(rule_id, space): [(executed_at, ms), ...]}`` recent runs for the
+            search-time median.
+        weights: the client's points per scoring check (defaults when omitted).
     """
     if not kibana_url or not api_key:
         log_error("fetch_detection_rules: kibana_url and api_key are required")
         return pd.DataFrame()
-    if known_rule_keys is None:
-        known_rule_keys = set()
 
     base_url = kibana_url.rstrip('/')
-    # NOTE (4.1.14 Fix 15): Do NOT add `Connection: close` here. Combined with
-    # the ThreadPoolExecutor(max_workers=20) used downstream for parallel
-    # mapping fetches, it caused TCP port exhaustion against the default
-    # urllib3 pool of 10, surfacing as `urllib3.connectionpool is full` and
-    # SSL `Max retries exceeded` redirect storms. The HTTPAdapter mounted
-    # below sizes the pool to absorb the parallelism instead.
-    headers = {
-        "kbn-xsrf": "true",
-        "Authorization": f"ApiKey {api_key}",
-        "Content-Type": "application/json",
-    }
-    session = requests.Session()
-    # 4.1.14 Fix 15: heavy-duty adapter sized for the 20-worker thread pool
-    # used by the parallel index-mapping fetches further down. Default
-    # urllib3 pool of 10 was being saturated, evicting in-flight connections
-    # mid-request and triggering retry-exhaustion on Kibana proxies.
-    adapter = requests.adapters.HTTPAdapter(
-        pool_connections=25, pool_maxsize=25, max_retries=3,
-    )
-    session.mount('http://', adapter)
-    session.mount('https://', adapter)
-    session.headers.update(headers)
-    session.verify = False
+    session = _new_session(api_key)
 
     spaces = [s.strip() for s in (spaces or []) if s and s.strip()]
     if not spaces:
@@ -1347,7 +1381,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
                 # same shape eliminates the test-vs-sync divergence that
                 # caused 4.1.13's `0/0 rules` regression for default-only
                 # SIEMs. Do NOT special-case the literal string 'default'
-                # here -- AGENTS.md §8.3 anti-pattern.
+                # here -- CLAUDE.md §8.3 anti-pattern.
                 endpoint = f"{base_url}/s/{space}/api/detection_engine/rules/_find"
                 if page == 1:
                     # Permanent visible proof of the URL being hit per
@@ -1497,177 +1531,8 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True,
             }
             all_rules.extend(space_rules)
 
-        rule_meta_list = []
-        index_request_map = defaultdict(set)
-        skipped_mapping_count = 0
-
-        # --- Batch data view resolution: resolve all data-view rules in parallel ---
-        dv_tasks = []
-        for i, r in enumerate(all_rules):
-            has_explicit_index = r.get('index') and len(r.get('index', [])) > 0
-            if not has_explicit_index and (r.get('data_view_id') or r.get('dataViewId')):
-                dv_tasks.append((i, r.get('space_id', 'default'), r))
-
-        if dv_tasks:
-            dv_results = {}
-            workers = min(10, len(dv_tasks))
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = {
-                    pool.submit(get_data_view_indices, session, base_url, space, rule): idx
-                    for idx, space, rule in dv_tasks
-                }
-                for fut in as_completed(futures):
-                    rule_idx = futures[fut]
-                    try:
-                        dv_results[rule_idx] = fut.result()
-                    except Exception:
-                        dv_results[rule_idx] = []
-            log_info(f"[perf] Resolved {len(dv_tasks)} data view lookups in parallel")
-        else:
-            dv_results = {}
-
-        for i, r in enumerate(all_rules):
-            query = r.get('query', '')
-            language = normalize_rule_language(r.get('language', 'kuery'))
-            # Use last execution metrics for dynamic search-time scoring
-            search_time = 0
-            try:
-                exec_summary = r.get('execution_summary', {}) or {}
-                last_exec = exec_summary.get('last_execution', {}) or {}
-                metrics = last_exec.get('metrics', {}) or {}
-                search_time = int(metrics.get('total_search_duration_ms', 0) or 0)
-            except Exception:
-                search_time = 0
-            indices = r.get('index', []) or []
-            resolved_from_data_view = False
-            if not indices:
-                # Use pre-resolved data view indices (fetched in parallel above)
-                indices = dv_results.get(i, [])
-                if indices:
-                    resolved_from_data_view = True
-            if language == "esql":
-                esql_indices = get_esql_index(query)
-                if esql_indices: indices = esql_indices
-
-            clean_indices = [str(i).strip() for i in indices if i and str(i).strip().lower() not in IGNORED_INDICES]
-
-            # Convert data-view-backed rules to concrete index patterns at pull
-            # time. ``data_view_id`` is a Kibana-space-scoped object — copying
-            # a rule that still carries one into another space (promotion)
-            # references a data view that doesn't exist there, and the rule
-            # fails to run. Persisting resolved ``index`` onto the raw payload
-            # here means every downstream consumer (mapping, promotion,
-            # preview) sees a portable index list instead of a dangling
-            # data_view_id.
-            if resolved_from_data_view and clean_indices:
-                r['index'] = clean_indices
-                r.pop('data_view_id', None)
-                r.pop('dataViewId', None)
-
-            # Lazy Mapping: skip mapping check for rules already in DB
-            rule_key = (r.get('rule_id'), r.get('space_id', 'default'))
-            needs_mapping = check_mappings and rule_key not in known_rule_keys
-
-            fields = set()
-            if needs_mapping:
-                if language in ["kuery", "lucene"]: fields = extract_kuery_lucene(query)
-                elif language == "esql": fields = extract_esql(query)
-                elif language == "eql": fields = extract_eql(query)[0]
-
-                # UI-built rules can have an empty ``query`` and put every
-                # selection criterion into ``filters`` (the rule named
-                # ``'host rules '`` is the canonical repro — see CHANGELOG
-                # 4.1.18). Always union filter-derived fields into the
-                # mapping set, regardless of query language, so those rules
-                # are validated the same way as standard query rules.
-                filter_fields = extract_filter_fields(r.get("filters"))
-                if filter_fields:
-                    fields = fields | filter_fields
-
-                for idx in clean_indices: index_request_map[idx].update(fields)
-            else:
-                if check_mappings:
-                    skipped_mapping_count += 1
-
-            rule_meta_list.append({
-                "raw": r,
-                "fields": fields,
-                "indices": clean_indices,
-                "needs_mapping": needs_mapping,
-                "search_time": search_time,
-            })
-
-        if skipped_mapping_count:
-            log_info(f"[perf] Lazy mapping: skipped {skipped_mapping_count}/{len(all_rules)} rules (already in DB)")
-
-        mapping_cache = {}
-        if check_mappings and index_request_map:
-            mapping_cache = get_batch_mappings(session, base_url, index_request_map,
-                                              es_direct_url=elasticsearch_url)
-        
-        processed_rules = []
-        for meta in rule_meta_list:
-            r = meta["raw"]
-            rule_language = normalize_rule_language(r.get('language', 'kuery'))
-            results = []
-            if check_mappings:
-                for idx in meta["indices"]:
-                    idx_mappings = mapping_cache.get(idx, {})
-                    for f in meta["fields"]:
-                        if not idx_mappings: exists, f_type = "?", "unknown"
-                        elif f in idx_mappings: exists, f_type = "Yes", idx_mappings.get(f)
-                        else: exists, f_type = "-", "missing"
-                        results.append((str(idx), str(f), str(exists), str(f_type)))
-
-            # Simplified extraction for brevity
-            threats = r.get('threat', [])
-            mitre_ids = []
-            tactics = []
-            techniques = []
-            if isinstance(threats, list):
-                for t in threats:
-                    if not isinstance(t, dict): continue
-                    if 'tactic' in t: tactics.append(t['tactic'].get('name', ''))
-                    for tech in t.get('technique', []):
-                         if tech.get('id'): mitre_ids.append(tech.get('id'))
-                         techniques.append(f"{tech.get('id')} {tech.get('name')}")
-            
-            # Extract investigation/highlighted fields
-            investigation_fields_obj = r.get('investigation_fields', {})
-            if isinstance(investigation_fields_obj, dict):
-                investigation_fields = investigation_fields_obj.get('field_names', [])
-            else:
-                investigation_fields = []
-            if not investigation_fields:
-                # Try alert_suppression.group_by as fallback
-                alert_suppression = r.get('alert_suppression', {})
-                if isinstance(alert_suppression, dict):
-                    investigation_fields = alert_suppression.get('group_by', [])
-            highlighted_str = ",".join(investigation_fields) if investigation_fields else "-"
-            
-            rule_data = {
-                "rule_id": r.get('rule_id'),
-                "name": r.get('name'),
-                "enabled": r.get('enabled'),
-                "author_str": str(r.get('author', [])),
-                "severity": r.get('severity'),
-                "risk_score": r.get('risk_score'),
-                "timestamp_override": r.get('timestamp_override', "-"),
-                "note_exists": "Yes" if r.get('note') else "-",
-                "note": r.get('note', ''),
-                "tactics": ",".join(tactics),
-                "techniques": ",".join(techniques),
-                "highlighted_str": highlighted_str,
-                "search_time": meta.get("search_time", 0), "language": rule_language,
-                "indices": meta["indices"],
-                "fields": list(meta["fields"]),
-                "results": results, "query": r.get('query', ''),
-                "mitre_ids": list(set(mitre_ids)),
-                "raw_data": r,
-                "space_id": r.get('space_id', 'default')
-            }
-            processed_rules.append(calculate_score(rule_data))
-
+        processed_rules = _process_rules(session, base_url, all_rules, check_mappings, catalogue,
+                                         elasticsearch_url, force_catalogue, search_time_history, weights)
         df = pd.DataFrame(processed_rules)
         # Stash per-space diagnostics so the orchestrator can scope its
         # subtractive-delete pass to fully-fetched (siem, space) pairs.
@@ -2418,6 +2283,9 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     except Exception:
         response_rule = {}
     target_rule_id = response_rule.get("rule_id") or response_rule.get("id") or rule_id
+    # TIDE keys a rule by Kibana's saved-object ``id`` (``rule_id`` is the same in every space),
+    # so that is the identity the caller must record for the copy.
+    target_saved_id = response_rule.get("id") or target_rule_id
     log_info(f"{action} rule '{rule_name}' in {target_space} as {target_rule_id}")
 
     # Copy-only promotion is non-destructive by contract. Kibana can take a
@@ -2425,7 +2293,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # the successful create response is sufficient to retain the source and
     # let the next tenant sync reconcile the destination copy.
     if not delete_source:
-        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_rule_id
+        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_saved_id
     
     # ── Verify the rule actually exists in the target before deleting from source ──
     verify_prefix = _space_api_prefix(tgt_base, target_space)
@@ -2447,6 +2315,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
             )
             if match and (match.get("rule_id") or match.get("id")):
                 target_rule_id = match.get("rule_id") or match.get("id")
+                target_saved_id = match.get("id") or target_saved_id
                 verify_resp = type("Verification", (), {"status_code": 200})()
     if verify_resp.status_code != 200:
         error_msg = (
@@ -2466,7 +2335,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     if delete_response.status_code not in (200, 204):
         warning_msg = f"Rule promoted but failed to delete from {source_space}: {delete_response.status_code}"
         log_error(warning_msg)
-        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_rule_id
+        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_saved_id
     
     log_info(f"Deleted rule '{rule_name}' from {source_space}")
-    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_rule_id
+    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_saved_id

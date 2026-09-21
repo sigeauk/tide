@@ -36,7 +36,7 @@
                 type="button">
                 {{ icon('chevron-down', '14') }}
             </button>
-            <div class="sync-dropdown" style="position:absolute;right:0;top:100%;margin-top:4px;background:var(--color-bg-layer-5);border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none;">
+            <div class="sync-dropdown u-bg-layer-5" style="position:absolute;right:0;top:100%;margin-top:4px;border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none">
                 <button name="Sync with Mappings"
                     class="btn btn-secondary"
                     style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
@@ -59,9 +59,20 @@
             {{ icon('plus', '16') }}
             <span>Create Rule</span>
         </button>
+        <button name="Bulk Promote"
+            class="btn btn-secondary"
+            title="Promote every staging rule that matches the current filters"
+            hx-get="/api/promotion/bulk"
+            hx-include="[name='search'], [name='space'], [name='enabled'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to']"
+            hx-target="#modal-container"
+            hx-swap="innerHTML"
+            style="height:38px;">
+            {{ icon('arrow-up-right', '16') }}
+            <span>Bulk promote</span>
+        </button>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -136,15 +147,16 @@
             {{ icon('chevron-down', '14') }}
         </button>
         <div id="rh-state-dropdown" class="tide-filter-dropdown" style="display:none;">
-            {% for opt in ['production', 'staging', 'migrated', 'deprecated'] %}
-            <label class="rh-checkbox-row">
+            {% set state_opts = [('production', 'Production only'), ('staging', 'Staging only'), ('migrated', 'Migrated (both)'), ('deprecated', 'Deprecated (neither)')] %}
+            {% for opt, opt_label in state_opts %}
+            <label class="rh-checkbox-row" title="{{ {'production': 'Exists only in a production SIEM space', 'staging': 'Exists only in a staging SIEM space', 'migrated': 'Exists in both staging and production (a linked pair)', 'deprecated': 'Exists in neither — not found at the last successful sync'}[opt] }}">
                 <input type="checkbox" name="state" value="{{ opt }}" {% if opt in state %}checked{% endif %}
                     hx-get="/api/rules"
                     hx-trigger="change"
                     hx-target="#rules-grid"
                     hx-swap="innerHTML"
                     hx-include="{{ rh_filter_include }}">
-                <span>{{ opt | capitalize }}</span>
+                <span>{{ opt_label }}</span>
             </label>
             {% endfor %}
         </div>
@@ -232,6 +244,17 @@
             <option value="desc" {% if sort_name == 'desc' %}selected{% endif %}>Z → A</option>
         </select>
     </div>
+
+    <div class="filter-group">
+        <label class="form-label">View</label>
+        <div class="rh-viewtoggle" role="group" aria-label="Rule view">
+            <button type="button" name="Cards View" data-rh-view="cards" aria-pressed="{{ 'false' if view == 'table' else 'true' }}" title="Cards">{{ icon('layout-grid', '16') }}<span class="sr-only">Cards</span></button>
+            <button type="button" name="Table View" data-rh-view="table" aria-pressed="{{ 'true' if view == 'table' else 'false' }}" title="Table">{{ icon('table', '16') }}<span class="sr-only">Table</span></button>
+        </div>
+        <input type="hidden" id="rh-view" name="view" value="{{ view }}">
+        <input type="hidden" id="rh-sort-col" name="sort_col" value="{{ sort_col | default('') }}">
+        <input type="hidden" id="rh-sort-dir" name="sort_dir" value="{{ sort_dir | default('') }}">
+    </div>
 </div>
 </div>
 
@@ -251,11 +274,7 @@
 <!-- Slide Panel Container for MITRE technique details -->
 <div id="slide-panel-container"></div>
 
-<!-- Modal Container -->
-<div id="modal-container"></div>
 
-<!-- Toast Container -->
-<div id="toast-container" class="toast-container"></div>
 
 {% endblock %}
 
@@ -278,6 +297,9 @@
     document.addEventListener('change', function(e) {
         var sortIds = ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'];
         if (sortIds.indexOf(e.target.id) === -1) return;
+        var colInput = document.getElementById('rh-sort-col'), dirInput = document.getElementById('rh-sort-dir');
+        if (colInput) colInput.value = '';
+        if (dirInput) dirInput.value = '';
         sortIds.forEach(function(id) {
             var el = document.getElementById(id);
             if (el && el !== e.target) el.value = '';
@@ -290,7 +312,7 @@
         var label = document.getElementById('rh-state-label');
         if (!label) return;
         label.textContent = checked.length
-            ? checked.map(function(c) { return c.value.charAt(0).toUpperCase() + c.value.slice(1); }).join(', ')
+            ? checked.map(function(c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
             : 'All states';
     }
     function tideUpdateScoreLabel() {
@@ -332,16 +354,71 @@
     // hx-include, so the refetch honors whatever filters are active
     // instead of reverting the stats cards to unfiltered totals.
     document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.target.classList && event.target.classList.contains('rule-card')) {
+        if (event.target.classList && (event.target.classList.contains('rule-card') || event.target.classList.contains('rule-row'))) {
             htmx.trigger(document.getElementById('metrics-container'), 'rulesFiltered');
         }
+    });
+
+    // Cards / table view. The choice rides along as the `view` filter (hidden input),
+    // is kept in the URL by the replaceState below, and is remembered per browser.
+    (function() {
+        var input = document.getElementById('rh-view');
+        if (!input) return;
+        function setPressed(view) {
+            document.querySelectorAll('[data-rh-view]').forEach(function(btn) {
+                btn.setAttribute('aria-pressed', btn.getAttribute('data-rh-view') === view ? 'true' : 'false');
+            });
+        }
+        if (!input.value) {
+            var stored = 'cards';
+            try { stored = localStorage.getItem('tide.rulesView') || 'cards'; } catch (_) { /* storage blocked */ }
+            input.value = stored === 'table' ? 'table' : 'cards';
+        }
+        setPressed(input.value);
+        document.addEventListener('click', function(e) {
+            var btn = e.target.closest && e.target.closest('[data-rh-view]');
+            if (!btn) return;
+            var view = btn.getAttribute('data-rh-view');
+            if (input.value === view) return;
+            input.value = view;
+            try { localStorage.setItem('tide.rulesView', view); } catch (_) { /* storage blocked */ }
+            setPressed(view);
+            htmx.trigger(document.body, 'refreshRules');
+        });
+    })();
+
+    // Table view: clicking a sortable header.
+    //  • score / rule / validated drive the same sort selects as the filter bar;
+    //  • SIEM / state / severity / author / lang use the table-only sort_col + sort_dir.
+    // Either way the most recent choice wins and the other sorts are cleared.
+    document.addEventListener('click', function(e) {
+        var th = e.target.closest && e.target.closest('.rt-th--sortable');
+        if (!th) return;
+        var def = th.getAttribute('data-sort-default');
+        var colInput = document.getElementById('rh-sort-col'), dirInput = document.getElementById('rh-sort-dir');
+        var col = th.getAttribute('data-sort-col');
+        if (col) {
+            var same = colInput.value === col;
+            dirInput.value = same ? (dirInput.value === 'asc' ? 'desc' : 'asc') : def;
+            colInput.value = col;
+            ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'].forEach(function(id) {
+                var el = document.getElementById(id); if (el) el.value = '';
+            });
+            tideUpdateScoreLabel(); tideUpdateValidatedLabel();
+            htmx.trigger(document.body, 'refreshRules');
+            return;
+        }
+        var select = document.getElementById(th.getAttribute('data-sort-select'));
+        if (!select) return;
+        select.value = (select.value === def) ? (def === 'desc' ? 'asc' : 'desc') : def;
+        select.dispatchEvent(new Event('change', { bubbles: true }));   // capture handler clears sort_col + sibling selects
     });
 
     // Keep the address bar (and therefore a page refresh) in sync with
     // the last-applied grid filters/pagination.
     document.body.addEventListener('htmx:afterRequest', function(event) {
         if (!event.detail.successful || !event.detail.target || event.detail.target.id !== 'rules-grid') return;
-        var reqPath = event.detail.pathInfo && (event.detail.pathInfo.requestPath || event.detail.pathInfo.finalRequestPath);
+        var reqPath = event.detail.pathInfo && (event.detail.pathInfo.finalRequestPath || event.detail.pathInfo.requestPath);
         if (reqPath && reqPath.indexOf('/api/rules') === 0) {
             window.history.replaceState(null, '', '/rules' + reqPath.slice('/api/rules'.length));
         }

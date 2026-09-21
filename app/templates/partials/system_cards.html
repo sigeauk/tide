@@ -32,7 +32,7 @@
                 <div class="cve-card-item__id cve-card-item__id--pill">
                     {% if s.classification %}
                     {% set clf_color = clf_colors.get(s.classification, '#6b7280') if clf_colors is defined and clf_colors else '#6b7280' %}
-                    <span class="system-card__classification" style="background:{{ clf_color }}20;color:{{ clf_color }};border-color:{{ clf_color }}40;">{{ s.classification }}</span>
+                    <span class="system-card__classification u-bg-dyn-tint" style="--u-bg-color:{{ clf_color }};color:{{ clf_color }};border-color:{{ clf_color }}40">{{ s.classification }}</span>
                     {% else %}
                     <span class="text-muted">Unclassified</span>
                     {% endif %}

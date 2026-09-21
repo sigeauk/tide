@@ -590,6 +590,271 @@ console.debug('TIDE app.js loading...');
         }
     });
 
+    // ══════════════════════════════════════════════════════════════════
+    //  Rule modal behaviour (card/table click → modal in #modal-container)
+    //   • loading skeleton while the modal/edit request is in flight
+    //   • close (X / Esc / backdrop) with focus returned to the opener
+    //   • prev / next (buttons + ← →) through the list the modal was opened from
+    //   • history toggle, section order and section open/closed remembered per browser
+    //   • copy-query button
+    // ══════════════════════════════════════════════════════════════════
+    var ruleModalOpener = null;      // element that opened the modal (card / row)
+    var ruleModalListRoot = null;    // its [data-rule-list] container
+    var ruleSkeletonTimer = null;
+    var MODAL_PATHS = ['/history-modal', '/edit-form', '/create-form'];
+
+    function ruleModalOverlay() { return document.querySelector('.modal-overlay[data-rule-modal]'); }
+
+    function closeRuleModal() {
+        var overlay = ruleModalOverlay();
+        if (!overlay) return false;
+        var container = overlay.parentElement;
+        overlay.remove();
+        if (container && container.id === 'modal-container') container.innerHTML = '';
+        if (ruleModalOpener && document.contains(ruleModalOpener)) {
+            try { ruleModalOpener.focus({ preventScroll: true }); } catch (_) { /* element not focusable */ }
+        }
+        return true;
+    }
+
+    function showRuleSkeleton(container) {
+        var tpl = document.getElementById('rule-modal-skeleton');
+        if (!tpl || !container) return;
+        container.innerHTML = '';
+        container.appendChild(tpl.content.cloneNode(true));
+    }
+
+    function clearRuleSkeleton() {
+        clearTimeout(ruleSkeletonTimer);
+        ruleSkeletonTimer = null;
+    }
+
+    // Remember what opened the modal, and show the skeleton if the response is slow.
+    document.addEventListener('htmx:beforeRequest', function(e) {
+        var elt = e.detail && e.detail.elt;
+        var path = (e.detail && e.detail.pathInfo && e.detail.pathInfo.requestPath) || '';
+        var target = e.detail && e.detail.target;
+        if (elt && elt.hasAttribute && elt.hasAttribute('data-rule-open')) {
+            ruleModalOpener = elt;
+            ruleModalListRoot = elt.closest('[data-rule-list]');
+        }
+        if (!target || target.id !== 'modal-container') return;
+        if (!MODAL_PATHS.some(function(p) { return path.indexOf(p) !== -1; })) return;
+        clearRuleSkeleton();
+        ruleSkeletonTimer = setTimeout(function() { showRuleSkeleton(target); }, 120);
+    });
+    ['htmx:afterSwap', 'htmx:responseError', 'htmx:sendError', 'htmx:timeout'].forEach(function(name) {
+        document.addEventListener(name, function(e) {
+            var target = e.detail && e.detail.target;
+            if (!target || target.id !== 'modal-container') return;
+            clearRuleSkeleton();
+            if (name !== 'htmx:afterSwap') {
+                var overlay = target.querySelector('[data-rm-skeleton]');
+                if (overlay) { overlay.remove(); target.innerHTML = ''; }
+                if (typeof showToast === 'function') showToast('Could not load the rule. Please try again.', 'error');
+            }
+        });
+    });
+
+    // Close handlers (delegated so they work for swapped-in modals).
+    document.addEventListener('click', function(e) {
+        if (e.target.closest && e.target.closest('[data-rm-close]')) { closeRuleModal(); return; }
+        var overlay = e.target;
+        if (overlay && overlay.matches && overlay.matches('.modal-overlay[data-rm-overlay]')) closeRuleModal();
+    });
+
+    // Copy query
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-copy]');
+        if (!btn) return;
+        var src = document.querySelector(btn.getAttribute('data-rm-copy'));
+        if (!src || !navigator.clipboard) return;
+        navigator.clipboard.writeText(src.innerText).then(function() {
+            btn.classList.add('is-done');
+            setTimeout(function() { btn.classList.remove('is-done'); }, 1200);
+        });
+    });
+
+    // ── prev / next through the list the modal was opened from ──
+    function ruleNavItems() {
+        var root = ruleModalListRoot && document.contains(ruleModalListRoot) ? ruleModalListRoot : null;
+        return root ? Array.prototype.slice.call(root.querySelectorAll('[data-rule-open]')) : [];
+    }
+    function ruleNavIndex(items) {
+        var modal = document.querySelector('.rule-modal[data-rule-id]');
+        if (!modal) return -1;
+        var id = 'rule-' + modal.getAttribute('data-rule-id');
+        for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
+        return -1;
+    }
+    function ruleNavSentinel() {
+        return ruleModalListRoot ? ruleModalListRoot.querySelector('.infinite-scroll-sentinel') : null;
+    }
+    function updateRuleNavButtons() {
+        var modal = document.querySelector('.rule-modal[data-rule-id]');
+        if (!modal) return;
+        var items = ruleNavItems(), idx = ruleNavIndex(items);
+        var prev = modal.querySelector('[data-rm-nav="prev"]'), next = modal.querySelector('[data-rm-nav="next"]');
+        if (prev) prev.disabled = idx <= 0;
+        if (next) next.disabled = idx === -1 || (idx >= items.length - 1 && !ruleNavSentinel());
+    }
+    function openAdjacentRule(dir) {
+        var items = ruleNavItems(), idx = ruleNavIndex(items);
+        if (idx === -1) return;
+        var nextIdx = idx + (dir === 'next' ? 1 : -1);
+        if (nextIdx >= 0 && nextIdx < items.length) {
+            items[nextIdx].scrollIntoView({ block: 'nearest' });
+            htmx.trigger(items[nextIdx], 'click');
+            return;
+        }
+        // At the end of what is loaded: pull the next page (infinite scroll), then continue.
+        var sentinel = dir === 'next' ? ruleNavSentinel() : null;
+        if (!sentinel) return;
+        var root = ruleModalListRoot;
+        var once = function(ev) {
+            if (!root || !root.contains(ev.detail.target) && ev.detail.target !== root && !ev.detail.target.contains(root)) return;
+            document.removeEventListener('htmx:afterSettle', once);
+            var again = ruleNavItems();
+            if (idx + 1 < again.length) htmx.trigger(again[idx + 1], 'click');
+        };
+        document.addEventListener('htmx:afterSettle', once);
+        htmx.trigger(sentinel, 'tideLoadMore');
+    }
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-nav]');
+        if (btn && !btn.disabled) openAdjacentRule(btn.getAttribute('data-rm-nav'));
+    });
+    document.addEventListener('keydown', function(e) {
+        if (!ruleModalOverlay()) return;
+        if (e.key === 'Escape') { closeRuleModal(); return; }
+        if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        var a = document.activeElement, tag = a && a.tagName;
+        if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (a && a.isContentEditable)) return;
+        if (!document.querySelector('.rule-modal[data-rule-id]')) return;   // e.g. edit form is open
+        e.preventDefault();
+        openAdjacentRule(e.key === 'ArrowRight' ? 'next' : 'prev');
+    });
+
+    // ── Preferences remembered per browser: history shown/hidden, section order, section open/closed ──
+    window.tideCloseRuleModal = closeRuleModal;      // used by MITRE pills inside the modal (so the side panel is visible)
+
+    function readPref(key, fallback) {
+        try { var raw = localStorage.getItem(key); return raw === null ? fallback : JSON.parse(raw); } catch (_) { return fallback; }
+    }
+    function writePref(key, value) {
+        try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage blocked */ }
+    }
+
+    // History column: one toggle (data-view = default | no-history)
+    function applyRuleModalHistory(modal, shown) {
+        if (!modal) return;
+        modal.setAttribute('data-view', shown ? 'default' : 'no-history');
+        var btn = modal.querySelector('[data-rm-history-toggle]');
+        if (btn) btn.setAttribute('aria-pressed', shown ? 'true' : 'false');
+    }
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-history-toggle]');
+        if (!btn) return;
+        var modal = btn.closest('.rule-modal');
+        var shown = modal.getAttribute('data-view') === 'no-history';     // was hidden -> now shown
+        applyRuleModalHistory(modal, shown);
+        writePref('tide.ruleModalHistory', shown ? 'shown' : 'hidden');
+    });
+
+    // Centre-column section order (about · logic · guide · references · mappings · scores)
+    // The centre column keeps its original storage key; the side columns get their own.
+    function ruleOrderKey(col) {
+        var m = col.className.match(/rm-col--(\w+)/);
+        return !m || m[1] === 'logic' ? 'tide.ruleModalOrder' : 'tide.ruleModalOrder.' + m[1];
+    }
+    function ruleSectionEls(col) { return Array.prototype.slice.call(col.querySelectorAll(':scope > [data-section]')); }
+    function updateMoveButtons(col) {
+        var items = ruleSectionEls(col);
+        items.forEach(function(el, i) {
+            var up = el.querySelector('[data-rm-move="up"]'), down = el.querySelector('[data-rm-move="down"]');
+            if (up) up.disabled = i === 0;
+            if (down) down.disabled = i === items.length - 1;
+        });
+    }
+    function applyRuleSectionOrder(col) {
+        var order = readPref(ruleOrderKey(col), []);
+        if (Array.isArray(order) && order.length) {
+            var items = ruleSectionEls(col), byKey = {};
+            items.forEach(function(el) { byKey[el.getAttribute('data-section')] = el; });
+            var anchor = col.querySelector(':scope > .rm-note');            // keep non-section notes where they are
+            order.forEach(function(k) { if (byKey[k]) { col.insertBefore(byKey[k], anchor); delete byKey[k]; } });
+            Object.keys(byKey).forEach(function(k) { col.insertBefore(byKey[k], anchor); });   // sections added later go last
+        }
+        updateMoveButtons(col);
+    }
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-move]');
+        if (!btn || btn.disabled) return;
+        e.preventDefault();               // the buttons live inside <summary>: do not toggle the section
+        e.stopPropagation();
+        var section = btn.closest('[data-section]'), col = section && section.parentElement;
+        if (!col) return;
+        var items = ruleSectionEls(col), i = items.indexOf(section);
+        var j = btn.getAttribute('data-rm-move') === 'up' ? i - 1 : i + 1;
+        if (j < 0 || j >= items.length) return;
+        if (j < i) col.insertBefore(section, items[j]); else col.insertBefore(items[j], section);
+        writePref(ruleOrderKey(col), ruleSectionEls(col).map(function(el) { return el.getAttribute('data-section'); }));
+        updateMoveButtons(col);
+        var same = section.querySelector('[data-rm-move="' + btn.getAttribute('data-rm-move') + '"]');
+        var target = same && !same.disabled ? same : section.querySelector('[data-rm-move]:not(:disabled)');
+        if (target) target.focus({ preventScroll: true });
+        section.scrollIntoView({ block: 'nearest' });
+    }, true);
+
+    // Section open/closed
+    function readRuleModalFolds() { return readPref('tide.ruleModalFolds', {}) || {}; }
+    document.addEventListener('toggle', function(e) {
+        var fold = e.target;
+        if (!fold || !fold.matches || !fold.matches('details.rm-fold[data-fold]')) return;
+        var folds = readRuleModalFolds();
+        folds[fold.getAttribute('data-fold')] = fold.open;
+        writePref('tide.ruleModalFolds', folds);
+    }, true);
+
+    // Panels (activity, score chart, logic, actions, MITRE) collapse via a head button and share the fold pref.
+    function setPanelCollapsed(panel, collapsed) {
+        panel.classList.toggle('is-collapsed', collapsed);
+        var btn = panel.querySelector('[data-rm-collapse]');
+        if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-collapse]');
+        if (!btn) return;
+        var panel = btn.closest('.rm-panel[data-fold]');
+        if (!panel) return;
+        var collapsed = !panel.classList.contains('is-collapsed');
+        setPanelCollapsed(panel, collapsed);
+        var folds = readRuleModalFolds();
+        folds[panel.getAttribute('data-fold')] = !collapsed;
+        writePref('tide.ruleModalFolds', folds);
+    }, true);
+
+    // Restore everything when a modal is swapped in
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var target = e.detail && e.detail.target;
+        if (!target || target.id !== 'modal-container') return;
+        var modal = target.querySelector('.rule-modal[data-rule-id]');
+        if (!modal) return;
+        applyRuleModalHistory(modal, readPref('tide.ruleModalHistory', 'shown') !== 'hidden');
+        var folds = readRuleModalFolds();
+        modal.querySelectorAll('details.rm-fold[data-fold]').forEach(function(fold) {
+            if (folds[fold.getAttribute('data-fold')] === false) fold.open = false;
+        });
+        modal.querySelectorAll('.rm-panel[data-fold]').forEach(function(panel) {
+            if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
+        });
+        modal.querySelectorAll('.rm-col').forEach(applyRuleSectionOrder);
+        updateRuleNavButtons();
+        var closeBtn = modal.querySelector('[data-rm-close]');
+        if (closeBtn) closeBtn.focus({ preventScroll: true });
+    });
+
     // Keep summary link navigation and card expansion separate across list/detail accordions.
     document.addEventListener('pointerdown', function(event) {
         var link = event.target.closest('details > summary a[href]');
@@ -741,5 +1006,136 @@ console.debug('TIDE app.js loading...');
         // DOM is already ready
         initializeApp();
     }
+
+    // <details data-remember="key"> keeps its open/closed state per browser. A panel rendered open on purpose
+    // (data-keep-open, e.g. right after a save) is left alone.
+    function applyRemembered(root) {
+        if (!root || !root.querySelectorAll) return;
+        var panels = Array.prototype.slice.call(root.querySelectorAll('details[data-remember]'));
+        if (root.matches && root.matches('details[data-remember]')) panels.push(root);
+        panels.forEach(function (d) {
+            if (d.hasAttribute('data-keep-open')) return;
+            try {
+                var saved = localStorage.getItem('tide.open.' + d.getAttribute('data-remember'));
+                if (saved !== null) d.open = saved === '1';
+            } catch (_) { /* storage unavailable: keep the default */ }
+        });
+    }
+    document.addEventListener('toggle', function (e) {
+        var d = e.target;
+        if (!d.matches || !d.matches('details[data-remember]')) return;
+        try { localStorage.setItem('tide.open.' + d.getAttribute('data-remember'), d.open ? '1' : '0'); } catch (_) { /* ignore */ }
+    }, true);
+    document.addEventListener('htmx:load', function (e) { applyRemembered(e.target); });
+
+    // Management > client > Rule scoring: live total of the points allocated (delegated, so it survives htmx swaps).
+    document.addEventListener('input', function (e) {
+        var input = e.target;
+        if (!input.matches || !input.matches('[data-scoring-weight]')) return;
+        var form = input.closest('[data-scoring-form]');
+        var total = 0;
+        form.querySelectorAll('[data-scoring-weight]').forEach(function (el) { total += parseInt(el.value, 10) || 0; });
+        var out = form.querySelector('[data-scoring-total]');
+        if (out) out.textContent = total;
+    });
+
+    // Rule modal > Actions > Promote / Demote: confirm dialog, then POST to the promotion API.
+    // Promote: "Delete source" starts from the client default and is only sent when the user changes it,
+    // so the server applies the same default logic as before. Demote: the production copy is kept unless ticked.
+    function showMoveConfirm(cfg) {
+        var host = document.getElementById('modal-container');
+        if (!host) return;
+        var overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML =
+            '<div name="' + cfg.verb + ' Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
+            '<h2 class="modal-section-title">' + cfg.title + '</h2>' +
+            '<p class="text-secondary mb-md">Are you sure you want to ' + cfg.verb.toLowerCase() + ' <strong data-move-name></strong> ' + cfg.destination + '?</p>' +
+            '<div class="alert alert-warning mb-md"><p>' + cfg.warning + '</p></div>' +
+            '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
+            '<input type="checkbox" name="delete_source"' + (cfg.deleteDefault ? ' checked' : '') + '> ' + cfg.checkboxLabel + '</label>' +
+            '<div class="modal-actions">' +
+            '<button name="Cancel" type="button" class="btn btn-secondary" data-move-cancel>Cancel</button>' +
+            '<button name="' + cfg.verb + '" type="button" class="btn btn-primary" data-move-go>' + cfg.verb + '</button>' +
+            '</div></div>';
+        overlay.querySelector('[data-move-name]').textContent = cfg.ruleName;
+        var box = overlay.querySelector('input[name="delete_source"]');
+        box.dataset.changed = 'false';
+        box.addEventListener('change', function () { box.dataset.changed = 'true'; });
+        overlay.querySelector('[data-move-cancel]').onclick = function () { overlay.remove(); };
+        var go = overlay.querySelector('[data-move-go]');
+        go.onclick = function () {
+            go.disabled = true;
+            go.textContent = cfg.busy;
+            var body = new URLSearchParams();
+            if (cfg.alwaysSend || box.dataset.changed === 'true') body.set('delete_source', box.checked ? 'true' : 'false');
+            var url = '/api/promotion/' + encodeURIComponent(cfg.ruleId) + '/' + cfg.verb.toLowerCase() + (cfg.siemId ? '?siem_id=' + encodeURIComponent(cfg.siemId) : '');
+            fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
+                .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html }; }); })
+                .then(function (res) {
+                    var toasts = document.getElementById('toast-container');
+                    if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
+                    if (res.ok) {
+                        document.querySelectorAll('#modal-container .modal-overlay').forEach(function (o) { o.remove(); });
+                        setTimeout(function () { window.location.reload(); }, 1200);
+                    } else {
+                        go.disabled = false;
+                        go.textContent = cfg.verb;
+                    }
+                })
+                .catch(function (err) {
+                    go.disabled = false;
+                    go.textContent = cfg.verb;
+                    var toasts = document.getElementById('toast-container');
+                    if (toasts) {
+                        var t = document.createElement('div');
+                        t.className = 'toast toast-danger';
+                        t.textContent = 'Error: ' + err.message;
+                        t.onclick = function () { t.remove(); };
+                        toasts.appendChild(t);
+                    }
+                });
+        };
+        host.appendChild(overlay);
+    }
+
+    window.showPromoteConfirm = function (ruleId, ruleName, siemId, deleteSourceDefault) {
+        showMoveConfirm({
+            verb: 'Promote', busy: 'Promoting...', title: 'Promote to Production', destination: 'to the production environment',
+            warning: 'The production copy becomes the master rule. Delete source is enabled by default from the client settings.',
+            checkboxLabel: 'Delete source after promotion', deleteDefault: deleteSourceDefault,
+            ruleId: ruleId, ruleName: ruleName, siemId: siemId
+        });
+    };
+
+    window.showDemoteConfirm = function (ruleId, ruleName, siemId) {
+        showMoveConfirm({
+            verb: 'Demote', busy: 'Demoting...', title: 'Demote to Staging', destination: 'back to the staging environment',
+            warning: 'A copy is created in staging. The production rule stays live unless you tick the box below.',
+            checkboxLabel: 'Delete the production copy after demoting', deleteDefault: false, alwaysSend: true,
+            ruleId: ruleId, ruleName: ruleName, siemId: siemId
+        });
+    };
+
+    // Rule compare dialog: inline / side-by-side layout, remembered per browser.
+    function applyDiffView(root) {
+        var view = 'inline';
+        try { view = localStorage.getItem('tide.diffView') || 'inline'; } catch (_) { /* default */ }
+        root.setAttribute('data-view', view === 'side' ? 'side' : 'inline');
+    }
+    document.addEventListener('htmx:load', function (e) {
+        var roots = e.target && e.target.querySelectorAll ? Array.prototype.slice.call(e.target.querySelectorAll('.rd-root')) : [];
+        if (e.target && e.target.matches && e.target.matches('.rd-root')) roots.push(e.target);
+        roots.forEach(applyDiffView);
+    });
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('[data-rd-view]');
+        if (!btn) return;
+        var root = btn.closest('.rd-root');
+        if (!root) return;
+        root.setAttribute('data-view', btn.getAttribute('data-rd-view'));
+        try { localStorage.setItem('tide.diffView', btn.getAttribute('data-rd-view')); } catch (_) { /* ignore */ }
+    }, true); // capture: the dialog stops click propagation, so a bubbling listener never sees it
 
 })();

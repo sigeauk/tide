@@ -51,7 +51,6 @@ def _get_write_paths() -> List[str]:
 def export_rule_logs(
     db,
     log_path: str,
-    validation_data: dict = None,
     siem_id: Optional[str] = None,
     space: Optional[str] = None,
     filename: Optional[str] = None,
@@ -62,7 +61,6 @@ def export_rule_logs(
     Args:
         db: DatabaseService instance
         log_path: Directory to write log files
-        validation_data: Optional dict of {rule_name: {last_checked_on, checked_by}}
         siem_id: When set, restrict the export to rules belonging to this SIEM
             (matches ``detection_rules.siem_id``). Required for per-SIEM
             scoping; omitted callers get the legacy global behaviour.
@@ -83,9 +81,9 @@ def export_rule_logs(
 
         # Since 4.1.13 (Migration 45) `detection_rules` lives only in tenant
         # DBs. Iterate every tenant, set tenant context, fetch the
-        # SIEM/space-scoped slice from each, and dedupe by rule_id (rules
-        # for a given (siem_id, space) are identical across tenants that
-        # mapped that pair, so first-write-wins is correct).
+        # SIEM/space-scoped slice from each. Scores and validation are
+        # per-tenant, so every tenant's rules are written and tagged with the
+        # tenant they belong to.
         from app.services.tenant_manager import (
             resolve_tenant_db_path,
             set_tenant_context,
@@ -93,9 +91,10 @@ def export_rule_logs(
             get_tenant_db_path,
         )
         from app.config import get_settings
+        from app.services.database import validation_for
         data_dir = get_settings().data_dir
         prev_ctx = get_tenant_db_path()
-        rules_by_id: Dict[str, Dict] = {}
+        rules: List[Dict] = []
         try:
             tenants = db.list_clients() or []
         except Exception as exc:
@@ -116,6 +115,11 @@ def export_rule_logs(
                 tenant_rules = db.get_all_rules_for_export(
                     siem_id=siem_id, space=space
                 )
+                tenant_validation = db._load_validation_data()
+                for r in tenant_rules:
+                    r["_validation"] = validation_for(tenant_validation, r.get("validation_key"), r.get("name"))
+                    r["_tenant"] = tname
+                    r["_client_id"] = cid
             except Exception as exc:
                 logger.warning(
                     f"export_rule_logs: tenant '{tname}' ({cid}) read failed: "
@@ -128,11 +132,7 @@ def export_rule_logs(
                     clear_tenant_context()
                 else:
                     set_tenant_context(prev_ctx)
-            for r in tenant_rules:
-                rid = r.get("rule_id")
-                if rid and rid not in rules_by_id:
-                    rules_by_id[rid] = r
-        rules = list(rules_by_id.values())
+            rules.extend(r for r in tenant_rules if r.get("rule_id"))
 
         if not rules:
             logger.warning(
@@ -141,10 +141,6 @@ def export_rule_logs(
             )
             return 0
         
-        # Load validation data if not provided
-        if validation_data is None:
-            validation_data = db._load_validation_data()
-        
         # Write JSON lines
         count = 0
         with open(log_file, 'w') as f:
@@ -152,6 +148,8 @@ def export_rule_logs(
                 # Build the log entry matching Phase 5 spec
                 entry = {
                     "date": datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "tenant": rule.get("_tenant", ""),
+                    "client_id": rule.get("_client_id", ""),
                     "rule_id": rule.get("rule_id", ""),
                     "name": rule.get("name", ""),
                     "space": rule.get("space", ""),
@@ -174,15 +172,10 @@ def export_rule_logs(
                     "mitre_ids": rule.get("mitre_ids", []),
                 }
                 
-                # Add validation info from checkedRule data
-                rule_name = rule.get("name", "")
-                if rule_name in validation_data:
-                    vd = validation_data[rule_name]
-                    entry["last_checked_on"] = vd.get("last_checked_on", "")
-                    entry["checked_by"] = vd.get("checked_by", "")
-                else:
-                    entry["last_checked_on"] = ""
-                    entry["checked_by"] = ""
+                # Validation is per-tenant; the rule carries its tenant's record.
+                vd = rule.get("_validation") or {}
+                entry["last_checked_on"] = vd.get("last_checked_on", "")
+                entry["checked_by"] = vd.get("checked_by", "")
                 
                 f.write(json.dumps(entry) + "\n")
                 count += 1

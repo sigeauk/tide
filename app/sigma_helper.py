@@ -228,24 +228,21 @@ def extract_mitre_tactics(rule: Dict) -> List[str]:
     return list(dict.fromkeys(tactics))  # dedupe, preserve order
 
 
-def index_sigma_rules() -> int:
-    """Populate the *sigma_rules_index* table in the **shared** DB.
+def index_sigma_rules(conn) -> int:
+    """Populate the *sigma_rules_index* table on *conn* (the reference DB).
 
-    Uses the in-memory rules cache (must be loaded first via
-    ``load_all_rules()``).  Strategy is TRUNCATE → INSERT so the index
-    always mirrors the baked-in SigmaHQ repo.
+    Loads the rules via ``load_all_rules()``. Strategy is TRUNCATE → INSERT so
+    the index always mirrors the baked-in SigmaHQ repo.
 
     Returns the number of rows inserted.
     """
     from datetime import datetime as _dt
-    from app.services.database import get_database_service
 
     rules = load_all_rules()
     if not rules:
         log_error("[SIGMA-INDEX] No rules in cache – skipping index")
         return 0
 
-    db = get_database_service()
     now = _dt.utcnow()
     rows = []
     for rule in rules:
@@ -272,37 +269,42 @@ def index_sigma_rules() -> int:
             now,
         ))
 
-    with db.get_shared_connection() as conn:
-        # Self-heal for environments where migration 30 did not run yet.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS sigma_rules_index (
-                rule_id   VARCHAR PRIMARY KEY,
-                title     VARCHAR,
-                level     VARCHAR,
-                status    VARCHAR,
-                product   VARCHAR,
-                category  VARCHAR,
-                service   VARCHAR,
-                techniques VARCHAR[],
-                tactics   VARCHAR[],
-                file_path VARCHAR,
-                indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        try:
-            conn.execute("CREATE INDEX idx_sigma_product  ON sigma_rules_index(product)")
-            conn.execute("CREATE INDEX idx_sigma_service  ON sigma_rules_index(service)")
-            conn.execute("CREATE INDEX idx_sigma_category ON sigma_rules_index(category)")
-        except Exception:
-            pass
-        conn.execute("DELETE FROM sigma_rules_index")
-        conn.executemany(
-            """INSERT INTO sigma_rules_index
-               (rule_id, title, level, status, product, category,
-                service, techniques, tactics, file_path, indexed_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sigma_rules_index (
+            rule_id   VARCHAR PRIMARY KEY,
+            title     VARCHAR,
+            level     VARCHAR,
+            status    VARCHAR,
+            product   VARCHAR,
+            category  VARCHAR,
+            service   VARCHAR,
+            techniques VARCHAR[],
+            tactics   VARCHAR[],
+            file_path VARCHAR,
+            indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
+    """)
+    # DuckDB cannot reliably DELETE from a table whose secondary ART
+    # indexes hold many duplicate keys (many rules share a product/
+    # service/category) — it raises "Failed to delete all rows from
+    # index". Drop them, rebuild the table contents, then recreate.
+    for idx in ("idx_sigma_product", "idx_sigma_service", "idx_sigma_category"):
+        conn.execute(f"DROP INDEX IF EXISTS {idx}")
+    conn.execute("DELETE FROM sigma_rules_index")
+    import pandas as _pd
+    cols = ["rule_id", "title", "level", "status", "product", "category",
+            "service", "techniques", "tactics", "file_path", "indexed_at"]
+    conn.register("sigma_index_src", _pd.DataFrame(rows, columns=cols))
+    try:
+        conn.execute(
+            f"INSERT INTO sigma_rules_index ({', '.join(cols)}) "
+            f"SELECT {', '.join(cols)} FROM sigma_index_src"
+        )
+    finally:
+        conn.unregister("sigma_index_src")
+    conn.execute("CREATE INDEX idx_sigma_product  ON sigma_rules_index(product)")
+    conn.execute("CREATE INDEX idx_sigma_service  ON sigma_rules_index(service)")
+    conn.execute("CREATE INDEX idx_sigma_category ON sigma_rules_index(category)")
 
     log_info(f"[SIGMA-INDEX] Indexed {len(rows)} rules into sigma_rules_index")
     return len(rows)

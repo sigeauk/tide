@@ -11,8 +11,8 @@ from html import escape as _esc
 from typing import Optional
 
 import requests as http_requests
-from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Request, Form, File, UploadFile
+from fastapi.responses import HTMLResponse, Response
 
 from app.api.deps import DbDep, RequireAdmin, RequireSuperadmin, ActiveClient
 
@@ -1481,6 +1481,39 @@ _SIEM_CHECK_ENDPOINT = {
 }
 
 
+_SPACE_REASON_TEXT = {
+    "no_credentials": "This SIEM has no Kibana URL or API key saved, so spaces cannot be discovered.",
+    "live_failed": "TIDE could not reach Kibana to list spaces (see the app log for the HTTP status or error).",
+    "no_spaces_found": "Kibana returned no spaces for this API key (it needs the spaces read privilege).",
+}
+
+
+@router.get("/siems/{siem_id}/spaces")
+def list_siem_spaces(siem_id: str, db: DbDep, user: RequireAdmin):
+    """Spaces this SIEM offers, fetched on demand for the link-to-tenant picker.
+
+    Live lookup first (persisted on success), then the persisted cache. Unlike
+    the server-rendered lists in the client detail page this is always fresh
+    and also works for a SIEM added after the page was loaded.
+    """
+    from fastapi.responses import JSONResponse
+    from app.services.space_resolver import resolve_discoverable_spaces
+
+    if not db.get_siem_inventory_item(siem_id):
+        return JSONResponse({"spaces": [], "reason": "unknown_siem", "message": "Unknown SIEM."}, status_code=404)
+    try:
+        spaces, reason = resolve_discoverable_spaces(db, siem_id, allow_live=True)
+    except Exception as exc:
+        logger.warning("list_siem_spaces(%s) failed: %r", siem_id, exc)
+        spaces, reason = set(), "live_failed"
+    _KIBANA_SPACES_CACHE.pop(siem_id, None)
+    return JSONResponse({
+        "spaces": sorted((str(s) for s in spaces), key=str.lower),
+        "reason": reason,
+        "message": "" if spaces else _SPACE_REASON_TEXT.get(reason, "No spaces found."),
+    })
+
+
 @router.post("/siems/{siem_id}/logging", response_class=HTMLResponse)
 async def update_siem_logging(
     request: Request,
@@ -1642,6 +1675,40 @@ async def update_client_siem_default_index(
     return _render_client_siems_partial(client_id, db, toast="Default index saved.")
 
 
+@router.post("/clients/{client_id}/siems/{siem_id}/role", response_class=HTMLResponse)
+async def change_client_siem_role(
+    request: Request,
+    client_id: str,
+    siem_id: str,
+    db: DbDep,
+    user: RequireAdmin,
+):
+    """Switch a linked SIEM between Production and Staging without unlinking it.
+
+    Unlinking purges the SIEM's rules from the client and needs a re-sync; this keeps every rule,
+    score and validation in place, so a SIEM migration can start by re-tagging the old SIEM as
+    Staging and linking the new one as Production.
+    """
+    form = await request.form()
+    from_role = str(form.get("from_role", "")).strip().lower()
+    to_role = str(form.get("to_role", "")).strip().lower()
+    error = db.set_client_siem_role(client_id, siem_id, from_role, to_role)
+    if error:
+        return _render_client_siems_partial(client_id, db, toast=error)
+    logger.info(f"SIEM {siem_id} of client {client_id} changed from {from_role} to {to_role} by {user.username}")
+    try:
+        from app.config import get_settings
+        from app.services.tenant_manager import sync_shared_data
+        settings = get_settings()
+        sync_shared_data(settings.data_dir, settings.db_path, client_id)
+    except Exception as exc:
+        logger.warning(f"tenant mirror refresh after role change failed: {exc}")
+    toast = f"SIEM is now {to_role.capitalize()}."
+    if to_role == "production" and len(db.get_client_siems(client_id, environment_role="production")) > 1:
+        toast += " Promote needs exactly one production SIEM per client."
+    return _render_client_siems_partial(client_id, db, toast=toast)
+
+
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)
 def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
                             db: DbDep, user: RequireAdmin):
@@ -1651,12 +1718,12 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
     deleted, the tenant's ``detection_rules`` rows for the unlinked
     ``(siem_id, space)`` pairs are purged INSIDE ``tenant_context_for(client_id)``.
     Without this, the rows lingered indefinitely — sync only iterates
-    currently-mapped pairs (AGENTS.md §8.2 g2), so an unlinked pair is never
+    currently-mapped pairs (CLAUDE.md §8.2 g2), so an unlinked pair is never
     revisited and the now-orphan rules stayed visible on the Rule Health page.
     The previous "redistributor" call here was a no-op stub since 4.1.13 and
     has been removed.
 
-    Partial-unlink contract (AGENTS.md §8.1 dual-role config): when
+    Partial-unlink contract (CLAUDE.md §8.1 dual-role config): when
     ``environment_role`` is supplied, we MUST only purge the specific
     ``(siem_id, space)`` pair removed — the same ``siem_id`` may still be
     mapped under the other role with a different space, and a blanket
@@ -2214,6 +2281,81 @@ async def update_validation_thresholds(
     return _render_client_siems_partial(
         client_id, db, toast="Validation thresholds saved.",
     )
+
+
+# ---------------------------------------------------------------------------
+# Rule scoring weights (Linked SIEMs section of the client page)
+# ---------------------------------------------------------------------------
+
+def _render_client_scoring(request: Request, db, client_id: str, shown: dict = None,
+                           message: str = "", error: str = "") -> HTMLResponse:
+    """Render the per-client scoring editor. ``shown`` overrides the stored weights (a rejected form keeps what was typed)."""
+    from app import scoring
+
+    cfg = db.get_client_scoring(client_id)
+    values = shown if shown is not None else cfg["weights"]
+    groups = []
+    for title, group in (("Quality: does the rule work?", "quality"), ("Operations: is it healthy?", "operations"),
+                         ("Meta: is it documented?", "meta")):
+        items = [{"key": key, "label": label, "how": how, "default": default, "weight": values.get(key, default)}
+                 for key, label, grp, default, how in scoring.COMPONENTS if grp == group]
+        groups.append({"title": title, "items": items})
+    total = 0
+    for v in values.values():
+        try:
+            total += int(v)
+        except (TypeError, ValueError):
+            pass
+    return request.app.state.templates.TemplateResponse(request, "partials/client_scoring.html", {
+        "client": db.get_client(client_id), "groups": groups, "total": total, "custom": cfg["custom"],
+        "updated_at": cfg["updated_at"], "updated_by": cfg["updated_by"], "message": message, "error": error,
+    })
+
+
+def _rescore_client(db, client_id: str, weights: dict) -> dict:
+    from app.services.tenant_manager import tenant_context_for
+    with tenant_context_for(client_id):
+        return db.rescore_rules_with_weights(client_id, weights)
+
+
+def _rescore_message(result: dict, prefix: str) -> str:
+    text = f"{prefix} {result['rescored']} rules re-scored."
+    if result["skipped"]:
+        text += f" {result['skipped']} more will pick up the new weights on their next sync."
+    return text
+
+
+@router.get("/clients/{client_id}/scoring", response_class=HTMLResponse)
+def client_scoring_section(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+    return _render_client_scoring(request, db, client_id)
+
+
+@router.post("/clients/{client_id}/scoring", response_class=HTMLResponse)
+async def save_client_scoring(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+    """Save this client's points per scoring check and re-score its rules from the stored per-check results."""
+    from starlette.concurrency import run_in_threadpool
+    from app import scoring
+
+    form = await request.form()
+    raw = {key[2:]: value for key, value in form.items() if key.startswith("w_")}
+    weights, error = scoring.parse_weights(raw)
+    if error:
+        return _render_client_scoring(request, db, client_id, shown=raw, error=error)
+    db.set_client_scoring(client_id, weights, user.username)
+    result = await run_in_threadpool(_rescore_client, db, client_id, weights)
+    logger.info("Client %s scoring weights saved by %s: %s; %s", client_id, user.username, weights, result)
+    return _render_client_scoring(request, db, client_id, message=_rescore_message(result, "Saved."))
+
+
+@router.post("/clients/{client_id}/scoring/reset", response_class=HTMLResponse)
+async def reset_client_scoring(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+    from starlette.concurrency import run_in_threadpool
+    from app import scoring
+
+    db.reset_client_scoring(client_id)
+    result = await run_in_threadpool(_rescore_client, db, client_id, dict(scoring.DEFAULT_WEIGHTS))
+    logger.info("Client %s scoring weights reset by %s; %s", client_id, user.username, result)
+    return _render_client_scoring(request, db, client_id, message=_rescore_message(result, "Reset to defaults."))
 
 
 # ---------------------------------------------------------------------------
@@ -3358,7 +3500,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
 
     # SIEM rule counts keyed by (siem_id, space). Keying by space alone
     # collapses two SIEMs that share a Kibana space-name into one bucket and
-    # mis-labels rules in the grid (AGENTS.md §8.2 guarantee 4). The legacy
+    # mis-labels rules in the grid (CLAUDE.md §8.2 guarantee 4). The legacy
     # space-only ``siem_rule_counts`` dict is kept (last-writer-wins) only
     # for templates that have not been migrated to the per-SIEM map yet.
     siem_rule_counts: dict = {}
@@ -3398,7 +3540,7 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     from app.config import get_settings as _get_settings
     _settings = _get_settings()
     # Build a per-SIEM map of Kibana spaces so the Add-SIEM picker can show
-    # ONLY the spaces that exist on the SIEM the operator selected. AGENTS.md
+    # ONLY the spaces that exist on the SIEM the operator selected. CLAUDE.md
     # §8.2 guarantee 1: a flat union across SIEMs leaks SIEM B's spaces into
     # SIEM A's picker, then the live-Kibana validator 404s the submission.
     # 4.1.5 → 4.1.9 used a flat ``known_kibana_spaces`` union; that is the
@@ -5213,3 +5355,162 @@ def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, u
         )
     logger.info("Connector %s unlinked from client %s by %s", connector_id, client_id, user.username)
     return _render_client_connectors_partial(client_id, db, toast="Connector unlinked.")
+
+
+# ---------------------------------------------------------------------------
+# Data export / import (portable JSON; supplements copying data/)
+# ---------------------------------------------------------------------------
+
+_DATA_MAX_BYTES = 200 * 1024 * 1024
+
+
+@router.get("/tab/data-transfer", response_class=HTMLResponse)
+def tab_data_transfer(request: Request, db: DbDep, user: RequireSuperadmin):
+    """Export / import card for the management hub."""
+    options = "".join(
+        f'<option value="{_esc(c["id"])}">{_esc(c["name"])}</option>' for c in db.list_clients()
+    )
+    return HTMLResponse(f"""
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem;">
+  <div class="card" style="padding:1rem;">
+    <h4 style="margin:0 0 0.5rem;">Export</h4>
+    <p class="text-secondary" style="font-size:0.85rem;margin-top:0;">
+      Rules with their metadata, validation and history, baselines with their rule mappings, systems and
+      related data for one tenant, as a JSON file. No credentials, threat-actor data or SIEM connections.</p>
+    <form method="get" action="/api/management/export-data" hx-boost="false" style="display:flex;flex-direction:column;gap:0.6rem;">
+      <label>Tenant <select name="tenant" class="form-input" required>{options}</select></label>
+      <label style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="checkbox" name="include_users" value="true">
+        Include users, tenant roles and permissions (no passwords or Keycloak IDs)</label>
+      <button class="btn btn-primary" type="submit">Download export</button>
+    </form>
+  </div>
+  <div class="card" style="padding:1rem;">
+    <h4 style="margin:0 0 0.5rem;">Import</h4>
+    <p class="text-secondary" style="font-size:0.85rem;margin-top:0;">
+      Merges an export into the chosen tenant. Existing rows are kept and nothing is deleted. Tables
+      without a key (score history) are only filled when empty. Run a SIEM sync afterwards.
+      Imported local users have no password and must be given one; SSO users link by username or email at
+      first login.</p>
+    <form hx-post="/api/management/import-data" hx-encoding="multipart/form-data"
+          hx-target="#data-transfer-result" hx-swap="innerHTML"
+          style="display:flex;flex-direction:column;gap:0.6rem;">
+      <label>Into tenant
+        <select name="tenant" class="form-input" required
+                onchange="document.getElementById('data-new-client').style.display = this.value === '__new__' ? '' : 'none'">
+          {options}<option value="__new__">+ Create a new client&hellip;</option></select></label>
+      <label id="data-new-client" style="display:none;">New client name
+        <input type="text" name="new_name" class="form-input" maxlength="80" placeholder="e.g. Acme Corp"></label>
+      <label>Export file <input type="file" name="file" accept=".json,application/json" class="form-input" required></label>
+      <label style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="checkbox" name="include_users" value="true"> Also import users (if present in the file)</label>
+      <button class="btn btn-secondary" type="submit">Import</button>
+    </form>
+    <div id="data-transfer-result" style="margin-top:0.75rem;"></div>
+  </div>
+</div>""")
+
+
+@router.get("/export-data")
+def export_data(db: DbDep, user: RequireSuperadmin, tenant: str, include_users: bool = False):
+    """Download a portable JSON export of one tenant (optionally with users)."""
+    from datetime import datetime as _dt
+    from app.config import get_settings
+    from app.services import data_transfer as dtx
+    from app.services.tenant_manager import tenant_context_for
+
+    client = next((c for c in db.list_clients() if c["id"] == tenant), None)
+    if not client:
+        return HTMLResponse('<div class="alert alert-error">Unknown tenant.</div>', status_code=404)
+    with tenant_context_for(tenant):
+        with db.get_connection(read_only=True) as conn:
+            tables = dtx.export_tenant(conn)
+    users = None
+    if include_users:
+        with db.get_shared_connection(read_only=True) as conn:
+            users = dtx.export_users(conn)
+    payload = dtx.build_export(client["slug"], tables, users, get_settings().tide_version)
+    logger.info("Data export of tenant %s (users=%s) by %s", client["slug"], include_users, user.username)
+    filename = f"tide-export-{client['slug']}-{_dt.utcnow():%Y%m%d-%H%M}.json"
+    return Response(
+        dtx.dumps(payload),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/import-data", response_class=HTMLResponse)
+async def import_data(
+    db: DbDep, user: RequireSuperadmin,
+    tenant: str = Form(...), file: UploadFile = File(...), include_users: bool = Form(False),
+    new_name: str = Form(""),
+):
+    """Merge a JSON export into a tenant (and, when asked, the user directory)."""
+    import json as _json
+    from app.services import data_transfer as dtx
+    from app.services.tenant_manager import tenant_context_for
+
+    def _err(msg: str, code: int = 400):
+        return HTMLResponse(f'<div class="alert alert-error">{_esc(msg)}</div>', status_code=code)
+
+    creating = tenant == "__new__"
+    if not creating and not any(c["id"] == tenant for c in db.list_clients()):
+        return _err("Unknown tenant.", 404)
+    new_name = (new_name or "").strip()
+    if creating and not new_name:
+        return _err("Enter a name for the new client.")
+    raw = await file.read(_DATA_MAX_BYTES + 1)
+    if len(raw) > _DATA_MAX_BYTES:
+        return _err("File is larger than 200 MB.", 413)
+    try:
+        payload = _json.loads(raw)
+    except Exception as exc:
+        return _err(f"Invalid JSON: {exc}")
+    bad = dtx.validate_envelope(payload)
+    if bad:
+        return _err(bad)
+
+    lines: list[str] = []
+    if creating:
+        import re as _re
+        from app.config import get_settings
+        from app.services.tenant_manager import create_tenant_db
+        slug = _re.sub(r"[^a-z0-9]+", "-", new_name.lower()).strip("-")[:40] or "client"
+        taken = {c["slug"] for c in db.list_clients()}
+        base, n = slug, 2
+        while slug in taken:
+            slug, n = f"{base}-{n}", n + 1
+        try:
+            client = db.create_client(new_name, slug, f"Created by data import of '{payload.get('tenant', '')}'")
+            settings = get_settings()
+            create_tenant_db(client["id"], client["slug"], settings.data_dir, settings.db_path)
+        except Exception as exc:
+            logger.exception("Client creation during import failed")
+            return _err(f"Could not create the client: {exc}", 500)
+        tenant = client["id"]
+        lines.append(f"Created client '{new_name}' ({slug}).")
+    try:
+        if payload.get("tenant_data"):
+            with tenant_context_for(tenant):
+                with db.get_connection() as conn:
+                    summary = dtx.import_tenant(conn, payload["tenant_data"], client_id=tenant)
+            added = sum(v["added"] for v in summary.values())
+            lines.append(f"Tenant data: {added} rows added across {len(summary)} tables.")
+            for table, v in summary.items():
+                if v["skipped"] and v["note"]:
+                    lines.append(f"{table}: {v['skipped']} skipped ({v['note']}).")
+        if include_users and payload.get("user_data"):
+            with db.get_shared_connection() as conn:
+                res = dtx.import_users(conn, payload["user_data"], {payload.get("tenant"): tenant})
+            lines.append(
+                f"Users: {len(res['added'])} added, {len(res['existing'])} already existed "
+                f"(left unchanged), {res['permissions_added']} permissions added."
+            )
+            if res["local_without_password"]:
+                lines.append(f"{res['local_without_password']} local user(s) need a password set.")
+    except Exception as exc:
+        logger.exception("Data import failed")
+        return _err(f"Import failed: {exc}", 500)
+    logger.info("Data import into tenant %s by %s: %s", tenant, user.username, " | ".join(lines))
+    body = "".join(f"<div>{_esc(l)}</div>" for l in lines) or "Nothing to import."
+    return HTMLResponse(f'<div class="alert alert-success">{body}</div>')

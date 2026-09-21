@@ -1,7 +1,7 @@
 """Background scheduler for CTI connector auto-sync.
 
 This is the **only** sanctioned background ticker in TIDE
-(AGENTS.md §2 carve-out, added 5.0.x with the connector-interval
+(CLAUDE.md §2 carve-out, added 5.0.x with the connector-interval
 feature). Every other surface remains operator-triggered. The
 scheduler exists because CTI feeds are inherently delta-streamed —
 operators want the per-tenant CTI database to reflect upstream

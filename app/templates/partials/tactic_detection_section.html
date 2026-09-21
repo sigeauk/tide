@@ -14,7 +14,7 @@
 <div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
     {# ── SIEM rules (green) ────────────────────────────── #}
     {% for d in siem_dets %}
-    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-success);">
+    <div class="card u-bg-level-3" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;border-left:3px solid var(--color-success)">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
             {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
@@ -23,11 +23,16 @@
             <div style="font-size:0.85rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ d.rule_ref }}">
                 {{ icon('file-code','13') }}
                 {% if rule_info.rule_id %}
-                <span name="Open Detail" style="cursor:pointer;color:var(--color-text);text-decoration:underline;text-decoration-style:dotted;"
-                      hx-get="/api/rules/{{ rule_info.rule_id }}/detail?space={{ rule_info.space | default('default') }}"
+                <span name="Open Detail" data-rule-open style="cursor:pointer;color:var(--color-text);text-decoration:underline;text-decoration-style:dotted;"
+                      hx-get="/api/rules/{{ rule_info.rule_id }}/history-modal?space={{ rule_info.space | default('default') | urlencode }}{% if rule_info.siem_id %}&siem_id={{ rule_info.siem_id | urlencode }}{% endif %}"
                       hx-target="#modal-container"
                       hx-swap="innerHTML"
                       title="View rule details">{{ rule_label }}</span>
+                {% if rule_info.environment_role == 'staging' %}
+                <span class="badge" style="font-size:0.6rem;padding:0.05rem 0.35rem;margin-left:0.35rem;" title="This rule's SIEM is currently a staging SIEM, so it does not count towards production coverage">Staging</span>
+                {% elif not rule_info.environment_role %}
+                <span class="badge" style="font-size:0.6rem;padding:0.05rem 0.35rem;margin-left:0.35rem;" title="This rule's SIEM is not linked to this tenant">Not linked</span>
+                {% endif %}
                 {% else %}
                 {{ rule_label }}
                 {% endif %}
@@ -51,7 +56,7 @@
 
     {# ── Manual rules (blue / app accent) ──────────────── #}
     {% for d in manual_dets %}
-    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-info);">
+    <div class="card u-bg-level-3" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;border-left:3px solid var(--color-info)">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
             {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
@@ -61,7 +66,7 @@
             </div>
             {% endif %}
             <div style="display:flex;align-items:center;gap:0.4rem;margin-top:0.25rem;">
-                <span class="badge" style="font-size:0.62rem;padding:0.1rem 0.35rem;background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('edit-3','9') }} MANUAL</span>
+                <span class="badge u-bg-blue-15" style="font-size:0.62rem;padding:0.1rem 0.35rem;color:var(--color-info);border:1px solid rgba(59,130,246,.3)">{{ icon('edit-3','9') }} MANUAL</span>
                 {% if d.note %}<span style="font-size:0.7rem;color:var(--color-text-muted);">{{ d.note }}</span>{% endif %}
             </div>
         </div>
@@ -78,7 +83,7 @@
 
     {# ── Sigma rules (potential → amber, not appliable) ────────── #}
     {% for d in sigma_dets %}
-    <div class="card" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;background:var(--color-surface-alt);border-left:3px solid var(--color-warning);opacity:0.85;">
+    <div class="card u-bg-level-3" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap;border-left:3px solid var(--color-warning);opacity:0.85">
         <div style="flex:1;min-width:0;">
             {% if d.rule_ref %}
             {% set rule_info = rule_name_lookup.get(d.rule_ref, {}) if rule_name_lookup is defined else {} %}
@@ -114,29 +119,29 @@
 <div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
         {# ── + Add SIEM Rule (green) ───────────────────────────── #}
-        <button name="+ Add SIEM Rule" class="btn btn-sm" id="add-siem-det-btn"
-                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
+        <button name="+ Add SIEM Rule" class="btn btn-sm u-bg-green-10" id="add-siem-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)"
                 onclick="this.style.display='none';var p=document.getElementById('add-siem-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('siem-rule-search'),'load');">
             {{ icon('shield-check','14') }} + Add SIEM Rule
         </button>
 
         {# ── + Add Manual Rule (blue) ──────────────────────────── #}
-        <button name="+ Add Manual Rule" class="btn btn-sm" id="add-manual-det-btn"
-                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
+        <button name="+ Add Manual Rule" class="btn btn-sm u-bg-blue-10" id="add-manual-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-info);border:1px solid rgba(59,130,246,.3)"
                 onclick="this.style.display='none';document.getElementById('add-manual-det-panel').style.display='flex';">
             {{ icon('edit-3','14') }} + Add Manual Rule
         </button>
 
         {# ── + Add Sigma Rule (amber) ──────────────────────────── #}
-        <button name="+ Add Sigma Rule" class="btn btn-sm" id="add-sigma-det-btn"
-                style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
+        <button name="+ Add Sigma Rule" class="btn btn-sm u-bg-yellow-10" id="add-sigma-det-btn"
+                style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.3)"
                 onclick="this.style.display='none';var p=document.getElementById('add-sigma-det-panel');p.style.display='flex';htmx.trigger(document.getElementById('sigma-rule-search'),'load');">
             {{ icon('zap','14') }} + Add Sigma Rule
         </button>
     </div>
 
     {# ── SIEM Rule search panel (green) ────────────────────────── #}
-    <div id="add-siem-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(34,197,94,.04);">
+    <div id="add-siem-det-panel" class="u-bg-green-04" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem">
         <div style="display:flex;gap:0.5rem;align-items:center;">
             <input type="text" id="siem-rule-search" class="form-input" placeholder="Search SIEM rules…"
                    style="font-size:0.82rem;flex:1;"
@@ -150,7 +155,7 @@
                 Cancel
             </button>
         </div>
-        <div id="siem-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+        <div id="siem-rule-results" class="u-bg-level-3" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden">
             <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
         </div>
         <form name="Submit Detections" id="add-siem-det-form"
@@ -164,7 +169,7 @@
     </div>
 
     {# ── Manual Rule input panel (blue) ────────────────────────── #}
-    <div id="add-manual-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
+    <div id="add-manual-det-panel" class="u-bg-blue-04" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem">
         <form name="Submit Detections" hx-post="/api/baselines/tactics/{{ step.id }}/detections"
               hx-target="#step-detection-section"
               hx-swap="innerHTML"
@@ -173,7 +178,7 @@
             <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
             <input type="hidden" name="source" value="manual">
             <div style="display:flex;gap:0.5rem;">
-                <button name="Save" type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+                <button name="Save" type="submit" class="btn btn-sm u-bg-blue-15" style="color:var(--color-info);border:1px solid rgba(59,130,246,.3)">{{ icon('plus','12') }} Save</button>
                 <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                         onclick="this.closest('div[id]').style.display='none';document.getElementById('add-manual-det-btn').style.display='inline-flex';">
                     Cancel
@@ -183,7 +188,7 @@
     </div>
 
     {# ── Sigma Rule search panel (amber) ───────────────────────── #}
-    <div id="add-sigma-det-panel" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(234,179,8,.04);">
+    <div id="add-sigma-det-panel" class="u-bg-yellow-04" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem">
         <div style="display:flex;gap:0.5rem;align-items:center;">
             <input type="text" id="sigma-rule-search" class="form-input" placeholder="Search sigma rules…"
                    style="font-size:0.82rem;flex:1;"
@@ -197,7 +202,7 @@
                 Cancel
             </button>
         </div>
-        <div id="sigma-rule-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+        <div id="sigma-rule-results" class="u-bg-level-3" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden">
             <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
         </div>
         <form name="Submit Detections" id="add-sigma-det-form"

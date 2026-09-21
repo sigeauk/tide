@@ -411,7 +411,7 @@ def _move_system_check_inner(system_id, source_client_id, target_client_id, db):
     # any of the SAME (siem_id, space) production pair? Composite key is
     # mandatory — two clients pointing at SIEM_A 'default' and SIEM_B
     # 'default' are NOT compatible even though their space names match
-    # (AGENTS.md §8.2 g4).
+    # (CLAUDE.md §8.2 g4).
     source_scopes = set(db.get_client_siem_scopes(source_client_id, "production"))
     target_scopes = set(db.get_client_siem_scopes(target_client_id, "production"))
     shared_scopes = source_scopes & target_scopes
@@ -635,25 +635,6 @@ def _move_system_multi_db(system_id, source_client_id, target_client_id,
     finally:
         src.close()
         tgt.close()
-
-    # ── Keep the shared DB consistent ──
-    from app.services.database import get_database_service
-    with get_database_service().get_shared_connection() as shared:
-        shared.execute(
-            "UPDATE systems SET client_id = ? WHERE id = ?",
-            [target_client_id, system_id])
-        shared.execute(
-            "UPDATE hosts SET client_id = ? WHERE system_id = ?",
-            [target_client_id, system_id])
-        shared.execute(
-            "UPDATE software_inventory SET client_id = ? WHERE system_id = ?",
-            [target_client_id, system_id])
-        if move_baselines and check["baselines"]:
-            bl_ids = [b["id"] for b in check["baselines"]]
-            bl_ph = ",".join("?" for _ in bl_ids)
-            shared.execute(
-                f"UPDATE playbooks SET client_id = ? WHERE id IN ({bl_ph})",
-                [target_client_id] + bl_ids)
 
     logger.info(
         f"System {system_id} moved cross-DB from {source_client_id} to "

@@ -1,0 +1,54 @@
+{# Partial: client_scoring.html — per-client rule scoring weights (Linked SIEMs section).
+   Context: client, groups [{title, items:[{key,label,how,default,weight}]}], total, custom,
+            updated_at, updated_by, message, error #}
+{% from "macros/icons.html" import icon %}
+{# Collapsed by default, open after a save / reset / error, and remembered per browser (app.js, data-remember). #}
+<details id="client-scoring" class="scoring-editor" data-remember="client-scoring"{% if message or error %} open data-keep-open{% endif %}>
+    <summary class="scoring-editor__head">
+        <h3 class="scoring-editor__title">{{ icon('bar-chart-2', '14') }} Rule scoring</h3>
+        {% if custom %}<span class="badge badge-info">Custom weights</span>{% else %}<span class="badge badge-muted">Default weights</span>{% endif %}
+        <span class="scoring-editor__chev">{{ icon('chevron-right', '16') }}</span>
+    </summary>
+    <p class="scoring-editor__intro">
+        Choose how many points each check is worth for {{ client.name }}. A rule's score is the percentage of the
+        points that apply which it earns, so the points don't have to add up to 100. Set a check to 0 to switch it off.
+        Saving re-scores this client's rules straight away.
+    </p>
+    {% if error %}<p class="scoring-editor__msg scoring-editor__msg--error" role="alert">{{ error }}</p>{% endif %}
+    {% if message %}<p class="scoring-editor__msg scoring-editor__msg--ok" role="status">{{ message }}</p>{% endif %}
+
+    <form name="Submit Scoring Weights" class="scoring-form" data-scoring-form
+          hx-post="/api/management/clients/{{ client.id }}/scoring" hx-target="#client-scoring" hx-swap="outerHTML">
+        <div class="scoring-groups">
+            {% for group in groups %}
+            <div class="scoring-group">
+                <h4 class="scoring-group__title">{{ group.title }}</h4>
+                {% for c in group['items'] %}
+                <label class="scoring-row" title="{{ c.how }}">
+                    <span class="scoring-row__label">{{ c.label }}</span>
+                    <input type="number" name="w_{{ c.key }}" min="0" max="100" step="1" required
+                           class="form-input scoring-row__input" data-scoring-weight value="{{ c.weight }}">
+                    <span class="scoring-row__default">default {{ c.default }}</span>
+                </label>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="scoring-editor__foot">
+            <span class="scoring-editor__total">
+                <strong data-scoring-total>{{ total }}</strong> points allocated. Each rule is scored as the percentage it earns of the points that apply.
+            </span>
+            <span class="scoring-editor__actions">
+                <button name="Reset Scoring" type="button" class="btn btn-secondary btn-sm"
+                        hx-post="/api/management/clients/{{ client.id }}/scoring/reset" hx-target="#client-scoring" hx-swap="outerHTML"
+                        hx-confirm="Reset {{ client.name }} to the default weights? Its rules are re-scored straight away.">
+                    Reset to defaults
+                </button>
+                <button name="Save Scoring" type="submit" class="btn btn-primary btn-sm">{{ icon('save', '14') }} Save and re-score</button>
+            </span>
+        </div>
+        {% if updated_at %}
+        <p class="scoring-editor__meta">Last changed {{ updated_at.strftime('%Y-%m-%d %H:%M') }}{% if updated_by %} by {{ updated_by }}{% endif %}.</p>
+        {% endif %}
+    </form>
+</details>

@@ -1,0 +1,24 @@
+{#
+  Shared rule-UI macros.
+
+  state_badge(state) — the four lifecycle states of a rule, defined by where it
+  currently exists across the tenant's SIEM spaces (used to migrate rules from one
+  SIEM to another: analysts keep working on staging — the old production — until the
+  migration lands):
+      Production  = only in a production space
+      Staging     = only in a staging space
+      Migrated    = in BOTH (a linked staging + production pair)
+      Deprecated  = in NEITHER (not found at the last successful sync)
+  Only Migrated and Deprecated are BADGED — Production and Staging are already shown by the
+  SIEM pill. Used by the rule card, the table row and the rule modal so they always agree.
+#}
+{% macro state_badge(state) -%}
+{#- Only the states that are NOT already obvious from the SIEM pill: Production / Staging render nothing. -#}
+{%- if state in ['Migrated', 'Deprecated'] -%}
+{%- set meta = {
+    'Migrated': 'Migrated — exists in both staging and production (a linked pair)',
+    'Deprecated': 'Deprecated — exists in neither; not found in the SIEM at the last successful sync'
+} -%}
+<span class="tide-lifecycle tide-lifecycle-{{ (state | lower) }}" title="{{ meta[state] }}">{{ state }}</span>
+{%- endif -%}
+{%- endmacro %}

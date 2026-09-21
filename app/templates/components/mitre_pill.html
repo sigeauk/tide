@@ -21,10 +21,11 @@ Parameters:
 - neutral: Boolean - always show blue/neutral style (for rule cards)
 - clickable: Boolean - whether pill opens slide panel on click
 - size: 'sm' | 'md' | 'lg' - pill size variant
+- close_modal: Boolean - close the open Rule modal first (use inside the modal so the side panel is visible)
 - search_filter: Optional string - current search filter to pass to sidebar API
 #}
 
-{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, neutral=false, clickable=true, size='sm', search_filter='', show_zero_count=false) %}
+{% macro mitre_pill(technique_id, covered=false, rule_count=0, defense_in_depth=false, neutral=false, clickable=true, size='sm', search_filter='', show_zero_count=false, close_modal=false) %}
 {# Determine status class based on coverage or neutral override #}
 {% if neutral %}
     {% set status_class = 'mitre-neutral' %}
@@ -43,10 +44,10 @@ Parameters:
     {% if clickable %}
     onpointerdown="event.preventDefault(); event.stopPropagation();"
     onmousedown="event.preventDefault(); event.stopPropagation();"
-    onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
+    onclick="event.preventDefault(); event.stopPropagation();{% if close_modal %} if (window.tideCloseRuleModal) { window.tideCloseRuleModal(); }{% endif %} if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
     style="cursor: pointer;"
     {% endif %}
-    title="{{ technique_id }}{% if covered %} Covered{% else %} Gap{% endif %}{% if rule_count > 0 or show_zero_count %} - {{ rule_count }} rule{{ '' if rule_count == 1 else 's' }}{% endif %}">
+    title="{{ technique_id }}{% set _name = mitre_name(technique_id) %}{% if _name %} - {{ _name }}{% endif %}{% if rule_count > 0 or show_zero_count %} ({{ rule_count }} rule{{ '' if rule_count == 1 else 's' }}){% endif %}">
     {{ technique_id }}{% if rule_count > 0 or show_zero_count %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
 </span>
 {% endmacro %}
@@ -87,7 +88,7 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
                     onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
                     style="cursor: pointer;"
                     {% endif %}
-                    title="{{ mid }}">
+                    title="{{ mid }}{% set _name = mitre_name(mid) %}{% if _name %} - {{ _name }}{% endif %}">
                     {{ mid }}
                 </span>
             {% endif %}

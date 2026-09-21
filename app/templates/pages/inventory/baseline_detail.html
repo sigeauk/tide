@@ -38,19 +38,17 @@
                 {% set _need_sys = (request.query_params.get('need_system') == '1') %}
                 {% set _has_sys = (applied_systems | length > 0) %}
                 <div class="quest-launcher" style="position:relative;order:5;">
-                    <button name="Start coverage quest" type="button" class="btn btn-sm"
+                    <button name="Start coverage quest" type="button" class="btn btn-sm u-bg-rgb-47-129-247-12"
                             id="quest-launch-btn"
                             onclick="document.getElementById('quest-launch-pop').style.display='block';this.style.display='none';"
-                            style="display:{{ 'none' if _need_sys else 'inline-flex' }};align-items:center;gap:0.35rem;
-                                   background:rgba(47,129,247,.12);color:var(--color-info,#2f81f7);
-                                   border:1px solid rgba(47,129,247,.4);font-weight:600;">
+                            style="display:{{ 'none' if _need_sys else 'inline-flex' }};align-items:center;gap:0.35rem;color:var(--color-info,#2f81f7);
+                                   border:1px solid rgba(47,129,247,.4);font-weight:600">
                         {{ icon('target','14') }} Start coverage quest
                     </button>
                     <div id="quest-launch-pop"
-                         style="display:{{ 'block' if _need_sys else 'none' }};position:absolute;top:calc(100% + 0.4rem);right:0;
-                                background:var(--color-bg-surface);border:1px solid rgba(47,129,247,.4);
+                         class="u-bg-surface" style="display:{{ 'block' if _need_sys else 'none' }};position:absolute;top:calc(100% + 0.4rem);right:0;border:1px solid rgba(47,129,247,.4);
                                 border-radius:var(--radius-lg);padding:0.85rem;box-shadow:var(--shadow);
-                                z-index:60;min-width:300px;">
+                                z-index:60;min-width:300px">
                         <div style="font-size:0.78rem;font-weight:600;margin-bottom:0.5rem;color:var(--color-text);">
                             {% if _need_sys %}Pick a system to defend{% else %}Pick a system to harden{% endif %}
                         </div>
@@ -89,9 +87,8 @@
                                 {% endif %}
                             </select>
                             <div style="display:flex;gap:0.4rem;">
-                                <button name="Start" type="submit" class="btn btn-sm" style="flex:1;
-                                        background:var(--color-info,#2f81f7);color:#fff;border:none;font-weight:600;
-                                        display:inline-flex;align-items:center;justify-content:center;gap:0.3rem;">
+                                <button name="Start" type="submit" class="btn btn-sm u-bg-info" style="flex:1;color:#fff;border:none;font-weight:600;
+                                        display:inline-flex;align-items:center;justify-content:center;gap:0.3rem">
                                     {{ icon('target','12') }} Start
                                 </button>
                                 <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
@@ -122,12 +119,12 @@
                     <a  name="Systems" href="/systems/{{ sys.system_id }}" style="color:inherit;text-decoration:none;">
                         {{ icon('layers','10') }} {{ sys.system_name }}
                     </a>
-                    <button name="Delete Apply" class="btn btn-sm"
+                    <button name="Delete Apply" class="btn btn-sm u-bg-transparent"
                             hx-delete="/api/baselines/{{ baseline.id }}/apply/{{ sys.system_id }}"
                             hx-swap="none"
                             hx-confirm="Remove {{ sys.system_name }} from this baseline?"
                             onclick="event.stopPropagation();"
-                            style="padding:0;background:transparent;border:none;color:var(--color-danger);cursor:pointer;line-height:1;">
+                            style="padding:0;border:none;color:var(--color-danger);cursor:pointer;line-height:1">
                         {{ icon('x','10') }}
                     </button>
                 </span>
@@ -144,8 +141,8 @@
                     onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
                 {{ icon('filter','12') }} <span id="baseline-sys-label">All Systems</span> <span style="margin-left:auto;">▾</span>
             </button>
-            <div class="filter-multi__dropdown hidden" id="baseline-sys-dropdown"
-                 style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem;">
+            <div class="filter-multi__dropdown hidden u-bg-surface" id="baseline-sys-dropdown"
+                 style="position:absolute;top:100%;left:0;z-index:50;border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem">
                 {% for sys in applied_systems %}
                 <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;white-space:nowrap;">
                     <input type="checkbox" class="bl-sys-cb" value="{{ sys.system_id }}" data-name="{{ (sys.system_name or '') | lower }}" onchange="filterTechCards()" checked> {{ sys.system_name }}
@@ -241,7 +238,7 @@ document.addEventListener('click', function(e){
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Add Technique</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('add-tactic-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Tactics" method="post" hx-post="/api/baselines/{{ baseline.id }}/tactics"
@@ -287,7 +284,7 @@ document.addEventListener('click', function(e){
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('pencil','16') }} Edit Baseline</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-baseline-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Update Baselines" hx-put="/api/baselines/{{ baseline.id }}"
@@ -328,19 +325,19 @@ document.addEventListener('click', function(e){
 
 <!-- ── Export Baseline Report Modal ──────────────────────────── -->
 <div name="Bl Export Modal" id="bl-export-modal"
-     style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.65);
-            z-index:1000; align-items:center; justify-content:center;"
+     class="u-bg-rgb-0-0-0-65" style="display:none; position:fixed; inset:0;
+            z-index:1000; align-items:center; justify-content:center"
      onclick="if(event.target===this)this.style.display='none'">
-    <div style="background:var(--bg-secondary,#161b22); border:1px solid var(--border-color,#30363d);
+    <div class="u-bg-surface" style="border:1px solid var(--border-color,#30363d);
                 border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
-                box-shadow:0 20px 60px rgba(0,0,0,0.6);">
+                box-shadow:0 20px 60px rgba(0,0,0,0.6)">
         <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
             <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
                 Export Baseline Report
             </h3>
             <button name="Close Export Modal" onclick="document.getElementById('bl-export-modal').style.display='none'"
-                    style="background:none; border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
-                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem;"
+                    class="u-bg-none" style="border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
+                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem"
                     title="Close">&#x2715;</button>
         </div>
         <div style="margin-bottom:1rem;">
@@ -348,10 +345,9 @@ document.addEventListener('click', function(e){
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Format</label>
             <select name="PDF Markdown" id="bl-modal-format"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 <option value="pdf">PDF</option>
                 <option value="markdown">Markdown</option>
                 <option value="json">TIDE JSON</option>
@@ -368,10 +364,9 @@ document.addEventListener('click', function(e){
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Classification</label>
             <select name="Official Confidential Secret Top Secret" id="bl-modal-classification"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 <option value="Official">Official</option>
                 <option value="Confidential">Confidential</option>
                 <option value="Secret">Secret</option>
@@ -383,10 +378,9 @@ document.addEventListener('click', function(e){
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Audience</label>
             <select name="Executive / CISO Technical / Engineer" id="bl-modal-audience"
-                    style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d);
-                           background:var(--bg-tertiary,#1c2128); color:var(--text-primary,#e6edf3);
-                           cursor:pointer;">
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
                 <option value="executive">Executive / CISO</option>
                 <option value="technical">Technical / Engineer</option>
             </select>
@@ -434,7 +428,7 @@ function confirmBaselineExport() {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('upload','16') }} Import Techniques</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('import-techniques-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">

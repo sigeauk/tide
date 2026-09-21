@@ -17,8 +17,8 @@
                 onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
             {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span style="margin-left:auto;">▾</span>
         </button>
-        <div class="filter-multi__dropdown hidden" id="sys-filter-dropdown"
-             style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem;">
+        <div class="filter-multi__dropdown hidden u-bg-surface" id="sys-filter-dropdown"
+             style="position:absolute;top:100%;left:0;z-index:50;border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem">
             {% for s in systems %}
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;white-space:nowrap;">
                 <input   name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" onchange="filterCveCards()" checked> {{ s.name }}
@@ -38,8 +38,8 @@
                 onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
             {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span style="margin-left:auto;">▾</span>
         </button>
-        <div class="filter-multi__dropdown hidden" id="cov-filter-dropdown"
-             style="position:absolute;top:100%;left:0;z-index:50;background:var(--color-bg-surface);border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:180px;box-shadow:var(--shadow);margin-top:0.25rem;">
+        <div class="filter-multi__dropdown hidden u-bg-surface" id="cov-filter-dropdown"
+             style="position:absolute;top:100%;left:0;z-index:50;border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:180px;box-shadow:var(--shadow);margin-top:0.25rem">
             <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
                 <input name="detected" type="checkbox" class="cov-filter-cb" value="detected" onchange="filterCveCards()" checked> Has Rules
             </label>
@@ -167,15 +167,15 @@
             {% set ns_sys = namespace(ids=[]) %}
             {% for h in cve.affected_hosts %}{% if h.system_id not in ns_sys.ids %}{% set ns_sys.ids = ns_sys.ids + [h.system_id] %}{% endif %}{% endfor %}
             {% if coverage_status == 'detected' %}
-            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill u-bg-green-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-success);border:1px solid rgba(34,197,94,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% elif coverage_status == 'partial' %}
-            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill u-bg-yellow-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% else %}
-            <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(220,38,38,.1);color:var(--color-danger);border:1px solid rgba(220,38,38,.25);" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill u-bg-red-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-danger);border:1px solid rgba(220,38,38,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% endif %}
@@ -185,15 +185,15 @@
         {# Detection badge #}
         <div class="cve-card-item__badges">
             {% if coverage_status == 'detected' %}
-                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(34,197,94,.12);color:var(--color-success);border:1px solid rgba(34,197,94,.3);" title="All hosts monitored">
+                <span class="status-pill u-bg-green-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)" title="All hosts monitored">
                     {{ icon('shield','10') }} Monitored
                 </span>
             {% elif coverage_status == 'partial' %}
-                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(234,179,8,.12);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
+                <span class="status-pill u-bg-yellow-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.3)" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
                     {{ icon('shield','10') }} Partial
                 </span>
             {% elif matched %}
-                <span class="status-pill" style="font-size:0.7rem;padding:0.12rem 0.5rem;background:rgba(220,38,38,.12);color:var(--color-danger);border-color:rgba(220,38,38,.3);" title="No detection rules recorded">
+                <span class="status-pill u-bg-red-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-danger);border-color:rgba(220,38,38,.3)" title="No detection rules recorded">
                     {{ icon('shield-off','10') }} No Rules
                 </span>
             {% endif %}

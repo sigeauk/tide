@@ -1,0 +1,39 @@
+{#
+  Loading skeleton for the Rule modal / edit form. Rendered once inside a
+  <template> in base.html; app.js clones it into #modal-container the moment a
+  modal request starts and the real response replaces it on swap.
+  No data, no icons — shimmering blocks that mirror the real layout.
+#}
+<div class="modal-overlay" data-rule-modal data-rm-overlay data-rm-skeleton>
+    <div class="modal-content rule-modal rm-skel" role="dialog" aria-modal="true" aria-busy="true" aria-label="Loading">
+        <header class="rm-header">
+            <div class="rm-skel__block rm-skel__ring"></div>
+            <div class="rm-header__main">
+                <div class="rm-skel__block rm-skel__title"></div>
+                <div class="rm-skel__row">
+                    <div class="rm-skel__block rm-skel__pill"></div>
+                    <div class="rm-skel__block rm-skel__pill rm-skel__pill--sm"></div>
+                    <div class="rm-skel__block rm-skel__pill rm-skel__pill--sm"></div>
+                </div>
+            </div>
+            <div class="rm-header__tools">
+                <div class="rm-skel__block rm-skel__tool"></div>
+                <button type="button" class="rm-close" data-rm-close aria-label="Cancel loading"><span aria-hidden="true">×</span></button>
+            </div>
+        </header>
+        <div class="rm-body">
+            <section class="rm-col">
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__line"></div><div class="rm-skel__block rm-skel__line rm-skel__line--short"></div><div class="rm-skel__block rm-skel__line"></div></div>
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__chart"></div></div>
+            </section>
+            <section class="rm-col">
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__line"></div><div class="rm-skel__block rm-skel__line"></div><div class="rm-skel__block rm-skel__line rm-skel__line--short"></div></div>
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__code"></div></div>
+            </section>
+            <aside class="rm-col">
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__btn"></div><div class="rm-skel__block rm-skel__btn"></div><div class="rm-skel__block rm-skel__btn"></div></div>
+                <div class="rm-panel"><div class="rm-skel__block rm-skel__h"></div><div class="rm-skel__block rm-skel__line"></div><div class="rm-skel__block rm-skel__line"></div></div>
+            </aside>
+        </div>
+    </div>
+</div>

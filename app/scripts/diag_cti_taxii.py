@@ -1,6 +1,6 @@
 """Quick standalone TAXII 2.1 cursor inspector.
 
-Usage (always in-container per AGENTS.md §3):
+Usage (always in-container per CLAUDE.md §3):
 
     docker exec tide-app python -m app.scripts.diag_cti_taxii
     docker exec tide-app python -m app.scripts.diag_cti_taxii --connector <id>

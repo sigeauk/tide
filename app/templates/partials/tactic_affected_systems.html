@@ -13,10 +13,10 @@
     <!-- Legend -->
     <div class="det-color-key" style="margin-bottom:1rem;">
         <span class="det-color-key__label">Coverage Status</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-success);"></span> Green — Covered</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-warning);"></span> Amber — Known Gap</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-danger);"></span> Red — No Action</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-muted);"></span> Grey — N/A</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-success"></span> Green — Covered</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-warning"></span> Amber — Known Gap</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-danger"></span> Red — No Action</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-muted"></span> Grey — N/A</span>
     </div>
 
     {% if affected_systems %}
@@ -30,7 +30,7 @@
                 {% elif sys.status == 'amber' %}
                 <span class="badge badge-warning" style="font-size:0.7rem;">{{ icon('alert-triangle','10') }} Known Gap</span>
                 {% elif sys.status == 'grey' %}
-                <span class="badge" style="font-size:0.7rem;background:rgba(128,128,128,.12);color:var(--color-muted);border:1px solid rgba(128,128,128,.3);">{{ icon('minus-circle','10') }} N/A</span>
+                <span class="badge u-bg-gray-12" style="font-size:0.7rem;color:var(--color-muted);border:1px solid rgba(128,128,128,.3)">{{ icon('minus-circle','10') }} N/A</span>
                 {% else %}
                 <span class="badge badge-danger" style="font-size:0.7rem;">{{ icon('alert-triangle','10') }} No Action</span>
                 {% endif %}
@@ -55,12 +55,12 @@
                 {% set ad_label = 'Unresolved rule' if '-' in ad.label and ad.label | length >= 32 else ad.label %}
                 <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
                     {{ icon('check','10') }} {{ ad_label[:30] }}
-                    <button name="Delete Apply System" class="btn btn-danger btn-sm"
+                    <button name="Delete Apply System" class="btn btn-danger btn-sm u-bg-transparent"
                             hx-delete="/api/baselines/tactics/{{ step_id }}/detections/{{ ad.id }}/apply-system/{{ sys.system_id }}"
                             hx-target="#step-affected-section"
                             hx-swap="innerHTML"
                             hx-confirm="Remove this detection from {{ sys.system_name }}?"
-                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;border:none;color:var(--color-danger);cursor:pointer">
                         {{ icon('x','9') }}
                     </button>
                 </span>
@@ -101,7 +101,7 @@
                 {{ icon('info','10') }} {{ sys.blind_spot_reason }}
                 {% for bs in blind_spots %}
                 {% if bs.system_id == sys.system_id %}
-                <button name="Delete Blind Spots" class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                <button name="Delete Blind Spots" class="btn btn-sm u-bg-transparent" style="padding:0 0.2rem;font-size:0.6rem;border:none;color:var(--color-danger);cursor:pointer"
                         hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=tactic&entity_id={{ step_id }}"
                         hx-target="#step-affected-section" hx-swap="innerHTML"
                         hx-confirm="Remove this status override for {{ sys.system_name }}?">{{ icon('x','9') }}</button>
@@ -125,7 +125,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="step-bs-modal-title">{{ icon('alert-triangle','16') }} Known Gap</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('step-bs-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
@@ -172,7 +172,7 @@ function openStepBlindSpotModal(stepId, systemId, systemName, overrideType) {
     if (overrideType === 'na') {
         title.innerHTML = 'Mark Not Applicable';
         desc.textContent = 'Marking this technique as not applicable';
-        badge.innerHTML = '<span class="badge" style="font-size:0.7rem;background:rgba(128,128,128,.12);color:var(--color-muted);border:1px solid rgba(128,128,128,.3);">Grey (N/A)</span>';
+        badge.innerHTML = '<span class="badge u-bg-gray-12" style="font-size:0.7rem;color:var(--color-muted);border:1px solid rgba(128,128,128,.3)">Grey (N/A)</span>';
         submit.textContent = 'Mark N/A';
         reason.placeholder = 'Why is this technique not applicable? (e.g., Linux system, Windows technique)';
     } else {

@@ -1,147 +1,61 @@
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/rule_ui.html" import state_badge %}
 {% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
-<!-- Rule Card Component -->
-{# search variable is passed from rules_grid.html context for filtering sidebar #}
+{#
+  Rule Card — THE one rule card (Rule Health grid, MITRE side panel, validate refresh).
+  Read-only summary: the whole card is the control (click / Enter opens the Rule
+  modal, which holds every action). No buttons on the card face.
+    top-left  : title                       top-right : SIEM pill, MITRE pills beneath it
+    body      : score ring | severity + a state badge ONLY for Migrated / Deprecated (production and staging are shown by the SIEM pill)
+    footer    : validation status (left) · author (right). The card's left edge is coloured
+                by validation status (green valid · amber due soon · red expired · grey never).
+  Context: rule, lifecycle_states, space_labels, space_labels_by_pair (see
+  app.api.rules.build_rule_card_context); optional search, oob.
+#}
 {% set current_search = search | default('') %}
-
 {% set rule_score = rule.score | default(0) %}
 {% set score_class = 'success' if rule_score >= 80 else ('warning' if rule_score >= 50 else 'danger') %}
 {% set sev_value = rule.severity.value | lower if rule.severity else 'low' %}
 {% set val_status = rule.validation_status | default('never') %}
 {% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'amber' else ('danger' if val_status == 'expired' else 'muted')) %}
+{% set lifecycle_key = rule.rule_id ~ '|' ~ (rule.siem_id or '') ~ '|' ~ (rule.space or '') %}
+{% set lifecycle_state = lifecycle_states.get(lifecycle_key, 'Deprecated') %}
+{% set siem_label = (space_labels_by_pair.get((rule.siem_id ~ '|' ~ (rule.space | default('default'))), '') if (space_labels_by_pair is defined and rule.siem_id) else '')
+    or space_labels.get(rule.space | default('default'), (rule.space | default('default')) | capitalize) %}
+{% set is_on = rule.enabled and not rule.deprecated %}
 
-<div name="Open History Modal" class="rule-card"
-    id="rule-{{ rule.rule_id }}"
+<div name="Open Rule Modal" class="rule-card rule-card--val-{{ val_class }}" id="rule-{{ rule.rule_id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+    data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ rule.name }}"
     hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
+    hx-trigger="click, keyup[key=='Enter']"
     hx-target="#modal-container"
     hx-swap="innerHTML"
-    hx-include="unset"
-    style="cursor:pointer;">
-    <div class="rule-header">
-        <div class="rule-title-stack">
-            <div class="rule-name" title="{{ rule.name }}">{{ rule.name }}</div>
-            {% set lifecycle_key = rule.rule_id ~ '|' ~ (rule.siem_id or '') ~ '|' ~ (rule.space or '') %}
-            {% set lifecycle_state = lifecycle_states.get(lifecycle_key, 'Deprecated') %}
-            {% if lifecycle_state in ['Migrated', 'Deprecated'] %}
-                <span class="tide-lifecycle tide-lifecycle-{{ (lifecycle_state | lower) | replace(' ', '-') }}">
-                    {{ lifecycle_state }}
-                </span>
-            {% endif %}
+    hx-include="unset">
+
+    <div class="rc-head">
+        <div class="rc-main">
+            <div class="rc-title" title="{{ rule.name }}">{{ rule.name }}</div>
+            <div class="score-ring score-ring--{{ score_class }}" style="--score: {{ rule_score }}"
+                 title="Score {{ rule_score }}%" role="img" aria-label="Score {{ rule_score }} percent">
+                <span class="score-ring__value">{{ rule_score }}</span>
+            </div>
         </div>
-        <div class="rule-pills-stack">
-            {% if rule.deprecated %}
-            <div class="status-pill status-disabled" title="This rule was not found in the SIEM during a successful sync.">
-                Deprecated
+        <div class="rc-side">
+            <div class="status-pill rc-siem {% if is_on %}status-enabled{% else %}status-disabled{% endif %}"
+                 title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ siem_label }}">
+                {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ siem_label }}</span>
             </div>
-            {% else %}
-            <div class="status-pill {% if rule.enabled %}status-enabled{% else %}status-disabled{% endif %}">
-                {% if rule.enabled %}
-                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>
-                </svg>
-                {% else %}
-                <svg class="status-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/>
-                </svg>
-                {% endif %}
-                {{
-                  (space_labels_by_pair.get((rule.siem_id ~ '|' ~ (rule.space | default('default'))), '') if (space_labels_by_pair is defined and rule.siem_id) else '')
-                  or space_labels.get(rule.space | default('default'), (rule.space | default('default')) | capitalize)
-                }}
-            </div>
-            {% endif %}
-            <div class="sev-pill sev-{{ sev_value }}">
-                {{ sev_value | upper }}
-            </div>
-            {# MITRE Pills - use neutral blue style for Rule Health cards #}
-            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=5) }}
+            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=4) }}
+            <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
+            {{ state_badge(lifecycle_state) }}
         </div>
     </div>
-    
-    <div class="rule-body">
-        
-        <div class="score-section">
-            <div class="score-meta">
-                <span>Quality Score</span>
-                <span class="score-value text-{{ score_class }}">{{ rule_score }}/100</span>
-            </div>
-            <div class="score-track">
-                <div class="score-fill fill-{{ score_class }}" style="width: {{ rule_score }}%;"></div>
-            </div>
-        </div>
-        
-        <div class="meta-grid">
-            <div class="meta-left">
-                <div class="meta-row">
-                    <span class="meta-label">Validated:</span>
-                    <span class="meta-val text-{{ val_class }}">
-                        {% if rule.validation_date %}
-                            {{ rule.validation_date.strftime('%Y-%m-%d') }}
-                        {% else %}
-                            Never
-                        {% endif %}
-                    </span>
-                </div>
-                <div class="meta-row">
-                    <span class="meta-label">By:</span>
-                    <span class="meta-val">{{ rule.validated_by | default('-') }}</span>
-                </div>
-            </div>
-            <div class="meta-right">
-                <div class="meta-row">
-                    <span class="meta-label">Author:</span>
-                    <span class="meta-val">{{ rule.author | default('-') | truncate(18, True, '...') }}</span>
-                </div>
-                <div class="meta-row">
-                    <span class="meta-label">Language:</span>
-                    <span class="meta-val">{{ rule.language | default('kuery') }}</span>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="rule-footer">
-        <button name="Submit Validate" 
-            class="btn btn-validate btn-sm"
-            onclick="event.stopPropagation();"
-            hx-post="/api/rules/{{ rule.rule_id }}/validate?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
-            hx-target="#rule-{{ rule.rule_id }}"
-            hx-swap="outerHTML"
-            hx-include="unset">
-            <span class="btn-text">{{ icon_text('circle-check', 'Validate', '14') }}</span>
-            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
-        </button>
-        <button name="Open Detail" 
-            class="btn btn-logic btn-sm"
-            onclick="event.stopPropagation();"
-            hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
-            hx-target="#modal-container"
-            hx-swap="innerHTML"
-            hx-include="unset">
-            {{ icon_text('clipboard-list', 'Logic', '14') }}
-        </button>
-        {% set card_space = rule.space | default('default') %}
-        {% set kibana_obj_id = rule.raw_data.id if rule.raw_data and rule.raw_data.id else rule.rule_id %}
-        {# Resolve the Kibana base from the rule's owning SIEM (per-tenant).
-           The legacy global env.elastic_url is a last-ditch fallback only \u2014
-           it was removed from settings in 4.0.10 so usually evaluates to ''. #}
-        {% set siem_kb = (kibana_urls_by_siem.get(rule.siem_id, '') if (kibana_urls_by_siem is defined and rule.siem_id) else '') %}
-        {% set kb_base = (siem_kb or env.elastic_url or '').rstrip('/') %}
-        {% if kb_base %}
-            {% if card_space | lower == 'default' %}
-                {% set card_kibana_url = kb_base ~ '/app/security/rules/id/' ~ kibana_obj_id %}
-            {% else %}
-                {% set card_kibana_url = kb_base ~ '/s/' ~ card_space ~ '/app/security/rules/id/' ~ kibana_obj_id %}
-            {% endif %}
-        <a name="Open in Kibana" href="{{ card_kibana_url }}"
-           onclick="event.stopPropagation();"
-           target="_blank"
-           rel="noopener noreferrer"
-           class="btn btn-secondary btn-sm"
-           data-kibana-link
-           title="Open in Kibana ({{ (space_labels_by_pair.get((rule.siem_id ~ '|' ~ card_space), '') if (space_labels_by_pair is defined and rule.siem_id) else '') or space_labels.get(card_space, card_space | capitalize) }})">
-            {{ icon_text('shield-check', 'Kibana', '14') }}
-        </a>
-        {% endif %}
+
+    <div class="rc-foot">
+        <span class="rc-foot__val text-{{ val_class }}" title="{% if rule.validation_date %}Validated {{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}{% else %}Never validated{% endif %}">
+            {{ icon('circle-check', '12') }}
+            {% if val_status == 'valid' %}Validated{% elif val_status == 'amber' %}Validation due{% elif val_status == 'expired' %}Validation expired{% else %}Never validated{% endif %}
+        </span>
+        <span class="rc-foot__author" title="Author: {{ rule.author | default('-') }}">{{ icon('user', '12') }} {{ rule.author | default('-') }}</span>
     </div>
 </div>

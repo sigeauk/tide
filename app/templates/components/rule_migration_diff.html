@@ -1,22 +1,106 @@
+{#
+  Staging vs production comparison for a migrated rule. `diffs` comes from
+  services/rule_diff.build_rule_diff (None when one of the two copies no longer exists).
+#}
+{% macro seg(segments) %}{% for text, changed in segments %}{% if changed %}<mark class="rd-mark">{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}{% endmacro %}
+<style>
+  .rd-field { border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); padding: 0.75rem 1rem; }
+  .rd-label { font-weight: 600; margin-bottom: 0.5rem; }
+  .rd-scalar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+  .rd-pill { padding: 0.15rem 0.6rem; border-radius: 999px; font-size: 0.85rem; }
+  .rd-old { background: rgba(var(--color-danger-rgb), 0.15); }
+  .rd-new { background: rgba(var(--color-success-rgb), 0.15); }
+  .rd-lines { font-family: var(--font-mono, monospace); font-size: 0.8rem; line-height: 1.5; border-radius: 6px; overflow: hidden; }
+  .rd-line { display: flex; white-space: pre-wrap; word-break: break-word; padding: 0 0.5rem; }
+  .rd-line::before { content: ' '; flex: 0 0 1.25rem; opacity: 0.7; }
+  .rd-line.del { background: rgba(var(--color-danger-rgb), 0.12); }
+  .rd-line.del::before { content: '\2212'; }
+  .rd-line.add { background: rgba(var(--color-success-rgb), 0.12); }
+  .rd-line.add::before { content: '+'; }
+  .rd-line.same { opacity: 0.7; }
+  .rd-line.gap { justify-content: center; font-style: italic; opacity: 0.6; padding: 0.15rem 0; }
+  .rd-line.gap::before { content: none; }
+  .rd-line.del .rd-mark { background: rgba(var(--color-danger-rgb), 0.35); color: inherit; border-radius: 2px; }
+  .rd-line.add .rd-mark { background: rgba(var(--color-success-rgb), 0.35); color: inherit; border-radius: 2px; }
+  .rd-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+  .rd-pill { word-break: break-all; }
+  .rd-toolbar { display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+  .rd-toggle { display: inline-flex; border: 1px solid var(--color-border); border-radius: 6px; overflow: hidden; }
+  .rd-toggle button { background: transparent; border: 0; padding: 0.25rem 0.75rem; cursor: pointer; color: inherit; font: inherit; font-size: 0.85rem; }
+  .rd-root[data-view="inline"] .rd-toggle [data-rd-view="inline"],
+  .rd-root[data-view="side"] .rd-toggle [data-rd-view="side"] { background: rgba(var(--color-success-rgb), 0.18); font-weight: 600; }
+  .rd-root[data-view="inline"] .rd-side, .rd-root[data-view="side"] .rd-inline { display: none; }
+  .rd-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+  .rd-colhead { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; margin-bottom: 0.25rem; }
+  .rd-srow { display: grid; grid-template-columns: 1fr 1fr; }
+  .rd-cell { white-space: pre-wrap; word-break: break-word; padding: 0 0.5rem; min-height: 1.5em; }
+  .rd-cell.left.change { background: rgba(var(--color-danger-rgb), 0.12); }
+  .rd-cell.right.change { background: rgba(var(--color-success-rgb), 0.12); }
+  .rd-cell.left.change .rd-mark { background: rgba(var(--color-danger-rgb), 0.35); color: inherit; border-radius: 2px; }
+  .rd-cell.right.change .rd-mark { background: rgba(var(--color-success-rgb), 0.35); color: inherit; border-radius: 2px; }
+  .rd-cell.right { border-left: 1px solid var(--color-border); }
+  .rd-srow.same { opacity: 0.7; }
+  .rd-srow.gap { display: block; text-align: center; font-style: italic; opacity: 0.6; padding: 0.15rem 0; }
+</style>
 <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
-  <div class="modal-content" onclick="event.stopPropagation()" style="max-width:900px;">
+  <div class="modal-content rd-root" data-view="inline" onclick="event.stopPropagation()" style="max-width:980px;">
     <div class="modal-header">
-      <h2>Rule migration comparison</h2>
+      <h2>Compare staging and production</h2>
       <button type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()">&times;</button>
     </div>
-    <p class="rule-help">Volatile execution and timestamp fields are excluded. Production is the current master unless changed below.</p>
-    {% if diffs %}
-    <div style="display:grid;gap:0.5rem;max-height:50vh;overflow:auto;">
-      {% for diff in diffs %}
-      <div class="card card-padded" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0.75rem;">
-        <strong>{{ diff.field }}</strong>
-        <pre style="white-space:pre-wrap;margin:0;">{{ diff.source | tojson(indent=2) }}</pre>
-        <pre style="white-space:pre-wrap;margin:0;">{{ diff.production | tojson(indent=2) }}</pre>
+    <p class="rule-help">
+      {{ (target or source).name if (target or source) else 'Rule' }} &mdash; showing what changed from the
+      <strong>staging</strong> copy to the <strong>production</strong> copy
+      (<span class="text-danger">&minus; staging</span> / <span class="text-success">+ production</span>).
+      Only reviewable fields are compared; scores, run results and internal metadata are ignored.
+    </p>
+    {% if diffs is none %}
+    <p class="empty-state-text">One of the two copies no longer exists, so there is nothing to compare.</p>
+    {% elif diffs %}
+    <div class="rd-toolbar">
+      <div class="rd-toggle" role="group" aria-label="Comparison layout">
+        <button type="button" data-rd-view="inline">Inline</button>
+        <button type="button" data-rd-view="side">Side by side</button>
+      </div>
+    </div>
+    <div style="display:grid;gap:0.75rem;max-height:55vh;overflow:auto;">
+      {% for d in diffs %}
+      <div class="rd-field">
+        <div class="rd-label">{{ d.label }}</div>
+        {% if d.kind == 'scalar' %}
+        <div class="rd-inline rd-scalar">
+          <span class="rd-pill rd-old">{{ d.old }}</span>&rarr;<span class="rd-pill rd-new">{{ d.new }}</span>
+        </div>
+        <div class="rd-side rd-cols">
+          <div><div class="rd-colhead">Staging</div><span class="rd-pill rd-old">{{ d.old }}</span></div>
+          <div><div class="rd-colhead">Production</div><span class="rd-pill rd-new">{{ d.new }}</span></div>
+        </div>
+        {% elif d.kind == 'list' %}
+        <div class="rd-inline rd-chips">
+          {% for item in d.removed %}<span class="rd-pill rd-old" title="Only in staging">&minus; {{ item }}</span>{% endfor %}
+          {% for item in d.added %}<span class="rd-pill rd-new" title="Only in production">+ {{ item }}</span>{% endfor %}
+        </div>
+        <div class="rd-side rd-cols">
+          <div><div class="rd-colhead">Staging only</div><div class="rd-chips">{% for item in d.removed %}<span class="rd-pill rd-old">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+          <div><div class="rd-colhead">Production only</div><div class="rd-chips">{% for item in d.added %}<span class="rd-pill rd-new">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+        </div>
+        {% else %}
+        <div class="rd-inline rd-lines">
+          {% for row in d.inline %}<div class="rd-line {{ row.type }}">{{ seg(row.segments) }}</div>{% endfor %}
+        </div>
+        <div class="rd-side rd-lines">
+          <div class="rd-srow"><div class="rd-colhead rd-cell left">Staging</div><div class="rd-colhead rd-cell right">Production</div></div>
+          {% for row in d.side %}
+            {% if row.type == 'gap' %}<div class="rd-srow gap">{{ seg(row.segments) }}</div>
+            {% else %}<div class="rd-srow {{ row.type }}"><div class="rd-cell left {{ row.type }}">{% if row.left %}{{ seg(row.left) }}{% endif %}</div><div class="rd-cell right {{ row.type }}">{% if row.right %}{{ seg(row.right) }}{% endif %}</div></div>{% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
       </div>
       {% endfor %}
     </div>
     {% else %}
-    <p class="empty-state-text">No meaningful differences found.</p>
+    <p class="empty-state-text">The staging and production copies are identical for every reviewable field.</p>
     {% endif %}
     <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
       <button type="button" class="btn btn-secondary"

@@ -7,13 +7,11 @@ import duckdb
 import json
 import os
 import re
-import shutil
-import tempfile
 import time
 import uuid
 import pandas as pd
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Any, Optional, Tuple, Set
+from typing import List, Dict, Any, Optional, Tuple, Set, Iterable
 from contextlib import contextmanager
 from threading import Lock
 
@@ -91,7 +89,7 @@ def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
 # Schema version for migrations
-SCHEMA_VERSION = 61
+SCHEMA_VERSION = 64
 
 
 def _scope_predicate(
@@ -100,7 +98,7 @@ def _scope_predicate(
 ) -> Tuple[str, list]:
     """Build a (siem_id, space) composite WHERE fragment for tenant scoping.
 
-    Per AGENTS.md §8.2 guarantee 4 / §8.3, ANY query that filters
+    Per CLAUDE.md §8.2 guarantee 4 / §8.3, ANY query that filters
     ``detection_rules`` by space alone leaks rules between two SIEMs that
     share a Kibana space name. This helper is the single source of truth for
     the correct predicate shape; every reader that takes a tenant scope must
@@ -135,6 +133,32 @@ def _scope_predicate(
     return f"({frag})", params
 
 
+def validation_key(rule_id, raw_data=None) -> str:
+    """The id a rule's validation is stored under.
+
+    TIDE's ``rule_id`` is Kibana's saved-object id, which is different in every space and SIEM.
+    Kibana's own ``rule_id`` (in the rule JSON) is kept when a rule is promoted, migrated or
+    imported, so validation follows the rule by that id. Falls back to TIDE's id.
+    """
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except Exception:
+            raw_data = None
+    if isinstance(raw_data, dict) and raw_data.get("rule_id"):
+        return str(raw_data["rule_id"])
+    return str(rule_id)
+
+
+# SQL for the same key, for queries that do not load the rule JSON
+VALIDATION_KEY_SQL = "COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id)"
+
+
+def validation_for(validation_data: Dict[str, Dict[str, str]], rule_id, rule_name) -> Dict[str, str]:
+    """The validation record for a rule: by rule id, else (rows not yet bound to an id) by name."""
+    return validation_data.get(str(rule_id)) or validation_data.get(str(rule_name)) or {}
+
+
 class DatabaseService:
     """
     Singleton database service for DuckDB operations.
@@ -158,18 +182,20 @@ class DatabaseService:
         
         self.settings = get_settings()
         self.db_path = self.settings.db_path
-        self.trigger_dir = self.settings.trigger_dir
-        self.validation_file = self.settings.validation_file
         self._conn_lock = Lock()
-        
-        # Validation data cache (avoids re-reading JSON file on every metrics call)
-        self._validation_cache: Optional[Dict] = None
-        self._validation_cache_mtime: float = 0.0
         
         # Ensure directories exist
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
-        os.makedirs(self.trigger_dir, exist_ok=True)
-        
+
+        # Reference data (ATT&CK, NIST, Sigma index) must be built before the
+        # first connection opens, because every connection attaches it read-only.
+        try:
+            from app.services.reference_db import ensure_reference_db
+            state = ensure_reference_db()
+            logger.info("Reference DB: updated=%s reason=%s", state.get("updated"), state.get("reason"))
+        except Exception as exc:
+            logger.error("Reference DB build failed: %s", exc, exc_info=True)
+
         # Initialize database
         self._init_db()
         self._initialized = True
@@ -2865,52 +2891,104 @@ class DatabaseService:
             )
             conn.execute("FORCE CHECKPOINT")
 
+        # Migration 62: persisted per-SIEM field catalogue (one row per index
+        # pattern) so rule mapping checks read stored answers instead of
+        # asking Elasticsearch on every sync.
+        if current_version < 62:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS siem_field_catalogue (
+                    siem_id VARCHAR NOT NULL,
+                    pattern VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    fields_json VARCHAR,
+                    field_count INTEGER,
+                    fingerprint VARCHAR,
+                    fetched_at TIMESTAMP,
+                    last_error VARCHAR,
+                    PRIMARY KEY (siem_id, pattern)
+                )
+            """)
+            self._set_schema_version(conn, 62)
+            logger.info("Migration 62: added the per-SIEM field catalogue.")
+
+        # Migration 63: per-client rule scoring weights (points per check).
+        if current_version < 63:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS client_scoring_weights (
+                    client_id VARCHAR PRIMARY KEY,
+                    weights_json VARCHAR NOT NULL,
+                    updated_at TIMESTAMP DEFAULT now(),
+                    updated_by VARCHAR
+                )
+            """)
+            self._set_schema_version(conn, 63)
+            logger.info("Migration 63: added per-client rule scoring weights.")
+
+        # Migration 64: per-tenant tables live only in tenant DBs.
+        if current_version < 64:
+            self._retire_shared_tenant_tables(conn)
+            self._set_schema_version(conn, 64)
+            logger.info("Migration 64: removed per-tenant tables from the shared DB.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
-    def _validate_legacy_tables(self, conn):
-        """Validate legacy tables and align schemas non-destructively."""
-        # Check for checkedRule table (legacy validation data)
+    # Tables that belong to one tenant. Since 4.1.2 they are read and written in
+    # the tenant's own DB; the shared copies are stale leftovers (children first).
+    _SHARED_TENANT_TABLES = (
+        "step_techniques", "step_detections", "playbook_steps",
+        "system_baseline_snapshots", "system_baselines", "applied_detections",
+        "vuln_detections", "blind_spots", "software_inventory",
+        "cve_technique_overrides", "hosts", "playbooks", "systems", "classifications",
+    )
+
+    def _retire_shared_tenant_tables(self, conn):
+        """Drop the stale per-tenant tables from the shared DB.
+
+        Custom classifications that exist only here are copied into their
+        tenant first. Operators should keep a copy of ``data/`` from before the
+        upgrade; the dropped rows are not recoverable from the app.
+        """
+        import duckdb as _duckdb
+
         try:
-            tables = conn.execute("""
-                SELECT table_name FROM information_schema.tables 
-                WHERE table_schema = 'main'
-            """).fetchall()
-            table_names = {t[0] for t in tables}
-            
-            # If checkedRule exists, validate its schema
-            if 'checkedRule' in table_names:
-                cols = conn.execute("DESCRIBE checkedRule").fetchall()
-                col_names = {c[0] for c in cols}
-                
-                # Expected columns for legacy compatibility
-                expected = {'rule_name', 'last_checked_on', 'checked_by'}
-                missing = expected - col_names
-                
-                if missing:
-                    logger.warning(f"checkedRule missing columns: {missing}")
-                    for col in missing:
-                        try:
-                            if col == 'rule_name':
-                                conn.execute("ALTER TABLE checkedRule ADD COLUMN rule_name VARCHAR")
-                            elif col == 'last_checked_on':
-                                conn.execute("ALTER TABLE checkedRule ADD COLUMN last_checked_on TIMESTAMP")
-                            elif col == 'checked_by':
-                                conn.execute("ALTER TABLE checkedRule ADD COLUMN checked_by VARCHAR DEFAULT 'unknown'")
-                            logger.info(f"Added missing column: {col}")
-                        except Exception as e:
-                            logger.warning(f"Could not add column {col}: {e}")
-                else:
-                    logger.info("checkedRule schema validated")
-                    
-        except Exception as e:
-            logger.warning(f"Legacy table validation skipped: {e}")
-    
+            rows = conn.execute(
+                "SELECT c.client_id, cl.db_filename, c.name, c.color "
+                "FROM classifications c JOIN clients cl ON cl.id = c.client_id "
+                "WHERE c.client_id IS NOT NULL AND cl.db_filename IS NOT NULL"
+            ).fetchall()
+        except Exception:
+            rows = []
+        data_dir = os.path.dirname(self.db_path)
+        for client_id, fname, name, color in rows:
+            path = os.path.join(data_dir, fname)
+            if not os.path.exists(path):
+                continue
+            try:
+                tconn = _duckdb.connect(path)
+                try:
+                    tconn.execute(
+                        "INSERT INTO classifications (name, color) "
+                        "SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM classifications WHERE name = ?)",
+                        [name, color, name],
+                    )
+                finally:
+                    tconn.close()
+            except Exception as exc:
+                logger.warning(f"Migration 64: could not keep classification '{name}' for {client_id[:8]}: {exc}")
+
+        for table in self._SHARED_TENANT_TABLES:
+            try:
+                conn.execute(f'DROP TABLE IF EXISTS "{table}"')
+            except Exception as exc:
+                logger.warning(f"Migration 64: could not drop {table}: {exc}")
+
     def _init_db(self):
         """Initialize database and run migrations.  Always uses the shared DB
         regardless of any active tenant context."""
         with self.get_shared_connection() as conn:
             self._run_migrations(conn)
-            self._validate_legacy_tables(conn)
+            from app.services.reference_db import drop_legacy_copies
+            drop_legacy_copies(conn)
             self._ensure_users_table(conn)
     
     def _ensure_users_table(self, conn):
@@ -3383,115 +3461,97 @@ class DatabaseService:
             return perms
 
     # --- VALIDATION DATA ---
+    # One row per rule id in the tenant's ``checkedRule`` table; ``rule_name`` is kept for
+    # readability. Rows written before ids were recorded have a NULL ``rule_id`` and match
+    # by name until a rule with that name shows up and they are bound to its id.
 
-    def _read_validation_file(self) -> Dict[str, Any]:
+    _checked_rule_ready: set = set()
+
+    def _ensure_checked_rule(self, conn) -> None:
+        """Add ``checkedRule.rule_id`` and bind name-only rows to rule ids, once per tenant DB per process."""
+        from app.services.tenant_manager import get_tenant_db_path
+        key = get_tenant_db_path()
+        if key in self._checked_rule_ready:
+            return
+        conn.execute("ALTER TABLE checkedRule ADD COLUMN IF NOT EXISTS rule_id VARCHAR")
+        self._bind_checked_rule_ids(conn)
+        self._checked_rule_ready.add(key)
+
+    def _bind_checked_rule_ids(self, conn) -> None:
+        """Key validation rows by :func:`validation_key`.
+
+        Rows keyed by a TIDE (saved-object) id move to the rule's Kibana ``rule_id``; when several
+        rows collapse onto one key the newest is kept. Name-only rows get the key of every rule with
+        that name. Rows with no matching rule stay as they are.
         """
-        Safely read the validation JSON file.
-
-        Returns the parsed dict (with a ``rules`` key) or ``None`` if the file
-        does not exist.  On *any* read / parse error the **backup** file is
-        tried before giving up, so a single truncated write can never destroy
-        all client data.
-        """
-        if not os.path.exists(self.validation_file):
-            return None
-
-        # Try primary file first
-        for path in (self.validation_file, self.validation_file + ".bak"):
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path, "r") as f:
-                    content = f.read().strip()
-                if not content:
-                    logger.warning(f"Validation file is empty: {path}")
-                    continue
-                data = json.loads(content)
-                if isinstance(data, dict) and "rules" in data and data["rules"]:
-                    return data
-                logger.warning(f"Validation file has no rule data: {path}")
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.error(f"Failed to read validation file {path}: {exc}")
-
-        # Both files unreadable / empty — return empty structure but do NOT
-        # overwrite the originals (caller decides whether to write).
-        logger.error("All validation files unreadable — returning empty data")
-        return {"rules": {}}
-
-    def _atomic_write_validation(self, data: Dict[str, Any]) -> None:
-        """
-        Atomically write *data* to the validation file.
-
-        Strategy:
-        1. Create a backup of the current file (``<file>.bak``).
-        2. Write to a temporary file in the **same directory** (important so
-           ``os.replace`` is a same-filesystem atomic rename).
-        3. ``os.replace`` the temp file over the real file — this is atomic on
-           both POSIX and modern Windows/NTFS.
-
-        If anything goes wrong the original file (or its backup) survives.
-        """
-        directory = os.path.dirname(self.validation_file) or "."
-        os.makedirs(directory, exist_ok=True)
-
-        # 1. Backup current file if it exists and is non-empty
-        if os.path.exists(self.validation_file):
-            try:
-                if os.path.getsize(self.validation_file) > 2:  # not just "{}"
-                    shutil.copy2(self.validation_file, self.validation_file + ".bak")
-            except OSError as exc:
-                logger.warning(f"Could not create validation backup: {exc}")
-
-        # 2. Write to temp file in the same directory
-        fd, tmp_path = tempfile.mkstemp(dir=directory, suffix=".tmp", prefix=".validation_")
         try:
-            with os.fdopen(fd, "w") as tmp_f:
-                json.dump(data, tmp_f, indent=4)
-                tmp_f.flush()
-                os.fsync(tmp_f.fileno())
-            # 3. Atomic replace
-            os.replace(tmp_path, self.validation_file)
-        except BaseException:
-            # Clean up temp file on failure — original is untouched
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+            conn.execute(
+                f"UPDATE checkedRule SET rule_id = m.k FROM "
+                f"(SELECT DISTINCT rule_id AS tide_id, {VALIDATION_KEY_SQL} AS k FROM detection_rules) m "
+                f"WHERE checkedRule.rule_id = m.tide_id AND m.k <> m.tide_id"
+            )
+            conn.execute(
+                "DELETE FROM checkedRule WHERE rule_id IS NOT NULL AND rowid NOT IN "
+                "(SELECT arg_max(rowid, last_checked_on) FROM checkedRule WHERE rule_id IS NOT NULL GROUP BY rule_id)"
+            )
+        except Exception:
+            return  # no rules table yet (never synced)
+        rows = conn.execute(
+            "SELECT rule_name, last_checked_on, checked_by FROM checkedRule WHERE rule_id IS NULL"
+        ).fetchall()
+        if not rows:
+            return
+        ids_by_name: Dict[str, List[str]] = {}
+        for key, name in conn.execute(
+            f"SELECT DISTINCT {VALIDATION_KEY_SQL}, name FROM detection_rules"
+        ).fetchall():
+            ids_by_name.setdefault(name, []).append(key)
+        have = {r[0] for r in conn.execute("SELECT rule_id FROM checkedRule WHERE rule_id IS NOT NULL").fetchall()}
+        for name, checked_on, checked_by in rows:
+            keys = ids_by_name.get(name)
+            if not keys:
+                continue
+            conn.execute("DELETE FROM checkedRule WHERE rule_id IS NULL AND rule_name = ?", [name])
+            for key in keys:
+                if key in have:
+                    continue
+                conn.execute(
+                    "INSERT INTO checkedRule (rule_id, rule_name, last_checked_on, checked_by) VALUES (?, ?, ?, ?)",
+                    [key, name, checked_on, checked_by],
+                )
+                have.add(key)
 
     def _load_validation_data(self) -> Dict[str, Dict[str, str]]:
-        """Load validation data from JSON file (cached by file mtime)."""
-        if not os.path.exists(self.validation_file):
-            return {}
+        """Return validation records for the active tenant, keyed by rule id (or by name for
+        rows not yet bound to an id). Look records up with :func:`validation_for`."""
         try:
-            mtime = os.path.getmtime(self.validation_file)
-            if self._validation_cache is not None and mtime == self._validation_cache_mtime:
-                return self._validation_cache
-            data = self._read_validation_file()
-            rules = data.get("rules", {}) if data else {}
-            self._validation_cache = rules
-            self._validation_cache_mtime = mtime
-            return rules
+            with self.get_connection() as conn:
+                self._ensure_checked_rule(conn)
+                rows = conn.execute(
+                    "SELECT rule_id, rule_name, strftime(last_checked_on, '%Y-%m-%dT%H:%M:%SZ'), checked_by "
+                    "FROM checkedRule"
+                ).fetchall()
         except Exception as exc:
             logger.error(f"Failed to load validation data: {exc}")
             return {}
-
-    def save_validation(self, rule_name: str, user_name: str):
-        """Save validation record for a rule (atomic + backup)."""
-        data = self._read_validation_file() or {"rules": {}}
-
-        if "rules" not in data:
-            data["rules"] = {}
-
-        data["rules"][str(rule_name)] = {
-            "last_checked_on": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "checked_by": user_name
+        return {
+            str(rule_id or name): {"last_checked_on": checked_on or "", "checked_by": checked_by or ""}
+            for rule_id, name, checked_on, checked_by in rows
         }
 
-        self._atomic_write_validation(data)
-        # Invalidate cache so next read picks up the change
-        self._validation_cache = None
-    
+    def save_validation(self, rule_id: str, rule_name: str, user_name: str):
+        """Record that a rule was validated by *user_name* in the active tenant DB."""
+        with self.get_connection() as conn:
+            self._ensure_checked_rule(conn)
+            conn.execute(
+                "DELETE FROM checkedRule WHERE rule_id = ? OR (rule_id IS NULL AND rule_name = ?)",
+                [str(rule_id), str(rule_name)],
+            )
+            conn.execute(
+                "INSERT INTO checkedRule (rule_id, rule_name, last_checked_on, checked_by) VALUES (?, ?, ?, ?)",
+                [str(rule_id), str(rule_name), datetime.utcnow(), user_name],
+            )
+
     # --- RULE OPERATIONS ---
     
     def get_rules(
@@ -3516,7 +3576,7 @@ class DatabaseService:
             # Tenant isolation: restrict to the client's mapped
             # (siem_id, space) pairs. Composite predicate is mandatory —
             # filtering by space alone leaks rules across SIEMs that share a
-            # Kibana space name (AGENTS.md \u00a78.2 g4 / \u00a78.3).
+            # Kibana space name (CLAUDE.md \u00a78.2 g4 / \u00a78.3).
             if filters.allowed_scopes is not None:
                 if not filters.allowed_scopes:
                     query += " AND COALESCE(deprecated, false) = true"
@@ -3632,6 +3692,7 @@ class DatabaseService:
         # Convert to models (search already applied in SQL)
         validation_data = self._load_validation_data()
         rules = []
+        threshold_cache: Dict[Tuple[str, str], Tuple[int, int]] = {}
 
         for _, row in df.iterrows():
             try:
@@ -3640,6 +3701,7 @@ class DatabaseService:
                     validation_data,
                     thresholds,
                     client_id=client_id,
+                    threshold_cache=threshold_cache,
                 )
                 rules.append(rule)
             except Exception as e:
@@ -3662,25 +3724,27 @@ class DatabaseService:
                 wanted_states = {s.strip().lower() for s in filters.state if s and s.strip()}
                 staging_scopes = self.get_client_siem_scopes(client_id, environment_role="staging") if client_id else []
                 production_scopes = self.get_client_siem_scopes(client_id, environment_role="production") if client_id else []
-                rules = [
-                    r for r in rules
-                    if self.get_rule_lifecycle_state(r.rule_id, staging_scopes, production_scopes).lower() in wanted_states
-                ]
+                states = self.get_rule_lifecycle_states_bulk(
+                    [r.rule_id for r in rules], staging_scopes, production_scopes
+                )
+                rules = [r for r in rules if states.get(r.rule_id, "Deprecated").lower() in wanted_states]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
         if fetch_all:
+            # Name is the tie-break, so it goes first; later (stable) sorts keep it within ties.
+            if not any(field == "name" for field, _ in sort_spec):
+                rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
             for field, direction in reversed(sort_spec):
                 reverse = direction == "desc"
                 if field == "validated":
                     rules.sort(key=lambda r: r.validation_date or datetime.min, reverse=reverse)
+                    # Never-validated rules have no date: keep them last in both directions.
+                    rules[:] = [r for r in rules if r.validation_date] + [r for r in rules if not r.validation_date]
                 elif field == "score":
                     rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
                 elif field == "name":
                     rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower(), reverse=reverse)
-
-            if not any(field == "name" for field, _ in sort_spec):
-                rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
 
             # Manual pagination
             offset = (filters.page - 1) * filters.page_size
@@ -4096,6 +4160,70 @@ class DatabaseService:
             ).fetchone()
         return row[0]
 
+    def get_rule_lifecycle_states_bulk(
+        self,
+        rule_ids: Iterable[str],
+        staging_scopes: List[Tuple[str, str]],
+        production_scopes: List[Tuple[str, str]],
+    ) -> Dict[str, str]:
+        """Bulk form of :meth:`get_rule_lifecycle_state` — same result, 3 queries total.
+
+        States: ``Production`` (only in a production scope), ``Staging`` (only in a
+        staging scope), ``Migrated`` (in both) and ``Deprecated`` (in neither).
+        The per-rule method issues 3+ queries per rule, which made state
+        filtering/sorting on ~1.7k rules take seconds.
+        """
+        migrations: Dict[str, Tuple[Any, Any]] = {}
+        logical_master: Dict[str, Any] = {}
+
+        def ids_in(conn, scopes: List[Tuple[str, str]]) -> set:
+            if not scopes:
+                return set()
+            predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
+            params: List[Any] = [v for pair in scopes for v in pair]
+            return {
+                r[0] for r in conn.execute(
+                    f"SELECT rule_id FROM detection_rules WHERE ({predicate}) "
+                    "AND COALESCE(deprecated, false) = false", params,
+                ).fetchall()
+            }
+
+        staging_set = {(str(s), str(sp).lower()) for s, sp in staging_scopes}
+        production_set = {(str(s), str(sp).lower()) for s, sp in production_scopes}
+
+        with self.get_connection() as conn:
+            for src, s_siem, s_space, tgt, t_siem, t_space in conn.execute(
+                "SELECT source_rule_id, source_siem_id, source_space, "
+                "target_rule_id, target_siem_id, target_space "
+                "FROM rule_migrations ORDER BY updated_at ASC"
+            ).fetchall():
+                # A migration only counts while its source is still a staging scope and its target a
+                # production scope; after a SIEM role change the record is stale and ignored.
+                if (str(s_siem), str(s_space).lower()) not in staging_set \
+                        or (str(t_siem), str(t_space).lower()) not in production_set:
+                    continue
+                for rid in (src, tgt):
+                    migrations[rid] = (src, tgt)          # ascending order: latest wins
+            tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
+            if "logical_rule_identities" in tables and "logical_rule_members" in tables:
+                for rid, master in conn.execute(
+                    "SELECT m.rule_id, l.master_rule_id FROM logical_rule_identities l "
+                    "JOIN logical_rule_members m ON m.logical_rule_id = l.id ORDER BY l.updated_at ASC"
+                ).fetchall():
+                    logical_master[rid] = master
+            staging_ids = ids_in(conn, staging_scopes)
+            production_ids = ids_in(conn, production_scopes)
+
+        out: Dict[str, str] = {}
+        for rid in rule_ids:
+            mig = migrations.get(rid)
+            source_id = mig[0] if mig else rid
+            target_id = mig[1] if mig else (logical_master[rid] if rid in logical_master else rid)
+            in_source = bool(source_id) and source_id in staging_ids
+            in_target = bool(target_id) and target_id in production_ids
+            out[rid] = "Migrated" if (in_source and in_target) else "Production" if in_target else "Staging" if in_source else "Deprecated"
+        return out
+
     def get_rule_lifecycle_state(
         self,
         rule_id: str,
@@ -4112,6 +4240,11 @@ class DatabaseService:
                 [rule_id, rule_id],
             ).fetchall()
             migration = migrations[0] if migrations else None
+            if migration and (
+                (str(migration[1]), str(migration[2]).lower()) not in {(str(a), str(b).lower()) for a, b in staging_scopes}
+                or (str(migration[4]), str(migration[5]).lower()) not in {(str(a), str(b).lower()) for a, b in production_scopes}
+            ):
+                migration = None  # stale: the SIEM roles changed since it was recorded
             logical = None
             if not migration:
                 logical_row = conn.execute(
@@ -4188,6 +4321,42 @@ class DatabaseService:
                 return None
             return dict(zip([desc[0] for desc in conn.description], row))
 
+    def get_rule_identity_lookups(self) -> Tuple[Dict[str, Dict[str, Any]], Dict[Tuple[str, str, str], Dict[str, Any]]]:
+        """Bulk form of the two per-rule identity lookups, for list pages.
+
+        Returns ``(migration_by_rule_id, logical_by_key)`` where
+        ``migration_by_rule_id`` maps a source OR target rule id to its
+        latest ``rule_migrations`` row (same winner as
+        :meth:`get_rule_migration_for_rule`) and ``logical_by_key`` maps
+        ``(rule_id, siem_id, space)`` to its latest logical identity (same
+        winner as :meth:`get_logical_rule_identity_for_rule` with both
+        scope arguments set). Two queries in total instead of two per rule.
+        """
+        migrations: Dict[str, Dict[str, Any]] = {}
+        logical: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT * FROM rule_migrations ORDER BY updated_at ASC").fetchall()
+            cols = [d[0] for d in conn.description]
+            for row in rows:
+                rec = dict(zip(cols, row))
+                for rid in (rec.get("source_rule_id"), rec.get("target_rule_id")):
+                    if rid:
+                        migrations[rid] = rec  # ascending order: latest wins
+            tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
+            if "logical_rule_identities" in tables and "logical_rule_members" in tables:
+                rows = conn.execute(
+                    "SELECT m.rule_id AS _m_rule_id, m.siem_id AS _m_siem_id, m.space AS _m_space, l.* "
+                    "FROM logical_rule_identities l "
+                    "JOIN logical_rule_members m ON m.logical_rule_id = l.id "
+                    "ORDER BY l.updated_at ASC"
+                ).fetchall()
+                cols = [d[0] for d in conn.description]
+                for row in rows:
+                    rec = dict(zip(cols, row))
+                    key = (rec.pop("_m_rule_id"), rec.pop("_m_siem_id"), rec.pop("_m_space"))
+                    logical[key] = rec
+        return migrations, logical
+
     def get_logical_rule_members(self, logical_id: str) -> List[Dict[str, Any]]:
         with self.get_connection() as conn:
             rows = conn.execute(
@@ -4215,16 +4384,18 @@ class DatabaseService:
         if not staging_scopes or not production_scopes:
             return 0
         with self.get_connection() as conn:
-            def rows_for(scopes):
+            def rows_for(scopes, live_only=True):
                 predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
                 params = [value for scope in scopes for value in scope]
                 return conn.execute(
                     f"SELECT rule_id, siem_id, space, name FROM detection_rules "
-                    f"WHERE ({predicate}) AND COALESCE(deprecated, false) = false",
+                    f"WHERE ({predicate})" + (" AND COALESCE(deprecated, false) = false" if live_only else ""),
                     params,
                 ).fetchall()
 
-            staging = rows_for(staging_scopes)
+            # A staging copy that was deleted at promotion is kept as a deprecated row; it still
+            # belongs to its production copy, so include it on the source side.
+            staging = rows_for(staging_scopes, live_only=False)
             production = rows_for(production_scopes)
             by_name_staging: Dict[str, List[Tuple[str, str, str]]] = {}
             by_name_production: Dict[str, List[Tuple[str, str, str]]] = {}
@@ -4326,6 +4497,7 @@ class DatabaseService:
         validation_data: Dict,
         thresholds: Optional[Tuple[int, int]] = None,
         client_id: Optional[str] = None,
+        threshold_cache: Optional[Dict[Tuple[str, str], Tuple[int, int]]] = None,
     ) -> DetectionRule:
         """Convert database row to DetectionRule model.
 
@@ -4368,10 +4540,19 @@ class DatabaseService:
         severity = sev_str if sev_str in {'low', 'medium', 'high', 'critical'} else 'low'
 
         if client_id:
-            amber_weeks, expired_weeks = self.get_client_validation_thresholds(
-                client_id,
-                severity=severity,
-            )
+            # ``threshold_cache`` is a per-request dict supplied by list
+            # callers: without it every row re-reads the client row from the
+            # shared DB (~1 query per rule).
+            cache_key = (client_id, severity)
+            if threshold_cache is not None and cache_key in threshold_cache:
+                amber_weeks, expired_weeks = threshold_cache[cache_key]
+            else:
+                amber_weeks, expired_weeks = self.get_client_validation_thresholds(
+                    client_id,
+                    severity=severity,
+                )
+                if threshold_cache is not None:
+                    threshold_cache[cache_key] = (amber_weeks, expired_weeks)
         elif thresholds is None:
             amber_weeks = int(self.settings.rule_validation_amber_weeks)
             expired_weeks = int(self.settings.rule_validation_expired_weeks)
@@ -4380,7 +4561,7 @@ class DatabaseService:
 
         # Get validation info
         rule_name = _ss(row.get('name'))
-        val_info = validation_data.get(str(rule_name), {})
+        val_info = validation_for(validation_data, validation_key(row.get('rule_id'), raw_data), rule_name)
 
         validation_date = None
         validated_by = None
@@ -4444,7 +4625,7 @@ class DatabaseService:
         Tenant scoping is by composite ``(siem_id, space)`` pairs from
         :py:meth:`get_client_siem_scopes`. Space-name-only filtering would
         leak rules between two SIEMs that share a Kibana space name
-        (AGENTS.md §8.2 g4).
+        (CLAUDE.md §8.2 g4).
 
         This is unfiltered/un-deduplicated by design (used only for the
         dashboard widget and to populate filter dropdown option lists).
@@ -4494,7 +4675,7 @@ class DatabaseService:
             # Rules by space (legacy, space-only) AND by composite scope.
             # The composite map is the authoritative one — keying by space
             # alone collapses two SIEMs that share a Kibana space-name into
-            # a single bucket (AGENTS.md §8.2 g4). Templates should prefer
+            # a single bucket (CLAUDE.md §8.2 g4). Templates should prefer
             # ``rules_by_scope`` and use ``rules_by_space`` only for
             # single-SIEM legacy views.
             rules_by_space = {}
@@ -4543,9 +4724,10 @@ class DatabaseService:
 
         if validation_data:
             now = datetime.now()
+            _sev_thresholds: Dict[str, Tuple[int, int]] = {}
             for _, row in df.iterrows():
                 rule_name = str(row.get('name') or '')
-                rule_v = validation_data.get(rule_name, {})
+                rule_v = validation_for(validation_data, validation_key(row.get('rule_id'), row.get('raw_data')), rule_name)
                 if rule_v:
                     validated_count += 1
                     val_str = rule_v.get('last_checked_on', '')
@@ -4554,8 +4736,12 @@ class DatabaseService:
                             val_date = datetime.strptime(val_str[:10], "%Y-%m-%d")
                             weeks = (now - val_date).days / 7
                             severity = str(row.get('severity') or 'low').lower()
+                            if client_id and severity not in _sev_thresholds:
+                                _sev_thresholds[severity] = self.get_client_validation_thresholds(
+                                    client_id, severity=severity
+                                )
                             amber_weeks, expired_weeks = (
-                                self.get_client_validation_thresholds(client_id, severity=severity)
+                                _sev_thresholds[severity]
                                 if client_id
                                 else thresholds or (
                                     int(self.settings.rule_validation_amber_weeks),
@@ -4647,7 +4833,7 @@ class DatabaseService:
 
         Composite ``(siem_id, space)`` predicates are mandatory whenever a
         client scope is in play. Filtering by space-name alone leaks rules
-        across SIEMs that share a Kibana space name (AGENTS.md §8.2 g4).
+        across SIEMs that share a Kibana space name (CLAUDE.md §8.2 g4).
         """
         with self.get_connection() as conn:
             # ── Build staging filter ──
@@ -4655,18 +4841,18 @@ class DatabaseService:
                 if not staging_scopes:
                     import pandas as _pd
                     staging_df = _pd.DataFrame(
-                        columns=['enabled', 'score', 'severity', 'name']
+                        columns=['enabled', 'score', 'severity', 'name', 'vkey']
                     )
                 else:
                     frag, params = _scope_predicate(staging_scopes)
                     staging_df = conn.execute(
-                        f"SELECT enabled, score, severity, name "
+                        f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey "
                         f"FROM detection_rules WHERE {frag}",
                         params,
                     ).df()
             else:
                 staging_df = conn.execute(
-                    "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
+                    f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey FROM detection_rules WHERE LOWER(space) = 'staging'"
                 ).df()
 
             # ── Build production count ──
@@ -4730,8 +4916,8 @@ class DatabaseService:
             validation_data = self._load_validation_data()
             if validation_data:
                 now = datetime.now()
-                for rule_name in staging_df['name'].tolist():
-                    rule_v = validation_data.get(str(rule_name), {})
+                for rule_id, rule_name in zip(staging_df['vkey'].tolist(), staging_df['name'].tolist()):
+                    rule_v = validation_for(validation_data, rule_id, rule_name)
                     if rule_v:
                         staging_validated += 1
                         val_str = rule_v.get('last_checked_on', '')
@@ -4896,6 +5082,9 @@ class DatabaseService:
                 created_at TIMESTAMP DEFAULT now()
             )
         """)
+        # Snapshots record the scoring model that produced them (NULL = model 1).
+        if "scoring_version" not in {c[0] for c in conn.execute("DESCRIBE rule_score_history").fetchall()}:
+            conn.execute("ALTER TABLE rule_score_history ADD COLUMN scoring_version INTEGER")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_rule_score_history_rule "
             "ON rule_score_history (rule_id, siem_id, space, client_id)"
@@ -4904,6 +5093,95 @@ class DatabaseService:
             "CREATE INDEX IF NOT EXISTS idx_rule_score_history_created "
             "ON rule_score_history (created_at DESC)"
         )
+
+    _SCORE_COLUMNS = [
+        "score", "quality_score", "meta_score", "score_mapping",
+        "score_field_type", "score_search_time", "score_language", "score_note",
+        "score_override", "score_tactics", "score_techniques", "score_author",
+        "score_highlights", "scoring_version",
+    ]
+
+    @staticmethod
+    def _norm_score_value(value: Any) -> Any:
+        """Normalise a score cell so DB values and pandas values compare equal."""
+        if value is None:
+            return None
+        # Pandas uses NaN for nullable numeric columns.
+        if isinstance(value, float) and value != value:
+            return None
+        try:
+            if hasattr(value, "item"):
+                value = value.item()
+        except Exception:
+            pass
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return None
+            if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+                try:
+                    return int(stripped)
+                except Exception:
+                    return stripped
+            return stripped
+        return value
+
+    def record_rule_score_snapshots_bulk(
+        self,
+        client_id: str,
+        rows: List[Dict[str, Any]],
+        conn: Any,
+    ) -> int:
+        """Bulk equivalent of ``record_rule_score_snapshot(only_if_changed=True)``.
+
+        Ensures the history table once, loads the latest snapshot per
+        ``(rule_id, siem_id, space)`` for the client in a single query, and
+        inserts only the rows whose score payload changed — instead of four
+        queries per rule during a sync. Returns the number of rows inserted.
+        """
+        if not rows:
+            return 0
+        norm = self._norm_score_value
+        score_columns = self._SCORE_COLUMNS
+        self._ensure_rule_score_history_table(conn)
+        latest: Dict[Tuple[Any, Any, Any], List[Any]] = {}
+        for rec in conn.execute(
+            "SELECT rule_id, siem_id, space, " + ", ".join(score_columns) + " "
+            "FROM rule_score_history WHERE client_id = ? "
+            "QUALIFY row_number() OVER ("
+            "PARTITION BY rule_id, siem_id, space ORDER BY created_at DESC) = 1",
+            [client_id],
+        ).fetchall():
+            latest[(rec[0], rec[1], rec[2])] = [norm(v) for v in rec[3:]]
+        version_at = score_columns.index("scoring_version")
+        for prev in latest.values():
+            if prev[version_at] is None:
+                prev[version_at] = 1
+
+        columns = ["rule_id", "siem_id", "space", "client_id", *score_columns]
+        to_insert: List[List[Any]] = []
+        for row in rows:
+            rule_id, siem_id = row.get("rule_id"), row.get("siem_id")
+            space = row.get("space") or "default"
+            values = [row.get(col) for col in score_columns]
+            if norm(values[version_at]) is None:
+                values[version_at] = 1
+            previous = latest.get((rule_id, siem_id, space))
+            if previous is not None and previous == [norm(v) for v in values]:
+                continue
+            to_insert.append([rule_id, siem_id, space, client_id, *values])
+        if to_insert:
+            # DataFrame bulk insert (executemany is row-by-row in DuckDB).
+            insert_df = pd.DataFrame(to_insert, columns=columns)
+            conn.register("score_history_src", insert_df)
+            try:
+                conn.execute(
+                    f"INSERT INTO rule_score_history ({', '.join(columns)}) "
+                    f"SELECT {', '.join(columns)} FROM score_history_src"
+                )
+            finally:
+                conn.unregister("score_history_src")
+        return len(to_insert)
 
     def record_rule_score_snapshot(
         self,
@@ -4938,28 +5216,7 @@ class DatabaseService:
             "score_highlights",
         ]
 
-        def _norm(value: Any) -> Any:
-            if value is None:
-                return None
-            # Pandas uses NaN for nullable numeric columns.
-            if isinstance(value, float) and value != value:
-                return None
-            try:
-                if hasattr(value, "item"):
-                    value = value.item()
-            except Exception:
-                pass
-            if isinstance(value, str):
-                stripped = value.strip()
-                if not stripped:
-                    return None
-                if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
-                    try:
-                        return int(stripped)
-                    except Exception:
-                        return stripped
-                return stripped
-            return value
+        _norm = self._norm_score_value
 
         local_conn = conn
         owns_conn = local_conn is None
@@ -5023,7 +5280,7 @@ class DatabaseService:
         with self.get_connection() as conn:
             self._ensure_rule_score_history_table(conn)
             rows = conn.execute(
-                "SELECT score, quality_score, meta_score, score_mapping, score_field_type, score_search_time, score_language, score_note, score_override, score_tactics, score_techniques, score_author, score_highlights, created_at "
+                "SELECT score, quality_score, meta_score, score_mapping, score_field_type, score_search_time, score_language, score_note, score_override, score_tactics, score_techniques, score_author, score_highlights, created_at, scoring_version "
                 "FROM rule_score_history WHERE rule_id = ? AND siem_id = ? AND space = ? ORDER BY created_at DESC LIMIT ?",
                 [rule_id, siem_id, space, limit],
             ).fetchall()
@@ -5043,31 +5300,166 @@ class DatabaseService:
                 "score_author": row[11],
                 "score_highlights": row[12],
                 "created_at": row[13],
+                "scoring_version": row[14] or 1,
             }
             for row in rows
         ]
     
+    # ── per-client scoring weights ───────────────────────────────────────
+    def get_client_scoring(self, client_id: str) -> Dict[str, Any]:
+        """The client's points per scoring check (defaults filled in) and who last changed them."""
+        from app.scoring import DEFAULT_WEIGHTS, resolve_weights
+        row = None
+        try:
+            with self.get_shared_connection() as conn:
+                row = conn.execute(
+                    "SELECT weights_json, updated_at, updated_by FROM client_scoring_weights WHERE client_id = ?",
+                    [client_id],
+                ).fetchone()
+        except Exception:
+            logger.warning("Could not read scoring weights for client %s; using defaults", client_id, exc_info=True)
+        try:
+            stored = json.loads(row[0]) if row and row[0] else {}
+        except ValueError:
+            stored = {}
+        weights = resolve_weights(stored)
+        return {"weights": weights, "custom": weights != DEFAULT_WEIGHTS,
+                "updated_at": row[1] if row else None, "updated_by": row[2] if row else None}
+
+    def set_client_scoring(self, client_id: str, weights: Dict[str, int], updated_by: str = "") -> None:
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "INSERT INTO client_scoring_weights (client_id, weights_json, updated_at, updated_by) "
+                "VALUES (?, ?, now(), ?) ON CONFLICT (client_id) DO UPDATE SET "
+                "weights_json = EXCLUDED.weights_json, updated_at = EXCLUDED.updated_at, updated_by = EXCLUDED.updated_by",
+                [client_id, json.dumps(weights, sort_keys=True), updated_by],
+            )
+
+    def reset_client_scoring(self, client_id: str) -> None:
+        with self.get_shared_connection() as conn:
+            conn.execute("DELETE FROM client_scoring_weights WHERE client_id = ?", [client_id])
+
+    def rescore_rules_with_weights(self, client_id: str, weights: Dict[str, int]) -> Dict[str, int]:
+        """Re-apply new weights to every stored rule of the ACTIVE tenant, without asking any SIEM.
+
+        Uses the per-check fractions saved with each rule's ``score_detail``. Rules scored before
+        fractions were stored are skipped and pick the weights up on their next sync. Records a
+        score-history snapshot for every rule whose score changed.
+        """
+        from app.scoring import SCORING_VERSION, rescore_detail
+        updates: List[Dict[str, Any]] = []
+        skipped = 0
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT rule_id, siem_id, space, raw_data FROM detection_rules").fetchall()
+            for rule_id, siem_id, space, raw in rows:
+                payload = json.loads(raw) if isinstance(raw, str) else (raw or {})
+                result = rescore_detail((payload or {}).get("score_detail"), weights)
+                if result is None:
+                    skipped += 1
+                    continue
+                detail, columns = result
+                payload["score_detail"] = detail
+                updates.append({"rule_id": rule_id, "siem_id": siem_id, "space": space, **columns,
+                                "scoring_version": SCORING_VERSION, "raw_data": json.dumps(payload, default=str)})
+            if updates:
+                frame = pd.DataFrame(updates)
+                conn.register("rescore_src", frame)
+                try:
+                    conn.execute(
+                        "UPDATE detection_rules SET score = s.score, quality_score = s.quality_score, "
+                        "meta_score = s.meta_score, score_mapping = s.score_mapping, "
+                        "score_field_type = s.score_field_type, score_search_time = s.score_search_time, "
+                        "score_language = s.score_language, score_note = s.score_note, "
+                        "score_override = s.score_override, score_tactics = s.score_tactics, "
+                        "score_techniques = s.score_techniques, score_author = s.score_author, "
+                        "score_highlights = s.score_highlights, raw_data = CAST(s.raw_data AS JSON) "
+                        "FROM rescore_src s WHERE detection_rules.rule_id = s.rule_id "
+                        "AND detection_rules.siem_id = s.siem_id AND detection_rules.space = s.space"
+                    )
+                finally:
+                    conn.unregister("rescore_src")
+                self.record_rule_score_snapshots_bulk(client_id, updates, conn)
+        return {"rescored": len(updates), "skipped": skipped}
+
+    def _ensure_search_time_table(self, conn) -> None:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS rule_search_time_samples (
+                rule_id VARCHAR NOT NULL,
+                siem_id VARCHAR NOT NULL,
+                space VARCHAR NOT NULL,
+                executed_at VARCHAR NOT NULL,
+                search_ms INTEGER NOT NULL
+            )
+        """)
+
+    def get_search_time_history(self, per_rule: int = 10) -> Dict[Tuple[str, str, str], List[Tuple[str, int]]]:
+        """Recent search durations per ``(rule_id, siem_id, space)``, newest first.
+
+        Feeds the search-time score, which uses the median of recent runs
+        instead of whichever single run happened to be last.
+        """
+        with self.get_connection() as conn:
+            self._ensure_search_time_table(conn)
+            rows = conn.execute(
+                "SELECT rule_id, siem_id, space, executed_at, search_ms FROM rule_search_time_samples "
+                "QUALIFY row_number() OVER (PARTITION BY rule_id, siem_id, space ORDER BY executed_at DESC) <= ?",
+                [per_rule],
+            ).fetchall()
+        out: Dict[Tuple[str, str, str], List[Tuple[str, int]]] = {}
+        for rule_id, siem_id, space, executed_at, ms in rows:
+            out.setdefault((rule_id, siem_id, space), []).append((executed_at, int(ms)))
+        for samples in out.values():
+            samples.sort(reverse=True)
+        return out
+
+    def record_search_time_samples(self, samples: List[Dict[str, Any]], keep_days: int = 30) -> int:
+        """Store new ``{rule_id, siem_id, space, executed_at, search_ms}`` samples (already-seen ones are skipped)."""
+        rows = [s for s in samples if s.get("executed_at") and s.get("search_ms") is not None]
+        if not rows:
+            return 0
+        frame = pd.DataFrame(rows, columns=["rule_id", "siem_id", "space", "executed_at", "search_ms"])
+        frame["executed_at"] = frame["executed_at"].astype(str)
+        frame = frame.drop_duplicates(subset=["rule_id", "siem_id", "space", "executed_at"])
+        with self.get_connection() as conn:
+            self._ensure_search_time_table(conn)
+            conn.register("search_samples_src", frame)
+            try:
+                inserted = conn.execute(
+                    "INSERT INTO rule_search_time_samples "
+                    "SELECT s.rule_id, s.siem_id, s.space, s.executed_at, s.search_ms FROM search_samples_src s "
+                    "WHERE NOT EXISTS (SELECT 1 FROM rule_search_time_samples t WHERE t.rule_id = s.rule_id "
+                    "AND t.siem_id = s.siem_id AND t.space = s.space AND t.executed_at = s.executed_at) "
+                    "RETURNING 1"
+                ).fetchall()
+            finally:
+                conn.unregister("search_samples_src")
+            cutoff = (datetime.now() - timedelta(days=keep_days)).strftime("%Y-%m-%dT%H:%M:%S")
+            conn.execute("DELETE FROM rule_search_time_samples WHERE executed_at < ?", [cutoff])
+        return len(inserted)
+
     def bootstrap_rule_history_from_elastic(
         self,
         rule_data: Dict[str, Any],
         client_id: str,
     ) -> None:
-        """Bootstrap lifecycle history from Elastic metadata on first sync.
-        
-        Extracts created_by/created_at from raw_data and records a 'created' event
-        if this is the rule's first appearance in TIDE.
-        """
-        rule_id = rule_data.get("rule_id")
-        siem_id = rule_data.get("siem_id")
-        space = rule_data.get("space") or rule_data.get("space_id") or "default"
-        
-        if not all([rule_id, siem_id, space]):
-            return
-        
-        raw_data = rule_data.get("raw_data", {})
-        created_by = (raw_data.get("created_by") or "").strip()
-        updated_by = (raw_data.get("updated_by") or created_by or "").strip()
+        """Bootstrap lifecycle history for one rule (see the bulk form)."""
+        self.bootstrap_rule_history_bulk([rule_data], client_id)
 
+    def bootstrap_rule_history_bulk(
+        self,
+        records: List[Dict[str, Any]],
+        client_id: str,
+    ) -> int:
+        """Bootstrap lifecycle history from Elastic metadata for many rules.
+
+        For each record, extracts created_by/created_at from ``raw_data`` and
+        records a 'created' event if this is the rule's first appearance in
+        TIDE, plus an 'edited' event when Elastic's ``updated_at`` is newer
+        and not already recorded. The history table is ensured and the
+        existing events are loaded once, and new events are inserted in one
+        batch — instead of a table check, a query and 1-2 inserts per rule.
+        Returns the number of events inserted.
+        """
         def _coerce_ts(value: Any) -> Optional[datetime]:
             if not value:
                 return None
@@ -5079,82 +5471,90 @@ class DatabaseService:
             except Exception:
                 return None
 
-        created_at = _coerce_ts(raw_data.get("created_at")) or datetime.now()
-        updated_at = _coerce_ts(raw_data.get("updated_at"))
-        updated_stamp = updated_at.isoformat() if updated_at else ""
-
-        has_created = False
-        has_matching_elastic_edit = False
+        # (rule_id, siem_id, space) -> [has_created, {elastic edit timestamps}]
+        state: Dict[Tuple[Any, Any, Any], List[Any]] = {}
         with self.get_connection() as conn:
             self._ensure_rule_lifecycle_history_table(conn)
-            rows = conn.execute(
-                "SELECT action, detail FROM rule_lifecycle_history "
-                "WHERE rule_id = ? AND siem_id = ? AND space = ?",
-                [rule_id, siem_id, space],
-            ).fetchall()
-            for action, detail_json in rows:
-                detail = {}
+            for rule_id, siem_id, space, action, detail_json in conn.execute(
+                "SELECT rule_id, siem_id, space, action, detail FROM rule_lifecycle_history "
+                "WHERE action = 'created' OR action = 'edited'"
+            ).fetchall():
+                entry = state.setdefault((rule_id, siem_id, space), [False, set()])
+                if action == "created":
+                    entry[0] = True
+                    continue
                 try:
                     detail = json.loads(detail_json) if detail_json else {}
                 except Exception:
                     detail = {}
-                if action == "created":
-                    has_created = True
-                if (
-                    action == "edited"
-                    and detail.get("source") == "elastic_sync"
-                    and detail.get("elastic_timestamp") == updated_stamp
-                ):
-                    has_matching_elastic_edit = True
+                if detail.get("source") == "elastic_sync":
+                    entry[1].add(detail.get("elastic_timestamp"))
 
-        if not has_created:
-            self.record_rule_history(
-                rule_id=rule_id,
-                siem_id=siem_id,
-                space=space,
-                client_id=client_id,
-                action="created",
-                actor_user_id=None,
-                actor_name="elastic",
-                detail={
-                    "source": "elastic_sync",
-                    "message": "Created in Kibana before initial sync.",
-                    "elastic_timestamp": created_at.isoformat(),
-                    "kibana_user": created_by or "",
-                },
-                created_at=created_at,
-            )
+            events: List[List[Any]] = []
+            for rule_data in records:
+                siem_id = rule_data.get("siem_id")
+                space = rule_data.get("space") or rule_data.get("space_id") or "default"
+                raw_data = rule_data.get("raw_data") or {}
+                # Key by the identity ``save_audit_results`` persists (Elastic's
+                # saved-object ``id``), not Kibana's stable ``rule_id``. Rule
+                # cards look history up by the stored id, so keying by the
+                # other one left Elastic-created/edited events unattached.
+                rule_id = raw_data.get("id") or rule_data.get("rule_id")
+                if not all([rule_id, siem_id, space]):
+                    continue
 
-        if updated_at and updated_at > created_at and not has_matching_elastic_edit:
-            self.record_rule_history(
-                rule_id=rule_id,
-                siem_id=siem_id,
-                space=space,
-                client_id=client_id,
-                action="edited",
-                actor_user_id=None,
-                actor_name="elastic",
-                detail={
-                    "source": "elastic_sync",
-                    "message": "Updated in Kibana before sync.",
-                    "changed_fields": "updated_at, updated_by",
-                    "field_diffs": [
-                        {
-                            "field": "updated_at",
-                            "before": "-",
-                            "after": updated_stamp,
-                        },
-                        {
-                            "field": "updated_by",
-                            "before": "-",
-                            "after": updated_by or "",
-                        },
-                    ],
-                    "elastic_timestamp": updated_stamp,
-                    "kibana_user": updated_by or "",
-                },
-                created_at=updated_at,
-            )
+                created_by = (raw_data.get("created_by") or "").strip()
+                updated_by = (raw_data.get("updated_by") or created_by or "").strip()
+                created_at = _coerce_ts(raw_data.get("created_at")) or datetime.now()
+                updated_at = _coerce_ts(raw_data.get("updated_at"))
+                updated_stamp = updated_at.isoformat() if updated_at else ""
+                has_created, elastic_edits = state.get((rule_id, siem_id, space), (False, set()))
+
+                if not has_created:
+                    events.append([
+                        str(uuid.uuid4()), rule_id, siem_id, space, client_id, "created", None, "elastic",
+                        json.dumps({
+                            "source": "elastic_sync",
+                            "message": "Created in Kibana before initial sync.",
+                            "elastic_timestamp": created_at.isoformat(),
+                            "kibana_user": created_by or "",
+                        }),
+                        created_at,
+                    ])
+
+                if updated_at and updated_at > created_at and updated_stamp not in elastic_edits:
+                    events.append([
+                        str(uuid.uuid4()), rule_id, siem_id, space, client_id, "edited", None, "elastic",
+                        json.dumps({
+                            "source": "elastic_sync",
+                            "message": "Updated in Kibana before sync.",
+                            "changed_fields": "updated_at, updated_by",
+                            "field_diffs": [
+                                {"field": "updated_at", "before": "-", "after": updated_stamp},
+                                {"field": "updated_by", "before": "-", "after": updated_by or ""},
+                            ],
+                            "elastic_timestamp": updated_stamp,
+                            "kibana_user": updated_by or "",
+                        }),
+                        updated_at,
+                    ])
+
+            if events:
+                # DataFrame bulk insert: ~50x faster than executemany, which
+                # DuckDB runs row-by-row (with index maintenance) per call.
+                cols = ["id", "rule_id", "siem_id", "space", "client_id", "action",
+                        "actor_user_id", "actor_name", "detail", "created_at"]
+                events_df = pd.DataFrame(events, columns=cols)
+                events_df["actor_user_id"] = events_df["actor_user_id"].astype("object")
+                conn.register("lifecycle_events_src", events_df)
+                try:
+                    conn.execute(
+                        f"INSERT INTO rule_lifecycle_history ({', '.join(cols)}) "
+                        f"SELECT {', '.join(cols)} FROM lifecycle_events_src"
+                    )
+                finally:
+                    conn.unregister("lifecycle_events_src")
+        return len(events)
     
     # --- THREAT ACTOR OPERATIONS ---
 
@@ -5665,7 +6065,7 @@ class DatabaseService:
         If client_id provided, coverage is scoped to that client's production
         ``(siem_id, space)`` pairs. Composite scope is mandatory — a
         space-only filter would leak TTP coverage from any other SIEM that
-        shares a Kibana space name (AGENTS.md §8.2 g4)."""
+        shares a Kibana space name (CLAUDE.md §8.2 g4)."""
         from app.models.threats import ThreatLandscapeMetrics
 
         # Pre-fetch composite scopes outside the main connection.
@@ -5809,7 +6209,7 @@ class DatabaseService:
         
         # Resolve composite (siem_id, space) scopes for tenant scoping.
         # Composite key is mandatory — a space-only allow-list bleeds rules
-        # between SIEMs that share a Kibana space name (AGENTS.md §8.2 g4).
+        # between SIEMs that share a Kibana space name (CLAUDE.md §8.2 g4).
         allowed_scopes: Optional[List[Tuple[str, str]]] = None
         if client_id:
             allowed_scopes = self.get_client_siem_scopes(client_id)
@@ -5820,17 +6220,17 @@ class DatabaseService:
                 if allowed_scopes:
                     frag, scope_params = _scope_predicate(allowed_scopes)
                     rules_df = conn.execute(
-                        f"SELECT enabled, score, space, severity, name "
+                        f"SELECT enabled, score, space, severity, name, {VALIDATION_KEY_SQL} AS vkey "
                         f"FROM detection_rules WHERE {frag}",
                         scope_params,
                     ).df()
                 else:
                     # Client has 0 SIEMs — empty result
                     import pandas as pd
-                    rules_df = pd.DataFrame(columns=['enabled', 'score', 'space', 'severity', 'name'])
+                    rules_df = pd.DataFrame(columns=['enabled', 'score', 'space', 'severity', 'name', 'vkey'])
             else:
                 rules_df = conn.execute(
-                    "SELECT enabled, score, space, severity, name FROM detection_rules"
+                    f"SELECT enabled, score, space, severity, name, {VALIDATION_KEY_SQL} AS vkey FROM detection_rules"
                 ).df()
             
             if rules_df.empty:
@@ -5862,8 +6262,8 @@ class DatabaseService:
                 validated_count = 0
                 validation_expired_count = 0
                 if validation_data:
-                    for rule_name in rules_df['name'].tolist():
-                        rule_v = validation_data.get(str(rule_name), {})
+                    for rule_id, rule_name in zip(rules_df['vkey'].tolist(), rules_df['name'].tolist()):
+                        rule_v = validation_for(validation_data, rule_id, rule_name)
                         if rule_v:
                             validated_count += 1
                             val_str = rule_v.get('last_checked_on', '')
@@ -5901,7 +6301,7 @@ class DatabaseService:
                 if allowed_scopes:
                     frag, scope_params = _scope_predicate(allowed_scopes)
                     staging_df = conn.execute(
-                        f"SELECT enabled, score, severity, name FROM detection_rules "
+                        f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey FROM detection_rules "
                         f"WHERE LOWER(space) = 'staging' AND {frag}",
                         scope_params,
                     ).df()
@@ -5913,11 +6313,11 @@ class DatabaseService:
                 else:
                     # Client has 0 SIEMs — empty staging/production
                     import pandas as pd
-                    staging_df = pd.DataFrame(columns=['enabled', 'score', 'severity', 'name'])
+                    staging_df = pd.DataFrame(columns=['enabled', 'score', 'severity', 'name', 'vkey'])
                     prod_result = (0,)
             else:
                 staging_df = conn.execute(
-                    "SELECT enabled, score, severity, name FROM detection_rules WHERE LOWER(space) = 'staging'"
+                    f"SELECT enabled, score, severity, name, {VALIDATION_KEY_SQL} AS vkey FROM detection_rules WHERE LOWER(space) = 'staging'"
                 ).df()
                 prod_result = conn.execute(
                     "SELECT COUNT(*) FROM detection_rules WHERE LOWER(space) = 'production'"
@@ -5955,8 +6355,8 @@ class DatabaseService:
                 staging_validated = 0
                 staging_validation_expired = 0
                 if validation_data:
-                    for rule_name in staging_df['name'].tolist():
-                        rule_v = validation_data.get(str(rule_name), {})
+                    for rule_id, rule_name in zip(staging_df['vkey'].tolist(), staging_df['name'].tolist()):
+                        rule_v = validation_for(validation_data, rule_id, rule_name)
                         if rule_v:
                             staging_validated += 1
                             val_str = rule_v.get('last_checked_on', '')
@@ -7915,25 +8315,6 @@ class DatabaseService:
             
             return rules
     
-    # --- TRIGGERS (for background sync) ---
-    
-    def set_trigger(self, trigger_name: str):
-        """Set a trigger file for the background worker."""
-        path = os.path.join(self.trigger_dir, trigger_name)
-        with open(path, 'w') as f:
-            f.write("1")
-    
-    def check_and_clear_trigger(self, trigger_name: str) -> bool:
-        """Check and clear a trigger file."""
-        path = os.path.join(self.trigger_dir, trigger_name)
-        if os.path.exists(path):
-            try:
-                os.remove(path)
-                return True
-            except:
-                pass
-        return False
-    
     # --- DATA MANAGEMENT ---
     
     # --- APP SETTINGS ---
@@ -8059,7 +8440,8 @@ class DatabaseService:
                        score, quality_score, meta_score,
                        score_mapping, score_field_type, score_search_time, score_language,
                        score_note, score_override, score_tactics, score_techniques,
-                       score_author, score_highlights, mitre_ids
+                       score_author, score_highlights, mitre_ids,
+                       {VALIDATION_KEY_SQL} AS validation_key
                 FROM detection_rules{where}
                 ORDER BY name
             """, params).fetchall()
@@ -8068,7 +8450,7 @@ class DatabaseService:
                        'score', 'quality_score', 'meta_score',
                        'score_mapping', 'score_field_type', 'score_search_time', 'score_language',
                        'score_note', 'score_override', 'score_tactics', 'score_techniques',
-                       'score_author', 'score_highlights', 'mitre_ids']
+                       'score_author', 'score_highlights', 'mitre_ids', 'validation_key']
 
             return [dict(zip(columns, row)) for row in rows]
     
@@ -8083,13 +8465,25 @@ class DatabaseService:
             logger.info(f"Cleared {count} detection rules")
             return count
     
-    def save_audit_results(self, audit_list: List[Dict[str, Any]], client_id: Optional[str] = None) -> int:
+    def save_audit_results(self, audit_list: List[Dict[str, Any]], client_id: Optional[str] = None,
+                           checkpoint: bool = True) -> int:
         """
         Save detection rules from Elastic sync to database.
         This replaces rules for each synced space to ensure live/accurate data.
+        ``checkpoint=False`` skips the full-file checkpoint (seconds on a large database) for
+        small writes such as a single-rule sync.
         """
         if not audit_list:
             return 0
+        import time as _tm
+        _t_last = [_tm.perf_counter()]
+        _stages: List[str] = []
+
+        def _mark(name: str) -> None:
+            now = _tm.perf_counter()
+            _stages.append(f"{name}={(now - _t_last[0]) * 1000:.0f}ms")
+            _t_last[0] = now
+
         
         df = pd.DataFrame(audit_list)
 
@@ -8167,6 +8561,9 @@ class DatabaseService:
             raw['results'] = row.get('results', [])
             raw['query'] = row.get('query', '')
             raw['search_time'] = row.get('search_time', 0)
+            detail = row.get('score_detail')
+            if isinstance(detail, dict):
+                raw['score_detail'] = detail
             return json.dumps(raw, default=str)
         
         df['raw_data'] = df.apply(build_raw_data, axis=1)
@@ -8186,6 +8583,8 @@ class DatabaseService:
                 df[col] = None
         
         df_final = df[target_cols].copy()
+        # Not a detection_rules column: carried along so the score snapshot records the scoring model.
+        df_final['scoring_version'] = df['scoring_version'] if 'scoring_version' in df.columns else None
 
         # A cross-space Elastic create can temporarily leave the source ID in
         # the fetched record while ``raw_data.id`` contains the generated
@@ -8277,10 +8676,12 @@ class DatabaseService:
             if isinstance(value, float) and value != value:
                 return ""
             if isinstance(value, list):
-                try:
-                    return json.dumps(value, sort_keys=True)
-                except Exception:
-                    return ",".join(str(v).strip() for v in value if str(v).strip())
+                # Order is not meaningful for the tracked list fields (MITRE
+                # technique IDs) and Elastic returns them in varying order, so
+                # compare as a sorted set — otherwise every sync logs bogus
+                # "MITRE techniques changed" edits for reordered lists.
+                items = sorted(str(v).strip() for v in value if str(v).strip())
+                return json.dumps(items)
             if isinstance(value, dict):
                 try:
                     return json.dumps(value, sort_keys=True)
@@ -8449,6 +8850,7 @@ class DatabaseService:
 
             return False
 
+        _mark("prep")
         with self.get_connection() as conn:
             try:
                 conn.execute("BEGIN TRANSACTION")
@@ -8498,6 +8900,7 @@ class DatabaseService:
                 """)
                 
                 conn.execute("COMMIT")
+                _mark("upsert")
                 
                 count = len(df_final)
                 logger.info(
@@ -8549,31 +8952,24 @@ class DatabaseService:
                             }
                         )
 
+                _mark("diff")
                 score_cols = [
                     'rule_id', 'siem_id', 'space', 'score', 'quality_score',
                     'meta_score', 'score_mapping', 'score_field_type',
                     'score_search_time', 'score_language', 'score_note',
                     'score_override', 'score_tactics', 'score_techniques',
-                    'score_author', 'score_highlights',
+                    'score_author', 'score_highlights', 'scoring_version',
                 ]
                 snapshot_df = df_final[[col for col in score_cols if col in df_final.columns]].copy()
-                for row in snapshot_df.to_dict(orient='records'):
+                if client_id:
                     try:
-                        if client_id:
-                            self.record_rule_score_snapshot(
-                                row.get('rule_id'),
-                                row.get('siem_id'),
-                                row.get('space') or 'default',
-                                client_id,
-                                row,
-                                only_if_changed=True,
-                                conn=conn,
-                            )
-                    except Exception:
-                        logger.exception(
-                            'Failed to record score snapshot for rule_id=%s siem_id=%s space=%s',
-                            row.get('rule_id'), row.get('siem_id'), row.get('space'),
+                        self.record_rule_score_snapshots_bulk(
+                            client_id,
+                            snapshot_df.to_dict(orient='records'),
+                            conn,
                         )
+                    except Exception:
+                        logger.exception('Failed to record score snapshots for client_id=%s', client_id)
                 
             except Exception as e:
                 try:
@@ -8583,13 +8979,16 @@ class DatabaseService:
                 logger.error(f"Failed to save rules: {e}")
                 raise
         
+        _mark("snapshots")
         # Checkpoint outside transaction context to avoid concurrency issues
         try:
-            with self.get_connection() as conn:
-                conn.execute("CHECKPOINT")
+            if checkpoint:
+                with self.get_connection() as conn:
+                    conn.execute("CHECKPOINT")
         except Exception:
             pass  # Auto-checkpoint will handle it
 
+        _mark("checkpoint")
         for event in pending_sync_edit_events:
             try:
                 self.record_rule_history(
@@ -8609,6 +9008,8 @@ class DatabaseService:
                     event.get('rule_id'), event.get('siem_id'), event.get('space'),
                 )
         
+        _mark("events")
+        logger.info("[perf] save_audit_results stages: " + " ".join(_stages))
         return count
 
     def delete_rules_for_spaces(self, spaces: List[str],
@@ -9106,9 +9507,15 @@ class DatabaseService:
                 return False
             if is_default[0]:
                 raise ValueError("Cannot delete the default client")
-            conn.execute("DELETE FROM user_clients WHERE client_id = ?", [client_id])
-            conn.execute("DELETE FROM client_siem_configs WHERE client_id = ?", [client_id])
-            conn.execute("DELETE FROM clients WHERE id = ?", [client_id])
+            # Everything keyed to this client only. Other clients, users, SIEM
+            # inventory and the tenant database file are left alone.
+            for table in ("user_clients", "user_roles", "role_permissions",
+                          "client_siem_map", "client_siem_configs"):
+                try:
+                    conn.execute(f"DELETE FROM {table} WHERE client_id = ?", [client_id])
+                except Exception as exc:
+                    logger.warning(f"delete_client: cleanup of {table} skipped: {exc!r}")
+            conn.execute("DELETE FROM clients WHERE id = ? AND is_default = false", [client_id])
         return True
 
     def get_user_clients(self, user_id: str) -> List[Dict]:
@@ -9478,6 +9885,33 @@ class DatabaseService:
                 "DELETE FROM client_siem_configs WHERE id = ? AND client_id = ?",
                 [siem_id, client_id],
             )
+
+    def set_client_siem_role(self, client_id: str, siem_id: str, from_role: str, to_role: str) -> Optional[str]:
+        """Re-tag a linked SIEM's environment role in place. Returns an error message, or None on success.
+
+        Nothing else changes: rules are keyed by (rule_id, siem_id, space), not by role, so the client's
+        rules, scores, validations and history stay as they are and simply move between the staging and
+        production views.
+        """
+        if to_role not in ("production", "staging") or from_role not in ("production", "staging") or from_role == to_role:
+            return "Nothing to change."
+        with self.get_shared_connection() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM client_siem_map WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
+                [client_id, siem_id, from_role],
+            ).fetchone():
+                return "Linked SIEM row not found."
+            if conn.execute(
+                "SELECT 1 FROM client_siem_map WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
+                [client_id, siem_id, to_role],
+            ).fetchone():
+                return f"This SIEM is already linked as {to_role}. Unlink that link first."
+            conn.execute(
+                "UPDATE client_siem_map SET environment_role = ? "
+                "WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
+                [to_role, client_id, siem_id, from_role],
+            )
+        return None
 
     # --- OpenCTI Inventory ---
 
@@ -10436,7 +10870,7 @@ class DatabaseService:
         """Get TTPs covered by enabled detection rules for a client's role-tagged
         ``(siem_id, space)`` pairs. Composite key is mandatory — a space-only
         filter would leak TTP coverage from a SIEM the tenant does not map
-        (AGENTS.md §8.2 g4)."""
+        (CLAUDE.md §8.2 g4)."""
         scopes = self.get_client_siem_scopes(client_id, environment_role)
         if not scopes:
             return set()
@@ -10452,7 +10886,7 @@ class DatabaseService:
     def get_technique_rule_counts_for_client(self, client_id: str, environment_role: str = "production") -> Dict[str, int]:
         """Get count of enabled rules per MITRE technique for the client's
         role-tagged ``(siem_id, space)`` pairs. Composite key is mandatory
-        (AGENTS.md §8.2 g4)."""
+        (CLAUDE.md §8.2 g4)."""
         scopes = self.get_client_siem_scopes(client_id, environment_role)
         if not scopes:
             return {}
@@ -10474,7 +10908,7 @@ class DatabaseService:
     def get_rules_for_client(self, client_id: str, environment_role: str = None) -> List[Dict]:
         """Get all detection rules visible to a client via linked SIEMs.
         Filtered by composite ``(siem_id, space)`` so two SIEMs sharing a
-        Kibana space name never bleed into each other (AGENTS.md §8.2 g4).
+        Kibana space name never bleed into each other (CLAUDE.md §8.2 g4).
         If ``environment_role`` is specified, restrict to that role's pairs only."""
         scopes = self.get_client_siem_scopes(client_id, environment_role)
         if not scopes:

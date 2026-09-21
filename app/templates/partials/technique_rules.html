@@ -1,57 +1,11 @@
-<!-- Technique Rules List Partial -->
-{% from "macros/icons.html" import icon %}
-{% from "components/mitre_pill.html" import mitre_pill %}
+{# Technique Rules List Partial (MITRE pill side panel).
+   Renders the SAME card as Rule Health (components/rule_card.html) so a rule
+   looks and behaves identically everywhere. Context: rules, search + the
+   card context from app.api.rules.build_rule_card_context(). #}
 {% if rules %}
-<div class="rules-list">
+<div class="rules-list rules-list--cards" data-rule-list>
     {% for rule in rules %}
-    <div class="rule-item">
-        <div class="rule-header">
-            <span name="Open Detail" class="rule-name"
-                  style="cursor:pointer;text-decoration:underline;text-decoration-style:dotted;"
-                  hx-get="/api/rules/{{ rule.rule_id }}/detail?space={{ rule.space | default('default') }}"
-                  hx-target="#modal-container"
-                  hx-swap="innerHTML"
-                  title="View rule details">{{ rule.name }}</span>
-            <span class="severity-badge severity-{{ rule.severity.value | lower }}">
-                {{ rule.severity.value | capitalize }}
-            </span>
-        </div>
-        <div class="rule-meta">
-            <span class="rule-score" title="Quality Score">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-                </svg>
-                {{ rule.score }}
-            </span>
-            <span class="rule-author" title="Author">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/>
-                    <circle cx="12" cy="7" r="4"/>
-                </svg>
-                {{ rule.author or 'Unknown' }}
-            </span>
-            <span class="rule-status {{ 'enabled' if rule.enabled else 'disabled' }}" title="Status">
-                {% if rule.enabled %}{{ icon('check','12') }} Enabled{% else %}{{ icon('x','12') }} Disabled{% endif %}
-            </span>
-            {% if rule.validation_date %}
-            {% set val_class = 'success' if rule.validation_status == 'valid' else ('warning' if rule.validation_status == 'expired' else 'danger') %}
-            <span class="rule-validated text-{{ val_class }}" title="Validated {{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}">
-                {{ icon('circle-check','12') }} {{ rule.validation_date.strftime('%Y-%m-%d') }}
-            </span>
-            {% else %}
-            <span class="rule-validated text-danger" title="Never validated">
-                {{ icon('circle-check','12') }} Never
-            </span>
-            {% endif %}
-        </div>
-        {% if rule.mitre_ids %}
-        <div class="rule-mitre-ids">
-            {% for mid in rule.mitre_ids %}
-            {{ mitre_pill(mid, neutral=true, clickable=true, size='sm') }}
-            {% endfor %}
-        </div>
-        {% endif %}
-    </div>
+        {% include "components/rule_card.html" %}
     {% endfor %}
 </div>
 {% else %}

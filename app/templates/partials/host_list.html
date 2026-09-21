@@ -9,7 +9,7 @@
 {% from "macros/icons.html" import icon %}
 
 {% if nessus_hosts is defined %}
-<div class="alert alert-success" style="margin-bottom:0.75rem;padding:0.6rem 1rem;border-radius:var(--radius-md);background:rgba(var(--color-success-rgb,34,197,94),.12);border:1px solid rgba(var(--color-success-rgb,34,197,94),.3);font-size:0.85rem;">
+<div class="alert alert-success u-bg-success-12" style="margin-bottom:0.75rem;padding:0.6rem 1rem;border-radius:var(--radius-md);border:1px solid rgba(var(--color-success-rgb,34,197,94),.3);font-size:0.85rem">
     {{ icon('check-circle', '14') }}
     Nessus import complete: <strong>{{ nessus_hosts }}</strong> device{% if nessus_hosts != 1 %}s{% endif %} created,
     <strong>{{ nessus_records }}</strong> package record{% if nessus_records != 1 %}s{% endif %} added.

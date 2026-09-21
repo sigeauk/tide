@@ -104,7 +104,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Systems — {{ client.name }}</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-systems-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -114,7 +114,7 @@
                 <label class="form-label">Current Systems</label>
                 <div style="display:flex;flex-direction:column;gap:0.35rem;">
                     {% for sys in client_systems %}
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
                         <span>{{ sys.name }}{% if sys.classification %} <span class="badge badge-muted" style="font-size:0.6rem;">{{ sys.classification }}</span>{% endif %}</span>
                         <div style="display:flex;gap:0.25rem;">
                             <button name="Move" class="btn btn-ghost btn-sm"
@@ -193,7 +193,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Move System to Another Client</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('move-system-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Move System" hx-post="/api/management/clients/{{ client.id }}/move-system"
@@ -242,7 +242,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Baselines — {{ client.name }}</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-baselines-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">
@@ -252,7 +252,7 @@
                 <label class="form-label">Current Baselines</label>
                 <div style="display:flex;flex-direction:column;gap:0.35rem;">
                     {% for bl in client_baselines %}
-                    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">
+                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
                         <span>{{ bl.name }}</span>
                         <button name="Remove" class="btn btn-ghost btn-sm text-danger"
                                 hx-delete="/api/management/clients/{{ client.id }}/baselines/{{ bl.id }}"
@@ -320,7 +320,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Edit Client</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-client-modal').style.display='none'">&#x2715;</button>
         </div>
         <form id="edit-client-form" onsubmit="return submitEditClient(event)"

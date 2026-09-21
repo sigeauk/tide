@@ -72,8 +72,11 @@
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
 
-    <!-- Global Modal Container (for rule detail modals triggered from MITRE pills etc.) -->
+    <!-- Global Modal Container — the ONLY one in the app (pages must not redeclare it).
+         Rule modal, edit form, MITRE-panel rule cards etc. all swap into it. -->
     <div id="modal-container"></div>
+    <!-- Loading skeleton, cloned into the container by app.js while a modal request is in flight. -->
+    <template id="rule-modal-skeleton">{% include "components/rule_modal_skeleton.html" %}</template>
 
     <!-- HTMX global error handler (stale-page / network errors) -->
     <script>

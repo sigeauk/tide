@@ -172,6 +172,11 @@ class ConnectionPool:
         # never lands in the tenant DB. Apply the fix lazily, once per
         # process per DB.
         _maybe_repair_threat_actors_pk(conn, db_path)
+        # App-wide reference data (ATT&CK, NIST, Sigma index) is attached
+        # read-only to every connection; copies stored locally would shadow it.
+        from app.services import reference_db
+        reference_db.attach(conn)
+        reference_db.drop_legacy_copies(conn, key=db_path)
         return conn
 
     # ---- public API --------------------------------------------------------

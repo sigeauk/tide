@@ -928,19 +928,6 @@ def _sigma_index_exists() -> bool:
     return bool(row)
 
 
-def _ensure_sigma_index_ready() -> bool:
-    """Best-effort ensure sigma_rules_index exists and is populated."""
-    if _sigma_index_exists():
-        return True
-    try:
-        from app import sigma_helper as sigma_mod
-        indexed = sigma_mod.index_sigma_rules()
-        logger.info("Baseline generator: sigma index rebuilt on demand (%d rows)", indexed)
-    except Exception as exc:
-        logger.warning("Baseline generator: sigma index rebuild failed: %s", exc)
-    return _sigma_index_exists()
-
-
 def _sigma_tech_catalog() -> dict[str, list[dict]]:
     """Return a curated Service Catalog of primary technologies for the UI.
 
@@ -949,7 +936,7 @@ def _sigma_tech_catalog() -> dict[str, list[dict]]:
     UI buckets (Endpoints, Cloud & Identity, Network & Security) with
     everything else falling into "Other Applications".
     """
-    if not _ensure_sigma_index_ready():
+    if not _sigma_index_exists():
         logger.info("Baseline generator: sigma_rules_index missing for active DB; returning empty catalog")
         return {}
 
@@ -1025,7 +1012,7 @@ def _build_baseline_groups(
 
     Returns ``groups`` — a flat list of baseline group dicts.
     """
-    if not selections or not _ensure_sigma_index_ready():
+    if not selections or not _sigma_index_exists():
         return []
 
     from app.services.database import get_database_service
@@ -1113,7 +1100,7 @@ def _generate_baselines_from_sigma(
         with db.get_shared_connection() as conn:
             if gkey:
                 rule_rows = conn.execute(f"""
-                    SELECT rule_id, title, file_path, attack_techniques, attack_tactics
+                    SELECT rule_id, title, file_path, techniques, tactics
                     FROM sigma_rules_index
                     WHERE {_TECH_COL} = ?
                       AND ({_GROUP_COL}) = ?
@@ -1123,7 +1110,7 @@ def _generate_baselines_from_sigma(
                 """, [tech, gkey]).fetchall()
             else:
                 rule_rows = conn.execute(f"""
-                    SELECT rule_id, title, file_path, attack_techniques, attack_tactics
+                    SELECT rule_id, title, file_path, techniques, tactics
                     FROM sigma_rules_index
                     WHERE {_TECH_COL} = ?
                       AND ({_GROUP_COL}) IS NULL
@@ -2289,24 +2276,49 @@ def api_update_tactic_technique(
 def _build_rule_name_lookup(client_id: str = None) -> dict:
     """Build rule name/id -> display metadata for clickable rule names.
 
+    Each entry carries ``rule_id``, ``name``, ``space``, ``siem_id`` and
+    ``environment_role`` (production / staging / '' when the SIEM is no longer
+    linked to the tenant) so the Rule modal opens the exact copy. When a
+    reference matches several copies (e.g. a rule present in staging and in
+    production), the production copy wins.
+
     NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
     shared schema no longer carries a `client_id` column. The table is already
     tenant-scoped (by tenant DB routing) so we skip the legacy
     `WHERE client_id = ?` filter that would BinderException against the
     current schema."""
+    roles: dict = {}
+    if client_id:
+        db = get_database_service()
+        for role in ("staging", "production"):  # production last so it wins on overlap
+            for siem_id, space in db.get_client_siem_scopes(client_id, environment_role=role):
+                roles[(str(siem_id), str(space).lower())] = role
     with _get_conn_inline() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name, space, raw_data FROM detection_rules"
+            "SELECT rule_id, name, space, siem_id, raw_data FROM detection_rules"
         ).fetchall()
-    lookup = {}
-    for rule_id, name, space, raw_data in rows:
-        info = {"rule_id": rule_id, "name": name or rule_id, "space": space or "default"}
+    rank = {"production": 2, "staging": 1, "": 0}
+    lookup: dict = {}
+
+    def _put(key, info):
+        current = lookup.get(key)
+        if current is None or rank[info["environment_role"]] >= rank[current["environment_role"]]:
+            lookup[key] = info
+
+    for rule_id, name, space, siem_id, raw_data in rows:
+        info = {
+            "rule_id": rule_id,
+            "name": name or rule_id,
+            "space": space or "default",
+            "siem_id": siem_id or "",
+            "environment_role": roles.get((str(siem_id), str(space or "default").lower()), ""),
+        }
         if name:
-            lookup[name] = info
+            _put(name, info)
         if rule_id:
-            lookup[rule_id] = info
+            _put(rule_id, info)
         for raw_key in _rule_reference_keys({"raw_data": raw_data}):
-            lookup[raw_key] = info
+            _put(raw_key, info)
     return lookup
 
 

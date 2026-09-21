@@ -16,9 +16,9 @@
     <!-- Traffic Light Legend -->
     <div class="det-color-key" style="margin-bottom:1rem;">
         <span class="det-color-key__label">Coverage Status</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-warning);"></span> Amber — Detection applied</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-danger);"></span> Red — At risk</span>
-        <span class="det-color-key__item"><span class="det-color-key__swatch" style="background:var(--color-text-muted);"></span> Grey — Known blind spot</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-warning"></span> Amber — Detection applied</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-danger"></span> Red — At risk</span>
+        <span class="det-color-key__item"><span class="det-color-key__swatch u-bg-text-muted"></span> Grey — Known blind spot</span>
     </div>
 
     <!-- Search bar -->
@@ -70,12 +70,12 @@
                 {% for det in ns_applied_all.items %}
                 <span class="badge badge-success" style="font-size:0.68rem;display:inline-flex;align-items:center;gap:0.25rem;">
                     {{ icon('check','10') }} {{ det.note[:30] if det.note else det.rule_ref[:30] if det.rule_ref else 'Rule' }}
-                    <button name="Delete Apply System" class="btn btn-danger btn-sm"
+                    <button name="Delete Apply System" class="btn btn-danger btn-sm u-bg-transparent"
                             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}/apply-system/{{ grp.system_id }}"
                             hx-target="#cve-affected-section"
                             hx-swap="innerHTML"
                             hx-confirm="Remove this detection from all hosts in {{ grp.system_name }}?"
-                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                            style="padding:0 0.2rem;font-size:0.6rem;line-height:1;margin-left:0.15rem;border:none;color:var(--color-danger);cursor:pointer">
                         {{ icon('x','9') }}
                     </button>
                 </span>
@@ -124,7 +124,7 @@
                 {% if bs.host_id == h.host_id %}
                 <div style="font-size:0.72rem;color:var(--color-text-muted);font-style:italic;margin-top:0.15rem;">
                     {{ icon('info','10') }} {{ bs.reason }}
-                    <button name="Delete Blind Spots" class="btn btn-sm" style="padding:0 0.2rem;font-size:0.6rem;background:transparent;border:none;color:var(--color-danger);cursor:pointer;"
+                    <button name="Delete Blind Spots" class="btn btn-sm u-bg-transparent" style="padding:0 0.2rem;font-size:0.6rem;border:none;color:var(--color-danger);cursor:pointer"
                             hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=cve&entity_id={{ cve_id }}"
                             hx-target="#cve-affected-section" hx-swap="innerHTML"
                             hx-confirm="Remove blind spot for {{ h.name }}?">{{ icon('x','9') }}</button>
@@ -166,12 +166,12 @@
                     {% set ns_shown_dets.ids = ns_shown_dets.ids + [det.id] %}
                     <span class="badge badge-success" style="font-size:0.62rem;display:inline-flex;align-items:center;gap:0.2rem;margin-bottom:0.2rem;">
                         {{ icon('check','9') }} {{ det.note[:20] if det.note else det.rule_ref[:20] if det.rule_ref else 'Rule' }}
-                        <button name="Delete Applied Detection" class="btn btn-danger btn-sm"
+                        <button name="Delete Applied Detection" class="btn btn-danger btn-sm u-bg-transparent"
                                 hx-delete="/api/inventory/applied-detection/{{ ad.id }}?cve_id={{ cve_id }}"
                                 hx-target="#cve-affected-section"
                                 hx-swap="innerHTML"
                                 hx-confirm="Remove detection from {{ h.name }}?"
-                                style="padding:0 0.15rem;font-size:0.55rem;line-height:1;background:transparent;border:none;color:var(--color-danger);cursor:pointer;">
+                                style="padding:0 0.15rem;font-size:0.55rem;line-height:1;border:none;color:var(--color-danger);cursor:pointer">
                             {{ icon('x','8') }}
                         </button>
                     </span>
@@ -293,7 +293,7 @@ function openBlindSpotModal(entityType, entityId, systemId, hostId, hostName) {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('eye-off','16') }} Log Blind Spot</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('blind-spot-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">

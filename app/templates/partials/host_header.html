@@ -8,7 +8,7 @@
                 {{ icon('server', '24') }} {{ host.name }}
             </h1>
             {% if system and system.classification %}
-            <span class="system-card__classification" style="background:{{ clf_color }}20;color:{{ clf_color }};border-color:{{ clf_color }}40;margin-top:0.35rem;">{{ icon('lock', '10') }} {{ system.classification }}</span>
+            <span class="system-card__classification u-bg-dyn-tint" style="--u-bg-color:{{ clf_color }};color:{{ clf_color }};border-color:{{ clf_color }}40;margin-top:0.35rem">{{ icon('lock', '10') }} {{ system.classification }}</span>
             {% endif %}
             {% if host.ip_address %}
             <p style="margin:0.3rem 0 0;color:var(--color-muted);font-family:monospace;font-size:0.9rem;">{{ host.ip_address }}</p>

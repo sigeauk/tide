@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from typing import Optional, Any, List, Dict
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
+from app.services.database import validation_key
 from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule
 
 import logging
@@ -35,7 +36,21 @@ def _parse_date_bound(raw_value: Optional[str], end_of_day: bool) -> Optional[da
     return parsed
 
 
-def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: str, sort_by: str) -> list:
+# Table-view column sorts beyond score / validated / name. Each maps to a key builder that
+# receives (rule, ctx) where ctx = {"state": {rule_id: state}, "siem_label": callable(rule)}.
+_SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
+_STATE_RANK = {"Production": 0, "Migrated": 1, "Staging": 2, "Deprecated": 3}
+_COLUMN_SORTS = {
+    "siem": lambda r, c: (c["siem_label"](r) or "").lower(),
+    "state": lambda r, c: _STATE_RANK.get(c["state"].get(r.rule_id, "Deprecated"), 9),
+    "severity": lambda r, c: _SEVERITY_RANK.get(str(getattr(getattr(r, "severity", None), "value", getattr(r, "severity", "")) or "").lower(), 0),
+    "author": lambda r, c: str(getattr(r, "author", "") or "").lower(),
+    "language": lambda r, c: str(getattr(r, "language", "") or "").lower(),
+}
+
+
+def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: str, sort_by: str,
+                  sort_col: str = "", sort_dir: str = "", sort_ctx: Optional[dict] = None) -> list:
     """Re-apply the active sort after any post-fetch substitution.
 
     ``list_rules`` swaps some rows for their migrated "master" counterpart
@@ -49,6 +64,12 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
         "validated_asc": ("validated", "asc"), "validated_desc": ("validated", "desc"),
         "name_asc": ("name", "asc"), "name_desc": ("name", "desc"),
     }
+    if sort_col in _COLUMN_SORTS and sort_dir in ("asc", "desc"):
+        # Table header sort on a column the DB layer cannot order: stable secondary sort by name.
+        rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
+        ctx = sort_ctx or {"state": {}, "siem_label": lambda r: ""}
+        rules.sort(key=lambda r: _COLUMN_SORTS[sort_col](r, ctx), reverse=(sort_dir == "desc"))
+        return rules
     if sort_validated in ("asc", "desc"):
         field, direction = "validated", sort_validated
     elif sort_score in ("asc", "desc"):
@@ -60,7 +81,11 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
 
     reverse = direction == "desc"
     if field == "validated":
+        # Never-validated rules have no date: keep them after every dated rule in both directions.
+        rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
         rules.sort(key=lambda r: getattr(r, "validation_date", None) or datetime.min, reverse=reverse)
+        dated = [r for r in rules if getattr(r, "validation_date", None)]
+        rules[:] = dated + [r for r in rules if not getattr(r, "validation_date", None)]
     elif field == "score":
         rules.sort(key=lambda r: int(getattr(r, "score", 0) or 0), reverse=reverse)
     elif field == "name":
@@ -121,11 +146,17 @@ def _dedupe_display_rules(db, rules: List["DetectionRule"], client_id: str) -> L
     filters."""
     display_rules = []
     seen_migrations = set()
+    # Two bulk queries up front instead of two per rule (was ~3.4k queries
+    # for a 1.7k-rule tenant on every Rule Health request).
+    migration_by_rule, logical_by_key = db.get_rule_identity_lookups()
     for rule in rules:
-        migration = db.get_rule_migration_for_rule(rule.rule_id)
-        logical = db.get_logical_rule_identity_for_rule(
-            rule.rule_id, rule.siem_id, rule.space
-        )
+        migration = migration_by_rule.get(rule.rule_id)
+        if rule.siem_id is not None and rule.space is not None:
+            logical = logical_by_key.get((rule.rule_id, rule.siem_id, rule.space))
+        else:
+            logical = db.get_logical_rule_identity_for_rule(
+                rule.rule_id, rule.siem_id, rule.space
+            )
         identity_key = (migration or logical or {}).get("id")
         if identity_key:
             if identity_key in seen_migrations:
@@ -137,7 +168,7 @@ def _dedupe_display_rules(db, rules: List["DetectionRule"], client_id: str) -> L
     return display_rules
 
 
-def _metrics_from_rules(rules: List["DetectionRule"]) -> RuleHealthMetrics:
+def _metrics_from_rules(rules: List["DetectionRule"], all_rules: Optional[List["DetectionRule"]] = None) -> RuleHealthMetrics:
     """Aggregate Rule Health stats from an already-filtered, already-
     deduplicated rule list — i.e. exactly the cards the grid would render
     across every page. Computing stats from raw (pre-dedup) SQL rows
@@ -160,12 +191,18 @@ def _metrics_from_rules(rules: List["DetectionRule"]) -> RuleHealthMetrics:
     validation_expired_count = 0
     never_validated_count = 0
 
-    for r in rules:
+    # Rules per SIEM count every copy: a promoted rule still lives in its staging SIEM, so the
+    # staging count does not drop when a rule is promoted (the grid shows the pair once).
+    for r in (all_rules if all_rules is not None else rules):
+        if r.deprecated:
+            continue
         if r.space:
             rules_by_space[r.space] = rules_by_space.get(r.space, 0) + 1
         if r.siem_id and r.space:
             scope_key = f"{r.siem_id}|{str(r.space).lower()}"
             rules_by_scope[scope_key] = rules_by_scope.get(scope_key, 0) + 1
+
+    for r in rules:
         sev = str(getattr(r.severity, "value", r.severity) or "low").lower()
         severity_breakdown[sev] = severity_breakdown.get(sev, 0) + 1
         lang = r.language or "unknown"
@@ -208,17 +245,43 @@ def _metrics_from_rules(rules: List["DetectionRule"]) -> RuleHealthMetrics:
     )
 
 
-def _get_filtered_deduped_rules(db, filters: RuleFilters, client_id: str) -> List["DetectionRule"]:
-    """Fetch every rule matching ``filters`` (unpaginated) and collapse
-    migrated/merged identities to one row each — the same rule set the
-    grid would render across all of its pages combined."""
+def _apply_lifecycle_counts(metrics: RuleHealthMetrics, db, client_id: str, rules) -> None:
+    """Fill the Production / Staging / Migrated / Deprecated split on ``metrics``
+    for the deduplicated ``rules`` (one entry per card the grid renders)."""
+    if not rules:
+        return
+    states = db.get_rule_lifecycle_states_bulk(
+        [r.rule_id for r in rules],
+        db.get_client_siem_scopes(client_id, environment_role="staging"),
+        db.get_client_siem_scopes(client_id, environment_role="production"),
+    )
+    counts = {"Production": 0, "Staging": 0, "Migrated": 0, "Deprecated": 0}
+    for r in rules:
+        st = states.get(r.rule_id, "Deprecated")
+        counts[st] = counts.get(st, 0) + 1
+    metrics.state_production = counts["Production"]
+    metrics.state_staging = counts["Staging"]
+    metrics.state_migrated = counts["Migrated"]
+    metrics.state_deprecated = counts["Deprecated"]
+
+
+def _get_filtered_rules(db, filters: RuleFilters, client_id: str):
+    """Every rule matching ``filters`` (unpaginated) as ``(all_rules, deduped)``.
+
+    ``deduped`` collapses migrated/merged identities to one row each, the same rule set the grid
+    renders across all of its pages. ``all_rules`` is every rule copy, for counts per SIEM."""
     all_filters = filters.model_copy(update={"page": 1, "page_size": 1_000_000})
     rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id)
     db.backfill_unique_rule_migrations(
         db.get_client_siem_scopes(client_id, environment_role="staging"),
         db.get_client_siem_scopes(client_id, environment_role="production"),
     )
-    return _dedupe_display_rules(db, rules, client_id)
+    return rules, _dedupe_display_rules(db, rules, client_id)
+
+
+def _get_filtered_deduped_rules(db, filters: RuleFilters, client_id: str) -> List["DetectionRule"]:
+    """Every rule matching ``filters`` with migrated/merged identities collapsed to one row each."""
+    return _get_filtered_rules(db, filters, client_id)[1]
 
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
@@ -768,7 +831,7 @@ def _build_rule_history_entries(history: list[dict], score_history: list[dict]) 
 def _build_space_labels(db, client_id: str) -> dict:
     """Build space → environment-role label mapping for the active client.
 
-    AGENTS.md §8.2 guarantee 4: two SIEMs can share a Kibana space-name.
+    CLAUDE.md §8.2 guarantee 4: two SIEMs can share a Kibana space-name.
     Keying this dict by ``space`` alone silently overwrites the first SIEM's
     label with the second SIEM's label, so the rule grid badge then shows
     rules from SIEM A under SIEM B's name. We therefore concatenate every
@@ -909,6 +972,9 @@ def list_rules(
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     append: bool = Query(False),
+    view: str = Query("cards"),
+    sort_col: str = Query(""),
+    sort_dir: str = Query(""),
 ):
     """List detection rules with filtering and pagination."""
     try:
@@ -944,20 +1010,34 @@ def list_rules(
         # separate cards, and makes the pagination total disagree with
         # the stats cards (which are computed the same way).
         all_rules = _get_filtered_deduped_rules(db, filters, client_id)
-        all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by)
+        sort_ctx = None
+        if sort_col in _COLUMN_SORTS:
+            _labels_by_pair = _build_space_labels_by_pair(db, client_id)
+            _labels = _build_space_labels(db, client_id)
+            sort_ctx = {
+                "state": db.get_rule_lifecycle_states_bulk(
+                    [r.rule_id for r in all_rules],
+                    db.get_client_siem_scopes(client_id, environment_role="staging"),
+                    db.get_client_siem_scopes(client_id, environment_role="production"),
+                ) if sort_col == "state" else {},
+                "siem_label": lambda r: _labels_by_pair.get(f"{r.siem_id}|{r.space}") or _labels.get(r.space or "default", ""),
+            }
+        all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by, sort_col, sort_dir, sort_ctx)
+        if search and search.strip():
+            # Search also matches author, rule id and MITRE ids, so a short term (e.g. "111") can hit
+            # dozens of rule-id substrings. Show name matches first (exact, then contains); the chosen
+            # sort still orders rules within each group (sorted() is stable).
+            _q = search.strip().lower()
+            all_rules = sorted(
+                all_rules,
+                key=lambda r: 0 if (r.name or "").lower() == _q else 1 if _q in (r.name or "").lower() else 2,
+            )
         total = len(all_rules)
         total_pages = max(1, (total + page_size - 1) // page_size)
         offset = (page - 1) * page_size
         rules = all_rules[offset:offset + page_size]
 
-        staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
-        production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
-        lifecycle_states = {
-            f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
-                rule.rule_id, staging_scopes, production_scopes
-            )
-            for rule in rules
-        }
+        card_ctx = build_rule_card_context(db, client_id, rules)
         
         logger.info(f"Fetched {len(rules)} rules (total: {total}, page: {page}/{total_pages})")
         
@@ -980,11 +1060,11 @@ def list_rules(
             "sort_score": sort_score,
             "sort_validated": sort_validated,
             "sort_name": sort_name,
-            "space_labels": _build_space_labels(db, client_id),
-            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
-            "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
-            "lifecycle_states": lifecycle_states,
+            **card_ctx,
             "append": append,
+            "view": view if view in ("cards", "table") else "cards",
+            "sort_col": sort_col if sort_col in _COLUMN_SORTS else "",
+            "sort_dir": sort_dir if (sort_col in _COLUMN_SORTS and sort_dir in ("asc", "desc")) else "",
         }
         response = templates.TemplateResponse(request, "partials/rules_grid.html", context)
         # Lets the stats cards re-fetch with the same active filters (see
@@ -1039,60 +1119,20 @@ def get_metrics(
     # renders) rather than raw SQL rows — a migrated/merged identity's
     # staging and production copies both satisfy the same filters, which
     # would otherwise double-count it against the grid's single card.
-    deduped_rules = _get_filtered_deduped_rules(db, filters, client_id)
-    metrics = _metrics_from_rules(deduped_rules)
+    all_rules, deduped_rules = _get_filtered_rules(db, filters, client_id)
+    metrics = _metrics_from_rules(deduped_rules, all_rules)
     # Hide orphan space buckets (rules whose (siem_id, space) is no
     # longer in client_siem_map after a mapping change).
     _prune_orphan_scopes(metrics, db, client_id)
+    _apply_lifecycle_counts(metrics, db, client_id, deduped_rules)
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request, "partials/metrics_row.html",
         {
             "metrics": metrics,
-            "last_sync_time": get_last_sync_time(),
+            "last_sync_time": get_last_sync_time(all_rules),
             "space_labels": _build_space_labels(db, client_id),
             "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
-        },
-    )
-
-
-@router.get("/{rule_id}/detail", response_class=HTMLResponse)
-def get_rule_detail(
-    request: Request,
-    rule_id: str,
-    db: DbDep,
-    user: CurrentUser,
-    settings: SettingsDep,
-    client_id: ActiveClient,
-    space: str = Query("default"),
-    siem_id: Optional[str] = Query(
-        None,
-        description="SIEM that owns this rule. Required for unambiguous "
-                    "resolution when multiple SIEMs share a space name. "
-                    "Falls back to first space-match (with WARN) if absent.",
-    ),
-):
-    """Get full rule details for modal display."""
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
-    
-    if not rule:
-        return HTMLResponse(
-            '<div class="modal-overlay" onclick="this.remove()">' 
-            '<div class="modal-content" onclick="event.stopPropagation()">' 
-            '<p style="color: var(--color-danger);">Rule not found</p>'
-            '<button class="btn btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button>'
-            '</div></div>',
-            status_code=404
-        )
-    
-    templates = request.app.state.templates
-    return templates.TemplateResponse(
-        request, "components/rule_detail_modal.html",
-        {
-            "rule": rule,
-            "env": settings,
-            "space_labels": _build_space_labels(db, client_id),
-            "kibana_url": _resolve_kibana_url(db, rule, client_id),
         },
     )
 
@@ -1118,7 +1158,7 @@ def validate_rule(
         return HTMLResponse('<div class="empty-state">Rule not found</div>', status_code=404)
     
     username = user.name or user.username if user else "Unknown"
-    db.save_validation(rule.name, username)
+    db.save_validation(validation_key(rule.rule_id, rule.raw_data), rule.name, username)
     validation_reason = f"{username} validated rule"
     if siem_id:
         try:
@@ -1140,37 +1180,16 @@ def validate_rule(
     
     templates = request.app.state.templates
 
-    _sl = _build_space_labels(db, client_id) if client_id else {}
-    staging_scopes = db.get_client_siem_scopes(client_id, environment_role="staging")
-    production_scopes = db.get_client_siem_scopes(client_id, environment_role="production")
-    lifecycle_states = {
-        f"{rule.rule_id}|{rule.siem_id}|{rule.space}": db.get_rule_lifecycle_state(
-            rule.rule_id, staging_scopes, production_scopes
-        )
-    }
+    card_ctx = build_rule_card_context(db, client_id, [rule])
 
-    # If called from the modal, re-render the modal instead of the card
-    if request.headers.get("X-Return-Modal") == "true":
-        return templates.TemplateResponse(
-            request, "components/rule_detail_modal.html",
-            {
-                "rule": rule,
-                "env": settings,
-                "space_labels": _sl,
-                "kibana_url": _resolve_kibana_url(db, rule, client_id),
-            },
-        )
+    # Unified Rule modal: re-render the modal and refresh the card behind it
+    # out-of-band (its "Validated on" date changes).
+    if request.headers.get("X-Return-Modal") == "rule":
+        return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, settings, just_validated=True)
 
     return templates.TemplateResponse(
         request, "components/rule_card.html",
-        {
-            "rule": rule,
-            "space_labels": _sl,
-            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
-            "kibana_urls_by_siem": _build_kibana_urls_by_siem(db, client_id),
-            "lifecycle_states": lifecycle_states,
-            "env": settings,
-        }
+        {"rule": rule, **card_ctx, "env": settings},
     )
 
 
@@ -1216,7 +1235,7 @@ async def test_rule(
         )
     
     # Resolve the SIEM for this rule. The PREFERRED path (4.0.13+) is to use
-    # the explicit siem_id query param — either passed by the rule_detail_modal
+    # the explicit siem_id query param — either passed by the rule modal
     # template (which knows rule.siem_id) or inferred from rule.siem_id below.
     # Falling back to space-only matching is ambiguous when two SIEMs share a
     # Kibana space name (e.g. both expose 'production') and was the root cause
@@ -1529,6 +1548,385 @@ def get_rule_history(
     )
 
 
+def _build_score_chart(score_history: list[dict], events: Optional[list[dict]] = None) -> Optional[dict]:
+    """Geometry for the Rule Score-over-time line chart (server-rendered SVG).
+
+    * x-axis is TIME-scaled across the score snapshots and the supplied
+      ``events`` (validations / edits), so markers line up with the line.
+    * y-axis auto-scales to the data (padded, clamped to 0–100) so small score
+      changes are visible instead of a flat line on a 0–100 axis.
+    ``score_history`` is newest-first (as returned by the DB layer). Returns
+    ``None`` when there is nothing to plot.
+    """
+    from datetime import datetime as _dt
+
+    samples = [
+        (row["created_at"], int(row["score"]))
+        for row in reversed(score_history or [])
+        if row.get("score") is not None and isinstance(row.get("created_at"), _dt)
+    ]
+    if not samples:
+        return None
+
+    marks = [
+        {"ts": e["ts"], "kind": e.get("kind", "edit"), "actor": e.get("actor") or "", "label": e.get("label") or ""}
+        for e in (events or [])
+        if isinstance(e.get("ts"), _dt)
+    ]
+    width, height = 340, 190
+    pad_l, pad_r, pad_t, pad_b = 34, 14, 14, 34
+    plot_w, plot_h = width - pad_l - pad_r, height - pad_t - pad_b
+
+    scores = [s for _, s in samples]
+    lo, hi = min(scores), max(scores)
+    if hi - lo < 10:                      # flat/near-flat: give the axis some air
+        mid = (hi + lo) / 2
+        lo, hi = mid - 6, mid + 6
+    pad = max(2, (hi - lo) * 0.1)
+    y_min, y_max = max(0, int(lo - pad)), min(100, int(hi + pad + 0.999))
+    if y_max - y_min < 10:
+        y_min, y_max = max(0, y_max - 10), min(100, max(y_max, 10))
+
+    def _y(score: float) -> float:
+        return round(pad_t + plot_h * (1 - (score - y_min) / (y_max - y_min)), 1)
+
+    times = [ts for ts, _ in samples] + [m["ts"] for m in marks]
+    t0, t1 = min(times), max(times)
+    span = (t1 - t0).total_seconds()
+
+    def _x(ts) -> float:
+        if span <= 0:
+            return round(pad_l + plot_w / 2, 1)
+        return round(pad_l + plot_w * ((ts - t0).total_seconds() / span), 1)
+
+    fmt = lambda ts: ts.strftime("%Y-%m-%d %H:%M")
+    points = [{"x": _x(ts), "y": _y(s), "score": s, "label": fmt(ts)} for ts, s in samples]
+    step = 5 if (y_max - y_min) <= 30 else 10 if (y_max - y_min) <= 60 else 25
+    tick_vals = sorted({y_min, y_max, *range(((y_min + step - 1) // step) * step, y_max, step)})
+    if len(tick_vals) > 6:
+        tick_vals = tick_vals[:: len(tick_vals) // 4 or 1] + [y_max]
+    event_marks = [
+        {"x": _x(m["ts"]), "kind": m["kind"],
+         "label": " · ".join(part for part in (m["label"], m["actor"], fmt(m["ts"])) if part)}
+        for m in marks
+    ]
+    return {
+        "width": width,
+        "height": height,
+        "pad_l": pad_l,
+        "plot_right": width - pad_r,
+        "plot_top": pad_t,
+        "plot_bottom": pad_t + plot_h,
+        "points": points,
+        "path": " ".join(f'{p["x"]},{p["y"]}' for p in points),
+        "ticks": [{"y": _y(v), "label": str(v)} for v in sorted(set(tick_vals))],
+        "events": event_marks,
+        "first_label": (t0).strftime("%Y-%m-%d"),
+        "last_label": (t1).strftime("%Y-%m-%d"),
+        "latest": points[-1]["score"],
+        "delta": points[-1]["score"] - points[0]["score"] if len(points) > 1 else 0,
+        "y_min": y_min,
+        "y_max": y_max,
+    }
+
+
+def _kibana_rule_url(db, rule, client_id: str) -> str:
+    """Deep link to the rule in its owning SIEM's Kibana ('' when unknown)."""
+    base = (_resolve_kibana_url(db, rule, client_id) or "").rstrip("/")
+    if not base:
+        return ""
+    space = getattr(rule, "space", None) or "default"
+    obj_id = (rule.raw_data or {}).get("id") if getattr(rule, "raw_data", None) else None
+    obj_id = obj_id or rule.rule_id
+    prefix = "" if str(space).lower() == "default" else f"/s/{space}"
+    return f"{base}{prefix}/app/security/rules/id/{obj_id}"
+
+
+def _as_list(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple)):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _render_guide_markdown(text: str):
+    """Tiny, safe Markdown → HTML for Elastic investigation guides.
+
+    Everything is HTML-escaped FIRST; only headings, lists, fenced code, bold,
+    inline code and http(s) links are then re-introduced, so rule content can
+    never inject markup.
+    """
+    import re as _re
+    from markupsafe import Markup, escape
+
+    def inline(s: str) -> str:
+        s = str(escape(s))
+        s = _re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        s = _re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+        return _re.sub(
+            r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+            r'<a href="\2" target="_blank" rel="noopener noreferrer">\1</a>', s,
+        )
+
+    out: list[str] = []
+    para: list[str] = []
+    list_tag = ""
+    in_code = False
+
+    def flush_para():
+        if para:
+            out.append("<p>" + inline(" ".join(para)) + "</p>")
+            para.clear()
+
+    def close_list():
+        nonlocal list_tag
+        if list_tag:
+            out.append(f"</{list_tag}>")
+            list_tag = ""
+
+    for line in str(text).splitlines():
+        if line.strip().startswith("```"):
+            flush_para(); close_list()
+            out.append("</code></pre>" if in_code else "<pre><code>")
+            in_code = not in_code
+            continue
+        if in_code:
+            out.append(str(escape(line)) + "\n")
+            continue
+        stripped = line.strip()
+        heading = _re.match(r"^#{1,6}\s+(.*)$", stripped)
+        bullet = _re.match(r"^[-*]\s+(.*)$", stripped)
+        numbered = _re.match(r"^\d+[.)]\s+(.*)$", stripped)
+        if not stripped:
+            flush_para(); close_list()
+        elif heading:
+            flush_para(); close_list()
+            out.append("<h4>" + inline(heading.group(1)) + "</h4>")
+        elif bullet or numbered:
+            flush_para()
+            tag = "ul" if bullet else "ol"
+            if list_tag != tag:
+                close_list()
+                out.append(f"<{tag}>")
+                list_tag = tag
+            out.append("<li>" + inline((bullet or numbered).group(1)) + "</li>")
+        else:
+            close_list()
+            para.append(stripped)
+    flush_para(); close_list()
+    if in_code:
+        out.append("</code></pre>")
+    return Markup("".join(out))
+
+
+def _build_rule_details(rule) -> dict:
+    """Human-facing rule facts from the stored Elastic payload (no new data needed)."""
+    raw = getattr(rule, "raw_data", None) or {}
+    references = [u for u in _as_list(raw.get("references")) if u.lower().startswith(("http://", "https://"))]
+    indexes = _as_list(raw.get("index"))
+    return {
+        "description": str(raw.get("description") or "").strip(),
+        "tags": _as_list(raw.get("tags")),
+        "interval": str(raw.get("interval") or "").strip(),
+        "lookback": str(raw.get("from") or "").strip(),
+        "risk_score": raw.get("risk_score"),
+        "max_signals": raw.get("max_signals"),
+        "indexes": indexes,
+        "guide": str(raw.get("note") or "").strip(),
+        "guide_html": _render_guide_markdown(str(raw.get("note") or "").strip()) if str(raw.get("note") or "").strip() else "",
+        "setup": str(raw.get("setup") or "").strip(),
+        "references": references,
+        "false_positives": _as_list(raw.get("false_positives")),
+    }
+
+
+def _score_components(rule, weights: Optional[dict] = None) -> tuple[int, list[dict]]:
+    """``(scoring version, components)`` for a rule.
+
+    Rules scored since model 2 carry per-component detail (points, whether it applied, a sentence
+    about this rule's result). Older rows fall back to the stored columns plus the generic
+    description until the next sync re-scores them.
+    """
+    from app import scoring
+
+    detail = (getattr(rule, "raw_data", None) or {}).get("score_detail")
+    if isinstance(detail, dict) and detail.get("components"):
+        keys = set(scoring.DEFAULT_WEIGHTS)
+        components = [c for c in detail["components"] if c.get("key") in keys]
+        if len(components) == len(keys):
+            return int(detail.get("version") or 1), components
+    weights = scoring.resolve_weights(weights)
+    def stored(key: str) -> int:
+        if key == "mitre":
+            return int(getattr(rule, "score_tactics", 0) or 0) + int(getattr(rule, "score_techniques", 0) or 0)
+        column = scoring.COLUMN_FOR.get(key)          # checks added later have no stored column
+        return int(getattr(rule, column, 0) or 0) if column else 0
+    return 1, [
+        {"key": key, "label": label, "group": group, "max": weights[key], "value": stored(key),
+         "applicable": True, "how": how, "result": ""}
+        for key, label, group, _w, how in scoring.COMPONENTS
+    ]
+
+
+def _build_score_bars(rule) -> list[dict]:
+    """Score breakdown as [{title, rows:[{label, value, max, pct, tone, applicable, how, result}]}]."""
+    _version, components = _score_components(rule)
+
+    def row(c: dict) -> dict:
+        maximum = c.get("max") or 0
+        applicable = c.get("applicable", True)
+        v = c.get("value") or 0
+        counted = applicable and maximum > 0
+        pct = max(0, min(100, round(v * 100 / maximum))) if counted else 0
+        tone = "muted" if not counted else "success" if pct >= 80 else "warning" if pct >= 50 else "danger"
+        return {"label": c.get("label", ""), "value": v, "max": maximum, "pct": pct, "tone": tone,
+                "applicable": applicable, "off": maximum <= 0, "how": c.get("how", ""), "result": c.get("result", "")}
+
+    # Only checks that carry points for this client are shown; a check set to 0 is simply not part of the score.
+    groups = [("Quality", "quality"), ("Operations", "operations"), ("Meta", "meta")]
+    shown = [(title, [row(c) for c in components if c.get("group") == key and (c.get("max") or 0) > 0]) for title, key in groups]
+    return [{"title": title, "rows": rows} for title, rows in shown if rows]
+
+
+def _build_score_meta(rule) -> dict:
+    """Scoring-model facts for the breakdown header: version, points in play and what could not be scored."""
+    version, components = _score_components(rule)
+    counted = [c for c in components if c.get("max", 0) > 0]
+    return {"version": version,
+            "allocated": sum(int(c.get("max") or 0) for c in counted),
+            "possible": sum(int(c.get("max") or 0) for c in counted if c.get("applicable", True)),
+            "skipped": [c.get("label", "") for c in counted if not c.get("applicable", True)]}
+
+
+def build_rule_card_context(db, client_id: str, rules) -> dict:
+    """Context ``components/rule_card.html`` / ``rule_row.html`` need — built in one place.
+
+    Used by the Rule Health grid + table, the post-validate refresh and the MITRE
+    technique sidebar so every rule renders identically.
+    """
+    rules = list(rules)
+    states = db.get_rule_lifecycle_states_bulk(
+        [r.rule_id for r in rules],
+        db.get_client_siem_scopes(client_id, environment_role="staging"),
+        db.get_client_siem_scopes(client_id, environment_role="production"),
+    )
+    return {
+        "space_labels": _build_space_labels(db, client_id),
+        "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
+        "lifecycle_states": {
+            f"{r.rule_id}|{r.siem_id}|{r.space}": states.get(r.rule_id, "Deprecated") for r in rules
+        },
+    }
+
+
+def _mapping_info(db, siem_id: str, rule) -> dict:
+    """How fresh the field-catalogue data behind a rule's mapping check is ('' label when unknown)."""
+    from datetime import datetime as _dt
+    from app.services.mapping_catalogue import MappingCatalogue
+
+    indices = sorted({str(row[0]) for row in (getattr(rule, "field_mappings", None) or []) if row})
+    if not indices:
+        return {}
+    try:
+        info = MappingCatalogue(db, siem_id).describe(indices)
+    except Exception:
+        logger.warning("Could not read the field catalogue for rule %s", getattr(rule, "rule_id", "?"), exc_info=True)
+        return {}
+    oldest = info.get("oldest")
+    label = ""
+    if oldest:
+        seconds = max(0, int((_dt.now() - oldest).total_seconds()))
+        label = ("just now" if seconds < 90 else f"{seconds // 60} min ago" if seconds < 5400
+                 else f"{round(seconds / 3600)} h ago" if seconds < 172800 else f"{seconds // 86400} days ago")
+    return {"label": label, "known": info.get("known", 0), "patterns": info.get("patterns", 0)}
+
+
+def _modal_with_card_oob(request, db, client_id: str, rule, space: str, siem_id: Optional[str],
+                         settings, **modal_flags) -> HTMLResponse:
+    """Re-render the Rule modal and refresh the card (or table row) behind it out-of-band."""
+    templates = request.app.state.templates
+    card_ctx = build_rule_card_context(db, client_id, [rule])
+    modal_ctx = _build_rule_modal_context(db, client_id, rule, space, siem_id, **modal_flags)
+    modal_html = templates.get_template("components/rule_modal.html").render({"request": request, **modal_ctx})
+    # The item behind the modal is a card, or a table row when the page is in table view
+    # (htmx sends the page URL, which carries ``view=table``).
+    as_row = "view=table" in request.headers.get("HX-Current-URL", "")
+    item_html = templates.get_template(
+        "components/rule_row.html" if as_row else "components/rule_card.html"
+    ).render({"request": request, "rule": rule, **card_ctx, "env": settings, "oob": True})
+    if as_row:
+        item_html = f"<template>{item_html}</template>"   # htmx: table rows need a <template> wrapper for OOB
+    return HTMLResponse(modal_html + item_html)
+
+
+def _build_rule_modal_context(
+    db, client_id: str, rule, space: str, siem_id: Optional[str], just_validated: bool = False,
+    flash: str = "",
+) -> dict:
+    """Everything the unified Rule modal needs: history, score chart, details, logic, links."""
+    actual_siem = siem_id or getattr(rule, "siem_id", "") or ""
+    history = db.get_rule_history(rule.rule_id, actual_siem, space, limit=100)
+    score_history = db.get_rule_score_history(rule.rule_id, actual_siem, space, limit=50)
+    all_entries = _build_rule_history_entries(history, score_history)
+    # Activity = edits + validations. Score snapshots are plotted in the chart
+    # beside it, so they are not repeated as timeline rows.
+    entries = [e for e in all_entries if e.get("kind") != "score"]
+    chart_events = [
+        {"ts": e["created_at"], "kind": "validation" if e.get("kind") == "validation" else "edit",
+         "actor": e.get("actor"), "label": e.get("badge") or ("Validated" if e.get("kind") == "validation" else "Edited")}
+        for e in entries if e.get("created_at")
+    ]
+    # Mark where the scoring model changed, so a step in the line reads as "the model changed",
+    # not "the rule got worse".
+    previous_version = None
+    for snap in reversed(score_history):          # history is newest-first
+        version = snap.get("scoring_version") or 1
+        if previous_version is not None and version != previous_version and snap.get("created_at"):
+            chart_events.append({"ts": snap["created_at"], "kind": "scoring", "actor": "",
+                                 "label": f"Scoring model v{version}"})
+        previous_version = version
+    scoring_cfg = db.get_client_scoring(client_id)
+    if scoring_cfg.get("custom") and isinstance(scoring_cfg.get("updated_at"), datetime):
+        chart_events.append({"ts": scoring_cfg["updated_at"], "kind": "scoring", "actor": scoring_cfg.get("updated_by") or "",
+                             "label": "Scoring weights changed"})
+    _, technique_lookup = _build_technique_groups(db)
+    mitre = []
+    for mid in getattr(rule, "mitre_ids", None) or []:
+        info = technique_lookup.get(str(mid).upper()) or {}
+        mitre.append({"id": str(mid).upper(), "name": info.get("name") or "", "tactic": info.get("tactic") or ""})
+    staging = db.get_client_siem_scopes(client_id, environment_role="staging")
+    production = db.get_client_siem_scopes(client_id, environment_role="production")
+    scope_label = (
+        _build_space_labels_by_pair(db, client_id).get(f"{actual_siem}|{space}")
+        or _build_space_labels(db, client_id).get(space, space.capitalize())
+    )
+    return {
+        "rule": rule,
+        "space": space,
+        "siem_id": actual_siem,
+        "scope_label": scope_label,
+        "lifecycle_state": db.get_rule_lifecycle_state(rule.rule_id, staging, production),
+        # Promote is offered only for rules living in a staging-role scope; the confirm
+        # dialog's "delete source" default comes from the client setting.
+        "can_promote": (str(actual_siem), str(space).lower()) in {(str(s), str(sp).lower()) for s, sp in staging},
+        # Demote (the reverse) is offered for rules living in a production-role scope.
+        "can_demote": (str(actual_siem), str(space).lower()) in {(str(s), str(sp).lower()) for s, sp in production},
+        "delete_source_default": bool((db.get_client(client_id) or {}).get("delete_source_after_promotion", True)),
+        "history_entries": entries,
+        "history_users": sorted({e.get("actor") for e in entries if e.get("actor")}),
+        "score_chart": _build_score_chart(score_history, chart_events),
+        "score_bars": _build_score_bars(rule),
+        "score_meta": _build_score_meta(rule),
+        "details": _build_rule_details(rule),
+        "mitre_details": mitre,
+        "kibana_rule_url": _kibana_rule_url(db, rule, client_id),
+        "just_validated": just_validated,
+        "flash": flash,
+        "mapping_info": _mapping_info(db, actual_siem, rule),
+    }
+
+
 @router.get("/{rule_id}/history-modal", response_class=HTMLResponse)
 def get_rule_history_modal(
     request: Request,
@@ -1539,33 +1937,14 @@ def get_rule_history_modal(
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
 ):
-    """Open a focused history modal with edit action when clicking a rule card."""
+    """Unified Rule modal (history + score chart, logic, actions) opened from a rule card."""
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
         return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
-
-    history = db.get_rule_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=100)
-    score_history = db.get_rule_score_history(rule_id, siem_id or getattr(rule, "siem_id", ""), space, limit=50)
-    history_entries = _build_rule_history_entries(history, score_history)
-    history_users = sorted({entry.get("actor") for entry in history_entries if entry.get("actor")})
-    templates = request.app.state.templates
-    scope_label = (
-        _build_space_labels_by_pair(db, client_id).get(f'{siem_id or getattr(rule, "siem_id", "")}|{space}')
-        or _build_space_labels(db, client_id).get(space, space.capitalize())
-    )
-    return templates.TemplateResponse(
+    return request.app.state.templates.TemplateResponse(
         request,
-        "components/rule_history_modal.html",
-        {
-            "rule": rule,
-            "history": history,
-            "history_users": history_users,
-            "score_history": score_history,
-            "history_entries": history_entries,
-            "space": space,
-            "scope_label": scope_label,
-            "siem_id": siem_id or getattr(rule, "siem_id", ""),
-        },
+        "components/rule_modal.html",
+        _build_rule_modal_context(db, client_id, rule, space, siem_id),
     )
 
 
@@ -1754,55 +2133,78 @@ async def edit_rule(
 
 @router.post("/{rule_id}/sync", response_class=HTMLResponse)
 def sync_one_rule(
+    request: Request,
     rule_id: str,
     db: DbDep,
     user: RequireUser,
+    settings: SettingsDep,
     client_id: ActiveClient,
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
 ):
-    """Check one rule directly against its configured SIEM scope."""
+    """Re-check ONE rule against its SIEM without syncing the rest.
+
+    Pulls just that rule, refreshes the field catalogue for its index patterns (so a
+    mapping fix in Elastic shows straight away), re-scores it and records the result.
+    A SIEM that cannot be reached changes nothing; only a definite "not found" from
+    Kibana marks the rule deprecated.
+    """
     from app import elastic_helper
+    from app.services.mapping_catalogue import MappingCatalogue
+
+    def reply(message: str, status_code: int = 200, rule=None):
+        if rule is not None and request.headers.get("X-Return-Modal") == "rule":
+            return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, settings, flash=message)
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=status_code)
 
     if not siem_id:
-        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
-    siem = next((item for item in (db.get_client_siems(client_id) or []) if item.get("id") == siem_id), None)
-    if not siem:
-        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
-    full = db.get_siem_inventory_item(siem_id) or siem
+        return reply("Missing SIEM context.", 400)
+    if (siem_id, space) not in {(s, sp) for s, sp in (db.get_client_siem_scopes(client_id) or [])}:
+        return reply("SIEM not found.", 404)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return reply("Rule not found.", 404)
+    full = db.get_siem_inventory_item(siem_id) or {}
+    if not (full.get("kibana_url") and full.get("api_token_enc")):
+        return reply("This SIEM has no Kibana URL or API key configured.", 400)
+
+    elastic_id = str((rule.raw_data or {}).get("id") or rule_id)
+    history = {(rid, sp): samples for (rid, sid, sp), samples in db.get_search_time_history().items()
+               if sid == siem_id and rid == rule_id}
     try:
-        frame = elastic_helper.fetch_detection_rules(
-            kibana_url=full.get("kibana_url") or siem.get("kibana_url"),
-            api_key=full.get("api_token_enc"),
-            spaces=[space],
-            check_mappings=True,
-            known_rule_keys=set(),
-            elasticsearch_url=full.get("elasticsearch_url") or siem.get("elasticsearch_url"),
+        frame = elastic_helper.fetch_single_rule(
+            kibana_url=full["kibana_url"], api_key=full["api_token_enc"], space=space, rule_id=elastic_id,
+            catalogue=MappingCatalogue(db, siem_id), elasticsearch_url=full.get("elasticsearch_url"),
+            force_catalogue=True, search_time_history=history,
+            weights=db.get_client_scoring(client_id)["weights"],
         )
-        matches = [] if frame is None or frame.empty else frame[
-            frame["rule_id"].astype(str) == str(rule_id)
-        ].to_dict("records")
-        if matches:
-            matches[0]["siem_id"] = siem_id
-            db.save_audit_results(matches, client_id=client_id)
-            action = "synced"
-            message = "Rule found in Elastic and refreshed."
-            detail = {"message": message, "targeted": True}
-            db.set_rule_deprecated(rule_id, siem_id, space, False)
-        else:
-            db.set_rule_deprecated(rule_id, siem_id, space, True)
-            action = "deprecated"
-            message = "Rule was not found in Elastic and is marked deprecated."
-            detail = {"message": message, "targeted": True}
-        db.record_rule_history(
-            rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
-            action=action, actor_user_id=user.id, actor_name=user.username,
-            detail=detail,
-        )
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>')
     except Exception as exc:
         logger.exception("Targeted rule sync failed for %s", rule_id)
-        return HTMLResponse(f'<div class="empty-state-text">Targeted sync failed: {exc}</div>', status_code=400)
+        return reply(f"Could not reach the SIEM, so nothing was changed: {exc}", 502, rule)
+
+    if frame is None or frame.empty:
+        db.set_rule_deprecated(rule_id, siem_id, space, True)
+        message = "Rule was not found in Elastic and is marked deprecated."
+        action = "deprecated"
+        score_note = ""
+    else:
+        rec = frame.to_dict("records")[0]
+        rec["siem_id"] = siem_id
+        before = rule.score
+        db.save_audit_results([rec], client_id=client_id, checkpoint=False)
+        if isinstance(rec.get("search_sample"), dict):
+            db.record_search_time_samples([{**rec["search_sample"], "siem_id": siem_id}])
+        db.set_rule_deprecated(rule_id, siem_id, space, False)
+        action, after = "synced", rec.get("score")
+        score_note = f" Score {before} → {after}." if after is not None and after != before else f" Score unchanged at {before}."
+        message = "Rule refreshed from Elastic and its field mappings re-checked." + score_note
+    db.record_rule_history(
+        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
+        action=action, actor_user_id=user.id, actor_name=user.username,
+        detail={"message": message, "targeted": True},
+    )
+    refreshed = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) or rule
+    return reply(message, 200, refreshed)
 
 
 @router.post("/{rule_id}/archive", response_class=HTMLResponse)

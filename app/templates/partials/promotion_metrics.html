@@ -17,7 +17,7 @@
 
 {# ── 3. Validated ── #}
 <div class="metric-card">
-    <p class="metric-value {% if metrics.staging_validated >= metrics.staging_total * 0.8 %}success{% elif metrics.staging_validated >= metrics.staging_total * 0.5 %}warning{% else %}danger{% endif %}">
+    <p class="metric-value success">
         {{ metrics.staging_validated }}
     </p>
     <p class="metric-label">Validated</p>

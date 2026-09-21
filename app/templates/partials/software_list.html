@@ -20,7 +20,7 @@
   })();
 </script>
 {% if nessus_warnings %}
-<div style="background:var(--color-warning-bg,#fffbe6);border:1px solid var(--color-warning,#e6a817);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem;font-size:0.82rem;">
+<div class="u-bg-warning-bg" style="border:1px solid var(--color-warning,#e6a817);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem;font-size:0.82rem">
     {{ icon('triangle-alert', '14') }} {{ nessus_warnings | length }} import warning(s):
     <ul style="margin:0.25rem 0 0 1.2rem;padding:0;">
         {% for w in nessus_warnings[:5] %}<li>{{ w }}</li>{% endfor %}
@@ -46,7 +46,7 @@
     <tbody>
     {% for sw in software %}
     {% set is_vuln = sw.name | lower in vuln_products %}
-    <tr style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06));{% if is_vuln %}background:rgba(var(--color-danger-rgb,220,38,38),.05);{% endif %}">
+    <tr{% if is_vuln %} class="u-bg-danger-05"{% endif %} style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06))">
         <td style="padding:0.4rem 0.5rem;font-weight:500;">
             {{ sw.name }}
             {% if is_vuln %}

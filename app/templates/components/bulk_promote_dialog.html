@@ -1,0 +1,62 @@
+{#
+  Bulk promote dialog. Context: total, counts, delete_default, qs, has_production; or job (a run in progress).
+  Opened from the Rule Health toolbar with the current filters; Start posts the same filters as the query string.
+#}
+<div class="modal-overlay" data-bulk-promote>
+    <div class="modal-content modal-sm" style="max-width:34rem;" onclick="event.stopPropagation()">
+    {% if job is defined and job %}
+        {% include "components/bulk_promote_status.html" %}
+    {% elif not has_production %}
+        <h2 class="modal-section-title">Bulk promote</h2>
+        <div class="alert alert-warning mb-md"><p>No production SIEM is linked to this client. Link one under Management, then try again.</p></div>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button></div>
+    {% elif total == 0 %}
+        <h2 class="modal-section-title">Bulk promote</h2>
+        <p class="text-secondary mb-md">No staging-only rules match the current filters, so there is nothing to promote.</p>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button></div>
+    {% else %}
+        <h2 class="modal-section-title">Bulk promote to production</h2>
+        <form name="Bulk Promote" hx-post="/api/promotion/bulk/start?{{ qs }}" hx-target="closest .modal-content" hx-swap="innerHTML" hx-include="this" data-total="{{ total }}" data-valid="{{ counts.valid }}">
+            <p class="text-secondary mb-sm">
+                This promotes <strong data-bulk-count>{{ total }}</strong> staging rule(s) that match the current Rule Health filters.
+            </p>
+            <p class="text-muted mb-md" style="font-size:0.8rem;">
+                Validated in date: {{ counts.valid }} · due soon: {{ counts.amber }} · expired: {{ counts.expired }} · never validated: {{ counts.never }}
+            </p>
+
+            <fieldset style="border:0;padding:0;margin:0 0 1rem;">
+                <legend class="form-label">Validation</legend>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                    <input type="radio" name="validation" value="keep" checked>
+                    <span><strong>Keep each rule's current validation</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">For migrating between SIEMs. Validated rules stay validated on their original date; unvalidated rules stay unvalidated.</span></span>
+                </label>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                    <input type="radio" name="validation" value="stamp">
+                    <span><strong>Mark every promoted rule as validated now</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">Normal promotion: a rule is promoted because it was reviewed. This resets the date and validator on all of them.</span></span>
+                </label>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;">
+                    <input type="radio" name="validation" value="new_only">
+                    <span><strong>Mark as validated only rules that never were</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">Existing validation dates are kept; the rest are stamped now.</span></span>
+                </label>
+            </fieldset>
+
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.6rem;">
+                <input type="checkbox" name="only_validated" value="true"
+                       onchange="(function(f,on){var n=+(on?f.dataset.valid:f.dataset.total);f.querySelector('[data-bulk-count]').textContent=n;var b=f.querySelector('[data-bulk-go]');b.textContent='Promote '+n+(n===1?' rule':' rules');b.disabled=n===0;})(this.form,this.checked)">
+                Only promote rules that are validated in date ({{ counts.valid }})
+            </label>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">
+                <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from the source SIEM after promotion
+            </label>
+
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                <button name="Start Bulk Promote" type="submit" class="btn btn-primary" data-bulk-go>Promote {{ total }} rule{{ '' if total == 1 else 's' }}</button>
+            </div>
+        </form>
+    {% endif %}
+    </div>
+</div>

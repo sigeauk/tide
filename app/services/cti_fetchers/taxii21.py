@@ -9,7 +9,7 @@ to :func:`app.services.cti_ingest.ingest_stix_bundle` so every TAXII
 source goes through the same dedup + provenance code path as the
 legacy OpenCTI GraphQL fetcher.
 
-Hard rules enforced here (see ``PLAN_CTI.md`` + ``AGENTS.md``):
+Hard rules enforced here (see ``PLAN_CTI.md`` + ``CLAUDE.md``):
 
 * Synchronous façade — ``run_taxii_sync`` is a plain function so it
   fits the :class:`ConnectorFetcher` protocol used by the existing

@@ -575,12 +575,31 @@ def get_technique_rules(
     # Get ALL rules for this technique (including disabled)
     rules = db.get_rules_for_technique(technique_id, search=search, enabled_only=False, client_id=client_id)
 
+    # One card template for every rule list in the app — see rules.build_rule_card_context.
+    from app.api.rules import build_rule_card_context
+
+    # Production rules first (enabled before disabled), then everything else the same way.
+    production_scopes = {
+        (str(siem), str(space).lower())
+        for siem, space in db.get_client_siem_scopes(client_id, environment_role="production")
+    }
+    rules = sorted(
+        rules,
+        key=lambda r: (
+            (str(r.siem_id), str(r.space).lower()) not in production_scopes,
+            not r.enabled,
+            (r.name or "").lower(),
+        ),
+    )
+
     templates = request.app.state.templates
     return templates.TemplateResponse(
         request,
         "partials/technique_rules.html",
         {
             "rules": rules,
+            "search": search or "",
+            **build_rule_card_context(db, client_id, rules),
         }
     )
 

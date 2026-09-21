@@ -40,14 +40,14 @@
                         style="font-size:0.75rem;padding:0.2rem 0.5rem;display:flex;align-items:center;gap:0.25rem;">
                     {{ icon('more-vertical', '14') }} Options
                 </button>
-                <div id="bl-opts-{{ bl.playbook_id }}" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--bg-secondary);border:1px solid var(--border-color);border-radius:0.5rem;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:50;min-width:160px;overflow:hidden;">
+                <div id="bl-opts-{{ bl.playbook_id }}" class="u-bg-surface" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;border:1px solid var(--border-color);border-radius:0.5rem;box-shadow:0 8px 24px rgba(0,0,0,0.3);z-index:50;min-width:160px;overflow:hidden">
                     <button name="Take Snapshot" onclick="openSnapshotModal('single','{{ bl.playbook_id }}','{{ bl.playbook_name }}');closeAllBlOptions();"
-                            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.75rem;border:none;background:none;color:var(--text-primary);font-size:0.8rem;cursor:pointer;text-align:left;"
+                            class="u-bg-none" style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.75rem;border:none;color:var(--text-primary);font-size:0.8rem;cursor:pointer;text-align:left"
                             onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background='none'">
                         {{ icon('camera','13') }} Take Snapshot
                     </button>
                     <button name="Edit Baseline" onclick="closeAllBlOptions();openEditBaselineModal('{{ bl.playbook_id }}','{{ bl.playbook_name | e }}','{{ (bl.playbook_description or '') | e }}');"
-                            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.75rem;border:none;background:none;color:var(--text-primary);font-size:0.8rem;cursor:pointer;text-align:left;"
+                            class="u-bg-none" style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.75rem;border:none;color:var(--text-primary);font-size:0.8rem;cursor:pointer;text-align:left"
                             onmouseover="this.style.background='var(--bg-tertiary)'" onmouseout="this.style.background='none'">
                         {{ icon('edit-2','13') }} Edit Baseline
                     </button>
@@ -57,9 +57,8 @@
             </div>
         </div>
     </summary>
-    <div style="height:6px;background:var(--bg-tertiary);border-radius:3px;overflow:hidden;margin-top:0.75rem;">
-        <div style="height:100%;width:{{ bl.coverage_pct }}%;border-radius:3px;
-                    background:{% if bl.coverage_pct == 100 %}var(--color-success){% elif bl.coverage_pct >= 50 %}var(--color-warning){% else %}var(--color-danger){% endif %};
+    <div class="u-bg-action" style="height:6px;border-radius:3px;overflow:hidden;margin-top:0.75rem">
+        <div class="{% if bl.coverage_pct == 100 %}u-bg-success{% elif bl.coverage_pct >= 50 %}u-bg-warning{% else %}u-bg-danger{% endif %}" style="height:100%;width:{{ bl.coverage_pct }}%;border-radius:3px;
                     transition:width 0.3s ease;"></div>
     </div>
 
@@ -194,7 +193,7 @@ function applyBaseline() {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('camera','16') }} <span id="snap-modal-title">Take Snapshot</span></h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('snapshot-modal').style.display='none'">&#x2715;</button>
         </div>
         <p id="snap-modal-desc" style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
@@ -290,7 +289,7 @@ function removeBaselineFromEditModal() {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('pencil','16') }} Edit Baseline</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-bl-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Edit Bl Form" id="edit-bl-form" method="post"
@@ -338,7 +337,7 @@ function setAllTacticGroupsExpanded(expanded) {
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="bs-bl-modal-title">{{ icon('alert-triangle','16') }} Known Gap</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('baseline-bs-modal').style.display='none'">&#x2715;</button>
         </div>
         <p style="font-size:0.82rem;color:var(--color-text-muted);margin:0 0 0.75rem;">
@@ -385,7 +384,7 @@ function openBaselineBlindSpotModal(stepId, stepTitle, sysId, overrideType) {
     if (overrideType === 'na') {
         title.innerHTML = 'Mark Not Applicable';
         desc.textContent = 'Marking this technique as not applicable';
-        badge.innerHTML = '<span class="badge" style="font-size:0.7rem;background:rgba(128,128,128,.12);color:var(--color-muted);border:1px solid rgba(128,128,128,.3);">Grey (N/A)</span>';
+        badge.innerHTML = '<span class="badge u-bg-gray-12" style="font-size:0.7rem;color:var(--color-muted);border:1px solid rgba(128,128,128,.3)">Grey (N/A)</span>';
         submit.textContent = 'Mark N/A';
         reason.placeholder = 'Why is this technique not applicable? (e.g., Linux system, Windows technique)';
     } else {

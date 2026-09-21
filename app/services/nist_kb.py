@@ -1,4 +1,4 @@
-"""Build-time loader for offline NIST 800-53 mappings."""
+"""NIST 800-53 mapping loader for the reference database (see ``reference_db``)."""
 
 from __future__ import annotations
 
@@ -8,11 +8,9 @@ import logging
 import os
 import re
 import sys
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pandas as pd
-
-from app.services.database import get_database_service
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +24,7 @@ def _slugify(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", (value or "").strip().lower()).strip("-") or "item"
 
 
-def _nist_source_digest(mappings_dir: str) -> str:
+def source_digest(mappings_dir: str) -> str:
     h = hashlib.sha256()
     for name in sorted(_NIST_FILES):
         path = os.path.join(mappings_dir, name)
@@ -91,84 +89,25 @@ def _parse_nist_mapping(bundle: Dict[str, Any], source_name: str) -> Dict[str, A
     }
 
 
-def load_nist_kb_from_files(force: bool = False, mappings_dir: str = "/opt/repos/mappings") -> Dict[str, Any]:
-    out: Dict[str, Any] = {
-        "updated": False,
-        "processed_files": 0,
-        "errors": [],
-        "reason": "",
-    }
-
-    if not os.path.isdir(mappings_dir):
-        out["reason"] = f"Mappings directory missing: {mappings_dir}"
-        return out
-
-    files = [name for name in _NIST_FILES if os.path.isfile(os.path.join(mappings_dir, name))]
-    if not files:
-        out["reason"] = "No NIST mappings files found."
-        return out
-
-    digest = _nist_source_digest(mappings_dir)
-    db = get_database_service()
-
+def load(mappings_dir: str) -> List[str]:
+    """Load the NIST mapping files into the database ``app.database`` points at.
+    Returns error strings."""
+    errors: List[str] = []
     app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if app_dir not in sys.path:
         sys.path.insert(0, app_dir)
 
-    from app.database import _ensure_nist_kb_schema, save_nist_knowledge
+    from app.database import save_nist_knowledge
 
-    with db.get_shared_connection() as conn:
-        _ensure_nist_kb_schema(conn)
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS nist_kb_state (
-                key VARCHAR PRIMARY KEY,
-                value VARCHAR,
-                updated_at TIMESTAMP DEFAULT now()
-            )
-            """
-        )
-        row = conn.execute("SELECT value FROM nist_kb_state WHERE key = 'source_digest'").fetchone()
-        previous = row[0] if row else ""
-        has_rows = int(conn.execute("SELECT COUNT(*) FROM nist_capabilities").fetchone()[0] or 0) > 0
-
-    if (not force) and previous == digest and has_rows:
-        out["reason"] = "NIST sources unchanged; skipped reload."
-        return out
-
-    with db.get_shared_connection() as conn:
-        _ensure_nist_kb_schema(conn)
-        conn.execute("DELETE FROM nist_capabilities")
-        conn.execute("DELETE FROM nist_capability_groups")
-
-    for file_name in files:
-        file_path = os.path.join(mappings_dir, file_name)
+    for file_name in (n for n in _NIST_FILES if os.path.isfile(os.path.join(mappings_dir, n))):
         try:
-            with open(file_path, "r", encoding="utf-8") as handle:
+            with open(os.path.join(mappings_dir, file_name), "r", encoding="utf-8") as handle:
                 bundle = json.load(handle)
             knowledge = _parse_nist_mapping(bundle, source_name=file_name)
             knowledge["capability_groups"] = pd.DataFrame(knowledge.get("capability_groups") or [])
             knowledge["capabilities"] = pd.DataFrame(knowledge.get("capabilities") or [])
             save_nist_knowledge(knowledge, domain="enterprise")
-            out["processed_files"] += 1
         except Exception as exc:
             logger.error("NIST KB load failed for %s", file_name, exc_info=True)
-            out["errors"].append(f"{file_name}: {exc}")
-
-    if out["errors"]:
-        out["reason"] = "NIST KB load encountered errors; digest not advanced."
-        return out
-
-    with db.get_shared_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO nist_kb_state (key, value, updated_at)
-            VALUES ('source_digest', ?, now())
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
-            """,
-            [digest],
-        )
-
-    out["updated"] = True
-    out["reason"] = "NIST KB reloaded from local mappings-explorer files."
-    return out
+            errors.append(f"{file_name}: {exc}")
+    return errors

@@ -34,7 +34,7 @@
                 {{ tactic.title }}
             </h1>
             {% if tactic.tactic %}
-            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ tactic.tactic }}</span>
+            <span class="badge u-bg-blue-12" style="font-size:0.8rem;color:var(--color-info);border:1px solid rgba(59,130,246,.3)">{{ tactic.tactic }}</span>
             {% endif %}
 
             {# Edit button #}
@@ -48,14 +48,14 @@
 
             {# Applied systems count #}
             {% if affected_systems %}
-            <span class="badge" style="font-size:0.8rem;background:rgba(59,130,246,.12);color:var(--color-info);border:1px solid rgba(59,130,246,.3);" title="{{ affected_systems | length }} System{{ 's' if affected_systems | length != 1 }}">
+            <span class="badge u-bg-blue-12" style="font-size:0.8rem;color:var(--color-info);border:1px solid rgba(59,130,246,.3)" title="{{ affected_systems | length }} System{{ 's' if affected_systems | length != 1 }}">
                 {{ icon('layers','14') }} {{ affected_systems | length }}
             </span>
             {% endif %}
 
             {# Rules count #}
             {% if tactic.detections %}
-            <span class="badge" style="font-size:0.8rem;background:rgba(34,197,94,.12);color:var(--color-success);border:1px solid rgba(34,197,94,.3);" title="{{ tactic.detections | length }} Rule{{ 's' if tactic.detections | length != 1 }} Available">
+            <span class="badge u-bg-green-12" style="font-size:0.8rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)" title="{{ tactic.detections | length }} Rule{{ 's' if tactic.detections | length != 1 }} Available">
                 {{ icon('shield','14') }} {{ tactic.detections | length }}
             </span>
             {% endif %}
@@ -124,7 +124,7 @@
 
         {# Sigma rule selector — shown when multiple sigma detections exist #}
         {% if sigma_rule_ids | length > 1 %}
-        <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);background:rgba(234,179,8,.06);">
+        <div class="u-bg-yellow-06" style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;padding:0.5rem 0.75rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius)">
             <label style="font-size:0.75rem;font-weight:600;color:var(--color-warning);white-space:nowrap;">{{ icon('zap','13') }} Sigma Rule</label>
             <select name="Tc Sigma Rule Select" id="tc-sigma-rule-select" class="form-input" style="font-size:0.82rem;padding:0.3rem 0.5rem;flex:1;"
                     onchange="tcLoadSigmaRule(this.value);">
@@ -187,7 +187,7 @@
 
         <div style="margin-bottom:1rem;">
             <div style="display:flex;flex-direction:column;border:1px solid var(--color-border-muted);border-radius:var(--radius);">
-                <div style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                <div class="u-bg-level-3" style="padding:0.4rem 0.75rem;font-size:0.75rem;font-weight:600;color:var(--color-text-muted);border-bottom:1px solid var(--color-border-muted)">
                     {{ icon('file-text','13') }} rule.yml
                 </div>
                 <form name="Submit Convert" id="tc-convert-form" hx-post="/api/sigma/convert" hx-target="#tc-convert-response" hx-swap="innerHTML">
@@ -199,7 +199,7 @@
                     <input type="hidden" id="tc-form-template-file" name="template_file" value="">
                 </form>
                 <div id="tc-validation-result"></div>
-                <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                <div class="u-bg-level-3" style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;border-top:1px solid var(--color-border-muted)">
                     <button  name="Convert" type="submit" form="tc-convert-form" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
                         {{ icon_text('refresh-cw', 'Convert', '12') }}
                     </button>
@@ -208,7 +208,7 @@
                         {{ icon_text('check-circle', 'Validate', '12') }}
                     </button>
                 </div>
-                <div style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;align-items:center;border-top:1px solid var(--color-border-muted);background:var(--color-surface-alt);">
+                <div class="u-bg-level-3" style="padding:0.4rem 0.75rem;display:flex;gap:0.5rem;align-items:center;border-top:1px solid var(--color-border-muted)">
                     <form name="Submit Deploy" id="tc-deploy-form" hx-post="/api/sigma/deploy" hx-target="#tc-deploy-result" hx-swap="innerHTML" style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
                         <input type="hidden" name="yaml_content" id="tc-deploy-yaml">
                         <input type="hidden" name="raw_query" id="tc-deploy-query">
@@ -398,7 +398,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('pencil','16') }} Edit Technique</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('edit-tactic-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Update Tactics" hx-put="/api/baselines/tactics/{{ tactic.id }}"

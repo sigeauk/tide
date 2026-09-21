@@ -70,8 +70,8 @@ class Settings(BaseSettings):
     # --- DATABASE ---
     data_dir: str = Field(default="/app/data", alias="DATA_DIR")
     db_path: str = Field(default="/app/data/tide.duckdb", alias="DB_PATH")
-    trigger_dir: str = Field(default="/app/data/triggers", alias="TRIGGER_DIR")
-    validation_file: str = Field(default="/app/data/checkedRule.json", alias="VALIDATION_FILE")
+    # App-wide ATT&CK / NIST / Sigma-index data, built into the image (read-only at runtime).
+    reference_db_path: str = Field(default="/opt/reference/reference.duckdb", alias="REFERENCE_DB_PATH")
 
     # --- RULE VALIDATION AGE THRESHOLDS ---
     # Number of weeks before a validated rule is flagged "amber" (warning) or

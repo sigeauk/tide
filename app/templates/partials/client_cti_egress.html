@@ -108,7 +108,7 @@
     <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">New CTI Egress Target &mdash; {{ client.name }}</h3>
-            <button   name="Close Modal" style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;"
+            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
                     onclick="document.getElementById('add-cti-egress-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Cti Egress" hx-post="/api/management/clients/{{ client.id }}/cti-egress"

@@ -38,15 +38,15 @@
     </div>
     <div style="min-width:200px;">
       {% set pct = (completed_count / techniques | length * 100) | round(0) if techniques else 0 %}
-      <div style="height:6px;background:var(--color-bg-elevated,#1c2128);border-radius:3px;overflow:hidden;">
-        <div style="height:100%;width:{{ pct }}%;background:var(--color-success);transition:width .25s ease;"></div>
+      <div class="u-bg-action" style="height:6px;border-radius:3px;overflow:hidden">
+        <div class="u-bg-success" style="height:100%;width:{{ pct }}%;transition:width .25s ease"></div>
       </div>
       <div style="font-size:0.72rem;color:var(--color-text-muted);margin-top:0.3rem;text-align:right;">{{ pct }}% complete</div>
     </div>
   </div>
 
   {# ── Mini-heatmap: tactic columns in MITRE order ────────────── #}
-  <div style="display:flex;gap:0.4rem;overflow-x:auto;padding:0.6rem;background:var(--color-bg-elevated,#1c2128);border:1px solid var(--color-border,#30363d);border-radius:0.5rem;margin-bottom:1.25rem;">
+  <div class="u-bg-action" style="display:flex;gap:0.4rem;overflow-x:auto;padding:0.6rem;border:1px solid var(--color-border,#30363d);border-radius:0.5rem;margin-bottom:1.25rem">
     {% for tac, items in grouped_columns %}
     <div style="display:flex;flex-direction:column;gap:0.25rem;min-width:130px;flex-shrink:0;">
       <div title="{{ tac }}"
@@ -80,7 +80,7 @@
         {{ current.tactic }}
       </span>
       {% if current_covered %}
-      <span class="badge" style="font-size:0.65rem;background:rgba(34,197,94,.15);color:var(--color-success);border:1px solid rgba(34,197,94,.3);">
+      <span class="badge u-bg-green-15" style="font-size:0.65rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)">
         {{ icon('check','10') }} already covered
       </span>
       {% endif %}
@@ -110,7 +110,7 @@
     {% if coverage %}
       <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:0.35rem;">
         {% for det in coverage %}
-        <li style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.4rem 0.5rem;background:var(--color-bg-elevated,#1c2128);border-radius:0.3rem;">
+        <li class="u-bg-action" style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;padding:0.4rem 0.5rem;border-radius:0.3rem">
           {{ icon('check-circle','12') }}
           {% set rule_info = rule_name_lookup.get(det.rule_ref, {}) if rule_name_lookup is defined else {} %}
           {% set unresolved_label = 'Unresolved rule' if '-' in det.rule_ref and det.rule_ref | length >= 32 else det.rule_ref %}
@@ -149,25 +149,25 @@
     </div>
 
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.5rem;">
-      <button name="+ SIEM rule" class="btn btn-sm" id="qst-siem-btn"
-              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(34,197,94,.1);color:var(--color-success);border:1px solid rgba(34,197,94,.3);"
+      <button name="+ SIEM rule" class="btn btn-sm u-bg-green-10" id="qst-siem-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)"
               onclick="this.style.display='none';var p=document.getElementById('qst-siem-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-siem-search'),'load');">
         {{ icon('shield-check','14') }} + SIEM rule
       </button>
-      <button name="+ Manual rule" class="btn btn-sm" id="qst-manual-btn"
-              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(59,130,246,.1);color:var(--color-info);border:1px solid rgba(59,130,246,.3);"
+      <button name="+ Manual rule" class="btn btn-sm u-bg-blue-10" id="qst-manual-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-info);border:1px solid rgba(59,130,246,.3)"
               onclick="this.style.display='none';document.getElementById('qst-manual-panel').style.display='flex';">
         {{ icon('edit-3','14') }} + Manual rule
       </button>
-      <button name="+ Sigma rule" class="btn btn-sm" id="qst-sigma-btn"
-              style="display:inline-flex;align-items:center;gap:0.3rem;background:rgba(234,179,8,.1);color:var(--color-warning);border:1px solid rgba(234,179,8,.3);"
+      <button name="+ Sigma rule" class="btn btn-sm u-bg-yellow-10" id="qst-sigma-btn"
+              style="display:inline-flex;align-items:center;gap:0.3rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.3)"
               onclick="this.style.display='none';var p=document.getElementById('qst-sigma-panel');p.style.display='flex';htmx.trigger(document.getElementById('qst-sigma-search'),'load');">
         {{ icon('zap','14') }} + Sigma rule
       </button>
     </div>
 
     {# SIEM rule search panel #}
-    <div id="qst-siem-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(34,197,94,.04);">
+    <div id="qst-siem-panel" class="u-bg-green-04" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(34,197,94,.25);border-radius:var(--radius);padding:0.65rem">
       <div style="display:flex;gap:0.5rem;align-items:center;">
         <input type="text" id="qst-siem-search" class="form-input" placeholder="Search SIEM rules…"
                style="font-size:0.82rem;flex:1;"
@@ -177,7 +177,7 @@
         <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('qst-siem-panel').style.display='none';document.getElementById('qst-siem-btn').style.display='inline-flex';">Cancel</button>
       </div>
-      <div id="qst-siem-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+      <div id="qst-siem-results" class="u-bg-level-3" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden">
         <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
       </div>
       <form name="Submit Detections" id="qst-siem-form"
@@ -192,7 +192,7 @@
     </div>
 
     {# Manual rule input panel #}
-    <div id="qst-manual-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(59,130,246,.04);">
+    <div id="qst-manual-panel" class="u-bg-blue-04" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(59,130,246,.25);border-radius:var(--radius);padding:0.65rem">
       <form name="Submit Detections" hx-post="/api/baselines/tactics/{{ current.step_id }}/detections"
             hx-swap="none"
             hx-on::after-request="if(event.detail.successful){window.location.href='/quest/{{ quest.id }}/technique/{{ current.technique_id }}';}"
@@ -202,7 +202,7 @@
         <input type="hidden" name="source" value="manual">
         <input type="hidden" name="system_id" value="{{ quest.system_id }}">
         <div style="display:flex;gap:0.5rem;">
-          <button name="Save" type="submit" class="btn btn-sm" style="background:rgba(59,130,246,.15);color:var(--color-info);border:1px solid rgba(59,130,246,.3);">{{ icon('plus','12') }} Save</button>
+          <button name="Save" type="submit" class="btn btn-sm u-bg-blue-15" style="color:var(--color-info);border:1px solid rgba(59,130,246,.3)">{{ icon('plus','12') }} Save</button>
           <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                   onclick="document.getElementById('qst-manual-panel').style.display='none';document.getElementById('qst-manual-btn').style.display='inline-flex';">Cancel</button>
         </div>
@@ -210,7 +210,7 @@
     </div>
 
     {# Sigma rule search panel #}
-    <div id="qst-sigma-panel" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem;background:rgba(234,179,8,.04);">
+    <div id="qst-sigma-panel" class="u-bg-yellow-04" style="display:none;flex-direction:column;gap:0.5rem;border:1px solid rgba(234,179,8,.25);border-radius:var(--radius);padding:0.65rem">
       <div style="display:flex;gap:0.5rem;align-items:center;">
         <input type="text" id="qst-sigma-search" class="form-input" placeholder="Search Sigma rules…"
                style="font-size:0.82rem;flex:1;"
@@ -220,7 +220,7 @@
         <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                 onclick="document.getElementById('qst-sigma-panel').style.display='none';document.getElementById('qst-sigma-btn').style.display='inline-flex';">Cancel</button>
       </div>
-      <div id="qst-sigma-results" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden;background:var(--color-surface-alt);">
+      <div id="qst-sigma-results" class="u-bg-level-3" style="border:1px solid var(--color-border-muted);border-radius:var(--radius);overflow:hidden">
         <div style="padding:0.75rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">Loading…</div>
       </div>
       <form name="Submit Detections" id="qst-sigma-form"
@@ -250,7 +250,7 @@
   </div>
 
   {# ── Navigation footer ────────────────────────────────────── #}
-  <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.75rem 1rem;background:var(--color-bg-elevated,#1c2128);border:1px solid var(--color-border,#30363d);border-radius:0.5rem;">
+  <div class="u-bg-action" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.75rem 1rem;border:1px solid var(--color-border,#30363d);border-radius:0.5rem">
     {% if prev_tech %}
       <a name="← Previous" href="/quest/{{ quest.id }}/technique/{{ prev_tech }}" class="btn btn-secondary btn-sm">← Previous</a>
     {% else %}
@@ -260,8 +260,8 @@
     {% if current_covered %}
       {# Already covered — primary action is Next, not Mark covered. #}
       {% if next_tech %}
-        <a name="Next →" href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-sm"
-           style="background:var(--color-info,#2f81f7);color:#fff;display:inline-flex;align-items:center;gap:0.3rem;">
+        <a name="Next →" href="/quest/{{ quest.id }}/technique/{{ next_tech }}" class="btn btn-sm u-bg-info"
+           style="color:#fff;display:inline-flex;align-items:center;gap:0.3rem">
           Next → {{ next_tech }}
         </a>
       {% else %}

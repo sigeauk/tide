@@ -41,7 +41,6 @@ _REGISTRY: dict = {
     "/heatmap":        [_HOME, ("Heatmap", None)],
     "/threats":        [_HOME, ("Threats", None)],
     "/rules":          [_HOME, ("Rules", None)],
-    "/promotion":      [_HOME, ("Promotion", None)],
     "/sigma":          [_HOME, ("Sigma Library", None)],
     "/attack-tree":    [_HOME, ("Attack Tree", None)],
     "/baselines":      [_HOME, ("Baselines", None)],

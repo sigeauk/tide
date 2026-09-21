@@ -17,7 +17,7 @@ Design — `Plan Phase 1 §1`:
     * Independent schema ladder (:data:`CTI_SCHEMA_VERSION`). The CTI file
       never shares the catalogue with ``tide.duckdb`` or any tenant rule DB,
       so it never participates in the ``SCHEMA_VERSION`` ladder under
-      :pymod:`app.services.database` (which `AGENTS.md §8.4` lists as a
+      :pymod:`app.services.database` (which `CLAUDE.md §8.4` lists as a
       hard-stop fragile zone).
     * Module is import-safe: importing it does not create files or open
       connections. Files are created lazily on the first

@@ -88,6 +88,13 @@ ENV PYTHONPATH="/app"
 # the source tree) re-runs `python -m app.scripts.build_assets` on demand.
 RUN python -m app.scripts.build_assets
 
+# Build the app-wide reference DB (ATT&CK, NIST 800-53, Sigma index) into the image.
+# Read-only at runtime; the app rebuilds it at start if the source files change.
+ENV REFERENCE_DB_PATH=/opt/reference/reference.duckdb
+RUN mkdir -p /opt/reference && \
+    python -c "from app.services.reference_db import ensure_reference_db; print(ensure_reference_db())" || \
+    echo "WARN: reference DB build failed - it will be built at first start"
+
 # Point Python requests / httpx / urllib at the system CA bundle
 # (entrypoint.sh re-exports these after installing any custom CAs)
 ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt

@@ -1,0 +1,440 @@
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "macros/rule_ui.html" import state_badge %}
+{# Collapse / expand button for panels (the <details> sections use their own summary arrow). #}
+{% macro collapse_ctl(label) -%}
+<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
+{%- endmacro %}
+{# Up / down buttons that reorder the centre-column sections (order is remembered; see app.js). #}
+{% macro move_ctl() -%}
+<span class="rm-move" role="group" aria-label="Reorder section">
+    <button type="button" class="rm-move__btn" data-rm-move="up" title="Move section up" aria-label="Move section up">{{ icon('chevron-up', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-rm-move="down" title="Move section down" aria-label="Move section down">{{ icon('chevron-down', '13') }}</button>
+</span>
+{%- endmacro %}
+{#
+  Rule modal — opened by clicking a rule card / table row.
+    header : score ring · name · state/severity badges | prev/next · history toggle · close
+    left   : recent activity (edits/validations) over the score-over-time chart
+    centre : about (description, facts, tags) · logic · investigation guide ·
+             references · field mappings · score breakdown (bars)
+    right  : actions · MITRE techniques (with names)
+  Sections marked data-fold are collapsible (open by default) and every centre-column
+  section (data-section) can be moved up/down; open/closed state and order are
+  remembered per browser (app.js). data-view (default | no-history) is set by the
+  header History toggle and remembered too. Prev/next walk the list the modal was opened
+  from (app.js). Every id/attribute the history filter JS relies on
+  (data-history-modal, #history-*-filter, #history-timeline-list, [data-history-row])
+  is kept.
+#}
+{% set sev_value = (rule.severity.value if rule.severity and rule.severity.value is defined else (rule.severity | default('low'))) | lower %}
+{% set is_on = rule.enabled and not rule.deprecated %}
+{% set rule_score = rule.score | default(0) %}
+{% set score_class = 'success' if rule_score >= 80 else ('warning' if rule_score >= 50 else 'danger') %}
+{% set val_status = rule.validation_status | default('never') %}
+{% set val_class = 'success' if val_status == 'valid' else ('warning' if val_status == 'amber' else ('danger' if val_status == 'expired' else 'muted')) %}
+{% set scope_qs = 'space=' ~ (space | urlencode) ~ ('&siem_id=' ~ (siem_id | urlencode) if siem_id else '') %}
+
+<div name="Dismiss Rule Modal" class="modal-overlay" data-history-modal data-rule-modal data-rm-overlay>
+    <div class="modal-content rule-modal" data-view="default" data-rule-id="{{ rule.rule_id }}" role="dialog" aria-modal="true" aria-labelledby="rm-title">
+
+        <header class="rm-header">
+            <div class="score-ring score-ring--sm score-ring--{{ score_class }}" style="--score: {{ rule_score }}"
+                 title="Score {{ rule_score }}%" role="img" aria-label="Score {{ rule_score }} percent">
+                <span class="score-ring__value">{{ rule_score }}</span>
+            </div>
+            <div class="rm-header__main">
+                <h2 class="rm-title" id="rm-title">{{ rule.name }}</h2>
+                <div class="rm-header__badges">
+                    <span class="status-pill {% if is_on %}status-enabled{% else %}status-disabled{% endif %}"
+                          title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ scope_label }}">
+                        {{ icon('shield-check', '12') }} {{ scope_label }} · {{ 'Enabled' if is_on else 'Disabled' }}
+                    </span>
+                    {{ state_badge(lifecycle_state) }}
+                    <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
+                    <span class="rm-header__meta">{{ icon('user', '12') }} {{ rule.author | default('-') }}</span>
+                </div>
+            </div>
+
+            <div class="rm-header__tools">
+                <div class="rm-nav" role="group" aria-label="Browse rules">
+                    <button name="Previous Rule" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous rule (←)" aria-label="Previous rule" disabled>{{ icon('chevron-left', '16') }}</button>
+                    <button name="Next Rule" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next rule (→)" aria-label="Next rule" disabled>{{ icon('chevron-right', '16') }}</button>
+                </div>
+                <button name="Toggle History" type="button" class="rm-toggle" data-rm-history-toggle aria-pressed="true" title="Show or hide the history column">
+                    {{ icon('clipboard-list', '15') }}<span>History</span>
+                </button>
+                <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+            </div>
+        </header>
+
+        <div class="rm-body">
+
+            {# ───────── LEFT: activity + score chart ───────── #}
+            <section class="rm-col rm-col--history" aria-label="Activity and score">
+                <div class="rm-panel rm-panel--history" data-fold="history" data-section="history">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('recent activity') }}
+                        <h3 class="rm-panel__title">Recent activity</h3>
+                        {% if history_entries %}
+                        <div class="rm-filters">
+                            <select id="history-sort-filter" name="Date sort" aria-label="Sort by date">
+                                <option value="desc" selected>Newest</option>
+                                <option value="asc">Oldest</option>
+                            </select>
+                            <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
+                                <option value="">All</option>
+                                <option value="validation">Validation</option>
+                                <option value="edits">Edits</option>
+                            </select>
+                            <select id="history-user-filter" name="User filter" aria-label="Filter by user">
+                                <option value="">All users</option>
+                                {% for username in history_users %}
+                                <option value="{{ username }}">{{ username }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        {% endif %}
+                        {{ move_ctl() }}
+                    </div>
+
+                    {% if history_entries %}
+                    <div class="history-timeline rm-timeline" id="history-timeline-list">
+                        {% for entry in history_entries %}
+                        {% set ts_iso = entry.created_at.isoformat() if entry.created_at else '' %}
+                        {% set ts_text = entry.created_at.strftime('%Y-%m-%d %H:%M') if entry.created_at else 'N/A' %}
+                        {% if entry.expandable %}
+                        <details class="history-row history-kind-{{ entry.kind }}" data-history-row data-user="{{ entry.actor }}" data-kind="{{ entry.kind }}" data-time="{{ ts_iso }}">
+                            <summary>
+                                <span class="history-time">{{ ts_text }}</span>
+                                <span class="history-action-badge">{{ entry.badge }}</span>
+                                <span class="history-user">{{ entry.actor }}</span>
+                            </summary>
+                            <div class="history-row-payload">
+                                {% if entry.kind == 'edits' %}
+                                    {% if entry.field_diffs %}
+                                    <div class="history-detail-diff">
+                                        {% for diff in entry.field_diffs %}
+                                        <div class="history-diff-row">
+                                            <span class="history-diff-label">{{ diff.field }}</span>
+                                            <span class="history-diff-values">Previous</span>
+                                            <span class="history-diff-value-before">{{ diff.before }}</span>
+                                            <span class="history-diff-values">New</span>
+                                            <span class="history-diff-value-after">{{ diff.after }}</span>
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                    {% elif entry.changed_fields %}
+                                    <div class="history-diff-row history-diff-row--spaced">
+                                        <span class="history-diff-label">Changed fields</span>
+                                        <span class="history-diff-values">{{ entry.changed_fields }}</span>
+                                    </div>
+                                    {% endif %}
+                                    {% if entry.reason %}
+                                    <div class="history-diff-row history-diff-row--spaced">
+                                        <span class="history-diff-label">Reason</span>
+                                        <span class="history-diff-values">{{ entry.reason }}</span>
+                                    </div>
+                                    {% endif %}
+                                {% endif %}
+                            </div>
+                        </details>
+                        {% else %}
+                        <div class="history-row history-kind-{{ entry.kind }}" data-history-row data-user="{{ entry.actor }}" data-kind="{{ entry.kind }}" data-time="{{ ts_iso }}">
+                            <div class="history-row-head">
+                                <span class="history-time">{{ ts_text }}</span>
+                                <span class="history-action-badge">{{ entry.badge }}</span>
+                                <span class="history-user">{{ entry.actor }}</span>
+                            </div>
+                        </div>
+                        {% endif %}
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="rm-empty">No edits or validations recorded yet.</p>
+                    {% endif %}
+                </div>
+
+                <div class="rm-panel rm-panel--chart" data-fold="chart" data-section="chart">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('score over time') }}
+                        <h3 class="rm-panel__title">Rule score over time</h3>
+                        {% if score_chart %}
+                        <span class="rm-chart-delta {% if score_chart.delta > 0 %}text-success{% elif score_chart.delta < 0 %}text-danger{% else %}text-muted{% endif %}">
+                            {{ score_chart.latest }}%{% if score_chart.delta %} ({{ '%+d' | format(score_chart.delta) }}){% endif %}
+                        </span>
+                        {% endif %}
+                        {{ move_ctl() }}
+                    </div>
+                    {% if score_chart %}
+                    <svg class="rm-chart" viewBox="0 0 {{ score_chart.width }} {{ score_chart.height }}" role="img"
+                         aria-label="Rule score history, {{ score_chart.points | length }} snapshot(s), latest {{ score_chart.latest }} percent">
+                        {% for t in score_chart.ticks %}
+                        <line class="rm-chart__grid" x1="{{ score_chart.pad_l }}" x2="{{ score_chart.plot_right }}" y1="{{ t.y }}" y2="{{ t.y }}"/>
+                        <text class="rm-chart__tick" x="{{ score_chart.pad_l - 5 }}" y="{{ t.y + 3 }}" text-anchor="end">{{ t.label }}</text>
+                        {% endfor %}
+                        {% for ev in score_chart.events %}
+                        <line class="rm-chart__evline rm-chart__evline--{{ ev.kind }}" x1="{{ ev.x }}" x2="{{ ev.x }}" y1="{{ score_chart.plot_top }}" y2="{{ score_chart.plot_bottom }}"/>
+                        <circle class="rm-chart__ev rm-chart__ev--{{ ev.kind }}" cx="{{ ev.x }}" cy="{{ score_chart.plot_bottom + 9 }}" r="3.5"><title>{{ ev.label }}</title></circle>
+                        {% endfor %}
+                        {% if score_chart.points | length > 1 %}<polyline class="rm-chart__line" points="{{ score_chart.path }}"/>{% endif %}
+                        {% for p in score_chart.points %}
+                        <circle class="rm-chart__dot" cx="{{ p.x }}" cy="{{ p.y }}" r="3.5"><title>{{ p.label }} — {{ p.score }}%</title></circle>
+                        {% endfor %}
+                        <text class="rm-chart__tick" x="{{ score_chart.pad_l }}" y="{{ score_chart.height - 4 }}" text-anchor="start">{{ score_chart.first_label }}</text>
+                        <text class="rm-chart__tick" x="{{ score_chart.plot_right }}" y="{{ score_chart.height - 4 }}" text-anchor="end">{{ score_chart.last_label }}</text>
+                    </svg>
+                    <div class="rm-legend" aria-hidden="true">
+                        <span class="rm-legend__item"><i class="rm-legend__dot rm-legend__dot--score"></i> Score</span>
+                        <span class="rm-legend__item"><i class="rm-legend__dot rm-legend__dot--validation"></i> Validated</span>
+                        <span class="rm-legend__item"><i class="rm-legend__dot rm-legend__dot--edit"></i> Edited</span>
+                        {% if score_chart.events | selectattr('kind', 'equalto', 'scoring') | list %}
+                        <span class="rm-legend__item"><i class="rm-legend__dot rm-legend__dot--scoring"></i> Scoring change</span>
+                        {% endif %}
+                    </div>
+                    {% if score_chart.points | length < 2 %}
+                    <p class="rm-empty">One snapshot so far. The trend line appears after the score changes.</p>
+                    {% endif %}
+                    {% else %}
+                    <p class="rm-empty">No score history recorded yet.</p>
+                    {% endif %}
+                </div>
+            </section>
+
+            {# ───────── CENTRE: about + logic + folds ───────── #}
+            <section class="rm-col rm-col--logic" aria-label="Rule details and logic">
+                {% if details.description or details.tags or details.interval or details.indexes %}
+                <details class="rm-fold rm-fold--about" open data-fold="about" data-section="about">
+                    <summary><span>About this rule</span>{{ move_ctl() }}</summary>
+                    <div class="rm-about">
+                    {% if details.description %}<p class="rm-desc">{{ details.description }}</p>{% endif %}
+                    <dl class="rm-facts">
+                        {% if details.interval %}<div><dt>Runs every</dt><dd>{{ details.interval }}</dd></div>{% endif %}
+                        {% if details.lookback %}<div><dt>Looks back</dt><dd>{{ details.lookback | replace('now-', '') }}</dd></div>{% endif %}
+                        {% if details.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ details.risk_score }}</dd></div>{% endif %}
+                        {% if details.max_signals %}<div><dt>Max alerts</dt><dd>{{ details.max_signals }}</dd></div>{% endif %}
+                        <div><dt>Language</dt><dd>{{ rule.language | default('kuery') }}</dd></div>
+                    </dl>
+                    {% if details.indexes %}
+                    <div class="rm-chips" title="Index patterns">
+                        <span class="rm-chips__label">Indexes</span>
+                        {% for ix in details.indexes[:6] %}<span class="rm-chip rm-chip--mono">{{ ix }}</span>{% endfor %}
+                        {% if details.indexes | length > 6 %}<span class="rm-chip rm-chip--more" title="{{ details.indexes[6:] | join(', ') }}">+{{ details.indexes | length - 6 }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+                    {% if details.tags %}
+                    <div class="rm-chips" title="Tags">
+                        <span class="rm-chips__label">Tags</span>
+                        {% for tag in details.tags[:12] %}<span class="rm-chip">{{ tag }}</span>{% endfor %}
+                        {% if details.tags | length > 12 %}<span class="rm-chip rm-chip--more" title="{{ details.tags[12:] | join(', ') }}">+{{ details.tags | length - 12 }}</span>{% endif %}
+                    </div>
+                    {% endif %}
+                    </div>
+                </details>
+                {% endif %}
+
+                <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('rule logic') }}
+                        <h3 class="rm-panel__title">Rule logic <span class="rm-lang">{{ rule.language | default('kuery') }}</span></h3>
+                        <span class="rm-panel__tools">
+                            {{ move_ctl() }}
+                            <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#rm-query">
+                                {{ icon_text('copy', 'Copy', '12') }}
+                            </button>
+                        </span>
+                    </div>
+                    <pre class="query-display rm-query" id="rm-query">{{ rule.query | highlight_query(rule.language) }}</pre>
+                </div>
+
+                {% if details.guide_html %}
+                <details class="rm-fold" open data-fold="guide" data-section="guide">
+                    <summary><span>Investigation guide</span>{{ move_ctl() }}</summary>
+                    <div class="rm-prose">{{ details.guide_html }}</div>
+                </details>
+                {% endif %}
+
+                {% if details.references %}
+                <details class="rm-fold" open data-fold="references" data-section="references">
+                    <summary><span>References <span class="rm-fold__count">{{ details.references | length }}</span></span>{{ move_ctl() }}</summary>
+                    <ul class="rm-links">
+                        {% for url in details.references %}
+                        <li><a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '11') }} {{ url }}</a></li>
+                        {% endfor %}
+                    </ul>
+                </details>
+                {% endif %}
+
+                {% if rule.field_mappings %}
+                <details class="rm-fold" open data-fold="mappings" data-section="mappings">
+                    <summary><span>Field mappings <span class="rm-fold__count">{{ rule.field_mappings | length }}</span></span>{{ move_ctl() }}</summary>
+                    <div class="mapping-table-wrapper">
+                        <table class="mapping-table">
+                            <thead><tr><th>Index</th><th>Field</th><th class="text-center">Valid</th><th>Type</th></tr></thead>
+                            <tbody>
+                                {% for mapping in rule.field_mappings %}
+                                <tr>
+                                    <td>{{ mapping[0] }}</td>
+                                    <td>{{ mapping[1] }}</td>
+                                    <td class="text-center">
+                                        {% if mapping[2] in ['Yes', True] %}<span class="text-success">{{ icon('check','12') }}</span>
+                                        {% elif mapping[2] == '?' %}<span class="text-warning">?</span>
+                                        {% else %}<span class="text-danger">{{ icon('x','12') }}</span>{% endif %}
+                                    </td>
+                                    <td>{{ mapping[3] or '-' }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% if mapping_info and mapping_info.label %}
+                    <p class="rm-mapping-age">Checked against the SIEM's index mappings {{ mapping_info.label }}{% if mapping_info.known < mapping_info.patterns %} · {{ mapping_info.patterns - mapping_info.known }} pattern(s) not checked yet{% endif %}. Use Sync this rule to re-check now.</p>
+                    {% endif %}
+                </details>
+                {% elif rule.score_mapping == 0 %}
+                <div class="rm-note rm-note--danger">{{ icon_text('triangle-alert', 'Field mapping issues: index fields missing or not checked.', '14') }}</div>
+                {% endif %}
+
+                <details class="rm-fold" open data-fold="scores" data-section="scores">
+                    <summary><span>Score breakdown <span class="rm-fold__count">{{ rule_score }}%</span> <span class="rm-fold__count" title="Scoring model version. Scores from different versions are not directly comparable.">model v{{ score_meta.version }}</span></span>{{ move_ctl() }}</summary>
+                    {% if score_meta.skipped or score_meta.version < 2 or score_meta.allocated != 100 %}
+                    <p class="rm-scores__note">
+                        {% if score_meta.version < 2 %}Scored with an earlier model; sync to update it and see how each part is scored for this rule.
+                        {% else %}{% if score_meta.skipped %}{{ score_meta.skipped | join(', ') }} could not be scored for this rule, so the score is worked out from the {{ score_meta.possible }} of {{ score_meta.allocated }} points that apply.{% endif %}
+                        {% if score_meta.allocated != 100 %}This client allocates {{ score_meta.allocated }} points across the checks; the score is the percentage earned.{% endif %}{% endif %}
+                    </p>
+                    {% endif %}
+                    <div class="rm-scores">
+                        {% for group in score_bars %}
+                        <div class="rm-scores__group">
+                            <h4>{{ group.title }}</h4>
+                            {% for r in group.rows %}
+                            <div class="rm-bar{% if not r.applicable %} rm-bar--na{% endif %}" title="{% if r.result %}{{ r.result }}&#10;&#10;{% endif %}{{ r.how }}" tabindex="0">
+                                <span class="rm-bar__label">{{ r.label }}</span>
+                                <span class="rm-bar__track"><span class="rm-bar__fill rm-bar__fill--{{ r.tone }} u-w" style="--w: {{ r.pct }}%"></span></span>
+                                <span class="rm-bar__value">{% if r.off %}off{% elif not r.applicable %}n/a{% else %}{{ r.value }}/{{ r.max }}{% endif %}</span>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                </details>
+            </section>
+
+            {# ───────── RIGHT: actions + MITRE ───────── #}
+            <aside class="rm-col rm-col--actions" aria-label="Actions and MITRE">
+                <div class="rm-panel" data-fold="actions" data-section="actions">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('actions') }}
+                        <h3 class="rm-panel__title">Actions</h3>
+                        {{ move_ctl() }}
+                    </div>
+                    <div class="rm-actions">
+                        <button name="Validate Rule" class="btn btn-primary"
+                                hx-post="/api/rules/{{ rule.rule_id }}/validate?{{ scope_qs }}"
+                                hx-target="#modal-container" hx-swap="innerHTML"
+                                hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
+                            <span class="btn-text">{{ icon_text('circle-check', 'Validate rule', '14') }}</span>
+                            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
+                        </button>
+                        <button name="Open Edit Form" class="btn btn-secondary"
+                                hx-get="/api/rules/{{ rule.rule_id }}/edit-form?{{ scope_qs }}"
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                            {{ icon_text('edit-2', 'Edit rule', '14') }}
+                        </button>
+                        <button name="Sync Rule" class="btn btn-secondary"
+                                title="Re-check just this rule against its SIEM: pull it, refresh its index mappings and re-score it"
+                                hx-post="/api/rules/{{ rule.rule_id }}/sync?{{ scope_qs }}"
+                                hx-target="#modal-container" hx-swap="innerHTML"
+                                hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
+                            <span class="btn-text">{{ icon_text('refresh-cw', 'Sync this rule', '14') }}</span>
+                            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
+                        </button>
+                        {% if can_promote and lifecycle_state == 'Staging' %}
+                        <button name="Promote" type="button" class="btn btn-secondary"
+                                title="Promote this rule from staging to production"
+                                onclick="showPromoteConfirm('{{ rule.rule_id | e }}', {{ rule.name | tojson | forceescape }}, '{{ siem_id | default('') | e }}', {{ 'true' if delete_source_default else 'false' }})">
+                            {{ icon_text('arrow-up-right', 'Promote', '14') }}
+                        </button>
+                        {% endif %}
+                        {% if can_demote and lifecycle_state == 'Production' %}
+                        <button name="Demote" type="button" class="btn btn-secondary"
+                                title="Send this rule back to staging"
+                                onclick="showDemoteConfirm('{{ rule.rule_id | e }}', {{ rule.name | tojson | forceescape }}, '{{ siem_id | default('') | e }}')">
+                            {{ icon_text('arrow-down-left', 'Demote', '14') }}
+                        </button>
+                        {% endif %}
+                        {% if lifecycle_state == 'Migrated' %}
+                        <button name="Compare Rule Versions" type="button" class="btn btn-secondary"
+                                title="Compare the staging and production copies of this rule"
+                                hx-get="/api/promotion/{{ rule.rule_id }}/diff"
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                            {{ icon_text('git-branch', 'Compare versions', '14') }}
+                        </button>
+                        {% endif %}
+                        {% if kibana_rule_url %}
+                        <a name="Open in Kibana" class="btn btn-secondary" href="{{ kibana_rule_url }}" target="_blank" rel="noopener noreferrer"
+                           data-kibana-link title="Open in Kibana ({{ scope_label }})">
+                            {{ icon_text('external-link', 'View in Kibana', '14') }}
+                        </a>
+                        {% endif %}
+                    </div>
+
+                    {% if flash %}
+                    <p class="rm-note rm-note--info rm-flash" role="status">{{ flash }}</p>
+                    {% endif %}
+
+                    <div class="rm-test">
+                        <label for="rm-test-lookback" class="rm-label">Test against last</label>
+                        <div class="rm-test__row">
+                            <select id="rm-test-lookback" name="test-lookback" class="form-input form-select">
+                                <option value="1h">1h</option>
+                                <option value="6h">6h</option>
+                                <option value="24h" selected>24h</option>
+                                <option value="7d">7d</option>
+                                <option value="30d">30d</option>
+                            </select>
+                            <button name="Test Rule" class="btn btn-secondary"
+                                    hx-post="/api/rules/{{ rule.rule_id }}/test?{{ scope_qs }}"
+                                    hx-target="body" hx-swap="beforeend" hx-include="#rm-test-lookback">
+                                {{ icon_text('zap', 'Test', '14') }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <p class="rm-validated text-{{ val_class }}{% if just_validated %} rm-validated--flash{% endif %}" role="status">
+                        {{ icon('circle-check', '12') }}
+                        {% if just_validated %}
+                            Validated just now{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}
+                        {% elif rule.validation_date %}
+                            Validated {{ rule.validation_date.strftime('%Y-%m-%d %H:%M') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}
+                            {% if val_status == 'expired' %}· expired{% elif val_status == 'amber' %}· due soon{% endif %}
+                        {% else %}
+                            Never validated
+                        {% endif %}
+                    </p>
+                </div>
+
+                <div class="rm-panel" data-fold="mitre" data-section="mitre">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('MITRE ATT&amp;CK') }}
+                        <h3 class="rm-panel__title">MITRE ATT&amp;CK <span class="rm-fold__count">{{ mitre_details | length }}</span></h3>
+                        {{ move_ctl() }}
+                    </div>
+                    {% if mitre_details %}
+                    <ul class="rm-mitre">
+                        {% for m in mitre_details %}
+                        <li>
+                            {{ mitre_pill(m.id, neutral=true, clickable=true, size='sm', close_modal=true) }}
+                            <span class="rm-mitre__name">{{ m.name or 'Unknown technique' }}{% if m.tactic %}<small>{{ m.tactic }}</small>{% endif %}</span>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% else %}
+                    <p class="rm-empty">No MITRE techniques mapped to this rule.</p>
+                    {% endif %}
+                </div>
+            </aside>
+        </div>
+    </div>
+</div>

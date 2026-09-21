@@ -1,6 +1,6 @@
 {% from "macros/icons.html" import icon %}
 <!-- Preview results — rendered inside #gen-preview-area -->
-<div style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:0.75rem 1rem;margin-top:0.75rem;background:var(--bg-level-2-subcard);">
+<div class="u-bg-level-2" style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:0.75rem 1rem;margin-top:0.75rem">
     <h4 style="font-size:0.9rem;margin:0 0 0.5rem;color:var(--color-primary);">
         {{ icon('clipboard-list','14') }} Generation Preview
     </h4>
@@ -12,8 +12,8 @@
     </p>
     <div style="display:flex;flex-direction:column;gap:0.2rem;max-height:240px;overflow-y:auto;">
         {% for g in groups %}
-        <label class="gen-preview-row{% if g.exists %} gen-preview-exists{% endif %}"
-               style="display:flex;align-items:center;gap:0.45rem;padding:0.3rem 0.5rem;border-radius:var(--radius-sm);background:var(--bg-level-3-inner);font-size:0.82rem;cursor:pointer;">
+        <label class="gen-preview-row{% if g.exists %} gen-preview-exists{% endif %} u-bg-level-3"
+               style="display:flex;align-items:center;gap:0.45rem;padding:0.3rem 0.5rem;border-radius:var(--radius-sm);font-size:0.82rem;cursor:pointer">
             <input type="checkbox" name="selected_baselines" value="{{ loop.index0 }}"
                    {% if not g.exists %}checked{% endif %}
                    {% if g.exists %}data-exists="1"{% endif %}
