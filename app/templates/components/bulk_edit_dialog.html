@@ -1,0 +1,64 @@
+{#
+  Bulk edit confirm dialog. Context: action, label, total, error, items_json, delete_default; or job (a run in progress).
+  Opened from the Rule Health bulk bar with the selected rules; Start posts them back as items_json.
+#}
+<div class="modal-overlay" data-bulk-edit-dialog>
+    <div class="modal-content modal-sm" style="max-width:34rem;" onclick="event.stopPropagation()">
+    {% if job is defined and job %}
+        {% include "components/bulk_edit_status.html" %}
+    {% elif error %}
+        <h2 class="modal-section-title">{{ label }} rules</h2>
+        <div class="alert alert-warning mb-md"><p>{{ error }}</p></div>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button></div>
+    {% else %}
+        <h2 class="modal-section-title">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</h2>
+        <form name="Bulk Edit" hx-post="/api/rules/bulk-edit/start" hx-target="closest .modal-content" hx-swap="innerHTML" hx-include="this">
+            <input type="hidden" name="action" value="{{ action }}">
+            <input type="hidden" name="items" value="{{ items_json }}">
+
+            {% if action == 'validate' %}
+            <p class="text-secondary mb-md">Marks each selected rule as validated now, by you.</p>
+            {% elif action == 'enable' %}
+            <p class="text-secondary mb-md">Enables each selected rule in its SIEM.</p>
+            {% elif action == 'disable' %}
+            <p class="text-secondary mb-md">Disables each selected rule in its SIEM.</p>
+            {% elif action == 'promote' %}
+            <p class="text-secondary mb-md">Promotes each selected staging rule to the production SIEM.</p>
+            <fieldset style="border:0;padding:0;margin:0 0 1rem;">
+                <legend class="form-label">Validation</legend>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                    <input type="radio" name="validation" value="keep" checked>
+                    <span><strong>Keep each rule's current validation</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">Validated rules stay validated on their original date; unvalidated rules stay unvalidated.</span></span>
+                </label>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                    <input type="radio" name="validation" value="stamp">
+                    <span><strong>Mark every promoted rule as validated now</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">Resets the date and validator on all of them.</span></span>
+                </label>
+                <label style="display:flex;gap:0.5rem;align-items:flex-start;">
+                    <input type="radio" name="validation" value="new_only">
+                    <span><strong>Mark as validated only rules that never were</strong><br>
+                    <span class="text-muted" style="font-size:0.78rem;">Existing validation dates are kept; the rest are stamped now.</span></span>
+                </label>
+            </fieldset>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
+                <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from the staging SIEM after promotion
+            </label>
+            <p class="text-muted mb-md" style="font-size:0.78rem;">Ticked by default because this client's setting in Management is {{ 'to delete' if delete_default else 'to keep' }} the source.</p>
+            {% elif action == 'demote' %}
+            <p class="text-secondary mb-md">Sends each selected production rule back to the staging SIEM.</p>
+            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
+                <input type="checkbox" name="delete_source" value="true"> Delete each rule from the production SIEM after demotion
+            </label>
+            <p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, the production copy stays live and shows as Migrated. Never ticked by default, because that would remove a live detection.</p>
+            {% endif %}
+
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                <button name="Start Bulk Edit" type="submit" class="btn btn-primary">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</button>
+            </div>
+        </form>
+    {% endif %}
+    </div>
+</div>

@@ -121,11 +121,11 @@
         {% for severity in ['low', 'medium', 'high', 'critical'] %}
         <div style="min-width:0;">
             <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} amber</label>
-            <input type="number" min="1" name="amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
+            <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
         </div>
         <div style="min-width:0;">
             <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} expired</label>
-            <input type="number" min="1" name="expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
+            <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
         </div>
         {% endfor %}
     </div>

@@ -55,6 +55,60 @@ def get_promotion_rule_diff(
     )
 
 
+def _push_master_to_counterpart(db, client_id: str, migration: Dict[str, Any], side: str,
+                                user_id: str, username: str):
+    """Make the other copy of a migrated rule match the master, in its SIEM (blocking).
+
+    ``side`` is the copy being made master ("staging" or "production"). Its content is written over
+    the counterpart. The counterpart keeps its own enabled state, so choosing a master never switches
+    a detection on or off. Returns ``(status_code, message)``; 200 means the counterpart was updated.
+    """
+    import copy
+    from app.elastic_helper import promote_rule_to_production
+
+    m, o = ("source", "target") if side == "staging" else ("target", "source")
+    m_id, m_siem, m_space = migration[f"{m}_rule_id"], migration[f"{m}_siem_id"], migration[f"{m}_space"]
+    o_id, o_siem, o_space = migration[f"{o}_rule_id"], migration[f"{o}_siem_id"], migration[f"{o}_space"]
+    other_side = "production" if side == "staging" else "staging"
+
+    master = db.get_rule_by_id(m_id, m_space, siem_id=m_siem, client_id=client_id)
+    other = db.get_rule_by_id(o_id, o_space, siem_id=o_siem, client_id=client_id)
+    if not master or not master.raw_data:
+        return 404, f"The {side} copy no longer exists, so it cannot be the master."
+    if not other:
+        return 404, f"The {other_side} copy no longer exists, so there is nothing to update."
+    siems = {s.get("id"): s for s in (db.get_client_siems(client_id) or [])}
+    m_siem_row, o_siem_row = siems.get(m_siem), siems.get(o_siem)
+    if not m_siem_row or not o_siem_row:
+        return 400, "Both SIEMs must still be linked to this client to update the other copy."
+
+    payload = copy.deepcopy(master.raw_data)
+    payload["enabled"] = bool((other.raw_data or {}).get("enabled", False))
+    try:
+        result = promote_rule_to_production(
+            rule_data=payload,
+            source_space=m_space,
+            target_space=o_space,
+            source_kibana_url=m_siem_row.get("kibana_url"),
+            source_api_key=m_siem_row.get("api_token_enc"),
+            target_kibana_url=o_siem_row.get("kibana_url"),
+            target_api_key=o_siem_row.get("api_token_enc"),
+            delete_source=False,
+        )
+    except Exception as exc:
+        logger.exception("Updating the %s copy from the %s master failed", other_side, side)
+        return 500, f"Error: {exc}"
+    success, message = result[:2]
+    if not success:
+        return 400, f"Could not update the {other_side} copy: {message}"
+    db.record_rule_history(
+        rule_id=o_id, siem_id=o_siem, space=o_space, client_id=client_id, action="master_synced",
+        actor_user_id=user_id, actor_name=username,
+        detail={"message": f"Updated to match the {side} copy, now the master.", "master": side},
+    )
+    return 200, f"The {other_side} copy was updated to match the {side} copy."
+
+
 @router.post("/{rule_id}/master", response_class=HTMLResponse)
 async def set_promotion_master(
     request: Request,
@@ -63,11 +117,25 @@ async def set_promotion_master(
     user: RequireUser,
     client_id: ActiveClient,
 ):
+    """Choose which copy of a migrated rule is the master.
+
+    The master's content is written over the other copy in its SIEM, baseline links are pointed at the
+    master, and the choice is recorded. If the other copy cannot be updated nothing else changes.
+    """
+    from html import escape
     form = await request.form()
     side = str(form.get("master") or "production").lower()
     migration = db.get_rule_migration_for_rule(rule_id)
     if not migration or side not in {"staging", "production"}:
         return HTMLResponse('<div class="empty-state-text">Migration or master selection is invalid.</div>', status_code=400)
+    username = user.name or user.username if user else "Unknown"
+
+    status, message = await _run_in_context(
+        _push_master_to_counterpart, db, client_id, migration, side, user.id, username,
+    )
+    if status != 200:
+        return HTMLResponse(f'<div class="empty-state-text text-danger">{escape(message)}</div>', status_code=status)
+
     if side == "staging":
         master_id = migration["source_rule_id"]
         master_siem = migration["source_siem_id"]
@@ -91,7 +159,76 @@ async def set_promotion_master(
         actor_name=user.username,
         detail={"migration_id": migration["id"], "master": side, "previous_master": migration["master_rule_id"]},
     )
-    return HTMLResponse('<div class="empty-state-text">Master rule updated and baseline references re-linked.</div>')
+    _schedule_client_sync(client_id)
+    return HTMLResponse(
+        f'<div class="empty-state-text">{escape(message)} Baseline references now point at the {side} rule. '
+        f'A sync is refreshing the rule cache.</div>'
+    )
+
+
+def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str):
+    """Recreate a deprecated rule in the SIEM it came from (blocking). Returns ``(status_code, message)``."""
+    from app.elastic_helper import restore_detection_rule
+
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return 404, "Rule not found."
+    if not rule.deprecated:
+        return 400, "This rule is not deprecated."
+    siem = next(
+        (s for s in (db.get_client_siems(client_id) or [])
+         if s.get("id") == siem_id and str(s.get("space") or "default").lower() == str(space).lower()),
+        None,
+    )
+    if not siem:
+        return 400, "This rule's SIEM and space are no longer linked to the client, so it cannot be restored there."
+    if not rule.raw_data:
+        return 400, "TIDE has no stored copy of this rule to restore from."
+
+    ok, message, saved_id = restore_detection_rule(
+        rule.raw_data, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+    )
+    if not ok:
+        return 400, f"Restore failed: {message}"
+
+    # TIDE's row is keyed by the id it last synced. If that is the rule's own Kibana rule_id it survives
+    # the restore, so the row just becomes active again. If it was the saved-object id, Kibana has now
+    # issued a new one: keep the old row for history and move baseline links to the new identity.
+    kibana_rule_id = (rule.raw_data or {}).get("rule_id")
+    if kibana_rule_id and kibana_rule_id == rule_id:
+        db.set_rule_deprecated(rule_id, siem_id, space, False)
+    elif saved_id and saved_id != rule_id:
+        db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space)
+    else:
+        db.set_rule_deprecated(rule_id, siem_id, space, False)
+    db.record_rule_history(
+        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="restored",
+        actor_user_id=user_id, actor_name=username,
+        detail={"message": message, "restored_disabled": True},
+    )
+    logger.info("Restored deprecated rule '%s' in %s by %s", rule.name, space, username)
+    return 200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.'
+
+
+@router.post("/{rule_id}/restore", response_class=HTMLResponse)
+async def restore_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+):
+    """Bring a deprecated rule back: recreate it (disabled) in the SIEM it was removed from."""
+    username = user.name or user.username if user else "Unknown"
+    status, message = await _run_in_context(
+        _restore_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space,
+    )
+    if status != 200:
+        return _toast("danger", message, status)
+    _schedule_client_sync(client_id)
+    return _toast("success", message, 200, trigger="refreshRules")
 
 
 def _toast(kind: str, message: str, status_code: int = 200, trigger: Optional[str] = None) -> HTMLResponse:
@@ -268,42 +405,29 @@ def _toast_error(message: str, status_code: int) -> HTMLResponse:
     )
 
 
-@router.post("/{rule_id}/demote", response_class=HTMLResponse)
-async def demote_rule(
-    request: Request,
-    rule_id: str,
-    db: DbDep,
-    user: RequireUser,
-    client_id: ActiveClient,
-    siem_id: Optional[str] = Query(None),
-):
-    """Send a production rule back to the client's staging space (the reverse of promote).
+def _demote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str,
+                      siem_id: Optional[str], delete_source: bool):
+    """Send one production rule back to the client's staging SIEM (blocking).
 
-    The production copy is kept unless ``delete_source`` is set, so a demote never
-    removes a live detection by accident. Kept copies show as Migrated.
+    Returns ``(status_code, message, rule_name)``; 200 means demoted.
     """
-    import asyncio
     from app.elastic_helper import promote_rule_to_production
-    form = await request.form()
-    delete_source = str(form.get("delete_source") or "").lower() in {"1", "true", "on", "yes"}
 
     staging_siems = db.get_client_siems(client_id, environment_role="staging")
     production_siems = db.get_client_siems(client_id, environment_role="production")
     if not production_siems:
-        return _toast_error("No production SIEM configured for this client.", 400)
+        return 400, "No production SIEM configured for this client.", None
     if not staging_siems:
-        return _toast_error("No staging SIEM configured for this client.", 400)
+        return 400, "No staging SIEM configured for this client.", None
     if len(staging_siems) > 1:
-        return _toast_error(
-            "Demotion blocked: multiple staging SIEMs are linked. Keep one staging target per client to avoid ambiguous routing.",
-            409,
-        )
+        return 409, ("Demotion blocked: multiple staging SIEMs are linked. Keep one staging target "
+                     "per client to avoid ambiguous routing."), None
 
     candidates = production_siems
     if siem_id:
         candidates = [s for s in production_siems if s.get("id") == siem_id]
         if not candidates:
-            return _toast_error("Selected source SIEM is not linked as production for this client.", 400)
+            return 400, "Selected source SIEM is not linked as production for this client.", None
     matches = []
     for siem in candidates:
         sp = siem.get("space")
@@ -313,43 +437,37 @@ async def demote_rule(
         if found:
             matches.append((siem, sp, found))
     if not matches:
-        return _toast_error("Rule not found in production environment.", 404)
+        return 404, "Rule not found in production environment.", None
     if len(matches) > 1:
-        return _toast_error(
-            "Demotion blocked: rule is present in multiple production SIEMs. Retry from the specific SIEM context.", 409
-        )
+        return 409, ("Demotion blocked: rule is present in multiple production SIEMs. Retry from the "
+                     "specific SIEM context."), None
     source_siem, source_space, rule = matches[0]
     if not rule.raw_data:
-        return _toast_error("Rule data not available for demotion.", 400)
+        return 400, "Rule data not available for demotion.", rule.name
 
     target_siem = staging_siems[0]
     target_space = target_siem.get("space") or "default"
-    username = user.name or user.username if user else "Unknown"
 
     try:
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: promote_rule_to_production(
-                rule_data=rule.raw_data,
-                source_space=source_space,
-                target_space=target_space,
-                source_kibana_url=source_siem.get("kibana_url"),
-                source_api_key=source_siem.get("api_token_enc"),
-                target_kibana_url=target_siem.get("kibana_url"),
-                target_api_key=target_siem.get("api_token_enc"),
-                delete_source=delete_source,
-            ),
+        result = promote_rule_to_production(
+            rule_data=rule.raw_data,
+            source_space=source_space,
+            target_space=target_space,
+            source_kibana_url=source_siem.get("kibana_url"),
+            source_api_key=source_siem.get("api_token_enc"),
+            target_kibana_url=target_siem.get("kibana_url"),
+            target_api_key=target_siem.get("api_token_enc"),
+            delete_source=delete_source,
         )
     except Exception as e:
         logger.exception(f"Exception demoting rule '{rule.name}'")
-        return _toast_error(f"Error: {e}", 500)
+        return 500, f"Error: {e}", rule.name
 
     success, message = result[:2]
     staging_rule_id = result[2] if len(result) > 2 else rule_id
     if not success:
         logger.error(f"Failed to demote rule '{rule.name}': {message}")
-        return _toast_error(f"Demotion failed: {message}", 400)
+        return 400, f"Demotion failed: {message}", rule.name
 
     if delete_source:
         db.set_rule_deprecated(rule_id, source_siem.get("id"), source_space, True)
@@ -368,12 +486,12 @@ async def demote_rule(
             target_siem_id=source_siem.get("id"),
             target_space=source_space,
             source_retained=True,
-            actor_user_id=user.id,
+            actor_user_id=user_id,
             actor_name=username,
         )
     db.record_rule_history(
         rule_id=rule_id, siem_id=source_siem.get("id"), space=source_space,
-        client_id=client_id, action="demoted", actor_user_id=user.id, actor_name=username,
+        client_id=client_id, action="demoted", actor_user_id=user_id, actor_name=username,
         detail={
             "message": "Demoted to staging" + ("; production copy deleted." if delete_source else "; production copy kept."),
             "staging_rule_id": staging_rule_id,
@@ -381,19 +499,37 @@ async def demote_rule(
         },
     )
     logger.info(f"Demoted rule '{rule.name}' from {source_space} to {target_space} by {username}")
+    return (200,
+            f'Demoted "{rule.name}" to the staging environment'
+            f'{"" if delete_source else "; the production copy was kept"}',
+            rule.name)
 
-    try:
-        from app.main import scheduled_sync
-        asyncio.create_task(scheduled_sync(client_id=client_id))
-    except Exception as _exc:  # pragma: no cover - background hint only
-        logger.warning(f"Post-demote sync schedule failed: {_exc}")
 
-    response = HTMLResponse(
-        f'<div class="toast toast-success" onclick="this.remove()">'
-        f'Demoted "{rule.name}" to the staging environment'
-        f'{"" if delete_source else "; the production copy was kept"}'
-        f'</div>'
+@router.post("/{rule_id}/demote", response_class=HTMLResponse)
+async def demote_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: Optional[str] = Query(None),
+):
+    """Send a production rule back to the client's staging space (the reverse of promote).
+
+    The production copy is kept unless ``delete_source`` is set, so a demote never
+    removes a live detection by accident. Kept copies show as Migrated.
+    """
+    form = await request.form()
+    delete_source = str(form.get("delete_source") or "").lower() in {"1", "true", "on", "yes"}
+    username = user.name or user.username if user else "Unknown"
+    status, message, _name = await _run_in_context(
+        _demote_rule_sync, db, user.id, username, client_id, rule_id, siem_id, delete_source,
     )
+    if status != 200:
+        return _toast_error(message, status)
+    _schedule_client_sync(client_id)
+    from html import escape
+    response = HTMLResponse(f'<div class="toast toast-success" onclick="this.remove()">{escape(message)}</div>')
     response.headers["HX-Trigger"] = "refreshPromotion"
     return response
 

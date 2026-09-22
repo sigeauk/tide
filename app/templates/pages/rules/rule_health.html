@@ -16,60 +16,42 @@
     </div>
     <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
         <div id="sync-status"></div>
-        <div class="btn-group" style="position:relative;display:flex;align-items:stretch;height:38px;">
-            <button name="Sync"
-                class="btn btn-primary sync-btn"
-                hx-post="/api/rules/sync"
-                hx-target="#sync-status"
-                hx-swap="outerHTML"
-                hx-disabled-elt="this"
-                style="border-top-right-radius:0;border-bottom-right-radius:0;height:100%;">
-                <span class="sync-default">
-                    {{ icon('refresh-cw', '16') }}
-                    <span>Sync</span>
-                </span>
+        <div class="rh-more">
+            <button name="More Actions" id="rh-more-btn" type="button" class="btn btn-secondary rh-more__btn"
+                aria-haspopup="menu" aria-expanded="false" title="Sync, create a rule, bulk edit">
+                {{ icon('more-vertical', '18') }}
+                <span class="sr-only">More actions</span>
             </button>
-            <button  name="Toggle Sync Options"
-                class="btn btn-primary sync-btn"
-                onclick="event.stopPropagation(); var dd=this.nextElementSibling; dd.style.display = dd.style.display==='none' ? 'block' : 'none';"
-                style="border-top-left-radius:0;border-bottom-left-radius:0;border-left:1px solid rgba(255,255,255,0.2);padding:0 0.4rem;height:100%;"
-                type="button">
-                {{ icon('chevron-down', '14') }}
-            </button>
-            <div class="sync-dropdown u-bg-layer-5" style="position:absolute;right:0;top:100%;margin-top:4px;border:1px solid var(--color-border);border-radius:var(--radius-md);box-shadow:var(--shadow-md);z-index:50;min-width:180px;display:none">
-                <button name="Sync with Mappings"
-                    class="btn btn-secondary"
-                    style="width:100%;justify-content:flex-start;border:none;border-radius:0;height:38px;padding:0.5rem 1rem;font-size:0.875rem;"
-                    hx-post="/api/rules/sync?force_mapping=true"
-                    hx-target="#sync-status"
-                    hx-swap="outerHTML"
-                    hx-disabled-elt="this"
-                    onclick="this.closest('.sync-dropdown').style.display='none';">
-                    {{ icon('database', '14') }}
-                    <span style="margin-left:0.4rem;">Sync with Mappings</span>
+            <div class="rh-more__menu" id="rh-more-menu" role="menu" hidden>
+                <button name="Sync" type="button" role="menuitem" class="rh-more__item sync-btn"
+                    hx-post="/api/rules/sync" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                    <span class="sync-default">{{ icon('refresh-cw', '15') }}<span>Sync</span></span>
+                    <span class="htmx-indicator">{{ icon('refresh-cw', '15') }}<span>Syncing&hellip;</span></span>
+                </button>
+                <button name="Sync with Mappings" type="button" role="menuitem" class="rh-more__item"
+                    hx-post="/api/rules/sync?force_mapping=true" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                    {{ icon('database', '15') }}<span>Sync with mappings</span>
+                </button>
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Create Rule" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="/api/rules/create-form" hx-target="#modal-container" hx-swap="innerHTML">
+                    {{ icon('plus', '15') }}<span>Create rule</span>
+                </button>
+                <button name="Import Validation File" type="button" role="menuitem" class="rh-more__item"
+                    title="Import a checkedRule.json validation file"
+                    onclick="document.getElementById('import-validation-modal').style.display='flex'">
+                    {{ icon('upload', '15') }}<span>Import validation file</span>
+                </button>
+                <button name="Bulk Edit" id="bulk-edit-toggle" type="button" role="menuitem" class="rh-more__item"
+                    aria-pressed="false" title="Select several rules to validate, enable, disable, promote or demote them">
+                    {{ icon('check-square', '15') }}<span data-bulk-toggle-label>Bulk edit</span>
+                </button>
+                <button name="Reset Table Layout" id="rh-reset-layout" type="button" role="menuitem" class="rh-more__item"
+                    title="Restore the default column order and widths in table view">
+                    {{ icon('refresh-cw', '15') }}<span>Reset table columns</span>
                 </button>
             </div>
         </div>
-        <button name="Create Rule"
-            class="btn btn-success"
-            hx-get="/api/rules/create-form"
-            hx-target="#modal-container"
-            hx-swap="innerHTML"
-            style="height:38px;">
-            {{ icon('plus', '16') }}
-            <span>Create Rule</span>
-        </button>
-        <button name="Bulk Promote"
-            class="btn btn-secondary"
-            title="Promote every staging rule that matches the current filters"
-            hx-get="/api/promotion/bulk"
-            hx-include="[name='search'], [name='space'], [name='enabled'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to']"
-            hx-target="#modal-container"
-            hx-swap="innerHTML"
-            style="height:38px;">
-            {{ icon('arrow-up-right', '16') }}
-            <span>Bulk promote</span>
-        </button>
     </div>
 </div>
 {% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
@@ -258,6 +240,25 @@
 </div>
 </div>
 
+<!-- Bulk edit bar: shown only while Bulk edit is on -->
+<div id="bulk-bar" class="bulk-bar" hidden>
+    <span id="bulk-filter-src" hidden hx-include="{{ rh_filter_include }}"></span>
+    <span class="bulk-bar__count" id="bulk-count" aria-live="polite">0 selected</span>
+    <label class="bulk-bar__all" title="Select every rule that matches the current filters, not just the ones loaded">
+        <input type="checkbox" id="bulk-bar-all" aria-label="Select all rules matching the filters"> Select all
+    </label>
+    <button type="button" class="btn btn-secondary btn-sm" id="bulk-clear">Clear</button>
+    <button type="button" class="btn btn-secondary btn-sm" id="bulk-exit">Exit bulk edit</button>
+    <span class="bulk-bar__actions" role="group" aria-label="Bulk actions">
+        <button type="button" class="btn btn-primary btn-sm" data-bulk-action="promote">{{ icon('arrow-up-right', '14') }} Promote</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="demote">Demote</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="enable">Enable</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="disable">Disable</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="validate">{{ icon('circle-check', '14') }} Validate</button>
+    </span>
+    <p class="bulk-bar__hint" id="bulk-hint"></p>
+</div>
+
 <!-- Rules Grid - Load on page load via HTMX -->
 <div class="rule-scroll-region">
 <div id="rules-grid"
@@ -274,7 +275,48 @@
 <!-- Slide Panel Container for MITRE technique details -->
 <div id="slide-panel-container"></div>
 
-
+<!-- Import Validation File Modal -->
+<div name="Import Validation File Modal" id="import-validation-modal" class="modal-overlay" style="display:none;"
+     onclick="if(event.target===this) this.style.display='none'">
+    <div class="modal-content modal-sm">
+        <div class="modal-header">
+            <h3 class="modal-title">{{ icon('upload', '16') }} Import validation file</h3>
+            <button name="Close" type="button" class="btn btn-icon"
+                    onclick="document.getElementById('import-validation-modal').style.display='none'">&#x2715;</button>
+        </div>
+        <p class="rule-help">
+            Import a <code>checkedRule.json</code>-shaped file into this client's rule validations —
+            the same format TIDE reads automatically once at startup. Matches by rule name; a name
+            with no matching rule yet is kept and binds once one appears.
+        </p>
+        <form id="import-validation-form" name="Import Validation File"
+              hx-post="/api/rules/import-validation" hx-encoding="multipart/form-data"
+              hx-target="body" hx-swap="beforeend"
+              style="display:flex;flex-direction:column;gap:0.75rem;">
+            <div>
+                <label class="form-label">File</label>
+                <input type="file" name="file" accept=".json,application/json" class="form-input" required>
+            </div>
+            <div>
+                <label class="form-label">Checked by (optional)</label>
+                <input type="text" name="checked_by" class="form-input" placeholder="Leave blank to keep each entry's own name">
+                <small class="rule-help">Set this to record the import under one name instead of whatever is in the file.</small>
+            </div>
+            <label style="display:flex;gap:0.5rem;align-items:flex-start;">
+                <input type="checkbox" name="overwrite" value="true" style="margin-top:0.2rem;">
+                <span>
+                    Overwrite rules that already have a validation date<br>
+                    <small class="rule-help">Off by default: only fills rules with no validation yet, so nothing already recorded is replaced.</small>
+                </span>
+            </label>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary"
+                        onclick="document.getElementById('import-validation-modal').style.display='none'">Cancel</button>
+                <button name="Import" type="submit" class="btn btn-primary">Import</button>
+            </div>
+        </form>
+    </div>
+</div>
 
 {% endblock %}
 
@@ -436,4 +478,6 @@
         }
     });
 </script>
+{% include "pages/rules/_rules_columns_script.html" %}
+{% include "pages/rules/_bulk_edit_script.html" %}
 {% endblock %}

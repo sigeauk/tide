@@ -32,6 +32,40 @@
             </div>
         </div>
 
+        <!-- Search time: how long this run took, and what to do with it -->
+        {% if search_ms %}
+        <div class="modal-section">
+            <h3 class="modal-section-subtitle">Search time</h3>
+            <p style="margin:0 0 0.4rem;">
+                <strong style="font-size:1.25rem;">{{ '{:,}'.format(search_ms) }} ms</strong>
+                <span class="text-muted" style="font-size:0.8rem;">
+                    &nbsp;for this run over the last {{ lookback | default('24h') }}{% if search_ms_source == 'request' %} (timed from the request; Kibana reported no duration){% endif %}.
+                    A scheduled run covers a shorter window, so it is usually quicker.
+                </span>
+            </p>
+            <p class="text-muted" style="font-size:0.8rem;margin:0 0 0.6rem;">
+                {% if recorded_count %}Recorded for this rule: median {{ '{:,}'.format(recorded_median) }} ms over {{ recorded_count }} run{{ '' if recorded_count == 1 else 's' }}.
+                {% else %}No search time is recorded for this rule yet, so it is not scored on search time.{% endif %}
+            </p>
+            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+                <button name="Use As Search Time" type="button" class="btn btn-primary btn-sm"
+                        title="Make this the rule's only search time"
+                        hx-post="/api/rules/{{ rule.rule_id }}/search-time?space={{ rule_space | urlencode }}{% if siem_id %}&siem_id={{ siem_id | urlencode }}{% endif %}"
+                        hx-vals='{"mode": "replace", "ms": "{{ search_ms }}"}'
+                        hx-target="body" hx-swap="beforeend" hx-include="unset" hx-disabled-elt="this">
+                    Use as this rule's search time
+                </button>
+                <button name="Add To Average" type="button" class="btn btn-secondary btn-sm"
+                        title="Add this run to the rule's recent runs and use the median"
+                        hx-post="/api/rules/{{ rule.rule_id }}/search-time?space={{ rule_space | urlencode }}{% if siem_id %}&siem_id={{ siem_id | urlencode }}{% endif %}"
+                        hx-vals='{"mode": "add", "ms": "{{ search_ms }}"}'
+                        hx-target="body" hx-swap="beforeend" hx-include="unset" hx-disabled-elt="this">
+                    Add to the average
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Sample Results -->
         {% if samples and samples | length > 0 %}
         <div class="modal-section">

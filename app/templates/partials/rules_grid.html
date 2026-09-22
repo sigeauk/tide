@@ -20,26 +20,28 @@
             hx-trigger="tideLoadMore once"
             hx-target="this"
             hx-swap="outerHTML">
-            <td colspan="9"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+            <td colspan="11"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
         </tr>
         {% else %}
-        <tr class="infinite-scroll-end"><td colspan="9">All {{ total }} rules loaded</td></tr>
+        <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
         {% endif %}
     {% elif rules and rules | length > 0 %}
     <table class="rules-table">
         <thead>
             <tr>
+                <th class="rt-check" data-col="check"><label class="bulk-check" title="Select every rule matching the current filters"><input type="checkbox" id="bulk-select-all" aria-label="Select all rules matching the filters"></label></th>
                 {# Sortable columns: data-sort-select drives the existing sort filters; data-sort-col drives the
                    table-only sorts (sort_col/sort_dir). Arrow = current sort. #}
-                <th class="rt-th--sortable" data-sort-select="rh-sort-score" data-sort-default="desc" title="Sort by score">Score {{ sort_arrow(sort_score if not sort_col else '') }}</th>
-                <th class="rt-th--sortable" data-sort-select="rh-sort-name" data-sort-default="asc" title="Sort by name">Rule {{ sort_arrow(sort_name if not sort_col else '') }}</th>
-                <th class="rt-th--sortable" data-sort-col="siem" data-sort-default="asc" title="Sort by SIEM">SIEM {{ sort_arrow(sort_dir if sort_col == 'siem' else '') }}</th>
-                <th class="rt-th--sortable" data-sort-col="state" data-sort-default="asc" title="Sort by state (production, migrated, staging, deprecated)">State {{ sort_arrow(sort_dir if sort_col == 'state' else '') }}</th>
-                <th class="rt-th--sortable" data-sort-col="severity" data-sort-default="desc" title="Sort by severity">Severity {{ sort_arrow(sort_dir if sort_col == 'severity' else '') }}</th>
-                <th class="rt-th--sortable" data-sort-select="rh-sort-validated" data-sort-default="desc" title="Sort by validation date">Validated {{ sort_arrow(sort_validated if not sort_col else '') }}</th>
-                <th class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
-                <th>MITRE</th>
-                <th class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
+                <th data-col="score" class="rt-th--sortable" data-sort-select="rh-sort-score" data-sort-default="desc" title="Sort by score">Score {{ sort_arrow(sort_score if not sort_col else '') }}</th>
+                <th data-col="name" class="rt-th--sortable" data-sort-select="rh-sort-name" data-sort-default="asc" title="Sort by name">Rule {{ sort_arrow(sort_name if not sort_col else '') }}</th>
+                <th data-col="siem" class="rt-th--sortable" data-sort-col="siem" data-sort-default="asc" title="Sort by SIEM">SIEM {{ sort_arrow(sort_dir if sort_col == 'siem' else '') }}</th>
+                <th data-col="state" class="rt-th--sortable" data-sort-col="state" data-sort-default="asc" title="Sort by state (production, migrated, staging, deprecated)">State {{ sort_arrow(sort_dir if sort_col == 'state' else '') }}</th>
+                <th data-col="severity" class="rt-th--sortable" data-sort-col="severity" data-sort-default="desc" title="Sort by severity">Severity {{ sort_arrow(sort_dir if sort_col == 'severity' else '') }}</th>
+                <th data-col="validated" class="rt-th--sortable" data-sort-select="rh-sort-validated" data-sort-default="desc" title="Sort by validation date">Validated {{ sort_arrow(sort_validated if not sort_col else '') }}</th>
+                <th data-col="author" class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
+                <th data-col="mitre">MITRE</th>
+                <th data-col="lang" class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>
+                <th class="rt-cols" data-col="cols"><button type="button" id="rt-cols-btn" class="rt-cols__btn" aria-haspopup="dialog" aria-expanded="false" title="Choose and arrange columns"><span aria-hidden="true">&hellip;</span><span class="sr-only">Choose columns</span></button></th>
             </tr>
         </thead>
         <tbody data-rule-list>
@@ -50,10 +52,10 @@
                 hx-trigger="tideLoadMore once"
                 hx-target="this"
                 hx-swap="outerHTML">
-                <td colspan="9"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+                <td colspan="11"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
             </tr>
             {% else %}
-            <tr class="infinite-scroll-end"><td colspan="9">All {{ total }} rules loaded</td></tr>
+            <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
             {% endif %}
         </tbody>
     </table>

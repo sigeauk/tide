@@ -237,29 +237,22 @@ ATT&CK, NIST 800-53 and the Sigma index are built into the image (`/opt/referenc
 
 ### Moving to new hardware
 
-1. Install the same TIDE version on the new host. Keep its own `.env` and `certs/`.
-2. On the old host, stop TIDE and record a manifest:
-   ```
-   docker compose down
-   docker compose run --rm --no-deps tide-app python -m app.scripts.verify_data --write
-   ```
-3. Copy the whole `data/` folder to the new host, replacing whatever is there (stop TIDE on the new host first).
-4. On the new host, verify the copy, then start TIDE:
-   ```
-   docker compose run --rm --no-deps tide-app python -m app.scripts.verify_data --check
-   docker compose up -d
-   ```
-5. On the new host, once the check passes, delete `data/move-manifest.json`. If you keep running TIDE on the old host, delete its copy too. The manifest describes the data at the moment of `--write`, so it no longer matches once TIDE runs again.
+Use Management (superadmin) > Data export & import.
 
-`verify_data` only checks the copy; the move itself is the `data/` folder. That folder carries everything TIDE owns: per-tenant rules with scores, validation and history, baselines and their rule mappings, systems, and the shared database (users, roles, tenant assignments, permissions, SIEM and Keycloak settings).
+1. Install TIDE on the new host with its own `.env` and `certs/`, and sign in as a superadmin.
+2. On the old host, export each tenant (tick "Include users, tenant roles and permissions" on one of them). Each export downloads as a JSON file: rules with metadata, validation and history, migrations, baselines with their rule mappings, and systems. No passwords, API keys or Keycloak IDs are included.
+3. On the new host, add the SIEMs (Management > SIEMs) and Keycloak, since connection details and API keys are not exported. Then import each file, choosing "+ Create a new client" for a new tenant, and tick "Also import users" where the file has them.
+4. Link the SIEMs to each tenant with the same roles as before, then run a SIEM sync.
 
-SIEM, Keycloak and OpenCTI addresses are stored in the data, so update them (Management) if the new host reaches those systems under different names.
+Import merges: existing rows are kept, nothing is deleted, baselines with a name that already exists are not duplicated, and score-history tables are only filled when empty. Imported local users have no password until one is set.
 
-**Single sign-on users and a new Keycloak.** Users are copied with `data/`, but a new realm issues new Keycloak IDs. At first login TIDE matches the user by Keycloak ID, then by username, then by email, and re-links accounts marked keycloak/hybrid, keeping their roles and tenants. So users only need to exist in the new realm with the same username or email. Local-only accounts are never auto-linked to SSO. The superadmin flag is re-read from the Keycloak `superadmin` group at each login.
+Rows keep their SIEM IDs. If a SIEM has a different ID on the new host, rules re-sync from it and baseline links (by rule ID) still resolve, but the per-SIEM rule rows from the file won't match.
+
+Copying the whole `data/` folder to an identical TIDE version also works, and additionally carries SIEM and Keycloak settings. Stop TIDE on both hosts first. It moves every tenant, including leftover files from deleted clients.
+
+**Single sign-on users and a new Keycloak.** Users come across with the export (or a copied `data/`), but a new realm issues new Keycloak IDs. At first login TIDE matches the user by Keycloak ID, then by username, then by email, and re-links accounts marked keycloak/hybrid, keeping their roles and tenants. So users only need to exist in the new realm with the same username or email. Local-only accounts are never auto-linked to SSO. The superadmin flag is re-read from the Keycloak `superadmin` group at each login.
 
 **Changing a SIEM's role (production/staging).** Rules are keyed by rule ID, SIEM and space, not by role, and a baseline step points at its rule by rule ID, so the mapping is kept when a SIEM is switched either way. Baseline technique coverage is counted from production rules only, so a technique reads as uncovered while its rule's SIEM is staging, and returns when it is production again. Mapped rules in a staging SIEM are labelled "Staging" on the baseline step.
-
-**Export / import instead of copying `data/`.** Management (superadmin) > Data export & import downloads one tenant as JSON (rules with metadata, history, migrations, baselines with mappings, systems; optionally users, tenant roles and permissions, without passwords or Keycloak IDs). Import merges into a tenant: existing rows are kept, nothing is deleted, and score-history style tables are only filled when empty. Use it to move one tenant, or across TIDE versions. Imported local users have no password until one is set. Run a SIEM sync after importing. Rows keep their SIEM IDs, so on a host where the SIEMs have different IDs, rules re-sync from the SIEM and baseline links (by rule ID) still resolve, but per-SIEM rule rows from the file won't match.
 
 ### Transient Data (Recalculated)
 

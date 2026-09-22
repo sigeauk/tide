@@ -1672,10 +1672,14 @@ def _fetch_preview_alerts(session, base_url, space, preview_id, es_direct_url=No
 
 
 def preview_detection_rule(rule_data, space="default", lookback="24h",
-                           kibana_url=None, api_key=None, elasticsearch_url=None):
+                           kibana_url=None, api_key=None, elasticsearch_url=None, timing=None):
     """
     Test a detection rule against live Elasticsearch data using the Kibana Preview API.
     Returns (hit_count, sample_results, error) tuple.
+
+    Pass a dict as ``timing`` to also get how long the run took: ``timing["ms"]`` is the duration Kibana
+    reports for the preview execution (or, when it reports none, the wall-clock time of the request) and
+    ``timing["source"]`` says which ("kibana" or "request").
 
     ``kibana_url``, ``api_key`` and (optionally) ``elasticsearch_url`` are
     resolved per-tenant from ``siem_inventory`` / ``client_siem_map`` by the
@@ -1773,7 +1777,10 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
             payload["history_window_start"] = rule_data["history_window_start"]
     
     try:
+        import time as _time
+        _t0 = _time.monotonic()
         response = session.post(endpoint, json=payload, timeout=30)
+        _wall_ms = int((_time.monotonic() - _t0) * 1000)
 
         if response.status_code != 200:
             error_text = response.text[:500]
@@ -1825,6 +1832,16 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
                 preview_warnings.append(f"Error: {str(err)[:200]}")
             for warn in entry.get("warnings", []):
                 preview_warnings.append(str(warn)[:200])
+
+        if timing is not None:
+            reported = 0
+            for entry in logs:
+                try:
+                    reported += int(entry.get("duration") or 0)
+                except (TypeError, ValueError):
+                    pass
+            timing["ms"] = reported if reported > 0 else max(_wall_ms, 1)
+            timing["source"] = "kibana" if reported > 0 else "request"
 
         # Check if the preview was aborted
         if data.get("isAborted"):
@@ -2107,6 +2124,53 @@ def update_detection_rule(
     except Exception as e:
         log_error(f"Update rule failed: {e}")
         return False, str(e)
+
+
+def restore_detection_rule(
+    rule_data: dict,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str, Optional[str]]:
+    """Recreate a rule that was deleted from Kibana, from the copy TIDE kept.
+
+    The rule keeps its ``rule_id`` so anything that refers to it (baselines, history) still lines up.
+    It is created DISABLED: it was removed on purpose (usually by a promotion) and switching it on
+    could double-alert next to its production twin. If Kibana already has a rule with that
+    ``rule_id`` nothing is created and that rule is reported instead.
+
+    Returns: (success, message, kibana_saved_object_id)
+    """
+    import copy
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key", None
+    rule = copy.deepcopy(rule_data or {})
+    if not rule.get("name") or not (rule.get("query") is not None or rule.get("type") in ("machine_learning", "threat_match")):
+        return False, "Stored rule data is incomplete (no name or query), so it cannot be recreated.", None
+    for readonly in ("id", "_version", "created_at", "created_by", "updated_at", "updated_by", "execution_summary"):
+        rule.pop(readonly, None)
+    rule["enabled"] = False
+
+    session = _make_session(api_key)
+    prefix = _space_api_prefix(kibana_url.rstrip("/"), space)
+    url = f"{prefix}/api/detection_engine/rules"
+    try:
+        response = session.post(url, json=rule)
+        if response.status_code == 409 and rule.get("rule_id"):
+            existing = session.get(url, params={"rule_id": rule["rule_id"]})
+            if existing.status_code == 200:
+                saved = (existing.json() or {}).get("id")
+                return True, f"'{rule.get('name')}' already exists in {space}; nothing to recreate", saved
+        if response.status_code not in (200, 201):
+            error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+            log_error(f"Failed to restore rule: {error_msg}")
+            return False, error_msg, None
+        saved = (response.json() or {}).get("id")
+        log_info(f"Restored rule '{rule.get('name')}' in {space} (disabled)")
+        return True, f"Recreated '{rule.get('name')}' in {space}, disabled", saved
+    except Exception as e:
+        log_error(f"Restore rule failed: {e}")
+        return False, str(e), None
 
 
 def enable_detection_rule(

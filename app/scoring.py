@@ -31,6 +31,10 @@ Versions
      against the mapping, tactics and techniques are one MITRE check, the query
      language is worth 0 points unless a client turns it on, weights are set per
      client and scores are a percentage of the points allocated.
+  3  when a rule's index patterns match no indices at all there is nothing to check
+     its mapping, field types or timestamp override against, so those three checks
+     earn full marks instead of being failed or left out. They are still failed when
+     the indexes exist and lack the field, and left out when the SIEM cannot be reached.
 """
 from __future__ import annotations
 
@@ -39,7 +43,7 @@ from datetime import datetime, timezone
 from statistics import median
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-SCORING_VERSION = 2
+SCORING_VERSION = 3
 
 # Facts about one field: state is "found" | "missing" | "unknown".
 #   found    - present in the mapping of at least one of the rule's indexes
@@ -277,6 +281,29 @@ def rescore_detail(detail: Dict[str, Any], weights: Optional[Dict[str, Any]]) ->
     return _finish(components, resolve_weights(weights))
 
 
+def apply_search_time(detail: Dict[str, Any], samples_ms: Iterable[int],
+                      weights: Optional[Dict[str, Any]]) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """Recompute only the search-time check of a stored ``score_detail`` from ``samples_ms`` (newest first).
+
+    Like ``rescore_detail`` it needs no SIEM call, and returns ``None`` when the stored detail predates
+    per-check fractions (the rule has to be synced first).
+    """
+    stored = {c.get("key"): c for c in (detail or {}).get("components", [])}
+    if any(key not in stored or "fraction" not in stored[key] for key in DEFAULT_WEIGHTS):
+        return None
+    components = [dict(stored[key]) for key in DEFAULT_WEIGHTS]
+    samples = [int(s) for s in samples_ms if s is not None][:SEARCH_TIME_SAMPLES]
+    target = next(c for c in components if c["key"] == "search_time")
+    if samples:
+        med = median(samples)
+        target["fraction"] = search_time_fraction(med)
+        target["result"] = f"Median {int(med)} ms over the last {_plural(len(samples), 'run')}."
+    else:
+        target["fraction"] = None
+        target["result"] = "Not scored: TIDE has not seen this rule run yet."
+    return _finish(components, resolve_weights(weights))
+
+
 def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Score one rule in place and return it.
 
@@ -303,19 +330,22 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     missing = [f for f, v in facts.items() if v["state"] == MISSING]
     unknown = [f for f, v in facts.items() if v["state"] == UNKNOWN]
     known = len(found) + len(missing)
+    no_index = [f for f in missing if facts[f].get("no_index")]          # nothing to check against
+    really_missing = [f for f in missing if f not in no_index]
     if not facts:
         put("mapping", None, "No fields could be read from the query, so there is nothing to check.")
     elif known == 0:
         put("mapping", None, "Not scored: the rule's indexes could not be checked against the SIEM.")
     else:
         text = f"{len(found)} of {_plural(known, 'field')} found in the mapping"
-        if missing:
-            text += f"; missing: {_names(missing)}"
-            if all(facts[f].get("no_index") for f in missing):
-                text += " (the rule's index patterns match no indices in the SIEM)"
+        if really_missing:
+            text += f"; missing: {_names(really_missing)}"
+        if no_index:
+            text += (f"; {_plural(len(no_index), 'field')} cannot be mapped because the rule's index patterns match no "
+                     f"indices in the SIEM, so {'it earns' if len(no_index) == 1 else 'they earn'} full marks")
         if unknown:
             text += f"; {_plural(len(unknown), 'field')} not checked (index unreachable)"
-        put("mapping", len(found) / known, text + ".")
+        put("mapping", (len(found) + len(no_index)) / known, text + ".")
 
     # Field type: fit for use, over the query fields that were found plus any grouping / suppression
     # fields (which live outside the query but must be aggregatable).
@@ -337,6 +367,8 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
         if bad_agg:
             text += f"; cannot be aggregated but used for grouping: {_names(bad_agg)}"
         put("field_type", avg, text + ".")
+    elif no_index and not found:
+        put("field_type", 1.0, "Full marks: the rule's index patterns match no indices in the SIEM, so there are no mapped field types to judge.")
     else:
         put("field_type", None, "Not scored: no mapped fields to assess.")
 
@@ -365,7 +397,11 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     override = str(rule_data.get("timestamp_override") or "-")
     if override == "event.ingested":
         info = aux.get("event.ingested")
-        if info and info["state"] == MISSING:
+        if info and info["state"] == MISSING and info.get("no_index"):
+            # The setting is right; there is simply no index to check it against (a lab SIEM, or a
+            # pattern for an integration that is not installed). That earns full marks.
+            put("override", 1.0, "Set to event.ingested. The rule's index patterns match no indices in the SIEM, so there is nothing to check it against: full marks.")
+        elif info and info["state"] == MISSING:
             put("override", 0.0, "Set to event.ingested, but that field is missing from the rule's indexes.")
         else:
             put("override", 1.0, "Set to event.ingested.")

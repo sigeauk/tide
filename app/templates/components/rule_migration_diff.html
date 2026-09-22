@@ -102,6 +102,10 @@
     {% else %}
     <p class="empty-state-text">The staging and production copies are identical for every reviewable field.</p>
     {% endif %}
+    <p class="text-muted" style="font-size:0.8rem;margin-top:1rem;">
+      Making a copy the master writes its content over the other copy in that copy's SIEM, and points baseline links at the master.
+      The other copy keeps its own enabled or disabled state.
+    </p>
     <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
       <button type="button" class="btn btn-secondary"
               hx-post="/api/promotion/{{ migration.source_rule_id }}/master"

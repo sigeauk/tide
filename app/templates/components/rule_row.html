@@ -4,7 +4,7 @@
 {#
   Rule table row — the table-view twin of components/rule_card.html (same data,
   same click-to-open behaviour, same validation-status edge colour).
-  Columns: score · rule · SIEM · state · severity · validated · author · MITRE · lang
+  Columns: [bulk-edit checkbox] · score · rule · SIEM · state · severity · validated · author · MITRE · lang
   Context: rule, lifecycle_states, space_labels, space_labels_by_pair; optional search, oob.
 #}
 {% set rule_score = rule.score | default(0) %}
@@ -21,27 +21,36 @@
 <tr name="Open Rule Modal" class="rule-row rule-row--val-{{ val_class }}" id="rule-{{ rule.rule_id }}"{% if oob %} hx-swap-oob="true"{% endif %}
     data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ rule.name }}"
     hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
-    hx-trigger="click, keyup[key=='Enter']"
+    hx-trigger="click[!event.target.closest('.bulk-check')], keyup[key=='Enter' && !event.target.closest('.bulk-check')]"
     hx-target="#modal-container"
     hx-swap="innerHTML"
     hx-include="unset">
-    <td class="rt-score">
+    <td class="rt-check" data-col="check">
+    <label class="bulk-check" title="Select this rule">
+        <input type="checkbox" data-bulk-check aria-label="Select {{ rule.name }}"
+               data-key="{{ rule.rule_id }}|{{ rule.siem_id or '' }}|{{ rule.space | default('default') }}"
+               data-rule-id="{{ rule.rule_id }}" data-siem-id="{{ rule.siem_id or '' }}" data-space="{{ rule.space | default('default') }}"
+               data-state="{{ lifecycle_state }}">
+    </label>
+    </td>
+    <td class="rt-score" data-col="score">
         <div class="score-ring score-ring--sm score-ring--{{ score_class }}" style="--score: {{ rule_score }}" title="Score {{ rule_score }}%">
             <span class="score-ring__value">{{ rule_score }}</span>
         </div>
     </td>
-    <td class="rt-name"><span class="rt-title" title="{{ rule.name }}">{{ rule.name }}</span></td>
-    <td>
+    <td class="rt-name" data-col="name"><span class="rt-title" title="{{ rule.name }}">{{ rule.name }}</span></td>
+    <td class="rt-siem" data-col="siem">
         <span class="status-pill {% if is_on %}status-enabled{% else %}status-disabled{% endif %}" title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ siem_label }}">
             {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ siem_label }}</span>
         </span>
     </td>
-    <td>{{ state_badge(lifecycle_state) }}</td>
-    <td><span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span></td>
-    <td class="rt-validated text-{{ val_class }}" title="Validation status: {{ val_status }}">
+    <td data-col="state">{{ state_badge(lifecycle_state) }}</td>
+    <td data-col="severity"><span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span></td>
+    <td class="rt-validated text-{{ val_class }}" data-col="validated" title="Validation status: {{ val_status }}">
         {% if rule.validation_date %}{{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %}<span class="rt-sub"> · {{ rule.validated_by }}</span>{% endif %}{% else %}Never{% endif %}
     </td>
-    <td class="rt-author" title="{{ rule.author | default('-') }}">{{ rule.author | default('-') }}</td>
-    <td class="rt-mitre">{{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=(search | default('')), max_visible=3) }}</td>
-    <td class="rt-lang">{{ rule.language | default('kuery') }}</td>
+    <td class="rt-author" data-col="author" title="{{ rule.author | default('-') }}">{{ rule.author | default('-') }}</td>
+    <td class="rt-mitre" data-col="mitre">{{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=(search | default('')), max_visible=3) }}</td>
+    <td class="rt-lang" data-col="lang">{{ rule.language | default('kuery') }}</td>
+    <td class="rt-cols" data-col="cols"></td>
 </tr>

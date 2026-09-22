@@ -2222,7 +2222,11 @@ async def update_validation_thresholds(
         mode = "master"
 
     def _parse(name: str):
-        v = form.get(name)
+        # First value only: ``form.get`` returns the LAST one, and older pages submit the master
+        # weeks and the per-severity rows under the same names, so an empty severity box used to
+        # overwrite what was typed for the master weeks and clear the setting.
+        values = form.getlist(name)
+        v = values[0] if values else None
         if v is None:
             return None, True  # untouched
         s = str(v).strip()

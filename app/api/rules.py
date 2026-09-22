@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timedelta
 from urllib.parse import unquote
 
-from fastapi import APIRouter, Request, Query, BackgroundTasks
+from fastapi import APIRouter, Request, Query, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
 from typing import Optional, Any, List, Dict
 
@@ -1310,6 +1310,7 @@ async def test_rule(
     try:
         from app.elastic_helper import preview_detection_rule
         loop = asyncio.get_event_loop()
+        timing: Dict[str, Any] = {}
         hit_count, samples, error = await loop.run_in_executor(
             None,
             lambda: preview_detection_rule(
@@ -1317,9 +1318,19 @@ async def test_rule(
                 kibana_url=siem["kibana_url"],
                 api_key=siem["api_token_enc"],
                 elasticsearch_url=siem.get("elasticsearch_url"),
+                timing=timing,
             )
         )
-        
+
+        # What TIDE already knows about this rule's search time, so the user can see how the test compares.
+        recorded: List[int] = []
+        try:
+            recorded = db.get_rule_search_times(
+                _search_time_rule_id(rule), rule.siem_id or resolved_siem_id, rule.space or space,
+            )
+        except Exception:
+            logger.exception("Could not read recorded search times for %s", rule_id)
+
         templates = request.app.state.templates
         return templates.TemplateResponse(
             request, "components/test_result_popup.html",
@@ -1330,6 +1341,12 @@ async def test_rule(
                 "error": error,
                 "lookback": lookback,
                 "space_labels": _build_space_labels(db, client_id),
+                "search_ms": timing.get("ms"),
+                "search_ms_source": timing.get("source"),
+                "recorded_count": len(recorded),
+                "recorded_median": int(sorted(recorded)[len(recorded) // 2]) if recorded else None,
+                "siem_id": rule.siem_id or resolved_siem_id or "",
+                "rule_space": rule.space or space,
             }
         )
     except Exception as e:
@@ -1338,6 +1355,144 @@ async def test_rule(
             f'<div class="test-result test-error">Error: {str(e)}</div>',
             status_code=500
         )
+
+
+def _search_time_rule_id(rule) -> str:
+    """The id search-time samples are stored under: Kibana's saved-object id, as the sync records them."""
+    raw = rule.raw_data if isinstance(getattr(rule, "raw_data", None), dict) else {}
+    return str(raw.get("id") or rule.rule_id)
+
+
+@router.post("/{rule_id}/search-time", response_class=HTMLResponse)
+async def record_test_search_time(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Keep the search time measured by a Test run: ``mode=add`` joins the rule's average, ``mode=replace``
+    makes it the rule's only search time. The rule is re-scored for search time straight away."""
+    from datetime import datetime as _dt
+    form = await request.form()
+    mode = str(form.get("mode") or "add")
+    try:
+        ms = int(str(form.get("ms") or "0"))
+    except ValueError:
+        ms = 0
+    if mode not in ("add", "replace") or not (0 < ms <= 3_600_000):
+        return HTMLResponse('<div class="toast toast-danger" onclick="this.remove()">Not a valid search time.</div>', status_code=400)
+
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="toast toast-danger" onclick="this.remove()">Rule not found.</div>', status_code=404)
+    rule_siem = rule.siem_id or siem_id or ""
+    rule_space = rule.space or space
+    sample_id = _search_time_rule_id(rule)
+
+    if mode == "replace":
+        db.clear_search_time_samples(sample_id, rule_siem, rule_space)
+    db.record_search_time_samples([{
+        "rule_id": sample_id, "siem_id": rule_siem, "space": rule_space,
+        "executed_at": _dt.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), "search_ms": ms,
+    }])
+    samples = db.get_rule_search_times(sample_id, rule_siem, rule_space)
+    new_score = db.rescore_rule_search_time(client_id, rule.rule_id, rule_siem, rule_space, samples)
+
+    username = user.name or user.username if user else "Unknown"
+    try:
+        db.record_rule_history(
+            rule_id=rule.rule_id, siem_id=rule_siem, space=rule_space, client_id=client_id,
+            action="search_time_recorded", actor_user_id=user.id, actor_name=username,
+            detail={"message": f"Search time {ms} ms from a Test run, {'set as the only value' if mode == 'replace' else 'added to the average'}.",
+                    "search_ms": ms, "mode": mode},
+        )
+    except Exception:
+        logger.exception("Could not write search-time history for %s", rule_id)
+
+    from html import escape
+    what = "is now this rule's search time" if mode == "replace" else "was added to this rule's average"
+    tail = (f" The rule now scores {new_score}%." if new_score is not None
+            else " Its score will pick this up on the next sync.")
+    response = HTMLResponse(
+        f'<div class="toast toast-success" onclick="this.remove()">{escape(f"{ms} ms {what}.")}{escape(tail)}</div>'
+    )
+    response.headers["HX-Trigger"] = "refreshRules"
+    return response
+
+
+_IMPORT_VALIDATION_MAX_BYTES = 5 * 1024 * 1024
+
+
+@router.post("/import-validation", response_class=HTMLResponse)
+async def import_validation_file(
+    request: Request,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    file: UploadFile = File(...),
+    overwrite: str = Form(""),
+    checked_by: str = Form(""),
+):
+    """Import a ``checkedRule.json``-shaped file into the active client's rule validations.
+
+    Manual, on-demand version of the file TIDE reads automatically once at startup (see the
+    README and ``app.services.tenant_manager.import_legacy_validation_file``) — that one is
+    untouched. This is for re-applying an old export, or a file recovered after a migration
+    issue, without restarting the app.
+    """
+    from html import escape
+
+    def _script(message: str, kind: str = "success") -> HTMLResponse:
+        safe = escape(message).replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
+        return HTMLResponse(
+            "<script>"
+            "document.getElementById('import-validation-modal').style.display='none';"
+            "document.getElementById('import-validation-form').reset();"
+            f"if (typeof showToast === 'function') showToast(`{safe}`, {kind!r});"
+            "htmx.trigger(document.body, 'refreshRules');"
+            "</script>"
+        )
+
+    raw = await file.read(_IMPORT_VALIDATION_MAX_BYTES + 1)
+    if len(raw) > _IMPORT_VALIDATION_MAX_BYTES:
+        return _script("File is larger than 5 MB.", "danger")
+    try:
+        payload = json.loads(raw)
+    except Exception as exc:
+        return _script(f"Invalid JSON: {exc}", "danger")
+
+    entries = payload.get("rules") if isinstance(payload, dict) else None
+    if entries is None and isinstance(payload, dict) and all(isinstance(v, dict) for v in payload.values()):
+        entries = payload  # a bare {name: {...}} file, without the "rules" wrapper
+    if not isinstance(entries, dict) or not entries:
+        return _script(
+            'Not a validation file — expected {"rules": {"<rule name>": '
+            '{"last_checked_on": "...", "checked_by": "..."}}}.', "danger",
+        )
+
+    do_overwrite = overwrite.strip().lower() in {"1", "true", "on", "yes"}
+    name_override = checked_by.strip() or None
+    result = db.import_validation_entries(entries, overwrite=do_overwrite, checked_by_override=name_override)
+
+    username = user.name or user.username if user else "Unknown"
+    logger.info(
+        "Validation file imported by %s (client=%s): %d entries, overwrite=%s, checked_by_override=%r -> %s",
+        username, client_id, len(entries), do_overwrite, name_override, result,
+    )
+
+    parts = [f"{result['added']} added"]
+    if result["overwritten"]:
+        parts.append(f"{result['overwritten']} overwritten")
+    if result["skipped"]:
+        parts.append(f"{result['skipped']} skipped (already validated)")
+    if result["unmatched"]:
+        parts.append(f"{result['unmatched']} not matched to a rule yet")
+    if result["invalid"]:
+        parts.append(f"{result['invalid']} invalid entries ignored")
+    return _script("Validation file imported: " + ", ".join(parts) + ".")
 
 
 @router.post("/sync", response_class=HTMLResponse)

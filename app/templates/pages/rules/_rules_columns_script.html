@@ -1,0 +1,298 @@
+<script>
+// ── Rule Health table view: resize neighbouring columns, choose and arrange columns ──
+// The table is always full width. Dragging the edge between two columns moves width from one to
+// the other and nothing else changes. The "..." at the end of the header opens a list of every
+// column: untick to hide one, use the arrows to move it (top of the list = leftmost column).
+// The layout (order, hidden columns, each column's share of the width) is kept per browser.
+(function () {
+    var LS_KEY = 'tide.rulesTable.layout.v2';
+    var MIN_W = 48;
+    var COLUMNS = [
+        ['score', 'Score'], ['name', 'Rule'], ['siem', 'SIEM'], ['state', 'State'], ['severity', 'Severity'],
+        ['validated', 'Validated'], ['author', 'Author'], ['mitre', 'MITRE'], ['lang', 'Lang'],
+    ];
+    var TITLES = {};
+    COLUMNS.forEach(function (c) { TITLES[c[0]] = c[1]; });
+    var DEFAULT_ORDER = COLUMNS.map(function (c) { return c[0]; });
+    var FIXED = { check: true, cols: true };     // the checkbox column and the "..." column are not user-arranged
+    var resizing = false;
+
+    function table() { return document.querySelector('.rules-table'); }
+    function load() {
+        try {
+            var v = JSON.parse(localStorage.getItem(LS_KEY) || 'null');
+            return v && typeof v === 'object' ? v : {};
+        } catch (_) { return {}; }
+    }
+    function save(l) {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(l)); } catch (_) { /* storage blocked */ }
+    }
+    function domOrder(t) {
+        return Array.prototype.map.call(t.querySelectorAll('thead th[data-col]'), function (th) { return th.dataset.col; })
+            .filter(function (c) { return !FIXED[c]; });
+    }
+    // The saved order, reconciled with the columns that actually exist.
+    function fullOrder(t, l) {
+        var have = domOrder(t);
+        var order = (Array.isArray(l.order) ? l.order : DEFAULT_ORDER).filter(function (c) { return have.indexOf(c) !== -1; });
+        have.forEach(function (c) { if (order.indexOf(c) === -1) order.push(c); });
+        return order;
+    }
+    function hiddenSet(l) { return Array.isArray(l.hidden) ? l.hidden : []; }
+    function visibleOrder(t, l) {
+        var hid = hiddenSet(l);
+        return fullOrder(t, l).filter(function (c) { return hid.indexOf(c) === -1; });
+    }
+    function headOf(t, col) { return t.querySelector('thead th[data-col="' + col + '"]'); }
+
+    // Put every row's cells in order, hide the hidden columns. Rows with no column cells
+    // (loading / end-of-list rows) are left alone. The checkbox column is first, "..." last.
+    function applyOrderAndVisibility(t, l) {
+        var order = fullOrder(t, l), hid = hiddenSet(l);
+        var want = ['check'].concat(order, ['cols']);
+        Array.prototype.forEach.call(t.querySelectorAll('tr'), function (tr) {
+            var cells = {};
+            Array.prototype.forEach.call(tr.children, function (c) { if (c.dataset && c.dataset.col) cells[c.dataset.col] = c; });
+            if (!cells.score && !cells.name) return;
+            var seq = want.filter(function (c) { return cells[c]; });
+            var have = Array.prototype.map.call(tr.children, function (c) { return c.dataset && c.dataset.col; });
+            if (!(have.length === seq.length && have.every(function (c, i) { return c === seq[i]; }))) {
+                seq.forEach(function (c) { tr.appendChild(cells[c]); });
+            }
+            order.forEach(function (c) {
+                if (cells[c]) cells[c].style.display = hid.indexOf(c) === -1 ? '' : 'none';
+            });
+        });
+    }
+
+    function refreshHandles(t, l) {
+        Array.prototype.forEach.call(t.querySelectorAll('.rt-resize'), function (h) { h.remove(); });
+        var vis = visibleOrder(t, l);
+        vis.forEach(function (col, i) {
+            if (i === vis.length - 1) return;   // the last visible column has no right neighbour to trade with
+            var th = headOf(t, col);
+            if (!th) return;
+            var h = document.createElement('span');
+            h.className = 'rt-resize';
+            h.setAttribute('role', 'separator');
+            h.setAttribute('aria-orientation', 'vertical');
+            h.title = 'Drag to resize this column and the next one. Double-click to reset the table layout.';
+            th.appendChild(h);
+        });
+    }
+
+    function fixedWidth(t) {
+        var w = 0;
+        ['check', 'cols'].forEach(function (c) {
+            var th = headOf(t, c);
+            if (th) w += th.getBoundingClientRect().width;
+        });
+        return w;
+    }
+    function applyWidths(t, l) {
+        var vis = visibleOrder(t, l), frac = l.frac;
+        Array.prototype.forEach.call(t.querySelectorAll('thead th[data-col]'), function (th) {
+            if (!FIXED[th.dataset.col]) th.style.width = '';
+        });
+        if (!frac || !vis.every(function (c) { return frac[c] > 0; })) return;
+        var avail = t.getBoundingClientRect().width - fixedWidth(t);
+        if (avail <= 0) return;
+        var total = 0;
+        vis.forEach(function (c) { total += frac[c]; });
+        var used = 0;
+        vis.forEach(function (c, i) {
+            var px = i === vis.length - 1 ? avail - used : Math.round(frac[c] / total * avail);
+            headOf(t, c).style.width = Math.max(MIN_W, px) + 'px';
+            used += px;
+        });
+    }
+
+    // The "Loading more..." and "All rules loaded" rows span the whole table. If they span more
+    // columns than are shown (a hidden column, or the checkbox column while bulk edit is off) the
+    // browser invents empty columns and hands them part of the width, so the real columns no
+    // longer fill the table. Span exactly the columns that are visible.
+    function syncSpans(t) {
+        var shown = Array.prototype.filter.call(t.querySelectorAll('thead th[data-col]'), function (th) {
+            return getComputedStyle(th).display !== 'none';
+        }).length;
+        if (!shown) return;
+        Array.prototype.forEach.call(t.querySelectorAll('tr.infinite-scroll-sentinel > td, tr.infinite-scroll-end > td'), function (td) {
+            if (td.colSpan !== shown) td.colSpan = shown;
+        });
+    }
+
+    function apply() {
+        var t = table();
+        if (!t) return;
+        var l = load();
+        applyOrderAndVisibility(t, l);
+        syncSpans(t);
+        refreshHandles(t, l);
+        applyWidths(t, l);
+    }
+    function reset() {
+        try { localStorage.removeItem(LS_KEY); } catch (_) { /* storage blocked */ }
+        closeMenu();
+        apply();
+    }
+    window.tideRulesTable = { apply: apply, reset: reset };
+
+    var resetBtn = document.getElementById('rh-reset-layout');
+    if (resetBtn) resetBtn.addEventListener('click', reset);
+
+    // ── Resize: the edge belongs to a column and its right-hand visible neighbour ──
+    document.addEventListener('pointerdown', function (e) {
+        var h = e.target.closest && e.target.closest('.rt-resize');
+        if (!h) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var t = table(), l = load(), vis = visibleOrder(t, l), th = h.parentElement;
+        var i = vis.indexOf(th.dataset.col), next = i === -1 ? null : headOf(t, vis[i + 1]);
+        if (!next) return;
+        resizing = true;
+        var w = {};
+        vis.forEach(function (c) { w[c] = headOf(t, c).getBoundingClientRect().width; });
+        var a = th.dataset.col, b = next.dataset.col, startA = w[a], startB = w[b], startX = e.clientX;
+        h.setPointerCapture(e.pointerId);
+        h.classList.add('is-active');
+        document.body.classList.add('rt-resizing');
+        function move(ev) {
+            var dx = Math.max(MIN_W - startA, Math.min(startB - MIN_W, ev.clientX - startX));
+            w[a] = startA + dx;
+            w[b] = startB - dx;
+            th.style.width = Math.round(w[a]) + 'px';
+            next.style.width = Math.round(w[b]) + 'px';
+        }
+        function up() {
+            h.removeEventListener('pointermove', move);
+            h.removeEventListener('pointerup', up);
+            h.classList.remove('is-active');
+            document.body.classList.remove('rt-resizing');
+            var total = 0, frac = {};
+            vis.forEach(function (c) { total += w[c]; });
+            vis.forEach(function (c) { frac[c] = w[c] / total; });
+            var cur = load();
+            cur.frac = frac;
+            save(cur);
+            resizing = false;
+            applyWidths(t, cur);   // absorb rounding so the table stays exactly full width
+        }
+        h.addEventListener('pointermove', move);
+        h.addEventListener('pointerup', up);
+    });
+    // Letting go of a resize drag must not count as a click on the header (that would re-sort).
+    window.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('.rt-resize')) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+    document.addEventListener('dblclick', function (e) {
+        if (e.target.closest && e.target.closest('.rt-resize')) reset();
+    });
+
+    // ── Column chooser ("..." at the end of the header) ──
+    var menu = null;
+    function closeMenu() {
+        if (menu) { menu.remove(); menu = null; }
+        var btn = document.getElementById('rt-cols-btn');
+        if (btn) btn.setAttribute('aria-expanded', 'false');
+    }
+    function persist(t, l, widthsChanged) {
+        if (widthsChanged) delete l.frac;     // a different set of visible columns starts from default widths
+        save(l);
+        apply();
+        buildList();
+    }
+    function buildList() {
+        if (!menu) return;
+        var t = table();
+        if (!t) { closeMenu(); return; }
+        var l = load(), order = fullOrder(t, l), hid = hiddenSet(l);
+        var ul = menu.querySelector('ul');
+        ul.innerHTML = '';
+        order.forEach(function (col, i) {
+            var li = document.createElement('li');
+            var label = document.createElement('label');
+            var box = document.createElement('input');
+            box.type = 'checkbox';
+            box.checked = hid.indexOf(col) === -1;
+            // At least one column stays visible.
+            box.disabled = box.checked && order.length - hid.length <= 1;
+            box.addEventListener('change', function () {
+                var cur = load();
+                var hidden = hiddenSet(cur).filter(function (c) { return c !== col; });
+                if (!box.checked) hidden.push(col);
+                cur.hidden = hidden;
+                cur.order = fullOrder(t, cur);
+                persist(t, cur, true);
+            });
+            label.appendChild(box);
+            label.appendChild(document.createTextNode(TITLES[col] || col));
+            li.appendChild(label);
+
+            var move = document.createElement('span');
+            move.className = 'rt-colmenu__move';
+            [['up', '▲', -1, 'Move ' + (TITLES[col] || col) + ' left'], ['down', '▼', 1, 'Move ' + (TITLES[col] || col) + ' right']]
+                .forEach(function (d) {
+                    var b = document.createElement('button');
+                    b.type = 'button';
+                    b.textContent = d[1];
+                    b.title = d[3];
+                    b.setAttribute('aria-label', d[3]);
+                    b.disabled = (d[2] < 0 && i === 0) || (d[2] > 0 && i === order.length - 1);
+                    b.addEventListener('click', function () {
+                        var cur = load(), o = fullOrder(t, cur), at = o.indexOf(col), to = at + d[2];
+                        if (to < 0 || to >= o.length) return;
+                        o.splice(to, 0, o.splice(at, 1)[0]);
+                        cur.order = o;
+                        persist(t, cur, false);
+                    });
+                    move.appendChild(b);
+                });
+            li.appendChild(move);
+            ul.appendChild(li);
+        });
+    }
+    function openMenu(btn) {
+        closeMenu();
+        menu = document.createElement('div');
+        menu.className = 'rt-colmenu';
+        menu.setAttribute('role', 'dialog');
+        menu.setAttribute('aria-label', 'Choose table columns');
+        menu.innerHTML = '<div class="rt-colmenu__title">Columns (top = left)</div><ul></ul>' +
+            '<button type="button" class="btn btn-secondary btn-sm rt-colmenu__reset">Reset columns</button>';
+        menu.querySelector('.rt-colmenu__reset').addEventListener('click', reset);
+        document.body.appendChild(menu);
+        // Fixed position under the button, kept inside the viewport.
+        var r = btn.getBoundingClientRect(), w = menu.offsetWidth;
+        menu.style.top = Math.round(r.bottom + 4) + 'px';
+        menu.style.left = Math.round(Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))) + 'px';
+        btn.setAttribute('aria-expanded', 'true');
+        buildList();
+    }
+    document.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('#rt-cols-btn');
+        if (btn) {
+            e.stopPropagation();
+            if (menu) closeMenu(); else openMenu(btn);
+            return;
+        }
+        if (menu && !menu.contains(e.target)) closeMenu();
+    });
+    document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
+    // The scroll area moves under a fixed popover; close it rather than let it float.
+    var region = document.querySelector('.rule-scroll-region');
+    if (region) region.addEventListener('scroll', closeMenu, { passive: true });
+
+    // Keep the table full width when the window or the scroll region changes size.
+    var raf = 0;
+    function relayout() {
+        cancelAnimationFrame(raf);
+        raf = requestAnimationFrame(function () { var t = table(); if (t) applyWidths(t, load()); });
+    }
+    window.addEventListener('resize', relayout);
+    if (window.ResizeObserver && region) new ResizeObserver(relayout).observe(region);
+
+    // A grid reload replaces the table, and infinite scroll adds rows: re-apply to both.
+    document.body.addEventListener('htmx:afterSettle', function () { closeMenu(); apply(); });
+    apply();
+})();
+</script>

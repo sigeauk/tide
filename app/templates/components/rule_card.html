@@ -27,10 +27,17 @@
 <div name="Open Rule Modal" class="rule-card rule-card--val-{{ val_class }}" id="rule-{{ rule.rule_id }}"{% if oob %} hx-swap-oob="true"{% endif %}
     data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ rule.name }}"
     hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
-    hx-trigger="click, keyup[key=='Enter']"
+    hx-trigger="click[!event.target.closest('.bulk-check')], keyup[key=='Enter' && !event.target.closest('.bulk-check')]"
     hx-target="#modal-container"
     hx-swap="innerHTML"
     hx-include="unset">
+
+    <label class="bulk-check" title="Select this rule">
+        <input type="checkbox" data-bulk-check aria-label="Select {{ rule.name }}"
+               data-key="{{ rule.rule_id }}|{{ rule.siem_id or '' }}|{{ rule.space | default('default') }}"
+               data-rule-id="{{ rule.rule_id }}" data-siem-id="{{ rule.siem_id or '' }}" data-space="{{ rule.space | default('default') }}"
+               data-state="{{ lifecycle_state }}">
+    </label>
 
     <div class="rc-head">
         <div class="rc-main">

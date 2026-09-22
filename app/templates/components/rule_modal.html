@@ -372,6 +372,15 @@
                             {{ icon_text('git-branch', 'Compare versions', '14') }}
                         </button>
                         {% endif %}
+                        {% if rule.deprecated %}
+                        <button name="Restore Rule" type="button" class="btn btn-secondary"
+                                title="Recreate this rule in its SIEM (disabled) and make it active again"
+                                hx-post="/api/promotion/{{ rule.rule_id }}/restore?{{ scope_qs }}"
+                                hx-target="body" hx-swap="beforeend" hx-include="unset"
+                                hx-confirm="Recreate this rule in its SIEM? It is restored disabled, so nothing starts alerting until you enable it.">
+                            {{ icon_text('refresh-cw', 'Restore', '14') }}
+                        </button>
+                        {% endif %}
                         {% if kibana_rule_url %}
                         <a name="Open in Kibana" class="btn btn-secondary" href="{{ kibana_rule_url }}" target="_blank" rel="noopener noreferrer"
                            data-kibana-link title="Open in Kibana ({{ scope_label }})">

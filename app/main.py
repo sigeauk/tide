@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api, mitre as mitre_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -1507,6 +1507,7 @@ def create_app() -> FastAPI:
     # Include API routers
     app.include_router(auth.router)
     app.include_router(rules.router)
+    app.include_router(bulk_edit_api.router)
     app.include_router(heatmap.router)
     app.include_router(threats.router)
     app.include_router(promotion.router)

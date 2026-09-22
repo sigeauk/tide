@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.1] - 2026-09-22
+
+### Added
+- **Bulk edit on Rule Health.** Select several rules (a checkbox on each card or table row, shown only while Bulk edit is on) and validate, enable, disable, promote or demote them together, with a progress bar and a Stop button. Select all matching the current filters, not just the loaded page — filter to staging and select all, and only staging rules are picked. Promote is only offered when every selected rule is staging, and demote only when every one is production; the bar explains why otherwise. Promote follows the client's "delete source after promotion" setting from Management; demote never deletes the production copy by default. This shipped in 5.1.0 but was missed from that changelog entry.
+- **Import a validation file from Rule Health.** The "&hellip;" menu has an Import validation file option that takes a `checkedRule.json`-shaped file and applies it to the active client, matching by rule name. By default it only fills rules with no validation yet, the same as the automatic startup import; tick Overwrite to also replace existing validation dates. An optional Checked by field records the import under one name instead of whatever is in the file. This is a manual, repeatable version of the one-time import that already runs at startup — that one is unchanged.
+
 ## [5.1.0] - 2026-09-21
 
 ### Changed

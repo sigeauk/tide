@@ -1,0 +1,180 @@
+<script>
+// ── Rule Health: "..." menu, gutter alignment, bulk edit ──
+(function () {
+    var page = document.querySelector('.rule-browser-page');
+    if (!page) return;
+
+    // ── "..." actions menu ──
+    var moreBtn = document.getElementById('rh-more-btn');
+    var moreMenu = document.getElementById('rh-more-menu');
+    function closeMenu() {
+        if (!moreMenu || moreMenu.hidden) return;
+        moreMenu.hidden = true;
+        moreBtn.setAttribute('aria-expanded', 'false');
+    }
+    if (moreBtn && moreMenu) {
+        moreBtn.addEventListener('click', function (e) {
+            e.stopPropagation();
+            var open = moreMenu.hidden;
+            moreMenu.hidden = !open;
+            moreBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+        document.addEventListener('click', function (e) { if (!moreMenu.contains(e.target)) closeMenu(); });
+        document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeMenu(); });
+        moreMenu.addEventListener('click', function (e) {
+            // Picking any item closes the menu (the sync spinner shows in the page header).
+            if (e.target.closest('.rh-more__item')) setTimeout(closeMenu, 0);
+        });
+    }
+
+    // ── Cards must be exactly as wide as the metrics and filters above them ──
+    // The scroll region reserves a scrollbar gutter; the controls take the same inset.
+    var region = document.querySelector('.rule-scroll-region');
+    function measureGutter() {
+        if (!region) return;
+        var gutter = Math.max(0, region.offsetWidth - region.clientWidth);
+        page.style.setProperty('--rh-gutter', gutter + 'px');
+    }
+    measureGutter();
+    window.addEventListener('resize', measureGutter);
+
+    function tableApply() { if (window.tideRulesTable) window.tideRulesTable.apply(); }
+
+    // ── Bulk edit ──
+    var bar = document.getElementById('bulk-bar');
+    var toggle = document.getElementById('bulk-edit-toggle');
+    var selected = new Map();      // "rule_id|siem_id|space" -> {rule_id, siem_id, space, state}
+    var matching = null;           // Set of keys matching the filters, from the last "select all"
+    var busy = false;
+
+    function isOn() { return page.classList.contains('bulk-on'); }
+    function itemOf(cb) {
+        return { rule_id: cb.dataset.ruleId, siem_id: cb.dataset.siemId, space: cb.dataset.space, state: cb.dataset.state };
+    }
+    function toast(msg, kind) {
+        if (typeof showToast === 'function') showToast(msg, kind || 'error');
+    }
+
+    function refresh() {
+        if (!bar) return;
+        document.querySelectorAll('input[data-bulk-check]').forEach(function (cb) {
+            var on = selected.has(cb.dataset.key);
+            cb.checked = on;
+            var host = cb.closest('.rule-card, .rule-row');
+            if (host) {
+                host.classList.toggle('rule-card--selected', on && host.classList.contains('rule-card'));
+                host.classList.toggle('rule-row--selected', on && host.classList.contains('rule-row'));
+            }
+        });
+        var n = selected.size, states = {};
+        selected.forEach(function (it) { states[it.state] = (states[it.state] || 0) + 1; });
+        var kinds = Object.keys(states);
+        document.getElementById('bulk-count').textContent = n + ' selected';
+
+        function allAre(name) { return n > 0 && kinds.length === 1 && kinds[0] === name; }
+        var can = { validate: n > 0, enable: n > 0, disable: n > 0, promote: allAre('Staging'), demote: allAre('Production') };
+        bar.querySelectorAll('[data-bulk-action]').forEach(function (b) { b.disabled = !can[b.dataset.bulkAction]; });
+
+        var hint = document.getElementById('bulk-hint');
+        if (n > 0 && (!can.promote || !can.demote) && kinds.length) {
+            var mix = kinds.map(function (k) { return states[k] + ' ' + k.toLowerCase(); }).join(', ');
+            hint.textContent = 'Selected: ' + mix + '. Promote needs every selected rule to be staging; demote needs every one to be production.';
+        } else {
+            hint.textContent = '';
+        }
+
+        // The header box (table) and the bar box (cards and table) always agree.
+        var full = !!matching && matching.size > 0 && Array.from(matching).every(function (k) { return selected.has(k); });
+        ['bulk-select-all', 'bulk-bar-all'].forEach(function (id) {
+            var box = document.getElementById(id);
+            if (!box) return;
+            box.checked = full;
+            box.indeterminate = !full && n > 0;
+        });
+    }
+
+    function setBulk(on) {
+        page.classList.toggle('bulk-on', on);
+        if (bar) bar.hidden = !on;
+        if (toggle) {
+            toggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+            var label = toggle.querySelector('[data-bulk-toggle-label]');
+            if (label) label.textContent = on ? 'Exit bulk edit' : 'Bulk edit';
+        }
+        if (!on) { selected.clear(); matching = null; }
+        refresh();
+        tableApply();   // the checkbox column comes and goes
+        measureGutter();
+    }
+    if (toggle && bar) {
+        toggle.addEventListener('click', function () { setBulk(!isOn()); });
+        document.getElementById('bulk-exit').addEventListener('click', function () { setBulk(false); });
+    }
+
+    // Select all = every rule matching the current filters (all pages), decided by the server.
+    function filterQuery() {
+        var vals = htmx.values(document.getElementById('bulk-filter-src'));
+        var qs = new URLSearchParams();
+        Object.keys(vals).forEach(function (k) {
+            [].concat(vals[k]).forEach(function (v) { if (v !== '' && v != null) qs.append(k, v); });
+        });
+        return qs;
+    }
+    function selectMatching(select) {
+        if (busy) return;
+        busy = true;
+        fetch('/api/rules/bulk-edit/ids?' + filterQuery().toString(), { credentials: 'same-origin' })
+            .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+            .then(function (list) {
+                var keys = list.map(function (it) { return it.rule_id + '|' + it.siem_id + '|' + it.space; });
+                matching = new Set(keys);
+                list.forEach(function (it, i) {
+                    if (select) selected.set(keys[i], it); else selected.delete(keys[i]);
+                });
+                refresh();
+            })
+            .catch(function (err) { toast('Could not select all rules: ' + err.message); refresh(); })
+            .finally(function () { busy = false; });
+    }
+    if (bar) document.getElementById('bulk-clear').addEventListener('click', function () { selected.clear(); refresh(); });
+
+    document.addEventListener('change', function (e) {
+        var t = e.target;
+        if (t.matches && t.matches('input[data-bulk-check]')) {
+            if (t.checked) selected.set(t.dataset.key, itemOf(t)); else selected.delete(t.dataset.key);
+            refresh();
+        } else if (t.id === 'bulk-select-all' || t.id === 'bulk-bar-all') {
+            selectMatching(t.checked);
+        }
+    });
+
+    // Actions: the server re-checks the selection and returns a confirm dialog.
+    if (bar) bar.addEventListener('click', function (e) {
+        var btn = e.target.closest && e.target.closest('[data-bulk-action]');
+        if (!btn || btn.disabled) return;
+        var items = Array.from(selected.values()).map(function (it) {
+            return { rule_id: it.rule_id, siem_id: it.siem_id, space: it.space };
+        });
+        var body = new URLSearchParams({ action: btn.dataset.bulkAction, items: JSON.stringify(items) });
+        fetch('/api/rules/bulk-edit/dialog', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
+        })
+            .then(function (r) { return r.text(); })
+            .then(function (html) {
+                var box = document.getElementById('modal-container');
+                box.innerHTML = html;
+                if (window.htmx) htmx.process(box);
+            })
+            .catch(function (err) { toast('Could not open the bulk dialog: ' + err.message); });
+    });
+
+    // A full grid reload (filters, sort, view) starts a fresh selection; pages appended by
+    // infinite scroll do not, so their rows pick up the current selection.
+    document.body.addEventListener('htmx:beforeSwap', function (e) {
+        if (e.detail.target && e.detail.target.id === 'rules-grid') { selected.clear(); matching = null; }
+    });
+
+    document.body.addEventListener('htmx:afterSettle', function () { refresh(); measureGutter(); });
+})();
+</script>

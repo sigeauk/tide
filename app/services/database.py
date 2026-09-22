@@ -3552,6 +3552,94 @@ class DatabaseService:
                 [str(rule_id), str(rule_name), datetime.utcnow(), user_name],
             )
 
+    def import_validation_entries(
+        self,
+        entries: Dict[str, Any],
+        overwrite: bool = False,
+        checked_by_override: Optional[str] = None,
+    ) -> Dict[str, int]:
+        """Import ``{rule name: {last_checked_on, checked_by}}`` (the ``checkedRule.json`` shape)
+        into the active tenant's ``checkedRule`` table. Manual, on-demand twin of
+        :func:`app.services.tenant_manager.import_legacy_validation_file`, which only ever runs
+        once automatically at startup; this can be re-run any time from Rule Health.
+
+        Matches by rule name against every SIEM/space copy the active tenant currently has (a name
+        can map to several rules). ``overwrite=False`` (the default, matching the startup import)
+        only fills rules that have no validation yet. ``overwrite=True`` also replaces existing
+        entries with the file's date. ``checked_by_override``, when given, is recorded instead of
+        the file's own ``checked_by`` for every row this call writes — use it to attribute the
+        import to whoever is running it rather than whatever name was in the file.
+
+        A name with no matching rule in this tenant yet is kept as a name-only row (as the startup
+        import does), so it binds automatically once such a rule appears.
+
+        Returns ``{"added", "overwritten", "skipped", "unmatched", "invalid"}``.
+        """
+        added = overwritten = skipped = unmatched = invalid = 0
+        with self.get_connection() as conn:
+            self._ensure_checked_rule(conn)
+            ids_by_name: Dict[str, List[str]] = {}
+            for key, name in conn.execute(
+                f"SELECT DISTINCT {VALIDATION_KEY_SQL}, name FROM detection_rules"
+            ).fetchall():
+                ids_by_name.setdefault(name, []).append(key)
+            have_ids = {
+                r[0] for r in conn.execute(
+                    "SELECT rule_id FROM checkedRule WHERE rule_id IS NOT NULL"
+                ).fetchall()
+            }
+            have_names = {
+                r[0] for r in conn.execute(
+                    "SELECT rule_name FROM checkedRule WHERE rule_id IS NULL"
+                ).fetchall()
+            }
+
+            for name, rec in (entries or {}).items():
+                if not isinstance(rec, dict):
+                    invalid += 1
+                    continue
+                try:
+                    checked_on = datetime.strptime(str(rec.get("last_checked_on", ""))[:19], "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    checked_on = None
+                checked_by = checked_by_override or rec.get("checked_by") or "unknown"
+
+                keys = ids_by_name.get(name)
+                if not keys:
+                    unmatched += 1
+                    exists = name in have_names
+                    if exists and not overwrite:
+                        skipped += 1
+                        continue
+                    if exists:
+                        conn.execute("DELETE FROM checkedRule WHERE rule_id IS NULL AND rule_name = ?", [name])
+                        overwritten += 1
+                    else:
+                        added += 1
+                    conn.execute(
+                        "INSERT INTO checkedRule (rule_name, last_checked_on, checked_by) VALUES (?, ?, ?)",
+                        [name, checked_on, checked_by],
+                    )
+                    have_names.add(name)
+                    continue
+                for key in keys:
+                    exists = key in have_ids
+                    if exists and not overwrite:
+                        skipped += 1
+                        continue
+                    conn.execute("DELETE FROM checkedRule WHERE rule_id = ?", [key])
+                    conn.execute(
+                        "INSERT INTO checkedRule (rule_id, rule_name, last_checked_on, checked_by) VALUES (?, ?, ?, ?)",
+                        [key, name, checked_on, checked_by],
+                    )
+                    have_ids.add(key)
+                    if exists:
+                        overwritten += 1
+                    else:
+                        added += 1
+        return {"added": added, "overwritten": overwritten, "skipped": skipped,
+                "unmatched": unmatched, "invalid": invalid}
+
     # --- RULE OPERATIONS ---
     
     def get_rules(
@@ -5411,6 +5499,66 @@ class DatabaseService:
         for samples in out.values():
             samples.sort(reverse=True)
         return out
+
+    def get_rule_search_times(self, rule_id: str, siem_id: str, space: str, limit: int = 10) -> List[int]:
+        """Recent search durations (ms) recorded for one rule, newest first."""
+        with self.get_connection() as conn:
+            self._ensure_search_time_table(conn)
+            rows = conn.execute(
+                "SELECT search_ms FROM rule_search_time_samples WHERE rule_id = ? AND siem_id = ? AND space = ? "
+                "ORDER BY executed_at DESC LIMIT ?",
+                [rule_id, siem_id, space, int(limit)],
+            ).fetchall()
+        return [int(r[0]) for r in rows]
+
+    def clear_search_time_samples(self, rule_id: str, siem_id: str, space: str) -> None:
+        with self.get_connection() as conn:
+            self._ensure_search_time_table(conn)
+            conn.execute(
+                "DELETE FROM rule_search_time_samples WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                [rule_id, siem_id, space],
+            )
+
+    def rescore_rule_search_time(self, client_id: str, rule_id: str, siem_id: str, space: str,
+                                 samples_ms: List[int]) -> Optional[int]:
+        """Re-apply only the search-time check to one stored rule (no SIEM call).
+
+        Returns the rule's new score, or ``None`` when its stored score predates per-check fractions
+        (it then picks the search time up on its next sync).
+        """
+        from app.scoring import SCORING_VERSION, apply_search_time
+        weights = self.get_client_scoring(client_id)["weights"]
+        with self.get_connection() as conn:
+            row = conn.execute(
+                "SELECT raw_data FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                [rule_id, siem_id, space],
+            ).fetchone()
+            if not row:
+                return None
+            payload = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+            result = apply_search_time((payload or {}).get("score_detail"), samples_ms, weights)
+            if result is None:
+                return None
+            detail, columns = result
+            payload["score_detail"] = detail
+            conn.execute(
+                "UPDATE detection_rules SET score = ?, quality_score = ?, meta_score = ?, score_mapping = ?, "
+                "score_field_type = ?, score_search_time = ?, score_language = ?, score_note = ?, score_override = ?, "
+                "score_tactics = ?, score_techniques = ?, score_author = ?, score_highlights = ?, "
+                "raw_data = CAST(? AS JSON) WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                [columns["score"], columns["quality_score"], columns["meta_score"], columns["score_mapping"],
+                 columns["score_field_type"], columns["score_search_time"], columns["score_language"],
+                 columns["score_note"], columns["score_override"], columns["score_tactics"],
+                 columns["score_techniques"], columns["score_author"], columns["score_highlights"],
+                 json.dumps(payload, default=str), rule_id, siem_id, space],
+            )
+            self.record_rule_score_snapshots_bulk(
+                client_id,
+                [{"rule_id": rule_id, "siem_id": siem_id, "space": space, **columns,
+                  "scoring_version": SCORING_VERSION, "raw_data": json.dumps(payload, default=str)}],
+                conn,
+            )
+        return int(columns["score"])
 
     def record_search_time_samples(self, samples: List[Dict[str, Any]], keep_days: int = 30) -> int:
         """Store new ``{rule_id, siem_id, space, executed_at, search_ms}`` samples (already-seen ones are skipped)."""
@@ -9483,8 +9631,12 @@ class DatabaseService:
         }
         if mode == "criticality" and severity_key in severity_cols:
             sa, se = severity_cols[severity_key]
-            a = row.get(sa, a)
-            e = row.get(se, e)
+            # ``row.get(col, a)`` would return a stored NULL, dropping the master value; only a real
+            # per-severity value replaces it.
+            if row.get(sa) is not None:
+                a = row.get(sa)
+            if row.get(se) is not None:
+                e = row.get(se)
         if a is not None:
             try:
                 amber = int(a)
