@@ -8,7 +8,7 @@ from urllib.parse import unquote
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any, List, Dict, Tuple
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.services.database import validation_key
@@ -1423,6 +1423,59 @@ async def record_test_search_time(
     return response
 
 
+@router.get("/duplicates", response_class=HTMLResponse)
+def find_duplicate_rules(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Dialog listing rows in the active tenant that are the same real rule stored more than
+    once — see ``DatabaseService.find_duplicate_rule_groups`` for how a group is identified."""
+    groups = db.find_duplicate_rule_groups()
+    return request.app.state.templates.TemplateResponse(
+        request, "components/duplicate_rules_dialog.html",
+        {"groups": groups, "space_labels": _build_space_labels(db, client_id)},
+    )
+
+
+@router.post("/duplicates/resolve", response_class=HTMLResponse)
+async def resolve_duplicate_rules(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Merge the duplicate groups the operator confirmed (skips any marked 'not a duplicate')."""
+    form = await request.form()
+    try:
+        group_count = int(form.get("group_count") or 0)
+    except ValueError:
+        group_count = 0
+
+    username = user.name or user.username if user else "Unknown"
+    merged_groups = moved_total = deleted_total = 0
+    for i in range(group_count):
+        if str(form.get(f"skip__{i}") or "").lower() in {"1", "true", "on", "yes"}:
+            continue
+        siem_id = form.get(f"group_siem__{i}")
+        space = form.get(f"group_space__{i}")
+        members = form.getlist(f"group_members__{i}")
+        keep = form.get(f"keep__{i}")
+        if not siem_id or not space or not keep or keep not in members:
+            continue
+        drop_ids = [m for m in members if m != keep]
+        if not drop_ids:
+            continue
+        result = db.merge_duplicate_rules(keep, siem_id, space, drop_ids)
+        if result["deleted"]:
+            merged_groups += 1
+            moved_total += result["moved_links"]
+            deleted_total += result["deleted"]
+            logger.info(
+                "Merged duplicate rule group (client=%s siem=%s space=%s): kept %s, dropped %s "
+                "(%d baseline link(s) moved) by %s",
+                client_id, siem_id, space, keep, drop_ids, result["moved_links"], username,
+            )
+
+    response = request.app.state.templates.TemplateResponse(
+        request, "components/duplicate_rules_dialog.html",
+        {"result": {"groups": merged_groups, "moved_links": moved_total, "deleted": deleted_total}},
+    )
+    response.headers["HX-Trigger"] = "refreshRules"
+    return response
+
+
 _IMPORT_VALIDATION_MAX_BYTES = 5 * 1024 * 1024
 
 
@@ -2286,44 +2339,41 @@ async def edit_rule(
     )
 
 
-@router.post("/{rule_id}/sync", response_class=HTMLResponse)
-def sync_one_rule(
-    request: Request,
-    rule_id: str,
-    db: DbDep,
-    user: RequireUser,
-    settings: SettingsDep,
-    client_id: ActiveClient,
-    space: str = Query("default"),
-    siem_id: Optional[str] = Query(None),
-):
-    """Re-check ONE rule against its SIEM without syncing the rest.
+def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], space: str,
+                     actor_user_id: Optional[str] = None, actor_name: str = "system") -> Tuple[int, str, str]:
+    """Re-check ONE rule against its SIEM (blocking). Shared core of the "Sync this rule" button
+    and every write action (promote, demote, master push, restore, bulk edit) that used to
+    trigger a full client sync just to pick up the one or two rules it actually touched — see
+    CHANGELOG 5.1.2. A full mirror sync stays available (the Sync button, and any scheduled run);
+    this is for refreshing a known rule without re-fetching and re-scoring the whole space.
 
-    Pulls just that rule, refreshes the field catalogue for its index patterns (so a
-    mapping fix in Elastic shows straight away), re-scores it and records the result.
-    A SIEM that cannot be reached changes nothing; only a definite "not found" from
-    Kibana marks the rule deprecated.
+    Pulls just that rule, refreshes the field catalogue for its index patterns, re-scores it and
+    records the result. A SIEM that cannot be reached changes nothing; only a definite "not
+    found" from Kibana marks the rule deprecated.
+
+    Returns ``(status_code, message, action)`` — ``action`` is "synced", "deprecated", or "" on
+    failure. 200/202 mean something happened; other codes mean nothing changed.
     """
     from app import elastic_helper
     from app.services.mapping_catalogue import MappingCatalogue
 
-    def reply(message: str, status_code: int = 200, rule=None):
-        if rule is not None and request.headers.get("X-Return-Modal") == "rule":
-            return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, settings, flash=message)
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=status_code)
-
     if not siem_id:
-        return reply("Missing SIEM context.", 400)
+        return 400, "Missing SIEM context.", ""
     if (siem_id, space) not in {(s, sp) for s, sp in (db.get_client_siem_scopes(client_id) or [])}:
-        return reply("SIEM not found.", 404)
+        return 404, "SIEM not found.", ""
+    # No existing row is not an error here (unlike the "Sync this rule" button, which always has
+    # one): a rule TIDE just promoted, restored or pushed as master into this (siem, space) for
+    # the first time has no row yet — this call both creates and refreshes.
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
-    if not rule:
-        return reply("Rule not found.", 404)
     full = db.get_siem_inventory_item(siem_id) or {}
     if not (full.get("kibana_url") and full.get("api_token_enc")):
-        return reply("This SIEM has no Kibana URL or API key configured.", 400)
+        return 400, "This SIEM has no Kibana URL or API key configured.", ""
 
-    elastic_id = str((rule.raw_data or {}).get("id") or rule_id)
+    # fetch_single_rule tries both Kibana's saved-object id and its portable rule_id, so either
+    # identity works here. Prefer a cached saved-object id when we have one (faster, unambiguous);
+    # otherwise use rule_id as given — for a brand new row that IS the identity that was just used
+    # to create it in Kibana.
+    elastic_id = str((rule.raw_data or {}).get("id") if rule and rule.raw_data else rule_id)
     history = {(rid, sp): samples for (rid, sid, sp), samples in db.get_search_time_history().items()
                if sid == siem_id and rid == rule_id}
     try:
@@ -2335,30 +2385,63 @@ def sync_one_rule(
         )
     except Exception as exc:
         logger.exception("Targeted rule sync failed for %s", rule_id)
-        return reply(f"Could not reach the SIEM, so nothing was changed: {exc}", 502, rule)
+        return 502, f"Could not reach the SIEM, so nothing was changed: {exc}", ""
 
     if frame is None or frame.empty:
-        db.set_rule_deprecated(rule_id, siem_id, space, True)
-        message = "Rule was not found in Elastic and is marked deprecated."
+        if rule:
+            db.set_rule_deprecated(rule_id, siem_id, space, True)
+            message = "Rule was not found in Elastic and is marked deprecated."
+        else:
+            message = "Rule was not found in Elastic."
         action = "deprecated"
-        score_note = ""
     else:
         rec = frame.to_dict("records")[0]
         rec["siem_id"] = siem_id
-        before = rule.score
+        before = rule.score if rule else None
         db.save_audit_results([rec], client_id=client_id, checkpoint=False)
         if isinstance(rec.get("search_sample"), dict):
             db.record_search_time_samples([{**rec["search_sample"], "siem_id": siem_id}])
         db.set_rule_deprecated(rule_id, siem_id, space, False)
         action, after = "synced", rec.get("score")
-        score_note = f" Score {before} → {after}." if after is not None and after != before else f" Score unchanged at {before}."
+        if before is None:
+            score_note = f" Scored {after}." if after is not None else ""
+        elif after is not None and after != before:
+            score_note = f" Score {before} → {after}."
+        else:
+            score_note = f" Score unchanged at {before}."
         message = "Rule refreshed from Elastic and its field mappings re-checked." + score_note
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
-        action=action, actor_user_id=user.id, actor_name=user.username,
+        action=action, actor_user_id=actor_user_id, actor_name=actor_name,
         detail={"message": message, "targeted": True},
     )
-    refreshed = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) or rule
+    return 200, message, action
+
+
+@router.post("/{rule_id}/sync", response_class=HTMLResponse)
+def sync_one_rule(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    settings: SettingsDep,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Re-check ONE rule against its SIEM without syncing the rest. See ``sync_single_rule``."""
+    def reply(message: str, status_code: int = 200, rule=None):
+        if rule is not None and request.headers.get("X-Return-Modal") == "rule":
+            return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, settings, flash=message)
+        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=status_code)
+
+    before_rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) if siem_id else None
+    status, message, _action = sync_single_rule(
+        db, client_id, rule_id, siem_id, space, actor_user_id=user.id, actor_name=user.username,
+    )
+    if status != 200:
+        return reply(message, status, before_rule)
+    refreshed = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) or before_rule
     return reply(message, 200, refreshed)
 
 

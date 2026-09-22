@@ -42,6 +42,11 @@
                     onclick="document.getElementById('import-validation-modal').style.display='flex'">
                     {{ icon('upload', '15') }}<span>Import validation file</span>
                 </button>
+                <button name="Find Duplicate Rules" type="button" role="menuitem" class="rh-more__item"
+                    title="Find rules TIDE has stored more than once and merge them"
+                    hx-get="/api/rules/duplicates" hx-target="#modal-container" hx-swap="innerHTML">
+                    {{ icon('copy', '15') }}<span>Find duplicate rules</span>
+                </button>
                 <button name="Bulk Edit" id="bulk-edit-toggle" type="button" role="menuitem" class="rh-more__item"
                     aria-pressed="false" title="Select several rules to validate, enable, disable, promote or demote them">
                     {{ icon('check-square', '15') }}<span data-bulk-toggle-label>Bulk edit</span>

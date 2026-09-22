@@ -4093,6 +4093,214 @@ class DatabaseService:
                 conn.execute("ROLLBACK")
                 raise
 
+    # --- DUPLICATE RULE ROWS ---
+    # Every genuinely different rule in a Kibana space has its own portable ``rule_id`` (the field
+    # Elastic itself enforces uniqueness on) — that never changes if the rule is later edited. TIDE's
+    # own ``detection_rules.rule_id`` column, by contrast, is Kibana's saved-object ``id``, which is
+    # generated fresh whenever a rule is (re)created rather than updated in place. If that ever
+    # happens for a rule already in TIDE — a retried promotion, a rule deleted and recreated in
+    # Kibana, or similar — the old saved-object id is not automatically removed, and TIDE ends up
+    # with two or more database rows (each a different ``rule_id`` column value) for one real rule.
+    # They always share a validation timestamp, since validation is looked up by the portable id.
+    #
+    # ``find_duplicate_rule_groups``/``merge_duplicate_rules`` are the manual side of this (Rule
+    # Health > "..." > Find duplicate rules); ``save_audit_results`` above also closes the loop
+    # automatically at sync time, folding a stale row into the one a sync just confirmed is current.
+
+    def find_duplicate_rule_groups(self, limit: int = 200) -> List[Dict[str, Any]]:
+        """Groups of active-tenant rows that are the same real rule stored more than once.
+
+        Grouped by (portable rule_id, siem_id, space) — the same triple Elastic itself would refuse
+        to let collide for two genuinely different rules. A rule legitimately in both a staging and
+        a production space is a different (siem_id, space) pair per row, so it is never one of these
+        groups (that is what the "Migrated" state already covers).
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT rule_id, siem_id, space, name, score, enabled, deprecated, last_updated, "
+                f"{VALIDATION_KEY_SQL} AS portable_id "
+                f"FROM detection_rules"
+            ).fetchall()
+        groups: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+        for rule_id, siem_id, space, name, score, enabled, deprecated, last_updated, portable_id in rows:
+            groups.setdefault((portable_id, siem_id, space), []).append({
+                "rule_id": rule_id, "siem_id": siem_id, "space": space, "name": name,
+                "score": score, "enabled": bool(enabled), "deprecated": bool(deprecated),
+                "last_updated": last_updated,
+            })
+        validation_data = self._load_validation_data()
+        out = []
+        for (portable_id, siem_id, space), members in groups.items():
+            if len(members) < 2:
+                continue
+            val = validation_data.get(portable_id) or {}
+            for m in members:
+                m["rule_id_matches_portable"] = m["rule_id"] == portable_id
+            members.sort(key=lambda m: (m["deprecated"], -(m["last_updated"].timestamp() if m["last_updated"] else 0)))
+            out.append({
+                "portable_id": portable_id, "siem_id": siem_id, "space": space,
+                "members": members, "validated_by": val.get("checked_by") or "",
+                "validated_on": val.get("last_checked_on") or "",
+            })
+            if len(out) >= limit:
+                break
+        return out
+
+    def merge_duplicate_rules(self, keep_rule_id: str, siem_id: str, space: str,
+                              drop_rule_ids: List[str]) -> Dict[str, int]:
+        """Keep ``keep_rule_id`` in ``(siem_id, space)``; move baseline links off each of
+        ``drop_rule_ids`` and delete those rows outright (unlike :meth:`remap_rule_references`,
+        which deprecates-and-keeps — these are duplicate rows, not a promotion's source copy, so
+        there is nothing worth retaining). Score/lifecycle history for the dropped rows is left in
+        place as a record of what TIDE did with that saved-object id; only the live row goes."""
+        drop_rule_ids = [d for d in dict.fromkeys(drop_rule_ids) if d and d != keep_rule_id]
+        if not keep_rule_id or not drop_rule_ids:
+            return {"moved_links": 0, "deleted": 0}
+        moved = deleted = 0
+        with self.get_connection() as conn:
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                if not conn.execute(
+                    "SELECT 1 FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                    [keep_rule_id, siem_id, space],
+                ).fetchone():
+                    conn.execute("ROLLBACK")
+                    return {"moved_links": 0, "deleted": 0}
+                for old_id in drop_rule_ids:
+                    if not conn.execute(
+                        "SELECT 1 FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                        [old_id, siem_id, space],
+                    ).fetchone():
+                        continue
+                    moved += len(conn.execute(
+                        "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? RETURNING id",
+                        [keep_rule_id, old_id],
+                    ).fetchall())
+                    conn.execute("DELETE FROM checkedRule WHERE rule_id = ?", [old_id])
+                    conn.execute(
+                        "DELETE FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                        [old_id, siem_id, space],
+                    )
+                    deleted += 1
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        return {"moved_links": moved, "deleted": deleted}
+
+    def rekey_rule_identities(self) -> Dict[str, int]:
+        """One-time, idempotent: re-key every ``detection_rules`` row in the active tenant from
+        Kibana's saved-object id to Elastic's own portable rule id — the field Elastic itself
+        enforces as unique per space (``raw_data.rule_id``; see ``VALIDATION_KEY_SQL``). This is
+        what ``find_duplicate_rule_groups`` and every sync-time fallback (``enable``/``disable``,
+        promotion's existence check, restore) already treat as "the" id; after this runs it is
+        also what the DB row itself is keyed by, so those fallbacks have nothing left to fall back
+        from.
+
+        Caller MUST resolve every duplicate group first (``find_duplicate_rule_groups`` /
+        ``merge_duplicate_rules``) — a row whose portable id collides with another row's in the
+        same (siem_id, space) cannot be re-keyed (see ``skipped_collisions`` in the return value)
+        until that happens. Rows with no portable id recorded (no raw_data, or raw_data missing
+        rule_id — legacy/imported rows) are left as they are; their existing id is already the
+        only one on record.
+
+        Every table that stores a rule identity is updated in the same pass: precisely, by
+        (rule_id, siem_id, space), for tables that carry all three (rule_migrations' three sides,
+        logical_rule_members, the three history tables); by value alone for tables that are
+        deliberately siem/space-agnostic because validation and baseline links already have to
+        survive a promotion (checkedRule, step_detections.rule_ref, vuln_detections.rule_ref,
+        logical_rule_identities.canonical_rule_id) — matching the same scope those tables' other
+        write paths (``remap_rule_references``, ``_bind_checked_rule_ids``) already use.
+        ``detection_rules.source_rule_id`` (a purely informational "renamed from" trace) is not
+        rewritten; it can end up referring to a pre-migration id, which affects no lookup or join.
+
+        Returns ``{"rekeyed", "unchanged", "skipped_collisions", "skipped_no_portable_id"}``.
+        """
+        rekeyed = unchanged = skipped_collisions = skipped_no_id = 0
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT rule_id, siem_id, space, {VALIDATION_KEY_SQL} AS portable_id, "
+                f"json_extract_string(raw_data, '$.rule_id') AS has_portable "
+                f"FROM detection_rules"
+            ).fetchall()
+            existing_keys = {(r[0], r[1], r[2]) for r in rows}
+            claimed_keys: set = set()  # destinations already assigned to a move in this same pass
+            moves: List[Tuple[str, str, str, str]] = []  # (old_id, siem_id, space, new_id)
+            for old_id, siem_id, space, portable_id, has_portable in rows:
+                if not has_portable:
+                    skipped_no_id += 1
+                    continue
+                if portable_id == old_id:
+                    unchanged += 1
+                    continue
+                dest = (portable_id, siem_id, space)
+                # Either another row already holds this key, or a second row in this very pass
+                # wants the same one (two not-yet-merged duplicates both moving to their shared
+                # portable id) — either way a duplicate find_duplicate_rule_groups has not
+                # resolved yet. Leave every row sharing that destination alone rather than guess
+                # which one is current.
+                if dest in existing_keys or dest in claimed_keys:
+                    skipped_collisions += 1
+                    continue
+                claimed_keys.add(dest)
+                moves.append((old_id, siem_id, space, portable_id))
+
+            if not moves:
+                return {"rekeyed": rekeyed, "unchanged": unchanged,
+                        "skipped_collisions": skipped_collisions, "skipped_no_portable_id": skipped_no_id}
+
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                for old_id, siem_id, space, new_id in moves:
+                    conn.execute(
+                        "UPDATE detection_rules SET rule_id = ? WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                        [new_id, old_id, siem_id, space],
+                    )
+                    # Precisely scoped: every one of these tables carries the same (rule_id, siem_id,
+                    # space) triple as detection_rules, so only the exact row that just moved is touched.
+                    for table, id_col, siem_col, space_col in (
+                        ("rule_migrations", "source_rule_id", "source_siem_id", "source_space"),
+                        ("rule_migrations", "target_rule_id", "target_siem_id", "target_space"),
+                        ("rule_migrations", "master_rule_id", "master_siem_id", "master_space"),
+                        ("logical_rule_identities", "master_rule_id", "master_siem_id", "master_space"),
+                        ("logical_rule_members", "rule_id", "siem_id", "space"),
+                        ("rule_score_history", "rule_id", "siem_id", "space"),
+                        ("rule_lifecycle_history", "rule_id", "siem_id", "space"),
+                        ("rule_search_time_samples", "rule_id", "siem_id", "space"),
+                    ):
+                        try:
+                            conn.execute(
+                                f"UPDATE {table} SET {id_col} = ? "
+                                f"WHERE {id_col} = ? AND {siem_col} = ? AND {space_col} = ?",
+                                [new_id, old_id, siem_id, space],
+                            )
+                        except Exception as exc:
+                            logger.warning("rekey_rule_identities: %s.%s skipped: %r", table, id_col, exc)
+                    # Not siem/space-scoped in the schema — match by value, same as
+                    # remap_rule_references / _bind_checked_rule_ids already do for these.
+                    for table, id_col in (
+                        ("checkedRule", "rule_id"),
+                        ("step_detections", "rule_ref"),
+                        ("vuln_detections", "rule_ref"),
+                        ("logical_rule_identities", "canonical_rule_id"),
+                    ):
+                        try:
+                            conn.execute(f"UPDATE {table} SET {id_col} = ? WHERE {id_col} = ?", [new_id, old_id])
+                        except Exception as exc:
+                            logger.warning("rekey_rule_identities: %s.%s skipped: %r", table, id_col, exc)
+                    rekeyed += 1
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+        logger.info(
+            "rekey_rule_identities: %d rekeyed, %d already correct, %d collisions skipped "
+            "(resolve duplicates first), %d had no portable id to move to",
+            rekeyed, unchanged, skipped_collisions, skipped_no_id,
+        )
+        return {"rekeyed": rekeyed, "unchanged": unchanged,
+                "skipped_collisions": skipped_collisions, "skipped_no_portable_id": skipped_no_id}
+
     def ensure_logical_rule_identity(
         self,
         canonical_rule_id: str,
@@ -8635,10 +8843,14 @@ class DatabaseService:
         
         df = pd.DataFrame(audit_list)
 
-        # Kibana creates a new ID when a rule is copied across SIEMs or
-        # spaces. The fetched payload's ``id`` is authoritative for that
-        # destination row; the outer record can still carry the source ID
-        # from promotion metadata. Persist the actual Elastic identity.
+        # TIDE keys detection_rules by Elastic's own portable rule id (raw_data.rule_id — the
+        # field Elastic itself enforces as unique per space, and the one that survives a copy
+        # across spaces/SIEMs unchanged). Kibana's saved-object id (raw_data.id) is generated
+        # fresh every time an object is created and is NOT what this column stores (5.1.2 —
+        # storing the saved-object id here was the root cause of rules being duplicated when one
+        # was recreated instead of updated in place; see CHANGELOG and rekey_rule_identities for
+        # the one-time migration off the old scheme). Falls back to whatever identity the caller
+        # already had when raw_data carries no rule_id at all (legacy/imported rows).
         def normalize_rule_id(row):
             raw = row.get("raw_data")
             if isinstance(raw, str):
@@ -8646,7 +8858,7 @@ class DatabaseService:
                     raw = json.loads(raw)
                 except Exception:
                     raw = {}
-            return (raw or {}).get("id") or row.get("rule_id")
+            return (raw or {}).get("rule_id") or row.get("rule_id")
 
         if "rule_id" in df.columns:
             df["rule_id"] = df.apply(normalize_rule_id, axis=1)
@@ -8734,58 +8946,12 @@ class DatabaseService:
         # Not a detection_rules column: carried along so the score snapshot records the scoring model.
         df_final['scoring_version'] = df['scoring_version'] if 'scoring_version' in df.columns else None
 
-        # A cross-space Elastic create can temporarily leave the source ID in
-        # the fetched record while ``raw_data.id`` contains the generated
-        # destination ID. Repair any existing cache alias before the upsert so
-        # one real Elastic rule cannot render twice in the same SIEM/space.
-        with self.get_connection() as conn:
-            for row in df_final.to_dict(orient='records'):
-                raw = row.get('raw_data') or {}
-                if isinstance(raw, str):
-                    try:
-                        raw = json.loads(raw)
-                    except Exception:
-                        raw = {}
-                canonical_id = (raw or {}).get('id')
-                stale_id = row.get('rule_id')
-                scope_siem = row.get('siem_id')
-                scope_space = row.get('space') or 'default'
-                if not canonical_id or not stale_id or canonical_id == stale_id:
-                    continue
-                source_migration = conn.execute(
-                    "SELECT 1 FROM rule_migrations WHERE source_rule_id = ? "
-                    "AND source_siem_id = ? AND source_space = ? LIMIT 1",
-                    [stale_id, scope_siem, scope_space],
-                ).fetchone()
-                if source_migration:
-                    # The source identity is the migration key even when the
-                    # staging Elastic payload has a generated internal ID.
-                    continue
-                canonical_exists = conn.execute(
-                    "SELECT 1 FROM detection_rules WHERE rule_id = ? "
-                    "AND siem_id = ? AND space = ? LIMIT 1",
-                    [canonical_id, scope_siem, scope_space],
-                ).fetchone()
-                if canonical_exists:
-                    conn.execute(
-                        "DELETE FROM detection_rules WHERE rule_id = ? "
-                        "AND siem_id = ? AND space = ?",
-                        [stale_id, scope_siem, scope_space],
-                    )
-                else:
-                    conn.execute(
-                        "UPDATE detection_rules SET rule_id = ? "
-                        "WHERE rule_id = ? AND siem_id = ? AND space = ? "
-                        "AND raw_data->>'id' = ?",
-                        [canonical_id, stale_id, scope_siem, scope_space, canonical_id],
-                    )
-                df_final.loc[
-                    (df_final['rule_id'] == stale_id)
-                    & (df_final['siem_id'] == scope_siem)
-                    & (df_final['space'] == scope_space),
-                    'rule_id',
-                ] = canonical_id
-        
+        # (5.1.2: the "cross-space create leaves a stale saved-object id" repair that used to run
+        # here is gone — normalize_rule_id above now always derives rule_id from raw_data.rule_id
+        # (the portable id), never from raw_data.id, so there is no saved-object-id alias left to
+        # repair. The write-time duplicate guard right below (existing_by_key / incoming_portable)
+        # covers what this used to: folding a stale row sharing an incoming row's identity.)
+
         # Check for duplicates within the incoming data. The PK is
         # (rule_id, siem_id, space) since 4.1.12 (Migration 44) — the same
         # rule_id can legitimately appear in multiple Kibana spaces of the
@@ -8849,6 +9015,11 @@ class DatabaseService:
                 except Exception:
                     return {}
             return {}
+
+        def _portable_id(raw_val: Any, fallback_rule_id: Any) -> str:
+            """The id Elastic itself enforces as unique per space (see validation_key) — as
+            opposed to ``rule_id`` the DB column, which is Kibana's saved-object id."""
+            return str(_parse_raw(raw_val).get('rule_id') or fallback_rule_id)
 
         def _coerce_ts(value: Any) -> Optional[datetime]:
             if not value:
@@ -9016,7 +9187,39 @@ class DatabaseService:
                     for row in existing_rows:
                         item = dict(zip(target_cols, row))
                         existing_by_key[(item.get("rule_id"), item.get("siem_id"), item.get("space"))] = item
-                
+
+                    # Prevent duplicate rows accumulating (see "DUPLICATE RULE ROWS" above): if an
+                    # existing row in this write's scope shares an incoming row's PORTABLE rule id
+                    # (the field Elastic itself enforces uniqueness on) under a DIFFERENT stored
+                    # rule_id, that old row is provably stale — this fetch just confirmed the
+                    # current saved-object id for that rule, so the one we already had cannot still
+                    # be it. Fold it in now rather than leave a second row behind.
+                    incoming_portable: Dict[Tuple[str, str, str], str] = {}
+                    for r in df_final.to_dict(orient='records'):
+                        portable = _portable_id(r.get('raw_data'), r.get('rule_id'))
+                        incoming_portable[(portable, r.get('siem_id'), r.get('space') or 'default')] = r.get('rule_id')
+                    for (old_rule_id, old_siem_id, old_space), old_row in list(existing_by_key.items()):
+                        portable = _portable_id(old_row.get('raw_data'), old_rule_id)
+                        fresh_rule_id = incoming_portable.get((portable, old_siem_id, old_space))
+                        if not fresh_rule_id or fresh_rule_id == old_rule_id:
+                            continue
+                        conn.execute(
+                            "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ?",
+                            [fresh_rule_id, old_rule_id],
+                        )
+                        conn.execute("DELETE FROM checkedRule WHERE rule_id = ?", [old_rule_id])
+                        conn.execute(
+                            "DELETE FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                            [old_rule_id, old_siem_id, old_space],
+                        )
+                        logger.info(
+                            "save_audit_results: folded stale duplicate rule_id=%s into %s "
+                            "(siem_id=%s space=%s, shared rule_id %s) — the old saved-object id no "
+                            "longer exists in Kibana as of this sync.",
+                            old_rule_id, fresh_rule_id, old_siem_id, old_space, portable,
+                        )
+                        del existing_by_key[(old_rule_id, old_siem_id, old_space)]
+
                 # Insert fresh rules
                 conn.register('rules_source', df_final)
                 col_list = ', '.join(target_cols)

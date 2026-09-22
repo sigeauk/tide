@@ -443,6 +443,25 @@
                     <p class="rm-empty">No MITRE techniques mapped to this rule.</p>
                     {% endif %}
                 </div>
+
+                {% set _portable_rule_id = (rule.raw_data.rule_id if rule.raw_data is mapping else none) or rule.rule_id %}
+                <div class="rm-panel rm-panel--ids" data-fold="ruleids" data-section="ruleids">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('Rule IDs') }}
+                        <h3 class="rm-panel__title">Rule IDs</h3>
+                        {{ move_ctl() }}
+                    </div>
+                    <dl class="rm-ids">
+                        <div class="rm-ids__row">
+                            <dt title="TIDE's own row id for this rule, in this space (Kibana's saved-object id).">TIDE ID</dt>
+                            <dd>{{ rule.rule_id }}</dd>
+                        </div>
+                        <div class="rm-ids__row">
+                            <dt title="The id Elastic itself enforces as unique per space, and what stays the same if this rule is copied elsewhere.">Elastic ID</dt>
+                            <dd>{{ _portable_rule_id }}</dd>
+                        </div>
+                    </dl>
+                </div>
             </aside>
         </div>
     </div>

@@ -7649,3 +7649,25 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rule-browser-controls, .bulk-bar { margin-right: calc(var(--rh-gutter) + 0.5rem); }
 .bulk-bar__all { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; cursor: pointer; }
 .bulk-bar__all input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--color-primary); }
+
+/* Rule modal: Rule IDs panel, below MITRE ATT&CK (.rm-col already gaps siblings by 1rem) */
+.rm-ids { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.rm-ids__row { display: flex; align-items: baseline; gap: 0.6rem; }
+.rm-ids__row dt {
+  flex: 0 0 auto;
+  width: 5.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted);
+  cursor: help;
+}
+.rm-ids__row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-family: "SF Mono", "Fira Code", Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--color-text);
+}

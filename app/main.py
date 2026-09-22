@@ -296,6 +296,16 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.warning(f"Tenant schema sweep import failed: {_e}")
 
+        # 5.1.2 \u2014 one-time, idempotent re-key of every tenant's rule identities onto Elastic's
+        # own portable rule id (see CHANGELOG and DatabaseService.rekey_rule_identities). Must run
+        # after the schema sweep above (needs the current detection_rules columns) and before any
+        # sync, promotion or validation touches rule identity.
+        try:
+            from app.services.tenant_manager import rekey_all_tenant_rule_identities
+            rekey_all_tenant_rule_identities()
+        except Exception as _e:
+            logger.warning(f"Tenant rule identity re-key skipped: {_e}")
+
         # 4.1.3 \u2014 startup auth-source banner. Logs (in plain English) what
         # TIDE will use to talk to Kibana on the next sync. Saves operators
         # hours of "is it the env var, the DB record, or the per-tenant

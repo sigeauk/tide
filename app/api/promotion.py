@@ -159,7 +159,15 @@ async def set_promotion_master(
         actor_name=user.username,
         detail={"migration_id": migration["id"], "master": side, "previous_master": migration["master_rule_id"]},
     )
-    _schedule_client_sync(client_id)
+    # Only the counterpart's Kibana content changed (the master's own row is untouched) — refresh
+    # just that one row rather than the whole client. See sync_single_rule / CHANGELOG 5.1.2.
+    from app.api.rules import sync_single_rule
+    counterpart_siem, counterpart_space = (
+        (migration["target_siem_id"], migration["target_space"]) if side == "staging"
+        else (migration["source_siem_id"], migration["source_space"])
+    )
+    await _run_in_context(sync_single_rule, db, client_id, old_id, counterpart_siem, counterpart_space,
+                          user.id, user.username)
     return HTMLResponse(
         f'<div class="empty-state-text">{escape(message)} Baseline references now point at the {side} rule. '
         f'A sync is refreshing the rule cache.</div>'
@@ -167,38 +175,44 @@ async def set_promotion_master(
 
 
 def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str):
-    """Recreate a deprecated rule in the SIEM it came from (blocking). Returns ``(status_code, message)``."""
+    """Recreate a deprecated rule in the SIEM it came from (blocking).
+
+    Returns ``(status_code, message, effective_rule_id)`` — ``effective_rule_id`` is ``rule_id``
+    unless Kibana issued a new identity on recreation, in which case it is the new one (see the
+    remap below); the caller needs it to refresh the right row afterwards."""
     from app.elastic_helper import restore_detection_rule
 
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return 404, "Rule not found."
+        return 404, "Rule not found.", None
     if not rule.deprecated:
-        return 400, "This rule is not deprecated."
+        return 400, "This rule is not deprecated.", None
     siem = next(
         (s for s in (db.get_client_siems(client_id) or [])
          if s.get("id") == siem_id and str(s.get("space") or "default").lower() == str(space).lower()),
         None,
     )
     if not siem:
-        return 400, "This rule's SIEM and space are no longer linked to the client, so it cannot be restored there."
+        return 400, "This rule's SIEM and space are no longer linked to the client, so it cannot be restored there.", None
     if not rule.raw_data:
-        return 400, "TIDE has no stored copy of this rule to restore from."
+        return 400, "TIDE has no stored copy of this rule to restore from.", None
 
     ok, message, saved_id = restore_detection_rule(
         rule.raw_data, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
     )
     if not ok:
-        return 400, f"Restore failed: {message}"
+        return 400, f"Restore failed: {message}", None
 
     # TIDE's row is keyed by the id it last synced. If that is the rule's own Kibana rule_id it survives
     # the restore, so the row just becomes active again. If it was the saved-object id, Kibana has now
     # issued a new one: keep the old row for history and move baseline links to the new identity.
     kibana_rule_id = (rule.raw_data or {}).get("rule_id")
+    effective_rule_id = rule_id
     if kibana_rule_id and kibana_rule_id == rule_id:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
     elif saved_id and saved_id != rule_id:
         db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space)
+        effective_rule_id = saved_id
     else:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
     db.record_rule_history(
@@ -207,7 +221,7 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         detail={"message": message, "restored_disabled": True},
     )
     logger.info("Restored deprecated rule '%s' in %s by %s", rule.name, space, username)
-    return 200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.'
+    return 200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.', effective_rule_id
 
 
 @router.post("/{rule_id}/restore", response_class=HTMLResponse)
@@ -222,12 +236,13 @@ async def restore_rule(
 ):
     """Bring a deprecated rule back: recreate it (disabled) in the SIEM it was removed from."""
     username = user.name or user.username if user else "Unknown"
-    status, message = await _run_in_context(
+    status, message, effective_rule_id = await _run_in_context(
         _restore_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space,
     )
     if status != 200:
         return _toast("danger", message, status)
-    _schedule_client_sync(client_id)
+    from app.api.rules import sync_single_rule
+    await _run_in_context(sync_single_rule, db, client_id, effective_rule_id, siem_id, space, user.id, username)
     return _toast("success", message, 200, trigger="refreshRules")
 
 
@@ -258,7 +273,9 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     promoted because it was reviewed); ``keep`` leaves its validation as it is (SIEM-to-SIEM
     migrations); ``new_only`` stamps only rules that have never been validated.
 
-    Returns ``(status_code, message, rule_name, target_rule_id)``; 200 means promoted.
+    Returns ``(status_code, message, rule_name, target_rule_id, target_scope)``; 200 means
+    promoted. ``target_scope`` is ``(target_siem_id, target_space)`` on success, else ``None`` —
+    the caller uses it to refresh just the new production row instead of the whole client.
     """
     from app.elastic_helper import promote_rule_to_production
     from app.services.database import validation_for, validation_key
@@ -266,9 +283,9 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     staging_siems = db.get_client_siems(client_id, environment_role="staging")
     production_siems = db.get_client_siems(client_id, environment_role="production")
     if not staging_siems:
-        return 400, "No staging SIEM configured for this client.", None, None
+        return 400, "No staging SIEM configured for this client.", None, None, None
     if not production_siems:
-        return 400, "No production SIEM configured for this client.", None, None
+        return 400, "No production SIEM configured for this client.", None, None, None
 
     # Find the rule in a staging space. Each (siem, space) pair is checked individually: the same
     # rule_id can exist in several staging SIEMs and must be promoted from the SIEM it came from.
@@ -276,7 +293,7 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     if siem_id:
         candidate_siems = [s for s in staging_siems if s.get("id") == siem_id]
         if not candidate_siems:
-            return 400, "Selected source SIEM is not linked as staging for this client.", None, None
+            return 400, "Selected source SIEM is not linked as staging for this client.", None, None, None
     matches = []
     for siem in candidate_siems:
         sp = siem.get("space")
@@ -286,18 +303,18 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         if found:
             matches.append((siem, sp, found))
     if len(matches) > 1:
-        return 409, "Promotion blocked: rule is present in multiple staging SIEMs. Retry from the specific SIEM context.", None, None
+        return 409, "Promotion blocked: rule is present in multiple staging SIEMs. Retry from the specific SIEM context.", None, None, None
     if not matches:
-        return 404, "Rule not found in staging environment.", None, None
+        return 404, "Rule not found in staging environment.", None, None, None
     source_siem, source_space, rule = matches[0]
 
     if len(production_siems) > 1:
         return 409, ("Promotion blocked: multiple production SIEMs are linked. Keep one production "
-                     "target per client to avoid ambiguous routing."), rule.name, None
+                     "target per client to avoid ambiguous routing."), rule.name, None, None
     target_siem = production_siems[0]
     target_space = target_siem.get("space") or "default"
     if not rule.raw_data:
-        return 400, "Rule data not available for promotion.", rule.name, None
+        return 400, "Rule data not available for promotion.", rule.name, None, None
 
     try:
         result = promote_rule_to_production(
@@ -312,13 +329,13 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         )
     except Exception as e:
         logger.exception(f"Exception promoting rule '{rule.name}'")
-        return 500, f"Error: {e}", rule.name, None
+        return 500, f"Error: {e}", rule.name, None, None
 
     success, message = result[:2]
     target_rule_id = result[2] if len(result) > 2 else rule_id
     if not success:
         logger.error(f"Failed to promote rule '{rule.name}': {message}")
-        return 400, f"Promotion failed: {message}", rule.name, None
+        return 400, f"Promotion failed: {message}", rule.name, None, None
 
     # Validation is stored under Kibana's own rule id, which the promoted copy keeps, so "keep"
     # needs no work: the copy is already validated exactly like the source.
@@ -328,7 +345,7 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         db.save_validation(key, rule.name, username)
 
     # Move the rule in the local cache straight away, scoped by source SIEM. For a cross-SIEM
-    # promotion the next sync removes the stale row and adds the target copy.
+    # promotion the caller refreshes just the target row afterwards (see target_scope above).
     db.set_rule_deprecated(rule_id, source_siem.get("id"), source_space, delete_source)
     db.remap_rule_references(
         rule_id, target_rule_id, client_id,
@@ -347,17 +364,8 @@ def _promote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         actor_name=username,
     )
     logger.info(f"Promoted rule '{rule.name}' from {source_space} to {target_space} by {username}")
-    return 200, f'Successfully promoted "{rule.name}" to production environment as {target_rule_id}', rule.name, target_rule_id
-
-
-def _schedule_client_sync(client_id: str) -> None:
-    """Reconcile the tenant's rule cache in the background after promotions."""
-    try:
-        import asyncio
-        from app.main import scheduled_sync
-        asyncio.create_task(scheduled_sync(client_id=client_id))
-    except Exception as _exc:  # pragma: no cover - background hint only
-        logger.warning(f"Post-promote sync schedule failed: {_exc}")
+    return (200, f'Successfully promoted "{rule.name}" to production environment as {target_rule_id}',
+            rule.name, target_rule_id, (target_siem.get("id"), target_space))
 
 
 @router.post("/{rule_id}/promote", response_class=HTMLResponse)
@@ -389,12 +397,15 @@ async def promote_rule(
     )
     username = user.name or user.username if user else "Unknown"
     validation_mode = str(form.get("validation") or "stamp")
-    status, message, _name, _target = await _run_in_context(
+    status, message, _name, target_rule_id, target_scope = await _run_in_context(
         _promote_rule_sync, db, user.id, username, client_id, rule_id, siem_id, delete_source, validation_mode,
     )
     if status != 200:
         return _toast("danger", message, status)
-    _schedule_client_sync(client_id)
+    if target_scope:
+        from app.api.rules import sync_single_rule
+        await _run_in_context(sync_single_rule, db, client_id, target_rule_id, target_scope[0], target_scope[1],
+                              user.id, username)
     return _toast("success", message, 200, trigger="refreshPromotion")
 
 
@@ -409,25 +420,27 @@ def _demote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: 
                       siem_id: Optional[str], delete_source: bool):
     """Send one production rule back to the client's staging SIEM (blocking).
 
-    Returns ``(status_code, message, rule_name)``; 200 means demoted.
+    Returns ``(status_code, message, rule_name, staging_rule_id, target_scope)``; 200 means
+    demoted. ``target_scope`` is ``(target_siem_id, target_space)`` on success, else ``None`` —
+    the caller uses it to refresh just the new staging row instead of the whole client.
     """
     from app.elastic_helper import promote_rule_to_production
 
     staging_siems = db.get_client_siems(client_id, environment_role="staging")
     production_siems = db.get_client_siems(client_id, environment_role="production")
     if not production_siems:
-        return 400, "No production SIEM configured for this client.", None
+        return 400, "No production SIEM configured for this client.", None, None, None
     if not staging_siems:
-        return 400, "No staging SIEM configured for this client.", None
+        return 400, "No staging SIEM configured for this client.", None, None, None
     if len(staging_siems) > 1:
         return 409, ("Demotion blocked: multiple staging SIEMs are linked. Keep one staging target "
-                     "per client to avoid ambiguous routing."), None
+                     "per client to avoid ambiguous routing."), None, None, None
 
     candidates = production_siems
     if siem_id:
         candidates = [s for s in production_siems if s.get("id") == siem_id]
         if not candidates:
-            return 400, "Selected source SIEM is not linked as production for this client.", None
+            return 400, "Selected source SIEM is not linked as production for this client.", None, None, None
     matches = []
     for siem in candidates:
         sp = siem.get("space")
@@ -437,13 +450,13 @@ def _demote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: 
         if found:
             matches.append((siem, sp, found))
     if not matches:
-        return 404, "Rule not found in production environment.", None
+        return 404, "Rule not found in production environment.", None, None, None
     if len(matches) > 1:
         return 409, ("Demotion blocked: rule is present in multiple production SIEMs. Retry from the "
-                     "specific SIEM context."), None
+                     "specific SIEM context."), None, None, None
     source_siem, source_space, rule = matches[0]
     if not rule.raw_data:
-        return 400, "Rule data not available for demotion.", rule.name
+        return 400, "Rule data not available for demotion.", rule.name, None, None
 
     target_siem = staging_siems[0]
     target_space = target_siem.get("space") or "default"
@@ -461,13 +474,13 @@ def _demote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: 
         )
     except Exception as e:
         logger.exception(f"Exception demoting rule '{rule.name}'")
-        return 500, f"Error: {e}", rule.name
+        return 500, f"Error: {e}", rule.name, None, None
 
     success, message = result[:2]
     staging_rule_id = result[2] if len(result) > 2 else rule_id
     if not success:
         logger.error(f"Failed to demote rule '{rule.name}': {message}")
-        return 400, f"Demotion failed: {message}", rule.name
+        return 400, f"Demotion failed: {message}", rule.name, None, None
 
     if delete_source:
         db.set_rule_deprecated(rule_id, source_siem.get("id"), source_space, True)
@@ -502,8 +515,7 @@ def _demote_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: 
     return (200,
             f'Demoted "{rule.name}" to the staging environment'
             f'{"" if delete_source else "; the production copy was kept"}',
-            rule.name)
-
+            rule.name, staging_rule_id, (target_siem.get("id"), target_space))
 
 @router.post("/{rule_id}/demote", response_class=HTMLResponse)
 async def demote_rule(
@@ -522,12 +534,15 @@ async def demote_rule(
     form = await request.form()
     delete_source = str(form.get("delete_source") or "").lower() in {"1", "true", "on", "yes"}
     username = user.name or user.username if user else "Unknown"
-    status, message, _name = await _run_in_context(
+    status, message, _name, staging_rule_id, target_scope = await _run_in_context(
         _demote_rule_sync, db, user.id, username, client_id, rule_id, siem_id, delete_source,
     )
     if status != 200:
         return _toast_error(message, status)
-    _schedule_client_sync(client_id)
+    if target_scope:
+        from app.api.rules import sync_single_rule
+        await _run_in_context(sync_single_rule, db, client_id, staging_rule_id, target_scope[0], target_scope[1],
+                              user.id, username)
     from html import escape
     response = HTMLResponse(f'<div class="toast toast-success" onclick="this.remove()">{escape(message)}</div>')
     response.headers["HX-Trigger"] = "refreshPromotion"
@@ -595,18 +610,24 @@ def bulk_promote_dialog(request: Request, db: DbDep, user: RequireUser, client_i
 
 async def _run_bulk(job: Dict[str, Any], db, user_id: str, username: str, client_id: str, rules) -> None:
     from html import escape
+    from app.api.rules import sync_single_rule
     try:
         for rule in rules:
             if job["cancel"]:
                 break
             job["current"] = rule.name
-            status, message, _name, _target = await _run_in_context(
+            status, message, _name, target_rule_id, target_scope = await _run_in_context(
                 _promote_rule_sync, db, user_id, username, client_id, rule.rule_id, rule.siem_id,
                 job["delete_source"], job["validation_mode"],
             )
             job["done"] += 1
             if status == 200:
                 job["ok"] += 1
+                # Refresh just the new production row (this rule only), not the whole client —
+                # a bulk run can touch hundreds of rules and none of the others changed.
+                if target_scope:
+                    await _run_in_context(sync_single_rule, db, client_id, target_rule_id,
+                                          target_scope[0], target_scope[1], user_id, username)
             else:
                 job["failed"] += 1
                 if len(job["errors"]) < 10:
@@ -618,8 +639,6 @@ async def _run_bulk(job: Dict[str, Any], db, user_id: str, username: str, client
         job["errors"].append(escape(str(exc)))
     finally:
         job["current"] = ""
-        if job["ok"]:
-            _schedule_client_sync(client_id)
 
 
 @router.post("/bulk/start", response_class=HTMLResponse)

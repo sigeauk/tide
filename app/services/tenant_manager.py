@@ -911,3 +911,63 @@ def import_legacy_validation_file(data_dir: str) -> dict:
         f"tenant DBs; original kept as checkedRule.json.imported"
     )
     return summary
+
+
+# ── Rule identity re-key (5.1.2) ─────────────────────────────────────
+
+def rekey_all_tenant_rule_identities() -> dict:
+    """Walk every registered tenant DB once per process and re-key its rules onto Elastic's own
+    portable rule id, resolving any duplicate rows first. See
+    ``DatabaseService.find_duplicate_rule_groups`` / ``merge_duplicate_rules`` / 
+    ``rekey_rule_identities`` for what each step does and why.
+
+    Idempotent and safe to call on every startup: a tenant already fully re-keyed costs one query
+    per table with nothing to change. Called from the app lifespan, after the detection_rules
+    schema sweep and before anything else touches rule identities.
+
+    Returns ``{client_id: {"duplicate_groups_merged": n, "rekeyed": n, ...}}``.
+    """
+    from app.services.database import get_database_service
+    db = get_database_service()
+    with _cache_lock:
+        client_ids = list(_tenant_db_cache)
+    summary: dict = {}
+    for client_id in client_ids:
+        try:
+            with tenant_context_for(client_id):
+                groups = db.find_duplicate_rule_groups()
+                merged_groups = moved_links = deleted_rows = 0
+                for group in groups:
+                    members = sorted(
+                        group["members"],
+                        key=lambda m: (
+                            m["deprecated"],
+                            m["rule_id"] != group["portable_id"],  # prefer a survivor that needs no further rekey
+                            -(m["last_updated"].timestamp() if m["last_updated"] else 0),
+                        ),
+                    )
+                    keep = members[0]["rule_id"]
+                    drop = [m["rule_id"] for m in members[1:]]
+                    result = db.merge_duplicate_rules(keep, group["siem_id"], group["space"], drop)
+                    if result["deleted"]:
+                        merged_groups += 1
+                        moved_links += result["moved_links"]
+                        deleted_rows += result["deleted"]
+                rekey_result = db.rekey_rule_identities()
+            summary[client_id] = {
+                "duplicate_groups_merged": merged_groups, "baseline_links_moved": moved_links,
+                "duplicate_rows_removed": deleted_rows, **rekey_result,
+            }
+            if merged_groups or rekey_result["rekeyed"]:
+                logger.info(
+                    "Rule identity re-key for client %s: merged %d duplicate group(s) "
+                    "(%d row(s) removed), re-keyed %d rule row(s) (%d already correct, "
+                    "%d collision(s) deferred, %d with no portable id).",
+                    client_id, merged_groups, deleted_rows, rekey_result["rekeyed"],
+                    rekey_result["unchanged"], rekey_result["skipped_collisions"],
+                    rekey_result["skipped_no_portable_id"],
+                )
+        except Exception as exc:
+            logger.warning("Rule identity re-key skipped for client %s: %r", client_id, exc)
+            summary[client_id] = {"error": str(exc)}
+    return summary

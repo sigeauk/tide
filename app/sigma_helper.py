@@ -1179,7 +1179,7 @@ def send_rule_to_siem(
     pipeline_file: str = '',
     template_file: str = '',
     username: str = '',
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, str]:
     """
     Send a Sigma rule to Kibana/Elasticsearch SIEM via the Detection Rules API.
 
@@ -1198,7 +1198,8 @@ def send_rule_to_siem(
         username: Username of the deploying user (added to ``author`` field)
 
     Returns:
-        Tuple of (success: bool, message: str)
+        Tuple of (success: bool, message: str, rule_id: str) — rule_id is the portable id the
+        payload was created/updated under (used to refresh just this one row afterwards), or "" on failure.
     """
     import requests
 
@@ -1213,7 +1214,7 @@ def send_rule_to_siem(
         template_file=template_file,
     )
     if not ok:
-        return False, f"Conversion failed before deploy: {json_str}"
+        return False, f"Conversion failed before deploy: {json_str}", ""
 
     try:
         payload = json.loads(json_str)
@@ -1229,7 +1230,7 @@ def send_rule_to_siem(
             except json.JSONDecodeError:
                 continue
         if parsed is None:
-            return False, "Failed to parse conversion result as JSON/NDJSON"
+            return False, "Failed to parse conversion result as JSON/NDJSON", ""
         payload = parsed
 
     # Apply deploy-time overrides
@@ -1245,7 +1246,7 @@ def send_rule_to_siem(
         # 4.0.10. Callers MUST resolve the SIEM from siem_inventory /
         # client_siem_map for the active tenant and pass kibana_url + api_key.
         return False, ("No SIEM resolved for the active tenant/space. "
-                       "Assign a SIEM in the Management page and retry.")
+                       "Assign a SIEM in the Management page and retry."), ""
 
     headers = {
         "kbn-xsrf": "true",
@@ -1282,11 +1283,11 @@ def send_rule_to_siem(
                 action = "updated"
 
         if response.status_code in [200, 201]:
-            return True, f"Rule '{title}' {action} in {space} space!"
-        return False, f"Failed to {action} rule: {response.status_code} - {response.text}"
+            return True, f"Rule '{title}' {action} in {space} space!", rule_id
+        return False, f"Failed to {action} rule: {response.status_code} - {response.text}", ""
 
     except requests.exceptions.RequestException as exc:
-        return False, f"Connection error: {exc}"
+        return False, f"Connection error: {exc}", ""
 
 
 def get_rule_by_id(rule_id: str) -> Optional[Dict]:

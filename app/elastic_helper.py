@@ -1358,7 +1358,9 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
         for space in spaces:
             page = 1
             space_rules: list = []
+            seen_ids: set = set()      # distinct rule_ids collected so far, across all pages
             advertised_total: int = -1  # -1 = unknown until first response
+            hit_empty_page = False     # Kibana itself said "no more" — the only definitive end
             page_fetch_failed = False  # True only if an HTTP/network error
                                        # actually broke pagination. Distinct
                                        # from "Kibana said total=N but only N-k
@@ -1478,25 +1480,59 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                         rule['space_id'] = space
 
                 space_rules.extend(rules)
+                for rule in rules:
+                    rid = rule.get('rule_id')
+                    if rid:
+                        seen_ids.add(rid)
 
-                # Termination: either we've collected the advertised total or
-                # the API returned an empty page (defensive against a bad
-                # ``total``). Note we no longer rely on ``len(rules) <
-                # PAGE_SIZE`` because Kibana can occasionally return a short
-                # page mid-stream (e.g. when filters change between pages).
-                if advertised_total >= 0 and len(space_rules) >= advertised_total:
-                    break
                 if not rules:
+                    # Kibana itself says there is nothing more — the only fully trustworthy end
+                    # of results, regardless of what ``total`` claimed.
+                    hit_empty_page = True
+                    break
+                # Stop once the DISTINCT rule count reaches the advertised total, not the raw row
+                # count. A real production bug (large rule sets, e.g. 500 rules over 5 pages of
+                # 100): if Kibana's paging returns the same rule on two pages while a different
+                # rule falls through the gap between them, the raw row count reaches ``total`` one
+                # page early, before the actual missing rule was ever fetched — and TIDE would
+                # deprecate a rule that is genuinely still in Kibana. Continuing until the DISTINCT
+                # count catches up gives that rule a real chance to show up on a later page.
+                if advertised_total >= 0 and len(seen_ids) >= advertised_total:
+                    break
+                # Safety cap so a ``total`` that never converges (a Kibana bug, or rules being
+                # created faster than pages are fetched) cannot loop forever: allow some slack
+                # beyond what the advertised total should need, then give up and mark incomplete.
+                if page > (advertised_total // PAGE_SIZE + 1) + 5:
                     break
                 page += 1
 
             fetched = len(space_rules)
-            # Three outcomes:
-            #  1. page_fetch_failed       — real drift, preserve existing rows.
-            #  2. advertised_total < 0    — no successful page at all, treat as failure.
-            #  3. fetched < advertised_total but every page returned 200 —
-            #     Kibana's total was stale or filtered. Reconcile is safe;
-            #     the rules we got back are the authoritative current set.
+            distinct_ids = seen_ids
+
+            # ``space_rules`` can still hold the same rule twice (it appeared on two pages — see
+            # the loop above). Collapse that before it is fed into scoring/history as if it were
+            # two separate rules.
+            if len(distinct_ids) < len(space_rules):
+                seen: set = set()
+                deduped = []
+                for r in space_rules:
+                    rid = r.get('rule_id')
+                    if rid and rid in seen:
+                        continue
+                    if rid:
+                        seen.add(rid)
+                    deduped.append(r)
+                space_rules = deduped
+
+            # A fetch is "complete" — safe for the subtractive-delete pass below to trust — only
+            # when every page returned 200 AND the distinct rule count reached what Kibana itself
+            # advertised on page 1. Ending on an empty page short of that total looks identical
+            # whether Kibana's total was simply stale, or a page-boundary duplicate masked a rule
+            # that was skipped — those cannot be told apart from the response alone, so both are
+            # treated as incomplete. The cost of that is a genuinely-deleted rule takes one more
+            # sync to be marked deprecated; the alternative is wrongly deprecating a rule that is
+            # still live in Kibana, which is what this fix is for (500 rules over 5 pages of 100 is
+            # enough for a duplicate on one page to push a real rule past where pagination stops).
             if page_fetch_failed or advertised_total < 0:
                 total = advertised_total if advertised_total >= 0 else fetched
                 complete = False
@@ -1511,23 +1547,41 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                     f"app.scripts.diag_sync` for a full credential/connectivity "
                     f"breakdown."
                 )
-            else:
+            elif len(distinct_ids) >= advertised_total:
                 total = advertised_total
-                complete = True  # all pages OK — treat result set as authoritative
-                if fetched < advertised_total:
+                complete = True
+                if fetched > len(distinct_ids):
                     log_info(
-                        f"Space '{space}': fetched {fetched}/{total} rules "
-                        f"(Kibana over-reported total; reconciling against "
-                        f"actual returned set)."
+                        f"Space '{space}': fetched {len(distinct_ids)} distinct rule(s) of "
+                        f"advertised total {total} ({fetched - len(distinct_ids)} duplicate row(s) "
+                        f"across page boundaries, collapsed)."
                     )
                 else:
-                    log_info(f"Space '{space}': fetched {fetched}/{total} rules")
+                    log_info(f"Space '{space}': fetched {len(distinct_ids)}/{total} rules")
+            else:
+                total = advertised_total
+                complete = False
+                stop_reason = (
+                    "Kibana returned an empty page" if hit_empty_page
+                    else f"gave up after {page} page(s) without converging"
+                )
+                log_error(
+                    f"Sync drift: space '{space}' — only {len(distinct_ids)} distinct rule(s) "
+                    f"found (advertised total {total}); every page returned HTTP 200 so this is "
+                    f"not a connectivity error — {stop_reason}. Either Kibana's advertised total "
+                    f"was stale, or a duplicate on one page masked a rule skipped on another; the "
+                    f"two look identical from here, so subtractive delete is skipped for this "
+                    f"space to avoid wrongly deprecating a rule that is still live. A rule "
+                    f"genuinely deleted in Kibana will be marked deprecated on a later sync that "
+                    f"does converge. Re-run sync, or validate/sync the specific rule directly if "
+                    f"this space keeps triggering it."
+                )
 
             diagnostics[space] = {
                 "total": total,
                 "fetched": fetched,
                 "complete": complete,
-                "rule_ids": {r.get('rule_id') for r in space_rules if r.get('rule_id')},
+                "rule_ids": distinct_ids,
             }
             all_rules.extend(space_rules)
 
@@ -1884,42 +1938,6 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
     except Exception as e:
         log_error(f"Preview rule failed: {e}")
         return 0, [], str(e)
-
-
-def get_space_rule_ids(space, session, base_url):
-    """Get all rule_ids from a space. Caller must supply session and base_url
-    resolved from the per-tenant ``siem_inventory`` row."""
-    prefix = _space_api_prefix(base_url, space)
-    url = f"{prefix}/api/detection_engine/rules/_find"
-    all_rules = []
-    per_page = 100
-    page = 1
-    
-    while True:
-        params = {"per_page": per_page, "page": page}
-        response = session.get(url, params=params)
-        
-        if response.status_code != 200:
-            log_error(f"Failed to get rules from {space}: {response.status_code} {response.text}")
-            return set()
-        
-        data = response.json()
-        rules = data.get("data", [])
-        all_rules.extend(rules)
-        
-        if len(rules) < per_page:
-            break
-        page += 1
-    
-    # Kibana's _find response uses ``id`` for rule identity on some
-    # versions and includes ``rule_id`` on others. Accept both so a retry of
-    # an already-created target is treated as an update, not a duplicate
-    # create that blocks source deletion with HTTP 409.
-    return {
-        rule.get("rule_id") or rule.get("id")
-        for rule in all_rules
-        if rule.get("rule_id") or rule.get("id")
-    }
 
 
 def get_exception_list(list_id, source_space, session, base_url):
@@ -2280,14 +2298,28 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     rule.pop("id", None)
     rule.pop("execution_summary", None)
     
-    # Get existing rule IDs in target space. Kibana versions may expose the
-    # identity as ``id`` or ``rule_id``; also resolve an exact-name match so a
-    # retry after a partially completed promotion updates the existing copy
-    # instead of creating a 409 duplicate.
-    existing_ids = get_space_rule_ids(target_space, session=tgt_session, base_url=tgt_base)
-    target_existing_id = rule_id if rule_id in existing_ids else None
+    # Does the target space already have this rule? A single targeted lookup by the rule's own
+    # (portable) rule_id — the field Elastic itself treats as unique per space — rather than
+    # paging through the whole target space to answer one yes/no question. Fetching every rule
+    # in the target just to check one is both slow on a large ruleset and carries the same
+    # pagination-drift risk fixed elsewhere in sync (a rule genuinely present can still be
+    # missed by a paged listing); a direct lookup by id has neither problem. This also means a
+    # retry after a partially completed promotion updates the existing copy instead of creating
+    # a duplicate.
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
+    target_existing_id = None
+    if rule_id:
+        lookup_resp = tgt_session.get(
+            f"{tgt_prefix}/api/detection_engine/rules", params={"rule_id": rule_id},
+        )
+        if lookup_resp.status_code == 200:
+            found = lookup_resp.json() or {}
+            target_existing_id = found.get("rule_id") or found.get("id") or rule_id
     if target_existing_id is None:
+        # A real Elastic rule always has a rule_id, so this only fires when the source payload
+        # was missing one — match by exact name as a last resort. This is a single-page scan,
+        # not authoritative on a target space with more rules than fit in one page; it exists
+        # only to cover that edge case, not as the primary existence check above.
         find_resp = tgt_session.get(
             f"{tgt_prefix}/api/detection_engine/rules/_find",
             params={"search": rule_name, "per_page": 100},
@@ -2300,7 +2332,6 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
             )
             if exact:
                 target_existing_id = exact.get("rule_id") or exact.get("id")
-                existing_ids.add(target_existing_id)
     
     # Handle exception lists
     if rule.get("exceptions_list"):

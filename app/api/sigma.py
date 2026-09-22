@@ -298,7 +298,7 @@ def deploy_to_siem(
             '</div>'
         )
 
-    success, message = sigma.send_rule_to_siem(
+    success, message, new_rule_id = sigma.send_rule_to_siem(
         yaml_content=yaml_content,
         space=target_space,
         kibana_url=target_siem["kibana_url"],
@@ -311,16 +311,14 @@ def deploy_to_siem(
     )
 
     if success:
-        # Fire-and-forget per-tenant sync so the freshly-pushed rule shows
-        # up in the active tenant's DB on the next render. Detection rules
-        # are per-tenant since 4.1.13 — the sync only writes to this
-        # client's DuckDB file, so no cross-tenant side-effects.
-        try:
-            import asyncio
-            from app.main import scheduled_sync
-            asyncio.create_task(scheduled_sync(client_id=client_id))
-        except Exception as _exc:  # pragma: no cover - background hint only
-            logger.warning(f"Post-deploy sync schedule failed: {_exc}")
+        # Pull just the deployed rule into this tenant's DB, rather than a full client sync —
+        # nothing else in the space changed. See sync_single_rule / CHANGELOG 5.1.2.
+        if new_rule_id:
+            try:
+                from app.api.rules import sync_single_rule
+                sync_single_rule(db, client_id, new_rule_id, siem_id, target_space, user.id, user.username)
+            except Exception:
+                logger.exception("Post-deploy targeted sync failed for %s", new_rule_id)
         return HTMLResponse(f'<div class="alert alert-success">{message}</div>')
     else:
         return HTMLResponse(f'<div class="alert alert-danger">{message}</div>')

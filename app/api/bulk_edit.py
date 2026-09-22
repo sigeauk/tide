@@ -178,20 +178,33 @@ def _set_enabled_locally(db, rule_id: str, siem_id: str, space: str, enabled: bo
 
 def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
                item: Dict[str, str], opts: Dict[str, Any]):
-    """Apply ``action`` to one rule (blocking). Returns ``(status_code, message, rule_name)``; 200 is success."""
+    """Apply ``action`` to one rule (blocking). Returns ``(status_code, message, rule_name)``; 200 is success.
+
+    Refreshes only the rule(s) this call actually touched — never the whole client — see
+    sync_single_rule / CHANGELOG 5.1.2. A bulk run can span hundreds of rules; none of the others
+    changed, so nothing else needs re-checking against Elastic.
+    """
     from app import elastic_helper
     from app.api.promotion import _demote_rule_sync, _promote_rule_sync
+    from app.api.rules import sync_single_rule
 
     rule_id, siem_id, space = item["rule_id"], item["siem_id"], item["space"]
 
     if action == "promote":
-        status, message, name, _target = _promote_rule_sync(
+        status, message, name, target_rule_id, target_scope = _promote_rule_sync(
             db, user_id, username, client_id, rule_id, siem_id or None,
             opts["delete_source"], opts["validation_mode"],
         )
+        if status == 200 and target_scope:
+            sync_single_rule(db, client_id, target_rule_id, target_scope[0], target_scope[1], user_id, username)
         return status, message, name
     if action == "demote":
-        return _demote_rule_sync(db, user_id, username, client_id, rule_id, siem_id or None, opts["delete_source"])
+        status, message, name, staging_rule_id, target_scope = _demote_rule_sync(
+            db, user_id, username, client_id, rule_id, siem_id or None, opts["delete_source"],
+        )
+        if status == 200 and target_scope:
+            sync_single_rule(db, client_id, staging_rule_id, target_scope[0], target_scope[1], user_id, username)
+        return status, message, name
 
     thresholds = db.get_client_validation_thresholds(client_id)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id or None, thresholds=thresholds, client_id=client_id)
@@ -232,6 +245,9 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
         action="enabled" if turn_on else "disabled",
         actor_user_id=user_id, actor_name=username, detail={"message": message},
     )
+    # _set_enabled_locally only flips the enabled column; refresh this one row so its cached
+    # score and raw_data agree with the state Elastic now reports.
+    sync_single_rule(db, client_id, rule_id, siem_id, space, user_id, username)
     return 200, message, rule.name
 
 
@@ -263,9 +279,8 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
         job["errors"].append(str(exc))
     finally:
         job["current"] = ""
-        if job["ok"] and action != "validate":
-            from app.api.promotion import _schedule_client_sync
-            _schedule_client_sync(client_id)
+        # No client-wide sync here: promote/demote/enable/disable each refresh exactly the
+        # row(s) they touched inside _apply_one (validate never touches Elastic at all).
 
 
 @router.post("/start", response_class=HTMLResponse)

@@ -1,0 +1,73 @@
+{#
+  Find duplicate rules dialog. Context: groups (from db.find_duplicate_rule_groups), space_labels;
+  or result (a just-finished merge summary). Opened from the Rule Health "..." menu.
+
+  A group is rows sharing one Elastic rule's PORTABLE rule_id within one (siem_id, space) — the id
+  Elastic itself would refuse to let two different rules collide on, unlike TIDE's own DB row id
+  (Kibana's saved-object id, which can multiply if a rule gets recreated instead of updated). A rule
+  legitimately in both staging and production is never grouped here: that's a different (siem_id,
+  space) pair per row, and is what the Migrated state already covers.
+#}
+<div class="modal-overlay" data-duplicate-rules-dialog onclick="if(event.target===this) this.remove()">
+    <div class="modal-content" style="max-width:52rem;" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <h2 class="modal-title">Find duplicate rules</h2>
+            <button name="Close" type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()">&#x2715;</button>
+        </div>
+
+        {% if result is defined and result %}
+            <div class="alert alert-success mb-md">
+                <p>Merged {{ result.groups }} group{{ '' if result.groups == 1 else 's' }}: moved {{ result.moved_links }} baseline reference{{ '' if result.moved_links == 1 else 's' }}, removed {{ result.deleted }} duplicate row{{ '' if result.deleted == 1 else 's' }} from TIDE's database. Nothing was changed in Elastic.</p>
+            </div>
+            <div class="modal-actions">
+                <button name="Done" type="button" class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Done</button>
+            </div>
+        {% elif not groups %}
+            <p class="text-secondary mb-md">No duplicates found — every rule maps to exactly one row per SIEM and space.</p>
+            <div class="modal-actions">
+                <button name="Close" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button>
+            </div>
+        {% else %}
+            <p class="rule-help mb-md">
+                {{ groups | length }} rule{{ '' if groups | length == 1 else 's' }} stored more than once. They share a validated date because validation follows Elastic's own rule id, which is identical across the rows in each group below — only TIDE's internal row id differs. Pick which row to keep in each group, or tick "not a duplicate" to leave a group untouched. Merging moves any baseline links to the kept row and deletes the others from TIDE's database only; nothing in Elastic is touched.
+            </p>
+            <form name="Merge Duplicate Rules" hx-post="/api/rules/duplicates/resolve" hx-target="closest .modal-content" hx-swap="innerHTML"
+                  style="display:flex;flex-direction:column;gap:0.75rem;max-height:60vh;overflow:auto;padding-right:0.25rem;">
+                <input type="hidden" name="group_count" value="{{ groups | length }}">
+                {% for group in groups %}
+                {% set gi = loop.index0 %}
+                <fieldset class="card" style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:0.75rem 0.9rem;">
+                    <legend style="font-size:0.8rem;color:var(--color-text-secondary);padding:0 0.3rem;">
+                        {{ space_labels.get(group.space, group.space | capitalize) }}
+                        {% if group.validated_on %} &middot; validated {{ group.validated_on[:10] }}{% if group.validated_by %} by {{ group.validated_by }}{% endif %}{% endif %}
+                    </legend>
+                    <input type="hidden" name="group_siem__{{ gi }}" value="{{ group.siem_id }}">
+                    <input type="hidden" name="group_space__{{ gi }}" value="{{ group.space }}">
+                    <div style="display:flex;flex-direction:column;gap:0.4rem;">
+                        {% for m in group.members %}
+                        <label style="display:flex;align-items:flex-start;gap:0.6rem;padding:0.3rem;border-radius:var(--radius-sm);{% if m.deprecated %}opacity:0.65;{% endif %}">
+                            <input type="hidden" name="group_members__{{ gi }}" value="{{ m.rule_id }}">
+                            <input type="radio" name="keep__{{ gi }}" value="{{ m.rule_id }}" {% if loop.first %}checked{% endif %} style="margin-top:0.2rem;">
+                            <span style="flex:1;min-width:0;">
+                                <span style="font-weight:600;">{{ m.name }}</span>
+                                {% if m.deprecated %}<span class="badge badge-muted" style="font-size:0.65rem;">deprecated</span>{% endif %}
+                                <br>
+                                <span class="text-muted" style="font-size:0.72rem;font-family:var(--font-mono, monospace);word-break:break-all;">{{ m.rule_id }}</span>
+                                <span class="text-muted" style="font-size:0.75rem;"> &middot; score {{ m.score }} &middot; {{ 'enabled' if m.enabled else 'disabled' }}{% if m.last_updated %} &middot; updated {{ m.last_updated }}{% endif %}</span>
+                            </span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                    <label style="display:flex;align-items:center;gap:0.5rem;margin-top:0.5rem;font-size:0.8rem;">
+                        <input type="checkbox" name="skip__{{ gi }}" value="true"> Not a duplicate — keep both
+                    </label>
+                </fieldset>
+                {% endfor %}
+                <div class="modal-actions">
+                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                    <button name="Merge" type="submit" class="btn btn-primary">Merge selected groups</button>
+                </div>
+            </form>
+        {% endif %}
+    </div>
+</div>
