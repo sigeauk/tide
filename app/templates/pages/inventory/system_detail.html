@@ -2,226 +2,197 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 
+{#
+  A system, in Rule Health's shape: header with a "…" menu, a whole-system metric strip, then
+  sections (Techniques, Devices, Heatmap) that collapse and reorder -- both remembered per browser
+  (data-fold / data-section, app.js). The technique grid inside Baselines is filtered, sorted and
+  grouped from the bar above it; those choices ride in the URL, and the presentation ones (sort,
+  group, view) are also remembered per browser.
+
+  Every baseline is managed here: Manage baselines (edit, remove, apply, add) and Add technique
+  open as windows over this page, and the Baseline filter narrows the grid to one baseline.
+#}
+
 {% block title %}{{ system.name }} | Systems | TIDE{% endblock %}
 
 {% block content %}
 {{ breadcrumb(items=[('Home', '/'), ('Systems', '/systems'), (system.name, none)]) }}
 
 {% set host_count = host_summaries | length %}
-{% set vuln_count = host_summaries | sum(attribute='vuln_count') %}
-{% set sw_count = host_summaries | sum(attribute='software_count') %}
 {% set bl_count = baselines | length if baselines else 0 %}
-{% set bl_avg = ((baselines | sum(attribute='coverage_pct')) / bl_count) | round | int if bl_count > 0 else 0 %}
-{% set at_risk = namespace(count=0) %}
-{% for hs in host_summaries %}{% if hs.vuln_count > 0 %}{% set at_risk.count = at_risk.count + 1 %}{% endif %}{% endfor %}
+{% set clf_color = clf_colors.get(system.classification, '') if clf_colors and system.classification else '' %}
+{% macro collapse_ctl(label) -%}
+<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '16') }}</button>
+{%- endmacro %}
+{% macro move_ctl() -%}
+<span class="rm-move" role="group" aria-label="Reorder section">
+    <button type="button" class="rm-move__btn" data-rm-move="up" title="Move section up" aria-label="Move section up">{{ icon('chevron-up', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-rm-move="down" title="Move section down" aria-label="Move section down">{{ icon('chevron-down', '13') }}</button>
+</span>
+{%- endmacro %}
 
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
-    <div style="flex:1 1 520px;min-width:280px;max-width:980px;">
-        <h1 class="page-title-hero">{{ system.name }}</h1>
-        <p class="page-subtitle">
-            {% if system.description %}{{ system.description }}{% else %}No description.{% endif %}
-        </p>
+<div class="page-header sys-header">
+    <div class="sys-header__main">
+        <h1 class="page-title-hero">
+            {{ system.name }}
+            {% if system.classification %}
+            <span class="status-pill sys-header__clf{% if clf_color %} u-bg-dyn-tint{% endif %}"
+                  {% if clf_color %}style="--u-bg-color:{{ clf_color }};border-color:{{ clf_color }};color:{{ clf_color }};"{% endif %}
+                  title="Classification">{{ system.classification }}</span>
+            {% endif %}
+        </h1>
+        <p class="page-subtitle">{{ system.description or 'No description.' }}</p>
     </div>
-    <div style="flex:0 1 320px;min-width:260px;max-width:100%;align-self:start;display:flex;flex-direction:column;gap:0.5rem;">
-        <aside class="card card-padded">
-            <h2 class="section-title">Details</h2>
-            <div style="margin-top:0.5rem;display:grid;gap:0.35rem;">
-                <div><strong>Classification:</strong> {{ system.classification or 'Unclassified' }}</div>
-                <div><strong>Baselines:</strong> {{ bl_count }}</div>
-                <div><strong>Average Coverage:</strong> {% if bl_count > 0 %}{{ bl_avg }}%{% else %}N/A{% endif %}</div>
-            </div>
-        </aside>
-        <div style="display:flex;justify-content:flex-end;gap:0.5rem;flex-wrap:wrap;">
-            <button name="Export Report" class="btn btn-secondary btn-sm"
-                    onclick="openExportModal()"
-                    title="Generate system report"
-                    style="display:flex;align-items:center;gap:0.375rem;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                    <polyline points="7 10 12 15 17 10"/>
-                    <line x1="12" y1="15" x2="12" y2="3"/>
-                </svg>
-                Export
-            </button>
-            <button name="Open Edit Env Modal" class="btn btn-secondary btn-sm"
+    <div class="rh-more" data-more>
+        <button name="System Actions" type="button" class="btn btn-secondary rh-more__btn" data-more-toggle
+                aria-haspopup="menu" aria-expanded="false" title="Edit this system, export a report">
+            {{ icon('more-vertical', '18') }}<span class="sr-only">More actions</span>
+        </button>
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Edit System" type="button" role="menuitem" class="rh-more__item"
                     onclick="document.getElementById('edit-env-modal').style.display='flex'">
-                {{ icon('edit-2', '14') }} Edit
+                {{ icon('edit-2', '15') }}<span>Edit system</span>
+            </button>
+            <button name="Export Report" type="button" role="menuitem" class="rh-more__item"
+                    onclick="openExportModal()">
+                {{ icon('download', '15') }}<span>Export report</span>
             </button>
         </div>
     </div>
 </div>
 
-<div id="system-detail-sections" data-collapse-scope="system-detail-sections" style="margin-top:0.75rem;">
-<details class="card card-padded" data-collapse-key="system-{{ system.id }}-devices" style="margin-top:1rem;">
-    <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
-        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('server', '18') }} Devices ({{ host_count }})</h2>
-        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
+{% if baselines %}
+<div class="metrics-grid" id="system-steps-metrics"
+     hx-get="/api/systems/{{ system.id }}/steps-metrics"
+     hx-trigger="stepsChanged from:body"
+     hx-swap="innerHTML">
+    {% include "partials/system_steps_metrics.html" %}
+</div>
+{% endif %}
+
+<div class="sys-sections" data-order-key="tide.systemPageOrder" data-fold-store="tide.systemPageFolds">
+
+{# ── Baselines ──────────────────────────────────────────────────────────────────────────── #}
+<section class="card card-padded sys-section" data-section="baselines" data-fold="baselines" aria-label="Baselines">
+    <div class="sys-section__head">
+        {{ collapse_ctl('baselines') }}
+        <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="sys-section__count">{{ bl_count }}</span></h2>
+        <div class="rh-more" data-more>
+            <button name="Baseline Actions" type="button" class="btn btn-secondary btn-sm rh-more__btn rh-more__btn--sm" data-more-toggle
+                    aria-haspopup="menu" aria-expanded="false" title="Apply baselines, add techniques, generate baselines, choose SIEM coverage">
+                {{ icon('more-vertical', '16') }}<span class="sr-only">Baseline actions</span>
+            </button>
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Manage Baselines" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('layers', '15') }}<span>Manage baselines</span>
+                </button>
+                {% if baselines %}
+                <button name="Add Technique" type="button" role="menuitem" class="rh-more__item"
+                        title="Add a technique to one of this system's baselines"
+                        hx-get="/api/systems/{{ system.id }}/steps-new" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('plus', '15') }}<span>Add technique</span>
+                </button>
+                {% endif %}
+                <button name="Generate Baselines" type="button" role="menuitem" class="rh-more__item"
+                        hx-get="/api/baselines/generate-form?system_id={{ system.id }}"
+                        hx-target="#generate-baselines-modal" hx-swap="innerHTML" hx-include="unset"
+                        onclick="document.getElementById('generate-baselines-modal').style.display='flex';">
+                    {{ icon('zap', '15') }}<span>Generate baselines</span>
+                </button>
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="SIEM Coverage" type="button" role="menuitem" class="rh-more__item"
+                        title="Which SIEM destinations count toward this system's coverage"
+                        hx-get="/api/systems/{{ system.id }}/siem-coverage" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('target', '15') }}<span>SIEM coverage</span>
+                </button>
+            </div>
+        </div>
+        {{ move_ctl() }}
+    </div>
+    <div class="sys-section__body">
+    {% if baselines %}
+        {% include "partials/system_steps_filters.html" %}
+        <div id="system-steps-grid" class="sys-steps" data-rule-list
+             hx-get="/api/systems/{{ system.id }}/steps"
+             hx-trigger="load, stepsChanged from:body, sysFilter from:body"
+             hx-include="#sys-filters input, #sys-filters select"
+             hx-swap="innerHTML">
+            {% from "components/ui/loading_state.html" import loading_state %}
+            {{ loading_state("Loading techniques…") }}
+        </div>
+    {% else %}
+        <div class="empty-state-text sys-empty">
+            <p>No baselines are applied to this system yet.</p>
+            <button name="Apply a Baseline" type="button" class="btn btn-primary btn-sm"
+                    hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                {{ icon_text('plus', 'Apply a baseline', '13') }}
+            </button>
+        </div>
+    {% endif %}
+    </div>
+</section>
+
+{# ── Devices ────────────────────────────────────────────────────────────────────────────── #}
+<section class="card card-padded sys-section" data-section="devices" data-fold="devices" aria-label="Devices">
+    <div class="sys-section__head">
+        {{ collapse_ctl('devices') }}
+        <h2 class="section-title sys-section__title">{{ icon('server', '18') }} Devices <span class="sys-section__count">{{ host_count }}</span></h2>
+        <div class="sys-section__tools">
             <label name="Nessus Upload Hint" class="btn btn-secondary btn-sm" for="nessus-upload"
-                   title="Upload a .nessus or .xml scan file to auto-populate devices and packages"
-                   onclick="event.stopPropagation();">
+                   title="Upload a .nessus or .xml scan file to auto-populate devices and packages">
                 {{ icon('upload', '14') }} Upload Nessus
             </label>
-            <input id="nessus-upload" type="file" accept=".nessus,.xml" style="display:none"
+            <input id="nessus-upload" type="file" accept=".nessus,.xml" hidden
                    hx-post="/api/inventory/systems/{{ system.id }}/nessus-upload"
-                   hx-trigger="change"
-                   hx-encoding="multipart/form-data"
-                   hx-target="#hosts-section"
-                   hx-swap="innerHTML"
-                   name="file">
-            <button name="Add Device" class="btn btn-primary btn-sm"
-                    onclick="event.stopPropagation();document.getElementById('add-host-modal').style.display='flex'">
+                   hx-trigger="change" hx-encoding="multipart/form-data"
+                   hx-target="#hosts-section" hx-swap="innerHTML" name="file">
+            <button name="Add Device" type="button" class="btn btn-primary btn-sm"
+                    onclick="document.getElementById('add-host-modal').style.display='flex'">
                 {{ icon('plus', '14') }} Add Device
             </button>
         </div>
-    </summary>
-    <div style="margin-top:0.85rem;">
+        {{ move_ctl() }}
+    </div>
+    <div class="sys-section__body">
         <div id="hosts-section">
-            {% set system_id = system.id %}
             {% set sys_classification = system.classification %}
-            {% set sys_clf_color = clf_colors.get(system.classification, '') if clf_colors is defined and clf_colors and system.classification else '' %}
+            {% set sys_clf_color = clf_color %}
             {% include "partials/host_list.html" %}
         </div>
     </div>
-</details>
+</section>
 
-<details class="card card-padded card-mt" data-collapse-key="system-{{ system.id }}-baselines" style="margin-top:1rem;">
-    <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
-        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('check-square', '18') }} Assurance Baselines ({{ bl_count }})</h2>
-        <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-            <button name="Generate Baselines" class="btn btn-secondary btn-sm"
-                    hx-get="/api/baselines/generate-form?system_id={{ system.id }}"
-                    hx-target="#generate-baselines-modal"
-                    hx-swap="innerHTML"
-                    onclick="event.stopPropagation();document.getElementById('generate-baselines-modal').style.display='flex';"
-                    style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;">
-                {{ icon('zap', '14') }} Generate Baselines
-            </button>
-            <button name="Snapshot All" class="btn btn-primary btn-sm"
-                    onclick="event.stopPropagation();openSnapshotModal('all', '', '')"
-                    style="font-size:0.8rem;display:flex;align-items:center;gap:0.35rem;">
-                {{ icon('camera', '14') }} Snapshot All
-            </button>
-        </div>
-    </summary>
-    <div style="margin-top:0.85rem;">
-        <div style="display:flex;gap:0;border-bottom:2px solid var(--border-color);margin:0 0 1rem;">
-            <button name="Baselines" id="tab-baselines" class="btn btn-sm u-bg-transparent"
-                    onclick="switchToBaselines()"
-                    style="border:none;border-bottom:2px solid var(--color-primary);margin-bottom:-2px;border-radius:0;font-weight:600;color:var(--color-primary);padding:0.4rem 1rem;font-size:0.85rem">
-                {{ icon('shield','14') }} Baselines
-            </button>
-            <button name="Audit History" id="tab-audit-history" class="btn btn-sm u-bg-transparent"
-                    onclick="switchToAuditHistory()"
-                    style="border:none;border-bottom:2px solid transparent;margin-bottom:-2px;border-radius:0;font-weight:500;color:var(--color-muted);padding:0.4rem 1rem;font-size:0.85rem">
-                {{ icon('clock','14') }} Audit History
-            </button>
-        </div>
-        <div id="baseline-coverage" style="">
-            {% include "partials/baseline_coverage.html" %}
-        </div>
-        <div id="audit-history-content" style="display:none;">
-        </div>
+{# ── Heatmap ────────────────────────────────────────────────────────────────────────────── #}
+<section class="card card-padded sys-section" data-section="heatmap" data-fold="heatmap" aria-label="Heatmap">
+    <div class="sys-section__head">
+        {{ collapse_ctl('heatmap') }}
+        <h2 class="section-title sys-section__title">{{ icon('target', '18') }} Heatmap</h2>
+        {{ move_ctl() }}
     </div>
-</details>
-<script>
-function switchToBaselines() {
-    document.getElementById('baseline-coverage').style.display = '';
-    document.getElementById('audit-history-content').style.display = 'none';
-    var tb = document.getElementById('tab-baselines');
-    var ta = document.getElementById('tab-audit-history');
-    tb.style.borderBottomColor = 'var(--color-primary)';
-    tb.style.color = 'var(--color-primary)';
-    tb.style.fontWeight = '600';
-    ta.style.borderBottomColor = 'transparent';
-    ta.style.color = 'var(--color-muted)';
-    ta.style.fontWeight = '500';
-}
-function switchToAuditHistory() {
-    document.getElementById('baseline-coverage').style.display = 'none';
-    var ah = document.getElementById('audit-history-content');
-    ah.style.display = '';
-    var tb = document.getElementById('tab-baselines');
-    var ta = document.getElementById('tab-audit-history');
-    tb.style.borderBottomColor = 'transparent';
-    tb.style.color = 'var(--color-muted)';
-    tb.style.fontWeight = '500';
-    ta.style.borderBottomColor = 'var(--color-primary)';
-    ta.style.color = 'var(--color-primary)';
-    ta.style.fontWeight = '600';
-    // Trigger HTMX load if not yet loaded
-    if (!ah.dataset.loaded) {
-        htmx.ajax('GET', '/api/baselines/system/{{ system.id }}/audit-history', {target: '#audit-history-content', swap: 'innerHTML'});
-        ah.dataset.loaded = '1';
-    }
-}
-</script>
-
-<!-- ── MITRE Heatmap Section ─────────────────────────────────────── -->
-{% if baselines %}
-<details class="card card-padded card-mt" data-collapse-key="system-{{ system.id }}-heatmap" style="margin-top:1rem;" ontoggle="if(this.open){loadSystemHeatmap();}">
-    <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
-        <h2 class="section-title" style="font-size:1.1rem;margin-bottom:0;">{{ icon('target', '18') }} Heatmap</h2>
-    </summary>
-    <div style="margin-top:0.85rem;">
-        {# Baseline filter #}
-        <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;">
-            <span style="font-size:0.82rem;color:var(--color-text-muted);font-weight:600;">Filter by Baseline:</span>
-            <label style="display:inline-flex;align-items:center;gap:0.3rem;font-size:0.8rem;cursor:pointer;">
-                <input   name="Baseline Filter Checkbox" type="checkbox" class="sys-heatmap-bl-filter" value="" checked
-                       onchange="toggleAllHeatmapBaselines(this)"
-                       style="accent-color:var(--color-primary);">
-                All
-            </label>
+    <div class="sys-section__body">
+    {% if baselines %}
+        <div class="sys-heatmap__filters">
+            <span class="sys-heatmap__label">Filter by baseline:</span>
+            <label><input name="Baseline Filter Checkbox" type="checkbox" class="sys-heatmap-bl-filter" value="" checked onchange="toggleAllHeatmapBaselines(this)"> All</label>
             {% for bl in baselines %}
-            <label style="display:inline-flex;align-items:center;gap:0.3rem;font-size:0.8rem;cursor:pointer;">
-                <input   name="Baseline Filter Checkbox" type="checkbox" class="sys-heatmap-bl-filter" value="{{ bl.playbook_id }}" checked
-                       onchange="loadSystemHeatmap()"
-                       style="accent-color:var(--color-primary);">
-                {{ bl.playbook_name }}
-            </label>
+            <label><input name="Baseline Filter Checkbox" type="checkbox" class="sys-heatmap-bl-filter" value="{{ bl.id }}" checked onchange="loadSystemHeatmap()"> {{ bl.name }}</label>
             {% endfor %}
         </div>
-        {# Legend #}
-        <div style="display:flex;gap:1rem;margin-bottom:0.75rem;flex-wrap:wrap;">
-            <div style="display:flex;align-items:center;gap:0.35rem;font-size:0.72rem;">
-                <span class="ttp-card status-covered" style="padding:0.15rem 0.4rem;font-size:0.6rem;">COV</span>
-                <span style="color:var(--color-text-muted);">Covered</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:0.35rem;font-size:0.72rem;">
-                <span class="ttp-card status-amber" style="padding:0.15rem 0.4rem;font-size:0.6rem;">GAP</span>
-                <span style="color:var(--color-text-muted);">Known Gap</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:0.35rem;font-size:0.72rem;">
-                <span class="ttp-card status-gap" style="padding:0.15rem 0.4rem;font-size:0.6rem;">MISS</span>
-                <span style="color:var(--color-text-muted);">Missing</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:0.35rem;font-size:0.72rem;">
-                <span class="ttp-card status-na" style="padding:0.15rem 0.4rem;font-size:0.6rem;">N/A</span>
-                <span style="color:var(--color-text-muted);">Not Applicable</span>
-            </div>
+        <div class="sys-heatmap__legend">
+            <span><span class="ttp-card status-covered">COV</span> Covered</span>
+            <span><span class="ttp-card status-amber">GAP</span> Known gap</span>
+            <span><span class="ttp-card status-gap">MISS</span> Missing</span>
+            <span><span class="ttp-card status-na">N/A</span> Not applicable</span>
         </div>
-        {# Matrix target #}
-        <div id="system-heatmap-matrix" style="overflow-x:auto;"></div>
+        {# Loads the first time it scrolls into view -- never while its section is collapsed. #}
+        <div id="system-heatmap-matrix" class="sys-heatmap__matrix"
+             hx-get="/api/heatmap/system/{{ system.id }}/matrix" hx-trigger="intersect once" hx-swap="innerHTML"></div>
+    {% else %}
+        <p class="text-muted sys-empty">Apply a baseline to see its heatmap.</p>
+    {% endif %}
     </div>
-</details>
-<script>
-var _sysHeatmapLoaded = false;
-function loadSystemHeatmap() {
-    var checks = document.querySelectorAll('.sys-heatmap-bl-filter[value]:not([value=""])');
-    var ids = [];
-    checks.forEach(function(cb) { if (cb.checked) ids.push(cb.value); });
-    var params = ids.map(function(id) { return 'baseline_ids=' + encodeURIComponent(id); }).join('&');
-    htmx.ajax('GET', '/api/heatmap/system/{{ system.id }}/matrix' + (params ? '?' + params : ''),
-              {target: '#system-heatmap-matrix', swap: 'innerHTML'});
-    _sysHeatmapLoaded = true;
-}
-function toggleAllHeatmapBaselines(allCb) {
-    var checks = document.querySelectorAll('.sys-heatmap-bl-filter:not([value=""])');
-    checks.forEach(function(cb) { cb.checked = allCb.checked; });
-    loadSystemHeatmap();
-}
-</script>
-{% endif %}
+</section>
 
 </div>
 
@@ -399,19 +370,44 @@ function closeExportModal() {
     document.getElementById('export-modal-overlay').style.display = 'none';
 }
 function confirmExport() {
-    var format         = document.getElementById('modal-format').value;
-    var classification = document.getElementById('modal-classification').value;
-    var audience       = document.getElementById('modal-audience').value;
-    var includeDevices   = document.getElementById('modal-include-devices').checked;
-    var includeBaselines = document.getElementById('modal-include-baselines').checked;
     var params = new URLSearchParams();
-    params.set('mode', audience);
-    params.set('format', format);
-    params.set('classification', classification);
-    params.set('include_devices', includeDevices ? '1' : '0');
-    params.set('include_baselines', includeBaselines ? '1' : '0');
+    params.set('mode', document.getElementById('modal-audience').value);
+    params.set('format', document.getElementById('modal-format').value);
+    params.set('classification', document.getElementById('modal-classification').value);
+    params.set('include_devices', document.getElementById('modal-include-devices').checked ? '1' : '0');
+    params.set('include_baselines', document.getElementById('modal-include-baselines').checked ? '1' : '0');
     closeExportModal();
     window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
 }
+function loadSystemHeatmap() {
+    var ids = [];
+    document.querySelectorAll('.sys-heatmap-bl-filter:not([value=""])').forEach(function(cb) { if (cb.checked) ids.push(cb.value); });
+    var params = ids.map(function(id) { return 'baseline_ids=' + encodeURIComponent(id); }).join('&');
+    htmx.ajax('GET', '/api/heatmap/system/{{ system.id }}/matrix' + (params ? '?' + params : ''),
+              {target: '#system-heatmap-matrix', swap: 'innerHTML'});
+}
+// Applying or removing baselines changes more than the grid (the count, the metric strip, the
+// heatmap's filters), so once the Manage baselines window closes after a change, reload.
+// (hx-boost: this runs on every visit, so it watches this visit's modal container only -- a
+// previous visit's container is detached and its observer goes quiet with it.)
+(function () {
+    var initial = '{{ (baselines or []) | map(attribute="id") | sort | join(",") }}', latest = initial;
+    function watch() {
+        var host = document.getElementById('modal-container');
+        if (!host) return;
+        new MutationObserver(function () {
+            var d = host.querySelector('[data-baselines-dialog]');
+            if (d) { latest = d.getAttribute('data-applied'); return; }
+            if (latest !== initial) window.location.reload();
+        }).observe(host, { childList: true, subtree: true });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watch);
+    else watch();
+})();
+function toggleAllHeatmapBaselines(allCb) {
+    document.querySelectorAll('.sys-heatmap-bl-filter:not([value=""])').forEach(function(cb) { cb.checked = allCb.checked; });
+    loadSystemHeatmap();
+}
 </script>
+{% if baselines %}{% include "pages/inventory/_system_steps_script.html" %}{% endif %}
 {% endblock %}

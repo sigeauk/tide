@@ -242,7 +242,7 @@ console.debug('TIDE app.js loading...');
     /**
      * Show a toast notification
      */
-    window.showToast = function(message, type) {
+    window.showToast = function(message, type, duration) {
         type = type || 'success';
         const container = document.getElementById('toast-container');
         if (!container) return;
@@ -259,7 +259,7 @@ console.debug('TIDE app.js loading...');
         setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() { toast.remove(); }, 300);
-        }, 3000);
+        }, duration || 3000);
     };
 
     function slidePanelWidthKey() {
@@ -603,7 +603,10 @@ console.debug('TIDE app.js loading...');
     var ruleSkeletonTimer = null;
     var MODAL_PATHS = ['/history-modal', '/edit-form', '/create-form'];
 
-    function ruleModalOverlay() { return document.querySelector('.modal-overlay[data-rule-modal]'); }
+    // Any window built on the rule window's frame (the rule window, the baseline technique window):
+    // the overlay carries data-rm-overlay and the dialog data-rule-dom-id -- the id of the card or
+    // row that opens it, which is what prev/next walk.
+    function ruleModalOverlay() { return document.querySelector('.modal-overlay[data-rm-overlay]'); }
 
     function closeRuleModal() {
         var overlay = ruleModalOverlay();
@@ -639,6 +642,11 @@ console.debug('TIDE app.js loading...');
             ruleModalListRoot = elt.closest('[data-rule-list]');
         }
         if (!target || target.id !== 'modal-container') return;
+        // A window is already open (prev/next, or a rule opened from inside it): swap the content in
+        // place -- no entrance animation and no skeleton, so the window does not flash.
+        var open = target.querySelector('.modal-overlay[data-rm-overlay]:not([data-rm-skeleton]) > .modal-content');
+        target.classList.toggle('rm-swap-quiet', !!open);
+        if (open) { open.setAttribute('aria-busy', 'true'); return; }
         if (!MODAL_PATHS.some(function(p) { return path.indexOf(p) !== -1; })) return;
         clearRuleSkeleton();
         ruleSkeletonTimer = setTimeout(function() { showRuleSkeleton(target); }, 120);
@@ -649,6 +657,8 @@ console.debug('TIDE app.js loading...');
             if (!target || target.id !== 'modal-container') return;
             clearRuleSkeleton();
             if (name !== 'htmx:afterSwap') {
+                var busy = target.querySelector('.modal-content[aria-busy]');
+                if (busy) busy.removeAttribute('aria-busy');
                 var overlay = target.querySelector('[data-rm-skeleton]');
                 if (overlay) { overlay.remove(); target.innerHTML = ''; }
                 if (typeof showToast === 'function') showToast('Could not load the rule. Please try again.', 'error');
@@ -656,7 +666,9 @@ console.debug('TIDE app.js loading...');
         });
     });
 
-    // Close handlers (delegated so they work for swapped-in modals).
+    // Close handlers (delegated so they work for swapped-in modals). A response can also ask for
+    // the window to close once it has updated the page behind it (HX-Trigger-After-Swap).
+    document.addEventListener('tideCloseModal', function() { closeRuleModal(); });
     document.addEventListener('click', function(e) {
         if (e.target.closest && e.target.closest('[data-rm-close]')) { closeRuleModal(); return; }
         var overlay = e.target;
@@ -681,9 +693,11 @@ console.debug('TIDE app.js loading...');
         return root ? Array.prototype.slice.call(root.querySelectorAll('[data-rule-open]')) : [];
     }
     function ruleNavIndex(items) {
-        var modal = document.querySelector('.rule-modal[data-rule-id]');
+        var modal = document.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return -1;
-        var id = 'rule-' + modal.getAttribute('data-rule-id');
+        // Match on the card's scoped id, not the rule id: the same rule id is on a card per
+        // destination once it has been copied, and the first one is not necessarily this one.
+        var id = modal.getAttribute('data-rule-dom-id') || ('rule-' + modal.getAttribute('data-rule-id'));
         for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
         return -1;
     }
@@ -691,7 +705,7 @@ console.debug('TIDE app.js loading...');
         return ruleModalListRoot ? ruleModalListRoot.querySelector('.infinite-scroll-sentinel') : null;
     }
     function updateRuleNavButtons() {
-        var modal = document.querySelector('.rule-modal[data-rule-id]');
+        var modal = document.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return;
         var items = ruleNavItems(), idx = ruleNavIndex(items);
         var prev = modal.querySelector('[data-rm-nav="prev"]'), next = modal.querySelector('[data-rm-nav="next"]');
@@ -731,7 +745,7 @@ console.debug('TIDE app.js loading...');
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
         var a = document.activeElement, tag = a && a.tagName;
         if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA' || (a && a.isContentEditable)) return;
-        if (!document.querySelector('.rule-modal[data-rule-id]')) return;   // e.g. edit form is open
+        if (!document.querySelector('.rule-modal[data-rule-dom-id]')) return;   // e.g. edit form is open
         e.preventDefault();
         openAdjacentRule(e.key === 'ArrowRight' ? 'next' : 'prev');
     });
@@ -746,28 +760,218 @@ console.debug('TIDE app.js loading...');
         try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage blocked */ }
     }
 
-    // History column: one toggle (data-view = default | no-history)
-    function applyRuleModalHistory(modal, shown) {
-        if (!modal) return;
-        modal.setAttribute('data-view', shown ? 'default' : 'no-history');
-        var btn = modal.querySelector('[data-rm-history-toggle]');
-        if (btn) btn.setAttribute('aria-pressed', shown ? 'true' : 'false');
+    // ── Window layout (rule window, technique window) ──
+    // Every [data-section] directly in a .rm-col[data-col] can be dragged by its handle (or moved
+    // with the arrow keys on the handle) to any place in any column, and hidden or shown from the
+    // header's sections menu. The arrangement is remembered per kind of window (data-layout-key)
+    // as {cols: {left: [...], centre: [...], right: [...]}, hidden: [...]}. A column left with
+    // nothing visible folds away, and comes back as a drop target while a section is dragged.
+    var WINDOW_COL_WIDTHS = { left: 'minmax(260px, 1fr)', centre: 'minmax(0, 1.7fr)', right: 'minmax(240px, 0.85fr)' };
+    function windowCols(modal) { return Array.prototype.slice.call(modal.querySelectorAll('.rm-body > .rm-col[data-col]')); }
+    function windowSections(col) { return Array.prototype.slice.call(col.querySelectorAll(':scope > [data-section]')); }
+    function currentWindowLayout(modal) {
+        var cols = {}, hidden = [];
+        windowCols(modal).forEach(function(col) {
+            cols[col.getAttribute('data-col')] = windowSections(col).map(function(s) {
+                if (s.hidden) hidden.push(s.getAttribute('data-section'));
+                return s.getAttribute('data-section');
+            });
+        });
+        return { cols: cols, hidden: hidden };
+    }
+    function arrangeWindow(modal, layout) {
+        var byKey = {};
+        modal.querySelectorAll('.rm-col > [data-section]').forEach(function(s) { byKey[s.getAttribute('data-section')] = s; });
+        windowCols(modal).forEach(function(col) {
+            ((layout.cols || {})[col.getAttribute('data-col')] || []).forEach(function(k) {
+                if (byKey[k]) { col.appendChild(byKey[k]); delete byKey[k]; }
+            });
+        });
+        var hidden = layout.hidden || [];
+        modal.querySelectorAll('.rm-col > [data-section]').forEach(function(s) { s.hidden = hidden.indexOf(s.getAttribute('data-section')) !== -1; });
+        fitWindowColumns(modal);
+    }
+    function fitWindowColumns(modal) {
+        var body = modal.querySelector('.rm-body');
+        if (!body) return;
+        var arranging = modal.classList.contains('is-arranging'), widths = [];
+        windowCols(modal).forEach(function(col) {
+            var shown = Array.prototype.some.call(col.children, function(el) {
+                return !el.hidden && !el.classList.contains('rm-drop-marker') && (el.hasAttribute('data-section') || el.classList.contains('rm-note'));
+            });
+            col.classList.toggle('rm-col--empty', !shown);
+            if (shown || arranging) widths.push(WINDOW_COL_WIDTHS[col.getAttribute('data-col')] || 'minmax(0, 1fr)');
+        });
+        body.style.setProperty('--rm-cols', widths.join(' ') || '1fr');
+    }
+    function saveWindowLayout(modal) {
+        var key = modal.getAttribute('data-layout-key');
+        if (key) writePref(key, currentWindowLayout(modal));
+    }
+    function applyWindowLayout(modal) {
+        modal._tideDefaultLayout = currentWindowLayout(modal);     // as the page drew it, for Reset
+        var saved = readPref(modal.getAttribute('data-layout-key'), null);
+        if (saved && saved.cols) arrangeWindow(modal, saved); else fitWindowColumns(modal);
+    }
+
+    // Sections menu: tick to show, untick to hide. It stays open while ticking (data-keep-open).
+    function sectionLabel(s) {
+        return s.getAttribute('data-section-label') || s.getAttribute('data-section');
     }
     document.addEventListener('click', function(e) {
-        var btn = e.target.closest && e.target.closest('[data-rm-history-toggle]');
+        var toggle = e.target.closest && e.target.closest('[data-rm-layout] [data-more-toggle]');
+        if (!toggle) return;
+        var modal = toggle.closest('.rule-modal'), list = modal.querySelector('[data-rm-layout-list]');
+        list.innerHTML = '';
+        windowCols(modal).forEach(function(col) {
+            windowSections(col).forEach(function(s) {
+                var label = document.createElement('label'), box = document.createElement('input');
+                label.className = 'rh-more__item rm-layout__item';
+                box.type = 'checkbox';
+                box.checked = !s.hidden;
+                box.setAttribute('data-rm-show', s.getAttribute('data-section'));
+                label.appendChild(box);
+                label.appendChild(document.createTextNode(sectionLabel(s)));
+                list.appendChild(label);
+            });
+        });
+    }, true);
+    document.addEventListener('change', function(e) {
+        var box = e.target.closest && e.target.closest('[data-rm-show]');
+        if (!box) return;
+        var modal = box.closest('.rule-modal');
+        var s = modal.querySelector('.rm-col > [data-section="' + box.getAttribute('data-rm-show') + '"]');
+        if (!s) return;
+        s.hidden = !box.checked;
+        fitWindowColumns(modal);
+        saveWindowLayout(modal);
+    });
+    document.addEventListener('click', function(e) {
+        var btn = e.target.closest && e.target.closest('[data-rm-layout-reset]');
         if (!btn) return;
         var modal = btn.closest('.rule-modal');
-        var shown = modal.getAttribute('data-view') === 'no-history';     // was hidden -> now shown
-        applyRuleModalHistory(modal, shown);
-        writePref('tide.ruleModalHistory', shown ? 'shown' : 'hidden');
+        if (modal._tideDefaultLayout) arrangeWindow(modal, modal._tideDefaultLayout);
+        try { localStorage.removeItem(modal.getAttribute('data-layout-key')); } catch (_) { /* storage blocked */ }
+        closeMoreMenus(null);
     });
 
-    // Centre-column section order (about · logic · guide · references · mappings · scores)
-    // The centre column keeps its original storage key; the side columns get their own.
-    function ruleOrderKey(col) {
-        var m = col.className.match(/rm-col--(\w+)/);
-        return !m || m[1] === 'logic' ? 'tide.ruleModalOrder' : 'tide.ruleModalOrder.' + m[1];
+    // Drag a section by its handle to any column.
+    var draggingSection = null, dropMarker = null;
+    document.addEventListener('click', function(e) {
+        // The handle sits in a <summary> on some sections: it must not open or close them.
+        if (e.target.closest && e.target.closest('[data-rm-drag]')) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+    document.addEventListener('dragstart', function(e) {
+        var handle = e.target.closest && e.target.closest('[data-rm-drag]');
+        if (!handle) return;
+        draggingSection = handle.closest('[data-section]');
+        var modal = draggingSection.closest('.rule-modal');
+        modal.classList.add('is-arranging');
+        fitWindowColumns(modal);
+        draggingSection.classList.add('is-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try {
+            e.dataTransfer.setData('text/plain', draggingSection.getAttribute('data-section'));
+            e.dataTransfer.setDragImage(draggingSection, 24, 16);
+        } catch (_) { /* older browsers: default drag image */ }
+    });
+    document.addEventListener('dragover', function(e) {
+        if (!draggingSection) return;
+        var col = e.target.closest && e.target.closest('.rm-col[data-col]');
+        if (!col || col.closest('.rule-modal') !== draggingSection.closest('.rule-modal')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        var before = null;
+        windowSections(col).some(function(s) {
+            if (s === draggingSection || s.hidden) return false;
+            var r = s.getBoundingClientRect();
+            if (e.clientY < r.top + r.height / 2) { before = s; return true; }
+            return false;
+        });
+        if (!dropMarker) { dropMarker = document.createElement('div'); dropMarker.className = 'rm-drop-marker'; }
+        if (before) col.insertBefore(dropMarker, before); else col.appendChild(dropMarker);
+    });
+    document.addEventListener('drop', function(e) {
+        if (!draggingSection || !dropMarker || !dropMarker.parentElement) return;
+        e.preventDefault();
+        dropMarker.parentElement.insertBefore(draggingSection, dropMarker);
+    });
+    document.addEventListener('dragend', function() {
+        if (!draggingSection) return;
+        var modal = draggingSection.closest('.rule-modal');
+        draggingSection.classList.remove('is-dragging');
+        if (dropMarker) dropMarker.remove();
+        modal.classList.remove('is-arranging');
+        fitWindowColumns(modal);
+        saveWindowLayout(modal);
+        draggingSection = null;
+    });
+    // Move a section one place up or down (-1 / 1), or to the column to the 'left' or 'right'.
+    function moveWindowSection(section, dir) {
+        var col = section.parentElement, modal = section.closest('.rule-modal');
+        if (typeof dir === 'number') {
+            var shown = windowSections(col).filter(function(s) { return !s.hidden; }), j = shown.indexOf(section) + dir;
+            if (j < 0 || j >= shown.length) return;
+            if (dir < 0) col.insertBefore(section, shown[j]); else col.insertBefore(shown[j], section);
+        } else {
+            var cols = windowCols(modal), ci = cols.indexOf(col) + (dir === 'left' ? -1 : 1);
+            if (ci < 0 || ci >= cols.length) return;
+            cols[ci].appendChild(section);
+        }
+        fitWindowColumns(modal);
+        saveWindowLayout(modal);
+        section.scrollIntoView({ block: 'nearest' });
     }
+    // Or with the keyboard: arrow keys on a focused handle (or in a section's move bar) move its
+    // section. (Captured first, so ← → don't also step to another rule.)
+    document.addEventListener('keydown', function(e) {
+        var handle = e.target.closest && e.target.closest('[data-rm-drag], [data-rm-movebar]');
+        var dir = handle && { ArrowUp: -1, ArrowDown: 1, ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
+        if (!dir) return;
+        e.preventDefault();
+        e.stopPropagation();
+        moveWindowSection(handle.closest('[data-section]'), dir);
+        e.target.focus({ preventScroll: true });
+    }, true);
+
+    // A section's "…" › Move (components/window_ui.html section_menu): its head shows the move bar
+    // -- drag handle, arrows, Done -- until Done, Esc, or another section is moved.
+    function stopMovingSections(except) {
+        document.querySelectorAll('[data-section].is-moving').forEach(function(s) {
+            if (s === except) return;
+            s.classList.remove('is-moving');
+            var bar = s.querySelector('[data-rm-movebar]');
+            if (bar) bar.hidden = true;
+        });
+    }
+    document.addEventListener('click', function(e) {
+        var t = e.target.closest && e.target.closest('[data-rm-move-start], [data-rm-step], [data-rm-move-done]');
+        if (!t) return;
+        var section = t.closest('[data-section]');
+        if (t.hasAttribute('data-rm-move-done')) { stopMovingSections(null); return; }
+        if (t.hasAttribute('data-rm-step')) {
+            var step = t.getAttribute('data-rm-step');
+            moveWindowSection(section, { up: -1, down: 1 }[step] || step);
+            t.focus({ preventScroll: true });
+            return;
+        }
+        stopMovingSections(section);
+        section.classList.add('is-moving');
+        var bar = section.querySelector('[data-rm-movebar]');
+        bar.hidden = false;
+        section.scrollIntoView({ block: 'nearest' });
+        bar.querySelector('[data-rm-drag]').focus({ preventScroll: true });
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape' || !document.querySelector('[data-section].is-moving')) return;
+        e.preventDefault();
+        e.stopPropagation();          // ends moving; the window stays open
+        stopMovingSections(null);
+    }, true);
+
+    // Page sections (a container with data-order-key, e.g. a system's Baselines / Devices /
+    // Heatmap): order remembered, moved with their up/down buttons.
+    function ruleOrderKey(col) { return col.getAttribute('data-order-key'); }
     function ruleSectionEls(col) { return Array.prototype.slice.call(col.querySelectorAll(':scope > [data-section]')); }
     function updateMoveButtons(col) {
         var items = ruleSectionEls(col);
@@ -818,6 +1022,12 @@ console.debug('TIDE app.js loading...');
     }, true);
 
     // Panels (activity, score chart, logic, actions, MITRE) collapse via a head button and share the fold pref.
+    // Page sections built the same way (a system's Baselines / Devices / Heatmap) keep theirs under
+    // their container's data-fold-store key instead, so the two never collide.
+    function foldStoreKey(panel) {
+        var store = panel.closest('[data-fold-store]');
+        return store ? store.getAttribute('data-fold-store') : 'tide.ruleModalFolds';
+    }
     function setPanelCollapsed(panel, collapsed) {
         panel.classList.toggle('is-collapsed', collapsed);
         var btn = panel.querySelector('[data-rm-collapse]');
@@ -826,22 +1036,158 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('click', function(e) {
         var btn = e.target.closest && e.target.closest('[data-rm-collapse]');
         if (!btn) return;
-        var panel = btn.closest('.rm-panel[data-fold]');
+        var panel = btn.closest('.rm-panel[data-fold], .sys-section[data-fold]');
         if (!panel) return;
         var collapsed = !panel.classList.contains('is-collapsed');
         setPanelCollapsed(panel, collapsed);
-        var folds = readRuleModalFolds();
+        var key = foldStoreKey(panel);
+        var folds = readPref(key, {}) || {};
         folds[panel.getAttribute('data-fold')] = !collapsed;
-        writePref('tide.ruleModalFolds', folds);
+        writePref(key, folds);
+    }, true);
+
+    // Page-level reorderable sections (a container with data-order-key AND data-fold-store; a
+    // window's columns restore themselves on swap, above): restore order and open/closed state on
+    // a full load and on every boosted navigation, which swaps the body without a load event.
+    function restorePageSections(root) {
+        var scope = root && root.querySelectorAll ? root : document;
+        var cols = Array.prototype.slice.call(scope.querySelectorAll('[data-order-key][data-fold-store]'));
+        if (scope.matches && scope.matches('[data-order-key][data-fold-store]')) cols.push(scope);
+        cols.forEach(function(col) {
+            var folds = readPref(col.getAttribute('data-fold-store') || '', {}) || {};
+            col.querySelectorAll(':scope > [data-fold]').forEach(function(panel) {
+                if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
+            });
+            applyRuleSectionOrder(col);
+        });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { restorePageSections(); });
+    else restorePageSections();
+    document.addEventListener('htmx:load', function(e) { restorePageSections(e.target); });
+
+    // ATT&CK picker (components/mitre_picker.html): tactic, then technique, as often as needed.
+    // Chosen techniques are listed as pills with their names; `technique_ids` carries them and
+    // `tactic` the first one's tactic. A technique can sit under several tactics (T1078 is under
+    // four), so each keeps the tactic it was picked under; one already chosen keeps the form's
+    // tactic if it is one of its own, else its first.
+    function initMitrePicker(root) {
+        if (root.dataset.ready) return;
+        root.dataset.ready = '1';
+        var groups = JSON.parse(root.querySelector('[data-mitre-groups]').textContent || '[]');
+        var lookup = {};
+        groups.forEach(function(g) {
+            g.options.forEach(function(o) {
+                if (!lookup[o.id]) lookup[o.id] = { name: o.name, tactics: [] };
+                lookup[o.id].tactics.push(g.tactic);
+            });
+        });
+        var value = root.querySelector('[data-mitre-value]'), tacticOut = root.querySelector('[data-mitre-tactic]');
+        var list = root.querySelector('[data-mitre-list]'), empty = root.querySelector('[data-mitre-empty]');
+        var tacticSel = root.querySelector('[data-mitre-tactic-select]'), techSel = root.querySelector('[data-mitre-technique-select]');
+        var ids = (value.value || '').split(',').map(function(v) { return v.trim().toUpperCase(); }).filter(Boolean);
+        var chosenUnder = {}, current = tacticOut.value;
+        ids.forEach(function(id) {
+            var tactics = (lookup[id] || {}).tactics || [];
+            chosenUnder[id] = tactics.indexOf(current) !== -1 ? current : (tactics[0] || '');
+        });
+
+        function render() {
+            list.innerHTML = '';
+            ids.forEach(function(id) {
+                var info = { name: (lookup[id] || {}).name, tactic: chosenUnder[id] }, li = document.createElement('li');
+                var pill = document.createElement('span');
+                pill.className = 'mitre-pill mitre-neutral mitre-sm';
+                pill.textContent = id;
+                var name = document.createElement('span');
+                name.className = 'rm-mitre__name';
+                name.textContent = info.name || 'Unknown technique';
+                if (info.tactic) { var small = document.createElement('small'); small.textContent = info.tactic; name.appendChild(small); }
+                var rm = document.createElement('button');
+                rm.type = 'button';
+                rm.className = 'rm-x';
+                rm.title = 'Remove ' + id;
+                rm.setAttribute('aria-label', 'Remove ' + id);
+                rm.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+                rm.addEventListener('click', function() { ids.splice(ids.indexOf(id), 1); render(); });
+                li.appendChild(pill); li.appendChild(name); li.appendChild(rm);
+                list.appendChild(li);
+            });
+            empty.hidden = ids.length > 0;
+            value.value = ids.join(', ');
+            tacticOut.value = ids.length ? (chosenUnder[ids[0]] || '') : '';
+            fillTechniques();
+        }
+        function fillTechniques() {
+            var group = groups.filter(function(g) { return g.tactic === tacticSel.value; })[0];
+            techSel.innerHTML = '';
+            var first = document.createElement('option');
+            first.value = '';
+            first.textContent = group ? 'Technique…' : 'Choose a tactic first';
+            techSel.appendChild(first);
+            techSel.disabled = !group;
+            (group ? group.options : []).forEach(function(o) {
+                var opt = document.createElement('option');
+                opt.value = o.id;
+                opt.textContent = o.id + ' - ' + o.name;
+                opt.disabled = ids.indexOf(o.id) !== -1;
+                techSel.appendChild(opt);
+            });
+        }
+        tacticSel.addEventListener('change', fillTechniques);
+        techSel.addEventListener('change', function() {
+            if (techSel.value && ids.indexOf(techSel.value) === -1) {
+                ids.push(techSel.value);
+                chosenUnder[techSel.value] = tacticSel.value;
+            }
+            render();
+        });
+        render();
+    }
+    function initMitrePickers(scope) {
+        (scope && scope.querySelectorAll ? scope : document).querySelectorAll('[data-mitre-picker]').forEach(initMitrePicker);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { initMitrePickers(); });
+    else initMitrePickers();
+    document.addEventListener('htmx:load', function(e) { initMitrePickers(e.target); });
+
+    // "…" menus (data-more > [data-more-toggle] + .rh-more__menu). Rule Health wires its own.
+    function closeMoreMenus(except) {
+        document.querySelectorAll('[data-more] .rh-more__menu:not([hidden])').forEach(function(m) {
+            if (m === except) return;
+            m.hidden = true;
+            var t = m.parentElement.querySelector('[data-more-toggle]');
+            if (t) t.setAttribute('aria-expanded', 'false');
+        });
+    }
+    document.addEventListener('click', function(e) {
+        var toggle = e.target.closest && e.target.closest('[data-more-toggle]');
+        if (toggle) {
+            var menu = toggle.parentElement.querySelector('.rh-more__menu');
+            closeMoreMenus(menu);
+            menu.hidden = !menu.hidden;
+            toggle.setAttribute('aria-expanded', menu.hidden ? 'false' : 'true');
+            return;
+        }
+        // Picking an item, or clicking anywhere else, closes any open menu. Deferred so the item's
+        // own htmx/onclick handler still sees it. A menu of checkboxes (data-keep-open) stays open
+        // while they are ticked.
+        if (e.target.closest && e.target.closest('.rh-more__menu[data-keep-open]')) return;
+        setTimeout(function() { closeMoreMenus(null); }, 0);
+    });
+    // Esc closes an open menu first; only the next Esc closes the window it is in.
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape' || !document.querySelector('[data-more] .rh-more__menu:not([hidden])')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeMoreMenus(null);
     }, true);
 
     // Restore everything when a modal is swapped in
     document.addEventListener('htmx:afterSwap', function(e) {
         var target = e.detail && e.detail.target;
         if (!target || target.id !== 'modal-container') return;
-        var modal = target.querySelector('.rule-modal[data-rule-id]');
+        var modal = target.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return;
-        applyRuleModalHistory(modal, readPref('tide.ruleModalHistory', 'shown') !== 'hidden');
         var folds = readRuleModalFolds();
         modal.querySelectorAll('details.rm-fold[data-fold]').forEach(function(fold) {
             if (folds[fold.getAttribute('data-fold')] === false) fold.open = false;
@@ -849,7 +1195,7 @@ console.debug('TIDE app.js loading...');
         modal.querySelectorAll('.rm-panel[data-fold]').forEach(function(panel) {
             if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
         });
-        modal.querySelectorAll('.rm-col').forEach(applyRuleSectionOrder);
+        applyWindowLayout(modal);
         updateRuleNavButtons();
         var closeBtn = modal.querySelector('[data-rm-close]');
         if (closeBtn) closeBtn.focus({ preventScroll: true });
@@ -1039,83 +1385,295 @@ console.debug('TIDE app.js loading...');
         if (out) out.textContent = total;
     });
 
-    // Rule modal > Actions > Promote / Demote: confirm dialog, then POST to the promotion API.
-    // Promote: "Delete source" starts from the client default and is only sent when the user changes it,
-    // so the server applies the same default logic as before. Demote: the production copy is kept unless ticked.
-    function showMoveConfirm(cfg) {
+    // A TIDE-themed stand-in for window.confirm(), for the rule window's actions that change a
+    // SIEM. The native dialog is unstyled, unreadable on a long message, and gives no room to
+    // mark the destructive choice as destructive. Returns a Promise<boolean>. It appends to
+    // #modal-container, so it stacks above whatever modal asked for it (Compare, the edit form).
+    window.tideConfirm = function (opts) {
+        return new Promise(function (resolve) {
+            var host = document.getElementById('modal-container');
+            if (!host) { resolve(window.confirm(opts.body || opts.title || 'Are you sure?')); return; }
+            var overlay = document.createElement('div');
+            overlay.className = 'modal-overlay modal-overlay--confirm';
+            overlay.setAttribute('data-tide-confirm', '');
+            var danger = opts.danger !== false;
+            overlay.innerHTML =
+                '<div name="Confirm Modal" class="modal-content modal-sm" role="alertdialog" aria-modal="true" onclick="event.stopPropagation()">' +
+                '<h2 class="modal-section-title">' + (opts.title || 'Are you sure?') + '</h2>' +
+                '<div class="text-secondary mb-md" data-confirm-body>' + (opts.body || '') + '</div>' +
+                '<div class="modal-actions">' +
+                '<button name="Cancel" type="button" class="btn btn-secondary" data-confirm-cancel>' + (opts.cancelLabel || 'Cancel') + '</button>' +
+                '<button name="Confirm" type="button" class="btn ' + (danger ? 'btn-danger' : 'btn-primary') + '" data-confirm-go>' +
+                (opts.confirmLabel || 'Confirm') + '</button>' +
+                '</div></div>';
+            var done = function (answer) {
+                document.removeEventListener('keydown', onKey, true);
+                overlay.remove();
+                resolve(answer);
+            };
+            var onKey = function (e) { if (e.key === 'Escape') { e.stopPropagation(); done(false); } };
+            document.addEventListener('keydown', onKey, true);
+            overlay.onclick = function (e) { if (e.target === overlay) done(false); };
+            overlay.querySelector('[data-confirm-cancel]').onclick = function () { done(false); };
+            overlay.querySelector('[data-confirm-go]').onclick = function () { done(true); };
+            host.appendChild(overlay);
+            overlay.querySelector('[data-confirm-cancel]').focus();
+        });
+    };
+
+    // hx-confirm renders the browser's own dialog; route it through tideConfirm instead so every
+    // confirmation in the app looks like the app. htmx issues the request itself once we say yes.
+    document.addEventListener('htmx:confirm', function (e) {
+        if (!e.detail.question) return;
+        e.preventDefault();
+        window.tideConfirm({
+            title: 'Confirm',
+            body: e.detail.question,
+            confirmLabel: 'Continue',
+            danger: /delete|remove|permanent/i.test(e.detail.question),
+        }).then(function (ok) { if (ok) e.detail.issueRequest(true); });
+    });
+
+    // Rule modal > Actions > Move: confirm dialog, then POST to the promotion API.
+    // Copying (delete_source off) keeps the source live and links the two rows; ticking it
+    // is a true move (today's promote/demote), same one action either way.
+    window.showMoveDialog = function (ruleId, ruleName, siemId, space, deleteSourceDefault, targets) {
         var host = document.getElementById('modal-container');
         if (!host) return;
         var overlay = document.createElement('div');
         overlay.className = 'modal-overlay';
         overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+        var options = (targets || []).map(function (t) {
+            return '<option value="' + t.siem_id + '|' + t.space + '">' + (t.name || t.label) + '</option>';
+        }).join('');
         overlay.innerHTML =
-            '<div name="' + cfg.verb + ' Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
-            '<h2 class="modal-section-title">' + cfg.title + '</h2>' +
-            '<p class="text-secondary mb-md">Are you sure you want to ' + cfg.verb.toLowerCase() + ' <strong data-move-name></strong> ' + cfg.destination + '?</p>' +
-            '<div class="alert alert-warning mb-md"><p>' + cfg.warning + '</p></div>' +
+            '<div name="Move Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
+            '<h2 class="modal-section-title">Move rule</h2>' +
+            '<p class="text-secondary mb-md">Move <strong>' + ruleName + '</strong> to another linked destination.</p>' +
+            '<label class="form-label" style="font-size:0.78rem;">Target</label>' +
+            '<select name="target_scope" class="form-input mb-md" data-move-target>' + options + '</select>' +
             '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
-            '<input type="checkbox" name="delete_source"' + (cfg.deleteDefault ? ' checked' : '') + '> ' + cfg.checkboxLabel + '</label>' +
+            '<input type="checkbox" name="delete_source"' + (deleteSourceDefault ? ' checked' : '') + ' data-move-delete> Delete source after move</label>' +
+            '<p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, this is a copy: the source stays live and the two rows are linked (see the Linked panel).</p>' +
+            '<div class="inline-error mb-md" data-move-error hidden></div>' +
             '<div class="modal-actions">' +
             '<button name="Cancel" type="button" class="btn btn-secondary" data-move-cancel>Cancel</button>' +
-            '<button name="' + cfg.verb + '" type="button" class="btn btn-primary" data-move-go>' + cfg.verb + '</button>' +
+            '<button name="Move" type="button" class="btn btn-primary" data-move-go>Move</button>' +
             '</div></div>';
-        overlay.querySelector('[data-move-name]').textContent = cfg.ruleName;
-        var box = overlay.querySelector('input[name="delete_source"]');
-        box.dataset.changed = 'false';
-        box.addEventListener('change', function () { box.dataset.changed = 'true'; });
         overlay.querySelector('[data-move-cancel]').onclick = function () { overlay.remove(); };
+        var err = overlay.querySelector('[data-move-error]');
+        // A refused move is the common case worth designing for (moving onto a destination that
+        // already holds this rule id is refused so it can't silently overwrite), and its message
+        // explains what to do instead. It belongs next to the target picker the user has to
+        // change, not in a toast behind this dialog — which is where it used to go.
+        var showError = function (text) {
+            err.textContent = text;
+            err.hidden = false;
+            err.scrollIntoView({ block: 'nearest' });
+        };
         var go = overlay.querySelector('[data-move-go]');
         go.onclick = function () {
+            var target = overlay.querySelector('[data-move-target]').value;
+            if (!target) return;
+            err.hidden = true;
             go.disabled = true;
-            go.textContent = cfg.busy;
+            go.textContent = 'Moving...';
             var body = new URLSearchParams();
-            if (cfg.alwaysSend || box.dataset.changed === 'true') body.set('delete_source', box.checked ? 'true' : 'false');
-            var url = '/api/promotion/' + encodeURIComponent(cfg.ruleId) + '/' + cfg.verb.toLowerCase() + (cfg.siemId ? '?siem_id=' + encodeURIComponent(cfg.siemId) : '');
+            body.set('target_scope', target);
+            body.set('delete_source', overlay.querySelector('[data-move-delete]').checked ? 'true' : 'false');
+            var url = '/api/promotion/' + encodeURIComponent(ruleId) + '/move?siem_id=' + encodeURIComponent(siemId) + '&space=' + encodeURIComponent(space);
             fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
                 .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html }; }); })
                 .then(function (res) {
-                    var toasts = document.getElementById('toast-container');
-                    if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
                     if (res.ok) {
+                        var toasts = document.getElementById('toast-container');
+                        if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
                         document.querySelectorAll('#modal-container .modal-overlay').forEach(function (o) { o.remove(); });
                         setTimeout(function () { window.location.reload(); }, 1200);
                     } else {
+                        // The body is the server's toast markup; read its text so the reason
+                        // shows in the dialog rather than behind it.
+                        var tmp = document.createElement('div');
+                        tmp.innerHTML = res.html;
+                        showError((tmp.textContent || '').trim() || 'The move could not be completed.');
                         go.disabled = false;
-                        go.textContent = cfg.verb;
+                        go.textContent = 'Move';
                     }
                 })
-                .catch(function (err) {
+                .catch(function (e) {
                     go.disabled = false;
-                    go.textContent = cfg.verb;
-                    var toasts = document.getElementById('toast-container');
-                    if (toasts) {
-                        var t = document.createElement('div');
-                        t.className = 'toast toast-danger';
-                        t.textContent = 'Error: ' + err.message;
-                        t.onclick = function () { t.remove(); };
-                        toasts.appendChild(t);
-                    }
+                    go.textContent = 'Move';
+                    showError('Error: ' + e.message);
                 });
         };
         host.appendChild(overlay);
-    }
-
-    window.showPromoteConfirm = function (ruleId, ruleName, siemId, deleteSourceDefault) {
-        showMoveConfirm({
-            verb: 'Promote', busy: 'Promoting...', title: 'Promote to Production', destination: 'to the production environment',
-            warning: 'The production copy becomes the master rule. Delete source is enabled by default from the client settings.',
-            checkboxLabel: 'Delete source after promotion', deleteDefault: deleteSourceDefault,
-            ruleId: ruleId, ruleName: ruleName, siemId: siemId
-        });
     };
 
-    window.showDemoteConfirm = function (ruleId, ruleName, siemId) {
-        showMoveConfirm({
-            verb: 'Demote', busy: 'Demoting...', title: 'Demote to Staging', destination: 'back to the staging environment',
-            warning: 'A copy is created in staging. The production rule stays live unless you tick the box below.',
-            checkboxLabel: 'Delete the production copy after demoting', deleteDefault: false, alwaysSend: true,
-            ruleId: ruleId, ruleName: ruleName, siemId: siemId
+    // Delete (rule window). Deleting from TIDE alone needs no second confirm: if the rule still
+    // exists in Elastic the next sync brings it straight back, so nothing is lost. Ticking "also
+    // delete from Elastic" is the irreversible part, and only that asks again. A deprecated rule
+    // is already gone from Elastic, so it gets no Elastic option at all.
+    window.showDeleteRuleDialog = function (ruleId, ruleName, siemId, space, destName, deprecated) {
+        var host = document.getElementById('modal-container');
+        if (!host) return;
+        var esc = function (s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+        var dest = destName || space;
+        var overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+        overlay.innerHTML =
+            '<div name="Delete Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
+            '<h2 class="modal-section-title">Delete rule</h2>' +
+            '<p class="text-secondary mb-md">Remove <strong>' + esc(ruleName) + '</strong> from TIDE.' +
+            (deprecated ? '' : ' If it is still in Elastic, the next sync brings it back unless you delete it there too.') + '</p>' +
+            (deprecated ? '' :
+                '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.5rem;">' +
+                '<input type="checkbox" data-delete-elastic> Also delete it from Elastic (' + esc(dest) + ')</label>') +
+            '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
+            '<input type="checkbox" checked data-delete-links> Also remove any links to this rule</label>' +
+            '<p class="inline-error" data-delete-error hidden></p>' +
+            '<div class="modal-actions">' +
+            '<button name="Cancel" type="button" class="btn btn-secondary" data-delete-cancel>Cancel</button>' +
+            '<button name="Delete" type="button" class="btn btn-danger" data-delete-go>Delete</button>' +
+            '</div></div>';
+        overlay.querySelector('[data-delete-cancel]').onclick = function () { overlay.remove(); };
+        var err = overlay.querySelector('[data-delete-error]');
+        var go = overlay.querySelector('[data-delete-go]');
+        var reset = function () { go.disabled = false; go.textContent = 'Delete'; };
+        var run = function (fromElastic, removeLinks) {
+            go.disabled = true;
+            go.textContent = 'Deleting...';
+            err.hidden = true;
+            var url = '/api/rules/' + encodeURIComponent(ruleId) + '?siem_id=' + encodeURIComponent(siemId) +
+                      '&space=' + encodeURIComponent(space) + '&remove_links=' + (removeLinks ? 'true' : 'false') +
+                      '&from_elastic=' + (fromElastic ? 'true' : 'false');
+            fetch(url, { method: 'DELETE' })
+                .then(function (r) { return r.text().then(function (t) { return { ok: r.ok, text: t }; }); })
+                .then(function (res) {
+                    if (res.ok) {
+                        document.querySelectorAll('#modal-container .modal-overlay').forEach(function (o) { o.remove(); });
+                        if (typeof showToast === 'function') {
+                            showToast(fromElastic ? 'Rule deleted from Elastic and TIDE.' : 'Rule deleted from TIDE.', 'success');
+                        }
+                        if (window.htmx) htmx.trigger(document.body, 'refreshRules');
+                        return;
+                    }
+                    // Say why next to the button, not in a toast behind this dialog.
+                    var tmp = document.createElement('div');
+                    tmp.innerHTML = res.text;
+                    err.textContent = (tmp.textContent || '').trim() || 'The rule could not be deleted.';
+                    err.hidden = false;
+                    reset();
+                })
+                .catch(function (e) {
+                    err.textContent = 'Error: ' + e.message;
+                    err.hidden = false;
+                    reset();
+                });
+        };
+        go.onclick = function () {
+            var elasticBox = overlay.querySelector('[data-delete-elastic]');
+            var fromElastic = !!(elasticBox && elasticBox.checked);
+            var removeLinks = overlay.querySelector('[data-delete-links]').checked;
+            if (!fromElastic) { run(false, removeLinks); return; }
+            window.tideConfirm({
+                title: 'Delete from Elastic',
+                body: '<p class="mb-md"><strong>' + esc(ruleName) + '</strong> is permanently deleted from ' +
+                      '<strong>' + esc(dest) + '</strong> in Elastic, and from TIDE.</p>' +
+                      '<p class="inline-error">This cannot be undone. The rule stops alerting immediately.</p>',
+                confirmLabel: 'Delete from Elastic',
+                danger: true,
+            }).then(function (ok) { if (ok) run(true, removeLinks); });
+        };
+        host.appendChild(overlay);
+    };
+
+    // Add-link search results (rule_modal.html): clicking a match fills the name box with the
+    // exact name (so the exact-match lookup on submit succeeds) and closes the dropdown.
+    window.tidePickLinkTarget = function (btn) {
+        var results = btn.closest('.rm-add-link__results');
+        var input = results && results.parentElement && results.parentElement.querySelector('input[name="target_name"]');
+        if (input) input.value = btn.dataset.name;
+        if (results) results.innerHTML = '';
+    };
+    document.addEventListener('click', function (e) {
+        document.querySelectorAll('.rm-add-link__results').forEach(function (r) {
+            if (!r.contains(e.target) && e.target.name !== 'target_name') r.innerHTML = '';
         });
+    });
+
+    // Merge button (rule_migration_diff.html), wired as a plain onclick attribute rather than a
+    // per-render <script> block with addEventListener -- a <script> tag only runs when the
+    // fragment containing it is inserted via htmx's own swap (which specifically re-executes
+    // script tags) or a real page load; a plain `el.innerHTML = html` assignment, like
+    // tideSwitchCompareTarget below uses to switch which linked rule you're comparing against,
+    // never executes embedded scripts at all. That silently left the Merge button dead after
+    // switching targets. An onclick attribute has no such dependency -- it's wired by the
+    // browser's own HTML parser the moment the element exists, however it got there.
+    window.tideMergeLinked = function (root) {
+        var direction = (document.querySelector('input[name="rm-merge-direction"]:checked') || {}).value || 'source_over_target';
+        var deleteWhich = (document.querySelector('input[name="rm-merge-delete"]:checked') || {}).value || 'none';
+        var sourceName = root.dataset.sourceName, targetName = root.dataset.targetName;
+        var winner = direction === 'source_over_target' ? sourceName : targetName;
+        var loser = direction === 'source_over_target' ? targetName : sourceName;
+        var esc = function (s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+        var body = '<p class="mb-md"><strong>' + esc(loser) + '</strong> will be overwritten with the content of <strong>' +
+                   esc(winner) + '</strong>. Its own enabled/disabled state is kept.</p>';
+        var doomed = deleteWhich === 'source' ? sourceName : (deleteWhich === 'target' ? targetName : null);
+        if (doomed) {
+            body += '<p class="inline-error"><strong>' + esc(doomed) +
+                    '</strong> is then permanently deleted — from its SIEM as well as TIDE. This cannot be undone.</p>';
+        }
+        window.tideConfirm({
+            title: doomed ? 'Merge and delete' : 'Merge rules',
+            body: body,
+            confirmLabel: doomed ? 'Merge and delete' : 'Merge',
+            danger: !!doomed,
+        }).then(function (ok) { if (ok) tideRunMerge(root, direction, deleteWhich); });
+    };
+
+    function tideRunMerge(root, direction, deleteWhich) {
+        root.disabled = true;
+        root.textContent = 'Merging...';
+        var qs = 'siem_id=' + encodeURIComponent(root.dataset.siemId) + '&space=' + encodeURIComponent(root.dataset.space) +
+                 '&target_rule_id=' + encodeURIComponent(root.dataset.targetRuleId) +
+                 '&target_siem_id=' + encodeURIComponent(root.dataset.targetSiemId) +
+                 '&target_space=' + encodeURIComponent(root.dataset.targetSpace);
+        var body = new URLSearchParams({ direction: direction, delete_which: deleteWhich });
+        fetch('/api/promotion/' + encodeURIComponent(root.dataset.ruleId) + '/merge?' + qs, {
+            method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
+        })
+            .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html }; }); })
+            .then(function (res) {
+                var host = document.getElementById('modal-container');
+                if (host) host.innerHTML = res.html;
+                if (window.htmx && host) htmx.process(host);
+                if (res.ok && window.htmx) htmx.trigger(document.body, 'refreshRules');
+            })
+            .catch(function (err) {
+                root.disabled = false;
+                root.textContent = 'Merge';
+                if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+            });
+    }
+
+    // Compare view's "Comparing against" dropdown (rule_migration_diff.html): re-fetches the
+    // whole diff view against a different linked rule, without closing and reopening Compare.
+    window.tideSwitchCompareTarget = function (ruleId, siemId, space, targetValue) {
+        var parts = (targetValue || '').split('|');
+        if (parts.length !== 3) return;
+        var host = document.getElementById('modal-container');
+        var url = '/api/promotion/' + encodeURIComponent(ruleId) + '/diff?siem_id=' + encodeURIComponent(siemId) +
+                  '&space=' + encodeURIComponent(space) +
+                  '&target_rule_id=' + encodeURIComponent(parts[0]) +
+                  '&target_siem_id=' + encodeURIComponent(parts[1]) +
+                  '&target_space=' + encodeURIComponent(parts[2]);
+        fetch(url, { method: 'GET' })
+            .then(function (r) { return r.text(); })
+            .then(function (html) { if (host) { host.innerHTML = html; if (window.htmx) htmx.process(host); } })
+            .catch(function (err) {
+                if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+            });
     };
 
     // Rule compare dialog: inline / side-by-side layout, remembered per browser.

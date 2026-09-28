@@ -270,6 +270,18 @@ a:hover { color: var(--color-primary); }
   border-color: var(--color-border);
 }
 
+/* Coverage on a system (technique cards, technique window, systems table) */
+.status-pill.status-success { background: var(--color-success-bg); color: var(--color-success-text); border-color: var(--color-success); }
+.status-pill.status-warning { background: var(--color-warning-bg); color: var(--color-warning-text); border-color: var(--color-warning); }
+.status-pill.status-danger  { background: var(--color-danger-bg);  color: var(--color-danger-text);  border-color: var(--color-danger); }
+.status-pill.status-muted   { background: var(--color-bg-base);    color: var(--color-text-muted);   border-color: var(--color-border); }
+.status-pill.status-info    { background: var(--color-info-bg);    color: var(--color-info-text);    border-color: var(--color-info); }
+/* A technique's priority on a system (Risks) */
+.sm-priority--critical { background: var(--color-danger-bg);  color: var(--color-danger-text);  border-color: var(--color-danger); }
+.sm-priority--high     { background: var(--color-warning-bg); color: var(--color-warning-text); border-color: var(--color-warning); }
+.sm-priority--medium   { background: var(--color-info-bg);    color: var(--color-info-text);    border-color: var(--color-info); }
+.sm-priority--low      { background: var(--color-bg-base);    color: var(--color-text-muted);   border-color: var(--color-border); }
+
 .tide-lifecycle {
   display: inline-flex;
   align-items: center;
@@ -287,6 +299,7 @@ a:hover { color: var(--color-primary); }
 .tide-lifecycle-migrated { color: var(--color-info-text); border-color: var(--color-info); background: var(--color-info-glow); }
 .tide-lifecycle-production { color: var(--color-success-text); border-color: var(--color-success); background: var(--color-success-glow); }
 .tide-lifecycle-deprecated { color: var(--color-text-muted); border-color: var(--color-border); background: var(--color-bg-base); }
+.tide-lifecycle-offline { color: var(--color-warning-text); border-color: var(--color-warning); background: var(--color-warning-glow); }
 
 .status-dot {
   display: inline-flex;
@@ -1665,6 +1678,18 @@ a:hover { color: var(--color-primary); }
 .client-list-item--danger   { border-left-color: var(--color-danger); }
 .client-list-item--warning  { border-left-color: var(--color-warning); }
 .client-list-item__body { flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.client-siem-dot { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 999px; flex: 0 0 auto; border: 1px solid rgba(0,0,0,0.15); }
+.client-siem-edit-popover {
+  position: absolute; top: 100%; right: 0; z-index: 20; margin-top: 0.3rem; width: 16rem;
+  background: var(--color-bg-layer-5); border: 1px solid var(--color-border); border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md); padding: 0.75rem;
+}
+.client-siem-color-row { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.3rem; }
+.client-siem-swatch {
+  width: 1.3rem; height: 1.3rem; border-radius: 999px; border: 2px solid transparent; cursor: pointer; padding: 0;
+}
+.client-siem-swatch--selected { border-color: var(--color-text); box-shadow: 0 0 0 1px var(--color-bg-layer-5); }
+.client-siem-color-input { width: 1.6rem; height: 1.6rem; padding: 0; border: 1px solid var(--color-border); border-radius: 999px; cursor: pointer; background: none; }
 .client-list-item__icon {
   display: inline-flex;
   align-items: center;
@@ -2123,6 +2148,19 @@ a:hover { color: var(--color-primary); }
   background: var(--color-info);
   color: #fff;
 }
+
+/* Destructive actions. Same soft-then-solid shape as .btn-info, so a Delete sitting among
+   secondary buttons reads as different without shouting. */
+.btn-danger {
+  background: var(--color-danger-bg);
+  color: var(--color-danger-text);
+  border: 1px solid var(--color-danger);
+}
+.btn-danger:hover {
+  background: var(--color-danger);
+  color: #fff;
+}
+.btn-danger:disabled { opacity: 0.6; cursor: wait; }
 
 .btn-secondary {
   background: var(--color-bg-action);
@@ -3080,10 +3118,14 @@ a:hover { color: var(--color-primary); }
   position: fixed;
   bottom: 1rem;
   right: 1rem;
-  z-index: 100;
+  /* Above .modal-overlay (100) and the menus at 200: a toast almost always reports the result
+     of something started in a modal, and the modal usually stays open when that result is a
+     refusal. At the same z-index the overlay won and the message was invisible. */
+  z-index: 300;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  max-width: min(28rem, calc(100vw - 2rem));
 }
 
 .toast {
@@ -3092,6 +3134,8 @@ a:hover { color: var(--color-primary); }
   font: var(--small);
   box-shadow: var(--shadow-lg);
   animation: slideIn var(--transition-normal);
+  /* Refusals explain what to do instead, so they run to a sentence or two. */
+  overflow-wrap: anywhere;
 }
 
 .toast-success,
@@ -3101,7 +3145,10 @@ a:hover { color: var(--color-primary); }
   color: var(--color-success-text);
 }
 
+/* -danger and -error are both in use across the app and mean the same thing. Keep both:
+   dropping either silently un-styles every caller of that name. */
 .toast-error,
+.toast-danger,
 .alert-danger {
   background: var(--color-danger-bg);
   border: 1px solid var(--color-danger);
@@ -3109,8 +3156,16 @@ a:hover { color: var(--color-primary); }
 }
 
 .toast.show { opacity: 1; transform: translateX(0); }
-.toast-warning { border-left: 3px solid var(--color-warning); }
-.toast-info    { border-left: 3px solid var(--color-info); }
+.toast-warning {
+  background: var(--color-warning-bg);
+  border: 1px solid var(--color-warning);
+  color: var(--color-warning-text);
+}
+.toast-info {
+  background: var(--color-info-bg);
+  border: 1px solid var(--color-info);
+  color: var(--color-info-text);
+}
 
 
 /* ================================================================
@@ -4050,6 +4105,23 @@ body.light {
   gap: 0.75rem;
   justify-content: flex-end;
 }
+
+/* A refusal or warning shown inside the dialog that caused it, next to the control the user
+   has to change. Used by the Move dialog and by tideConfirm's destructive-action note. */
+.inline-error {
+  background: var(--color-danger-bg);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  color: var(--color-danger-text);
+  padding: 0.6rem 0.75rem;
+  font: var(--small);
+  overflow-wrap: anywhere;
+}
+.inline-error[hidden] { display: none; }
+
+/* tideConfirm stacks on top of the modal that asked for it (Compare, the edit form), and below
+   the toast container, so a toast about the result is still readable over it. */
+.modal-overlay--confirm { z-index: 250; }
 
 /* Mapping table wrapper */
 .mapping-table-wrapper {
@@ -6529,36 +6601,6 @@ body.is-resizing-slide-panel {
   color: var(--color-text-muted);
 }
 
-/* ── 4.1.0 P6 — Coverage Quest tray + pages ─────────────── */
-.quest-tray {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 0.5rem 0.875rem;
-  margin-bottom: 0.75rem;
-  border: 1px solid var(--color-accent, #2f81f7);
-  border-left-width: 4px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--color-accent, #2f81f7) 8%, var(--color-bg-elevated, #161b22));
-  font-size: 0.85rem;
-}
-.quest-tray__steps { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.quest-tray__step { color: var(--color-text-secondary, #8b949e); }
-.quest-tray__step.is-done { color: var(--color-text-primary, #c9d1d9); }
-.quest-tray__step.is-active strong { color: var(--color-accent, #2f81f7); }
-.quest-tray__step strong { font-weight: 600; margin-left: 0.25rem; }
-.quest-tray__sep { color: var(--color-text-tertiary, #6e7681); }
-.quest-tray__count { font-variant-numeric: tabular-nums; color: var(--color-text-secondary, #8b949e); }
-.quest-tray__actions { display: flex; gap: 0.5rem; }
-.quest-page .quest-form { display: flex; flex-direction: column; gap: 1rem; padding: 1.25rem; max-width: 520px; }
-.quest-page .form-field { display: flex; flex-direction: column; gap: 0.375rem; }
-.quest-page .form-field__label { font-size: 0.85rem; color: var(--color-text-secondary, #8b949e); }
-.quest-page .quest-form__actions { display: flex; gap: 0.5rem; align-items: center; }
-.quest-cover { padding: 1.25rem; }
-.quest-cover__hint { color: var(--color-text-secondary, #8b949e); margin: 0 0 1rem; }
-.quest-cover__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-
 /* >>> u-bg utilities >>> */
 /* ── BACKGROUND UTILITIES (u-bg-*) ─────────────────────────────────
  * Replace former inline style="background:..." declarations.
@@ -6938,6 +6980,8 @@ body.is-resizing-slide-panel {
 .score-ring--success { --ring: var(--color-success); }
 .score-ring--warning { --ring: var(--color-warning); }
 .score-ring--danger  { --ring: var(--color-danger); }
+.score-ring--muted   { --ring: var(--color-border-strong); }
+.score-ring--muted .score-ring__value { color: var(--color-text-muted); }
 
 /* ── Rule card (Rule Health grid + MITRE side panel: one template) ─
  * Left = title with the score ring beneath; right = SIEM pill, MITRE pills,
@@ -7052,6 +7096,11 @@ body.is-resizing-slide-panel {
 .rule-row--val-muted   { --edge: var(--color-border-strong); }
 .rule-row td { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--color-border-muted); vertical-align: middle; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-row td:first-child { box-shadow: inset 3px 0 0 var(--edge); }
+/* The checkbox cell (true first child) is display:none outside bulk-edit mode -- it still
+   counts for :first-child (display:none doesn't remove it from the DOM), so the shadow above
+   was landing on an invisible cell with nothing showing. Outside bulk-edit mode, put it on the
+   cell that's actually first on screen instead. */
+.rule-browser-page:not(.bulk-on) .rule-row td:first-child + td { box-shadow: inset 3px 0 0 var(--edge); }
 .rule-row:hover td { background: var(--color-bg-surface-hover); }
 .rule-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .rt-name { white-space: normal; }
@@ -7108,30 +7157,19 @@ body.is-resizing-slide-panel {
 .rm-iconbtn:focus-visible,
 .rm-close:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
 
-/* history toggle (header): pressed = history column shown */
-.rm-toggle {
-  display: inline-flex; align-items: center; gap: 0.4rem; height: 2rem; padding: 0 0.7rem;
-  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
-  background: var(--color-bg-action); color: var(--color-text-secondary);
-  font-size: 0.78rem; font-weight: 600; cursor: pointer;
-}
-.rm-toggle:hover { color: var(--color-text); }
-.rm-toggle[aria-pressed="true"] { background: var(--color-primary-muted); border-color: var(--color-primary); color: var(--color-primary); }
-.rm-toggle:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-
 /* body: columns are content-sized; the body scrolls as one */
 .rm-body {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) minmax(0, 1.7fr) 260px;
+  /* set by app.js from the columns that have something visible (see fitWindowColumns) */
+  grid-template-columns: var(--rm-cols, minmax(260px, 1fr) minmax(0, 1.7fr) minmax(240px, 0.85fr));
   gap: 1rem;
   align-items: start;
   padding: 1rem 1.25rem 1.25rem;
 }
 .rm-col { min-width: 0; display: flex; flex-direction: column; gap: 1rem; }
-.rm-col--actions { position: sticky; top: 0; }
 
 .rm-panel {
   background: var(--bg-level-2-subcard);
@@ -7149,12 +7187,14 @@ body.is-resizing-slide-panel {
 
 /* activity */
 .rm-filters { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.rm-filters--row { margin: -0.25rem 0 0.65rem; }
 .rm-filters select { border: 1px solid var(--color-border); border-radius: var(--radius-sm); padding: 0.25rem 0.4rem; font-size: 0.72rem; background: var(--color-bg-surface); color: var(--color-text); }
 .rm-timeline { max-height: 42vh; overflow-y: auto; }
 .rm-timeline > * { flex-shrink: 0; }
 .rule-modal .history-row > summary,
-.rule-modal .history-row-head { grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr) minmax(0, 6rem); gap: 0.5rem; padding: 0.5rem 0.65rem; font-size: 0.78rem; }
+.rule-modal .history-row-head { grid-template-columns: max-content minmax(0, 1fr) minmax(0, max-content); gap: 0.5rem; padding: 0.5rem 0.65rem; font-size: 0.78rem; }
 .rule-modal .history-user { overflow: hidden; text-overflow: ellipsis; }
+.rule-modal .history-action-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
 .history-diff-row--spaced { margin-top: 0.55rem; }
 
 /* score chart */
@@ -7272,11 +7312,36 @@ body.is-resizing-slide-panel {
 .rm-mitre__name { display: flex; flex-direction: column; min-width: 0; font-size: 0.78rem; color: var(--color-text); overflow-wrap: anywhere; }
 .rm-mitre__name small { color: var(--color-text-muted); font-size: 0.68rem; }
 
-/* layout: header History toggle → data-view on .rule-modal (default = history shown) */
-.rule-modal[data-view="no-history"] .rm-body { grid-template-columns: minmax(0, 1fr) 260px; }
-.rule-modal[data-view="no-history"] .rm-col--history { display: none; }
+/* window layout: sections move between columns (drag handle) and hide (header sections menu) */
+.rm-col > [data-section][hidden] { display: none !important; }
+.rm-col--empty { display: none; }
+.rule-modal.is-arranging .rm-col--empty { display: flex; min-height: 8rem; border: 2px dashed var(--color-border-strong); border-radius: var(--radius-md); }
+.rule-modal.is-arranging .rm-col { min-height: 8rem; }
+[data-section].is-dragging { opacity: 0.4; }
+.rm-drop-marker { height: 0.3rem; border-radius: 999px; background: var(--color-primary); flex-shrink: 0; }
+.rm-drag { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-left: auto; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: grab; opacity: 0.45; transition: opacity var(--transition-fast); flex-shrink: 0; }
+.rm-panel:hover .rm-drag, .rm-fold:hover .rm-drag, .rm-drag:focus-visible { opacity: 1; }
+.rm-drag:hover { color: var(--color-text); border-color: var(--color-border); background: var(--color-bg-action); }
+.rm-drag:active { cursor: grabbing; }
+.rm-drag:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+/* a section's "…" menu, and the move bar its Move shows (window_ui.html section_menu) */
+.rm-secmenu { margin-left: auto; flex-shrink: 0; }
+.rm-secmenu__btn { width: 1.5rem; height: 1.5rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; }
+.rm-secmenu__btn:hover:not(:disabled), .rm-secmenu__btn[aria-expanded="true"] { border-color: var(--color-border); background: var(--color-bg-action); }
+.rm-secmenu .rh-more__menu { min-width: 11rem; }
+.rm-movebar { display: flex; align-items: center; gap: 0.2rem; flex-basis: 100%; padding: 0.3rem; border: 1px dashed var(--color-primary); border-radius: var(--radius-sm); }
+.rm-movebar[hidden] { display: none; }
+.rm-movebar .rm-drag { margin-left: 0; opacity: 1; }
+.rm-movebar .btn { margin-left: auto; }
+[data-section].is-moving { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.rule-modal .rm-panel.is-moving .rm-panel__head { flex-wrap: wrap; }
+.rm-layout__menu { min-width: 15rem; }
+.rm-layout__head { margin: 0.3rem 0.7rem 0.2rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+.rm-layout__item { cursor: pointer; }
+.rm-layout__item input { margin: 0; accent-color: var(--color-primary); }
+.rm-layout__hint { display: flex; align-items: center; gap: 0.3rem; margin: 0.2rem 0.7rem 0.35rem; font-size: 0.72rem; color: var(--color-text-muted); }
 
-/* reorderable centre-column sections */
+/* reorderable sections */
 .rm-panel__tools { display: inline-flex; align-items: center; gap: 0.5rem; }
 .rm-move { display: inline-flex; gap: 0.15rem; margin-left: auto; opacity: 0.45; transition: opacity var(--transition-fast); }
 .rm-panel:hover .rm-move,
@@ -7289,12 +7354,15 @@ body.is-resizing-slide-panel {
 .rm-fold > summary { display: flex; align-items: center; gap: 0.45rem; }
 
 @media (max-width: 1000px) {
-  .rm-body,
-  .rule-modal[data-view="no-history"] .rm-body { grid-template-columns: 1fr; }
-  .rm-col--actions { position: static; }
+  .rm-body { grid-template-columns: 1fr; }
   .rm-header { flex-wrap: wrap; }
   .rm-bar { grid-template-columns: 6.5rem minmax(0, 1fr) 3rem; }
 }
+
+/* Stepping between rules in an open window swaps the content in place (app.js). */
+#modal-container.rm-swap-quiet > .modal-overlay,
+#modal-container.rm-swap-quiet > .modal-overlay > .modal-content { animation: none; }
+.modal-content[aria-busy="true"] { cursor: progress; }
 
 /* ── Loading skeleton (cloned from #rule-modal-skeleton) ──────── */
 .rm-skel .rm-header__tools { gap: 0.6rem; }
@@ -7546,7 +7614,7 @@ body.is-resizing-slide-panel {
 /* ── Rule table: SIEM cell ────────────────────────────────────────
  * The pill used to overflow its cell, clipping the label and the pill's rounded edge.
  * The label now shrinks with an ellipsis inside a pill that always fits the column. */
-.rules-table td.rt-siem { overflow: hidden; }
+.rules-table td.rt-siem { overflow: hidden; white-space: nowrap; }
 .rules-table .status-pill { display: inline-flex; max-width: 100%; min-width: 0; box-sizing: border-box; vertical-align: middle; }
 .rules-table .status-pill > svg { flex: 0 0 auto; }
 .rules-table .status-pill__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7637,6 +7705,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rh-more__item:hover, .rh-more__item:focus-visible { background: var(--color-bg-action-hover); outline: none; }
 .rh-more__item[aria-pressed="true"] { color: var(--color-primary); }
 .rh-more__item[disabled] { opacity: 0.5; cursor: default; }
+.rh-more__item--danger { color: var(--color-danger); }
 .rh-more__item .sync-default { display: inline-flex; align-items: center; gap: 0.6rem; }
 .rh-more__sep { height: 1px; margin: 0.25rem 0.2rem; background: var(--color-border); }
 .rh-more__item.htmx-request .htmx-indicator { display: inline-flex; align-items: center; gap: 0.6rem; }
@@ -7653,16 +7722,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 /* Rule modal: Rule IDs panel, below MITRE ATT&CK (.rm-col already gaps siblings by 1rem) */
 .rm-ids { margin: 0; display: flex; flex-direction: column; gap: 0.4rem; }
 .rm-ids__row { display: flex; align-items: baseline; gap: 0.6rem; }
-.rm-ids__row dt {
-  flex: 0 0 auto;
-  width: 5.5rem;
-  font-size: 0.72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  color: var(--color-text-muted);
-  cursor: help;
-}
 .rm-ids__row dd {
   margin: 0;
   min-width: 0;
@@ -7670,4 +7729,225 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
   font-family: "SF Mono", "Fira Code", Consolas, monospace;
   font-size: 0.8rem;
   color: var(--color-text);
+}
+
+.rm-linked-list { margin-bottom: 0.6rem; }
+.rm-add-link { display: flex; gap: 0.4rem; flex-wrap: wrap; position: relative; }
+.rm-add-link input[type="text"] { flex: 1 1 10rem; min-width: 0; }
+.rm-add-link__results {
+  position: absolute; top: 100%; left: 0; right: 0; z-index: 5; margin-top: 0.15rem;
+  background: var(--color-bg-layer-5); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-md); max-height: 11rem; overflow-y: auto;
+}
+.rm-add-link__results:empty { border: none; box-shadow: none; }
+.rm-add-link__results button {
+  display: block; width: 100%; text-align: left; padding: 0.4rem 0.6rem; font-size: 0.78rem;
+  background: transparent; border: 0; color: var(--color-text); cursor: pointer;
+}
+.rm-add-link__results button:hover, .rm-add-link__results button:focus { background: var(--color-bg-layer-3, var(--color-bg-hover)); }
+.rm-add-link__results .rm-empty { padding: 0.4rem 0.6rem; margin: 0; }
+
+
+/* ================================================================
+ * BASELINE STEP CARD + STEP WINDOW  (system-scoped baseline board)
+ * Mirrors the rule card / rule window so the two read as one app.
+ * Left edge = this step's coverage status ON THIS SYSTEM.
+ * ================================================================ */
+.steps-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+@media (max-width: 1280px) { .steps-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 860px)  { .steps-grid { grid-template-columns: 1fr; } }
+
+.step-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  min-height: 8.5rem;
+  padding: 0.85rem 0.9rem 0.75rem;
+  background: var(--color-bg-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.step-card:hover { border-color: color-mix(in srgb, var(--color-primary) 45%, var(--color-border)); }
+.step-card:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+
+.sc-head { flex: 1; display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; }
+.sc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+.sc-title {
+  font-size: 0.88rem; font-weight: 600; line-height: 1.3; color: var(--color-text);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sc-tactic { font-size: 0.7rem; color: var(--color-text-muted); display: flex; align-items: center; gap: 0.25rem; }
+.sc-side { flex: 0 1 46%; min-width: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 0.35rem; }
+.sc-side .mitre-pills-wrap { justify-content: flex-end; flex-wrap: wrap; }
+
+.sc-foot {
+  display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+  font-size: 0.72rem; color: var(--color-text-muted);
+  border-top: 1px solid var(--color-border-muted); padding-top: 0.5rem;
+}
+.sc-foot__rules { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--color-text); }
+.sc-foot__none  { display: inline-flex; align-items: center; gap: 0.25rem; }
+.sc-foot__warn  { color: var(--color-warning-text); }
+.sc-foot__hint  { opacity: 0.8; }
+.sc-foot__baseline { margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Step window ── */
+/* Technique window: the rule window's frame (.rule-modal), with its own contents. */
+/* Cards shared by the rule and technique windows: a mapped rule, a known gap / N/A, a covered
+   technique, a linked rule. Left edge: green = counts, amber = present but not evidence (or a
+   known gap), grey = not applicable / deprecated. */
+.rm-items { display: flex; flex-direction: column; gap: 0.45rem; }
+.rm-item {
+  display: flex; align-items: flex-start; gap: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--color-border-muted); border-left: 3px solid var(--color-success);
+  border-radius: var(--radius-md); background: var(--bg-level-3-inner);
+}
+.rm-item--warn { border-left-color: var(--color-warning); }
+.rm-item--gap { border-left-color: var(--color-warning); }
+.rm-item--gap .rm-item__name { color: var(--color-warning-text); }
+.rm-item--na, .rm-item--muted { border-left-color: var(--color-border-strong); }
+.rm-item--watched { border-left-color: var(--color-info); }
+.rm-item--watched .rm-item__name { color: var(--color-info-text); display: flex; align-items: center; gap: 0.4rem; }
+.rm-item__link { margin-left: auto; font-size: 0.75rem; display: inline-flex; align-items: center; gap: 0.2rem; }
+.rm-item--muted { opacity: 0.7; }
+.rm-item__main { flex: 1; min-width: 0; }
+.rm-item__name { display: flex; align-items: center; gap: 0.35rem; font-size: 0.84rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rm-item__open { all: unset; cursor: pointer; overflow: hidden; text-overflow: ellipsis; text-decoration: underline dotted; text-underline-offset: 2px; }
+.rm-item__open:hover { color: var(--color-primary); }
+.rm-item__open:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; border-radius: 2px; }
+.rm-item__text { margin: 0.25rem 0 0; font-size: 0.8rem; overflow-wrap: anywhere; }
+.rm-item__meta { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.3rem; font-size: 0.7rem; }
+/* A small square-cornered label on a card (a destination in its colour, a system, a tactic). */
+.rm-tag {
+  --tag-color: var(--color-text-secondary);
+  display: inline-flex; align-items: center; max-width: 100%; padding: 0.05rem 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--tag-color) 60%, transparent); border-radius: var(--radius-sm);
+  color: var(--tag-color); font-size: 0.65rem; font-weight: 600; line-height: 1.4;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rm-tag--system { --tag-color: var(--color-primary); }
+/* The one remove control on every card, and the close control on the Actions panels. */
+.rm-x {
+  flex: 0 0 auto; display: grid; place-items: center; width: 1.5rem; height: 1.5rem;
+  border: 1px solid var(--color-border); border-radius: var(--radius-sm);
+  background: transparent; color: var(--color-text-muted); cursor: pointer;
+}
+.rm-x:hover { color: var(--color-danger); border-color: var(--color-danger); }
+.rm-x:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.sm-muted { font-size: 0.82rem; margin: 0; }
+/* the technique window's history kinds, in the rule window's history format */
+.history-kind-rules .history-action-badge { color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-success) 18%, var(--color-bg-surface)); }
+.history-kind-gaps .history-action-badge { color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-warning) 18%, var(--color-bg-surface)); }
+.history-kind-technique .history-action-badge { color: var(--color-primary); border-color: color-mix(in srgb, var(--color-primary) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-primary-muted) 28%, var(--color-bg-surface)); }
+.history-kind-coverage .history-action-badge { color: var(--color-info); border-color: color-mix(in srgb, var(--color-info) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-info) 18%, var(--color-bg-surface)); }
+
+.sm-picker__results { margin-top: 0.5rem; border: 1px solid var(--color-border-muted); border-radius: var(--radius-md); overflow: hidden; max-height: 22rem; overflow-y: auto; }
+.sm-picker__loading { padding: 0.75rem; font-size: 0.82rem; }
+
+/* Add / edit technique form (components/technique_form.html) */
+.tf-form { display: flex; flex-direction: column; gap: 0.85rem; }
+.tf-form__row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+@media (max-width: 560px) { .tf-form__row { grid-template-columns: 1fr; } }
+.tf-form__note { font-size: 0.78rem; margin: 0; display: flex; align-items: flex-start; gap: 0.35rem; }
+.sm-gapform { display: flex; flex-direction: column; gap: 0.35rem; }
+.sm-gapform[hidden], #sm-risks-view[hidden], #sm-risk-ref-row[hidden], #sm-risk-why-row[hidden] { display: none; }
+.sm-risks__actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.3rem; }
+.sm-box-actions { display: flex; justify-content: flex-end; margin-top: 0.6rem; }
+
+/* Sigma rules in the technique window: potential rules, never coverage */
+.sm-sigma__search { margin-bottom: 0.6rem; }
+.sm-sigma__note { margin: 0 0 0.6rem; font-size: 0.75rem; }
+.sm-sigma__group { margin: 0.6rem 0 0.3rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-muted); }
+.sm-sigma { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.35rem; max-height: 18rem; overflow-y: auto; }
+.sm-sigma__item { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding: 0.35rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--bg-level-3-inner); }
+.sm-sigma__title { min-width: 0; font-size: 0.78rem; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sm-sigma__title:hover { color: var(--color-primary); }
+.sm-sigma__meta { display: inline-flex; align-items: center; gap: 0.35rem; flex-shrink: 0; font-size: 0.7rem; }
+
+/* ATT&CK picker (components/mitre_picker.html) */
+.mitre-picker { display: flex; flex-direction: column; gap: 0.5rem; }
+.mitre-picker__list { margin: 0; }
+.mitre-picker__list li { align-items: center; }
+.mitre-picker__list .rm-mitre__name { flex: 1 1 auto; }
+.mitre-picker__empty { margin: 0; font-size: 0.78rem; }
+.mitre-picker__add { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); gap: 0.5rem; }
+.modal-content.modal-md { max-width: 640px; }
+.tf-inline .modal-actions { margin-top: 0; }
+.sys-dialog__new { margin: 0 0 1rem; }
+.sys-dialog__new > summary { list-style: none; display: inline-flex; }
+.sys-dialog__new > summary::-webkit-details-marker { display: none; }
+.sys-dialog__new[open] > summary { margin-bottom: 0.5rem; }
+
+/* ── SYSTEM PAGE (Rule Health shape) ─────────────────────────────
+   Header with a "…" menu, page-level metric strip, then sections that collapse and reorder
+   (data-fold / data-section; app.js). Each section is a card with a head row. */
+.sys-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.sys-header__main { min-width: 0; flex: 1 1 auto; }
+.sys-header__clf { font-size: 0.7rem; vertical-align: middle; margin-left: 0.5rem; }
+.rh-more__btn--sm { height: 30px; width: 30px; }
+.sys-sections { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
+.sys-section__head { display: flex; align-items: center; gap: 0.5rem; }
+.sys-section__title { display: inline-flex; align-items: center; gap: 0.45rem; margin: 0; font-size: 1.1rem; flex: 1 1 auto; min-width: 0; }
+.sys-section__count { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); padding: 0.05rem 0.45rem; border: 1px solid var(--color-border); border-radius: 999px; }
+.sys-section__tools { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.sys-section__body { margin-top: 0.85rem; }
+.sys-section .rm-move { margin-left: 0; }
+.sys-section.is-collapsed .sys-section__body,
+.sys-section.is-collapsed .sys-section__tools { display: none; }
+.sys-section.is-collapsed .rm-collapse svg { transform: rotate(-90deg); }
+.sys-empty { padding: 1.25rem 1rem; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; }
+.sys-empty p { margin: 0; }
+.sys-note { margin-bottom: 0.85rem; background: var(--color-info-bg); border-color: var(--color-info); color: var(--color-info-text); }
+.sys-filters { margin-bottom: 0.85rem; }
+.sys-filter-list { display: flex; flex-direction: column; max-height: 16rem; overflow-y: auto; }
+
+/* Groups: one collapsible block per baseline / tactic; tactics nest inside baselines. */
+.sys-group { border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--bg-level-2-subcard); margin-bottom: 0.75rem; }
+.sys-group--inner { background: var(--bg-level-3-inner); margin: 0 0 0.6rem; }
+.sys-group__head { display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 0.8rem; cursor: pointer; list-style: none; }
+.sys-group__head::-webkit-details-marker { display: none; }
+.sys-group__chev svg { transition: transform var(--transition-fast); }
+.sys-group:not([open]) > .sys-group__head .sys-group__chev svg { transform: rotate(-90deg); }
+.sys-group__label { font-weight: 600; }
+.sys-group--inner .sys-group__label { font-size: 0.85rem; }
+.sys-group__meta { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
+.sys-group__body { padding: 0 0.8rem 0.8rem; }
+
+/* Table view: Rule Health's table, narrower column set. */
+.sys-table-wrap { overflow-x: auto; }
+.sys-table { min-width: 48rem; }
+.sys-table th:nth-child(2) { width: 9rem; }
+.sys-table th:nth-child(3) { width: 11rem; }
+.sys-table th:nth-child(4) { width: 12rem; }
+.sys-table th:nth-child(5) { width: 8.5rem; }
+.sys-table th:nth-child(6) { width: 9rem; }
+
+/* Heatmap section */
+.sys-heatmap__filters, .sys-heatmap__legend { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; font-size: 0.8rem; }
+.sys-heatmap__filters label, .sys-heatmap__legend > span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.sys-heatmap__label { font-weight: 600; color: var(--color-text-muted); }
+.sys-heatmap__legend .ttp-card { padding: 0.15rem 0.4rem; font-size: 0.6rem; }
+.sys-heatmap__matrix { overflow-x: auto; min-height: 2rem; }
+
+/* Dialogs from the Baselines "…" menu */
+.sys-dialog__form { display: flex; flex-direction: column; gap: 0.45rem; }
+.sys-dialog__row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
+.sys-dialog__saved { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--color-success); }
+.sys-dialog__list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.sys-dialog__item { display: flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.65rem; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--bg-level-2-subcard); }
+.sys-dialog__name { font-weight: 600; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sys-dialog__apply { margin-bottom: 1rem; }
+.sys-dialog__apply-row { display: flex; gap: 0.5rem; }
+.sys-dialog__apply-row select { flex: 1 1 auto; min-width: 0; }
+.sys-dialog__hint { font-size: 0.78rem; margin: 0.4rem 0 0; }
+.bl-tech__actions { display: flex; justify-content: flex-end; gap: 0.4rem; margin-top: 0.6rem; }
+@media (max-width: 640px) {
+  .sys-header { flex-direction: column; }
+  .sys-section__head { flex-wrap: wrap; }
 }

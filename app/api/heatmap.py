@@ -509,6 +509,15 @@ def get_technique_detail(
     except Exception:
         nist_capabilities = []
 
+    # One readable line per related item (ATT&CK markdown links and citations stripped); the
+    # panel shows it under the name, with the whole text on hover.
+    from app.inventory_engine import attack_plain_text
+    for items, key in ((subtechniques, "description"), (related_groups, "description"),
+                       (related_campaigns, "description"), (related_software, "description"),
+                       (related_mitigations, "description"), (related_procedure_examples, "use")):
+        for item in items:
+            item["summary"] = attack_plain_text(item.get(key))
+
     # Permission hints are not currently persisted in the local MITRE schema.
     permissions = []
     
@@ -578,18 +587,11 @@ def get_technique_rules(
     # One card template for every rule list in the app — see rules.build_rule_card_context.
     from app.api.rules import build_rule_card_context
 
-    # Production rules first (enabled before disabled), then everything else the same way.
-    production_scopes = {
-        (str(siem), str(space).lower())
-        for siem, space in db.get_client_siem_scopes(client_id, environment_role="production")
-    }
+    # Enabled rules first, then everything else alphabetically. There is no more
+    # "production destination" to prioritise -- every destination is just a name now.
     rules = sorted(
         rules,
-        key=lambda r: (
-            (str(r.siem_id), str(r.space).lower()) not in production_scopes,
-            not r.enabled,
-            (r.name or "").lower(),
-        ),
+        key=lambda r: (not r.enabled, (r.name or "").lower()),
     )
 
     templates = request.app.state.templates

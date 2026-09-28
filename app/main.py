@@ -26,7 +26,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, quest as quest_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -372,13 +372,13 @@ async def lifespan(app: FastAPI):
                 from app.api.management import _list_kibana_spaces as _lks
                 with _db_b.get_shared_connection() as _cb2:
                     _all_maps = _cb2.execute(
-                        "SELECT m.client_id, m.siem_id, m.environment_role, "
+                        "SELECT m.client_id, m.siem_id, m.name, "
                         "m.space, c.name "
                         "FROM client_siem_map m "
                         "LEFT JOIN clients c ON c.id = m.client_id"
                     ).fetchall()
                 _bad = 0
-                for _cid, _sid, _role, _sp, _cname in _all_maps:
+                for _cid, _sid, _dest_name, _sp, _cname in _all_maps:
                     _real = _lks(_db_b, _sid)
                     if _real is None:
                         continue  # unreachable Kibana \u2014 don't double-warn
@@ -386,11 +386,11 @@ async def lifespan(app: FastAPI):
                         _bad += 1
                         logger.warning(
                             "[auth-banner] BAD MAPPING client='%s' (%s) "
-                            "siem=%s role=%r space=%r is NOT a Kibana space "
+                            "siem=%s destination=%r space=%r is NOT a Kibana space "
                             "on this instance. Real spaces: %s. Sync will "
                             "404 against /s/%s/api/...",
                             _cname or "?", str(_cid)[:8], str(_sid)[:8],
-                            _role, _sp, sorted(_real), _sp,
+                            _dest_name, _sp, sorted(_real), _sp,
                         )
                 if _all_maps and _bad == 0:
                     logger.info(
@@ -642,6 +642,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
         "/api/inventory": "page:systems",
+        # Known gap / N/A marks on a system's techniques.
+        "/api/blind-spots": "page:systems",
         "/api/settings": "page:settings",
         "/api/clients": "page:clients",
         "/api/management": "page:management",
@@ -654,6 +656,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
         "/api/inventory": "page:systems",
+        # Known gap / N/A marks on a system's techniques.
+        "/api/blind-spots": "page:systems",
         "/api/settings": "page:settings",
         "/api/clients": "page:clients",
         "/api/management": "page:management",
@@ -1391,6 +1395,29 @@ def create_app() -> FastAPI:
 
     templates.env.globals["mitre_name"] = mitre_name
 
+    def rule_dom_id(rule) -> str:
+        """A DOM id for one rule *card or row*, unique per destination.
+
+        A rule's id is shared by every copy of it across destinations -- that is the whole point
+        of Move-as-copy -- so keying the element on rule_id alone put two or three identical ids
+        on one grid. htmx resolves an out-of-band swap with ``querySelector("#" + id)``, which
+        takes whichever comes first, so saving an edit or validating one copy repainted a
+        different destination's card. The scope goes in the id, and is slugified because it ends
+        up inside a CSS selector.
+        """
+        import re
+
+        def slug(value) -> str:
+            return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or ""))
+
+        return (
+            f"rule-{slug(getattr(rule, 'rule_id', '') or '')}"
+            f"--{slug(getattr(rule, 'siem_id', '') or '')}"
+            f"--{slug(getattr(rule, 'space', None) or 'default')}"
+        )
+
+    templates.env.globals["rule_dom_id"] = rule_dom_id
+
     # 4.1.0 P5 — route-metadata-driven breadcrumbs. Templates use
     # `{{ crumbs(request) }}` (or implicitly via the breadcrumb macro)
     # to fetch the trail. Resolution order in route_metadata.get_crumbs:
@@ -1398,25 +1425,6 @@ def create_app() -> FastAPI:
     from app.services.route_metadata import get_crumbs as _get_crumbs
 
     templates.env.globals["crumbs"] = _get_crumbs
-
-    # 4.1.0 P6 — active coverage quest exposed to every template so the
-    # quest tray can render above the breadcrumb when one is in flight.
-    # Resolves silently to None on any error (unauth, no tenant, etc.).
-    def _active_quest(request):
-        try:
-            from app.services.quest import get_quest_id_from_request, get_quest
-            qid = get_quest_id_from_request(request)
-            if not qid:
-                return None
-            q = get_quest(qid)
-            if q and q.get("status") == "active":
-                from app.services.quest import quest_summary
-                return quest_summary(q)
-        except Exception:
-            return None
-        return None
-
-    templates.env.globals["active_quest"] = _active_quest
 
     # --- Helper function to render templates with global context ---
     # --- Helper function to render templates with global context ---
@@ -1495,7 +1503,7 @@ def create_app() -> FastAPI:
                     try:
                         _siems = _db.get_client_siems(_cid)
                         ctx["space_labels"] = {
-                            s["space"]: f'{s["label"]} ({s["environment_role"].title()})'
+                            s["space"]: s.get("name") or s["label"]
                             for s in _siems if s.get("space")
                         }
                     except Exception:
@@ -1527,7 +1535,6 @@ def create_app() -> FastAPI:
     app.include_router(external_sharing.router)
     app.include_router(clients_api.router)
     app.include_router(management_api.router)
-    app.include_router(quest_api.router)
     app.include_router(cti_api.router)
     app.include_router(mitre_api.router)
     
@@ -1774,7 +1781,7 @@ def create_app() -> FastAPI:
             sid = s.get("id")
             if not sp or not sid:
                 continue
-            label = f'{s["label"]} ({s["environment_role"].title()})'
+            label = s.get("name") or s["label"]
             scope_labels[f'{sid}|{str(sp).lower()}'] = label
             # last-writer-wins for the legacy dict (intentionally lossy)
             space_labels[sp] = label
@@ -1783,7 +1790,24 @@ def create_app() -> FastAPI:
         # back to space-only keys for templates that haven't migrated.
         scopes = sorted(metrics_all.rules_by_scope.keys()) if metrics_all.rules_by_scope else []
         spaces = sorted(metrics_all.rules_by_space.keys()) if metrics_all.rules_by_space else []
-        
+
+        # Destinations whose SIEM failed the reachability check before the last sync: their
+        # rules are shown from TIDE's copy. A brief notice, not a banner (it fades after 10 s).
+        offline = db.get_offline_scopes()
+        offline_names = sorted({
+            scope_labels.get(f"{sid}|{str(sp).lower()}") for sid, sp in offline
+            if f"{sid}|{str(sp).lower()}" in scope_labels
+        })
+        offline_notice = ""
+        if offline_names:
+            offline_notice = (
+                f"{', '.join(offline_names)} could not be reached at the last sync; "
+                "their rules are shown from TIDE's last copy."
+                if len(offline_names) <= 2 else
+                f"{len(offline_names)} SIEMs could not be reached at the last sync; "
+                "their rules are shown from TIDE's last copy."
+            )
+
         return render_template(
             "pages/rules/rule_health.html",
             request,
@@ -1811,9 +1835,10 @@ def create_app() -> FastAPI:
                 "sort_col": sort_col_q,
                 "sort_dir": sort_dir_q,
                 "view": qp.get("view") if qp.get("view") in ("cards", "table") else "",
+                "offline_notice": offline_notice,
             }
         )
-    
+
     @app.get("/heatmap", response_class=HTMLResponse, name="heatmap")
     def heatmap_page(request: Request, user: CurrentUser):
         """Heatmap page."""
@@ -1881,7 +1906,7 @@ def create_app() -> FastAPI:
         """Dashboard page - Aggregated overview of detection engineering posture."""
         import os
         from app.services.database import get_database_service
-        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats, get_baselines_overview
+        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats, get_baselines_overview, get_system_baselines_rollup
         db = get_database_service()
         
         # Resolve active client for tenant-scoped metrics
@@ -1928,10 +1953,12 @@ def create_app() -> FastAPI:
             inventory_stats = get_inventory_stats()
             cve_stats = get_cve_overview_stats()
             baselines_overview = get_baselines_overview()
+            baselines_rollup = get_system_baselines_rollup()
         except Exception:
             inventory_stats = None
             cve_stats = None
             baselines_overview = []
+            baselines_rollup = None
         
         return render_template(
             "pages/core/dashboard.html",
@@ -1949,6 +1976,7 @@ def create_app() -> FastAPI:
                 "inventory_stats": inventory_stats,
                 "cve_stats": cve_stats,
                 "baselines_overview": baselines_overview,
+                "baselines_rollup": baselines_rollup,
             }
         )
     
@@ -2737,8 +2765,7 @@ def create_app() -> FastAPI:
                 deploy_targets.append({
                     "siem_id": s["id"],
                     "space": s["space"],
-                    "label": f'{s["label"]} ({s["environment_role"].title()})',
-                    "environment_role": s["environment_role"],
+                    "label": s.get("name") or s["label"],
                 })
 
         indices = sigma_mod.get_elastic_indices()

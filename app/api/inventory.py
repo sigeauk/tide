@@ -33,11 +33,13 @@ from __future__ import annotations
 import logging
 import json
 import uuid
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from app.api.deps import ActiveClient, CurrentUser, RequireUser
 from app.inventory_engine import (
+    get_system_steps,
     add_classification, add_cve_technique_override, add_host, add_host_software,
     add_software, add_system,
     add_cve_detection, remove_cve_detection, get_cve_detections,
@@ -53,18 +55,18 @@ from app.inventory_engine import (
     save_mitre_cve_map,
     build_system_report_data, build_cve_report_data, build_baseline_report_data,
     # Baselines
-    list_playbooks, get_playbook, get_playbook_header, get_baselines_overview,
+    list_playbooks, get_playbook, get_template, get_baselines_overview, count_system_baselines,
     create_playbook, delete_playbook, update_playbook,
     add_playbook_step, delete_playbook_step,
-    apply_baseline, remove_baseline, get_system_baselines,
-    # Tactic-level CRUD
-    add_step_technique, remove_step_technique, update_step_technique,
-    add_step_detection, remove_step_detection,
-    update_playbook_step, get_playbook_step, get_step_affected_systems,
-    get_baseline_step_coverage,
+    apply_baseline, remove_baseline, get_system_baselines, create_system_baseline,
+    # Techniques (steps)
+    add_step_technique, add_step_detection, relink_step_detection, remove_step_detection,
+    get_playbook_step, get_step_owner, add_technique, update_technique, parse_technique_ids,
+    canonical_tactic,
     normalize_technique_id,
     # Blind Spots
-    add_blind_spot, remove_blind_spot, get_blind_spots,
+    add_blind_spot, remove_blind_spot, get_blind_spots, update_blind_spot,
+    list_cve_detections, _load_applied_detections, _enrich_detections_with_applied,
     # Baseline Snapshots
     create_baseline_snapshot, create_all_baseline_snapshots,
     get_baseline_snapshots, delete_baseline_snapshot,
@@ -130,10 +132,6 @@ def _render(name: str, request: Request, ctx: dict):
     return _templates(request).TemplateResponse(request, name, base)
 
 
-def _get_conn_inline():
-    from app.services.database import get_database_service
-    return get_database_service().get_connection()
-
 
 def _gone_redirect(request: Request, fallback_url: str = "/") -> Response:
     """Return a redirect instead of a hard 404 when a resource is not found
@@ -158,22 +156,67 @@ def page_systems(request: Request, user: CurrentUser, client_id: ActiveClient):
     })
 
 
+_STEP_VIEWS = ("cards", "table")
+_TACTIC_SORTS = ("attack", "alpha", "off")
+
+
+def _step_grid_filters(request: Request) -> Dict[str, Any]:
+    """The system page's technique filters, read from the query string. Shared by the page (so a
+    reload or a shared link restores the same view) and the grid endpoint (so they never drift)."""
+    q = request.query_params
+    tactic_sort = q.get("tactic_sort", "")
+    view = q.get("view", "")
+    return {
+        "search": q.get("search", ""),
+        "tactic": [t for t in q.getlist("tactic") if t],
+        # Empty means "not chosen in the URL": the page fills it from the browser's remembered
+        # choice before the grid first loads, and the grid endpoint falls back to the default.
+        "tactic_sort": tactic_sort if tactic_sort in _TACTIC_SORTS else "",
+        "sort_name": q.get("sort_name", "") if q.get("sort_name") in ("asc", "desc") else "",
+        "status": q.get("status", ""),
+        "mapping": q.get("mapping", ""),
+        "baseline_id": q.get("baseline_id", ""),
+        "group": [g for g in q.getlist("group") if g in ("baseline", "tactic", "none")],
+        "view": view if view in _STEP_VIEWS else "",
+        "technique": q.get("technique", ""),
+    }
+
+
+def _system_baseline_or_none(system_id: str, baseline_id: str, client_id: str):
+    """One of this system's own baselines (its copy of a template, or one it started), else None.
+    A template, or another system's baseline, is never managed through this system."""
+    pb = get_playbook(baseline_id, client_id=client_id) if baseline_id else None
+    return pb if pb and pb.system_id == system_id else None
+
+
+def _system_page(request: Request, system, user, client_id: str):
+    """The system page, where all of its baselines are managed."""
+    from app.services.report_generator import CLASSIFICATION_OPTIONS
+    return _render("pages/inventory/system_detail.html", request, {
+        "active_page": "systems", "system": system, "system_id": system.id,
+        "host_summaries": get_host_summaries(system.id, client_id=client_id), "user": user,
+        "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
+        "classification_options": CLASSIFICATION_OPTIONS,
+        "filters": _step_grid_filters(request),
+        # Rollups for the metric strip, and the tactic/baseline lists for the filters; the grid
+        # loads over htmx with the filters applied.
+        **get_system_steps(system.id, client_id=client_id),
+    })
+
+
 @router.get("/systems/{system_id}", response_class=HTMLResponse)
 def page_system_detail(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
-    from app.services.report_generator import CLASSIFICATION_OPTIONS
     system = get_system(system_id, client_id=client_id)
     if not system:
         return _gone_redirect(request, "/systems")
-    host_summaries = get_host_summaries(system_id, client_id=client_id)
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    all_baselines = list_playbooks(client_id=client_id)
-    return _render("pages/inventory/system_detail.html", request, {
-        "active_page": "systems", "system": system,
-        "host_summaries": host_summaries, "user": user,
-        "classifications": list_classifications(client_id=client_id), "clf_colors": _clf_color_map(client_id=client_id),
-        "classification_options": CLASSIFICATION_OPTIONS,
-        "baselines": baselines, "playbooks": all_baselines,
-    })
+    return _system_page(request, system, user, client_id)
+
+
+@router.get("/systems/{system_id}/baselines/{baseline_id}")
+def page_system_baseline(system_id: str, baseline_id: str, user: CurrentUser):
+    """Old address of a page that no longer exists: a system's baselines are managed on the
+    system page. Kept so bookmarks land there, filtered to that baseline."""
+    return RedirectResponse(url=f"/systems/{system_id}?baseline_id={quote(baseline_id)}", status_code=301)
 
 
 @router.get("/hosts/{host_id}", response_class=HTMLResponse)
@@ -808,83 +851,42 @@ async def api_upload_mitre_mapping(
 # ---------------------------------------------------------------------------
 
 
-def _baseline_coverage_with_step_detections(baseline_id: str, covered_ttps, ttp_rule_counts):
-    """Return tenant-scoped SIEM coverage/counts for baseline pill rendering.
-
-    Baseline pages should reflect only detection_rules visible in the active
-    tenant scopes, so colour and count remain aligned with the technique modal
-    rule list."""
-    return set(covered_ttps), dict(ttp_rule_counts)
-
-
 @router.get("/baselines", response_class=HTMLResponse)
 def page_baselines(request: Request, user: CurrentUser, client_id: ActiveClient):
     baselines = get_baselines_overview(client_id=client_id)
     return _render("pages/inventory/baselines.html", request, {
         "active_page": "baselines", "baselines": baselines, "user": user,
+        "system_baselines": count_system_baselines(client_id=client_id),
     })
 
 
 @router.get("/baselines/{baseline_id}", response_class=HTMLResponse)
 def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
-    pb = get_playbook(baseline_id, client_id=client_id)
+    """A template: its techniques. It has no link to the systems it was applied to -- each got
+    its own copy -- so it can be applied to any system, again if need be."""
+    pb = get_template(baseline_id, client_id=client_id)
     if not pb:
         return _gone_redirect(request, "/baselines")
-    # Group tactics by MITRE tactic
-    tactic_groups = {}
-    for t in pb.tactics:
-        tac = t.tactic or "Other"
-        tactic_groups.setdefault(tac, []).append(t)
-    # Systems applied to this baseline (scoped to active client)
-    with _get_conn_inline() as conn:
-        sys_rows = conn.execute(
-            "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id "
-            "WHERE sb.playbook_id = ? AND s.client_id = ? ORDER BY s.name",
-            [baseline_id, client_id],
-        ).fetchall()
-    applied_systems = [{"system_id": r[0], "system_name": r[1]} for r in sys_rows]
-    all_systems = list_systems(client_id=client_id)
-    step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
-    # Per-technique coverage for pill coloring
-    from app.services.database import get_database_service as _get_db
-    _db = _get_db()
-    covered_ttps, ttp_rule_counts = _baseline_coverage_with_step_detections(
-        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
-        _db.get_ttp_rule_counts(client_id=client_id),
-    )
     return _render("pages/inventory/baseline_detail.html", request, {
         "active_page": "baselines", "baseline": pb, "user": user,
         "mitre_tactics": MITRE_TACTICS,
-        "tactic_groups": tactic_groups,
-        "applied_systems": applied_systems,
-        "all_systems": all_systems,
-        "step_coverage": step_coverage,
-        "covered_ttps": covered_ttps,
-        "ttp_rule_counts": ttp_rule_counts,
+        "all_systems": list_systems(client_id=client_id),
+    })
+
+
+def _template_techniques(request: Request, baseline_id: str, client_id: str):
+    return _render("partials/baseline_tactics.html", request, {
+        "baseline": get_template(baseline_id, client_id=client_id), "editable": True,
     })
 
 
 @router.get("/api/baselines/{baseline_id}/preview", response_class=HTMLResponse)
 def api_baseline_list_preview(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
     """Expanded techniques preview used by /baselines list cards."""
-    pb = get_playbook(baseline_id, client_id=client_id)
+    pb = get_template(baseline_id, client_id=client_id)
     if not pb:
         return HTMLResponse("")
-    step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
-    from app.services.database import get_database_service as _get_db
-    _db = _get_db()
-    covered_ttps, ttp_rule_counts = _baseline_coverage_with_step_detections(
-        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
-        _db.get_ttp_rule_counts(client_id=client_id),
-    )
-    return _render("partials/baseline_tactics.html", request, {
-        "baseline": pb,
-        "step_coverage": step_coverage,
-        "covered_ttps": covered_ttps,
-        "ttp_rule_counts": ttp_rule_counts,
-        "user": user,
-    })
+    return _render("partials/baseline_tactics.html", request, {"baseline": pb})
 
 
 # ---------------------------------------------------------------------------
@@ -996,7 +998,7 @@ def api_generate_baselines_form(
 
 
 def _build_baseline_groups(
-    selections: list[str], client_id: str,
+    selections: list[str], client_id: str, system_id: str,
 ) -> list[dict]:
     """Query sigma_rules_index and group matching rules into baseline buckets.
 
@@ -1006,9 +1008,9 @@ def _build_baseline_groups(
     ELSE service END`` so that e.g. "windows" yields ~20 modular baselines
     (one per event type / service).
 
-    Each group dict includes an ``exists`` flag (True when a playbook with
-    that name is already present).  The UI shows existing baselines
-    unchecked by default so the user can choose to re-create them.
+    Each group dict includes an ``exists`` flag (True when this system already
+    has a baseline with that name).  The UI shows those unchecked by default;
+    generating one again adds a second, named "<name> (copy)".
 
     Returns ``groups`` — a flat list of baseline group dicts.
     """
@@ -1032,7 +1034,7 @@ def _build_baseline_groups(
             ORDER BY tech, gkey
         """, selections).fetchall()
 
-    existing_names = {p.name for p in list_playbooks(client_id=client_id)}
+    existing_names = {b["playbook_name"] for b in get_system_baselines(system_id, include_detection_details=False, client_id=client_id)}
     groups: list[dict] = []
     for tech, gkey, cnt in rows:
         tech_label = tech.replace("_", " ").title()
@@ -1056,7 +1058,7 @@ async def api_generate_baselines_preview(
     form = await request.form()
     system_id = form.get("system_id", "")
     techs = form.getlist("techs")
-    groups = _build_baseline_groups(techs, client_id)
+    groups = _build_baseline_groups(techs, client_id, system_id)
     new_groups = [g for g in groups if not g["exists"]]
     existing_groups = [g for g in groups if g["exists"]]
     total_rules = sum(g["count"] for g in new_groups)
@@ -1074,17 +1076,16 @@ def _generate_baselines_from_sigma(
     groups: list[dict],
     client_id: str,
 ) -> int:
-    """Phase 4 baseline engine — create playbooks from Sigma rule groups.
+    """Create baselines of this system's own from Sigma rule groups -- no template behind them.
 
     For each group (tech + sub-grouping combination):
-      1. Create a Playbook with a description summarising the scope.
+      1. Start an empty baseline on the system, with a description summarising the scope.
       2. Query sigma_rules_index for matching rule_ids using the same
          ``_TECH_COL`` / ``_GROUP_COL`` expressions as the preview.
       3. For each rule, load the YAML file via sigma_helper, extract
          description / falsepositives / techniques / tactics.
-      4. Create a PlaybookStep per rule with step_detections and
-         step_techniques populated.
-      5. Apply the new baseline to the triggering system_id.
+      4. Add one technique per rule: its title, ATT&CK techniques and description only. The
+         technique window suggests Sigma rules from those ATT&CK ids.
 
     Returns the number of baselines created.
     """
@@ -1122,14 +1123,13 @@ def _generate_baselines_from_sigma(
         if not rule_rows:
             continue
 
-        # Create the playbook in the tenant DB
         scope = gkey.replace("_", " ").title() if gkey else "General"
         description = (
             f"Auto-generated detection baseline for {tech.replace('_', ' ').title()} "
             f"({scope}) — {len(rule_rows)} Sigma rules covering "
             f"severity levels critical/high/medium."
         )
-        pb = create_playbook(baseline_name, description, client_id=client_id)
+        baseline = create_system_baseline(system_id, baseline_name, description, client_id=client_id)
 
         # Create one PlaybookStep per Sigma rule
         for step_num, (rule_id, title, file_path, idx_techniques, idx_tactics) in enumerate(rule_rows, 1):
@@ -1152,11 +1152,10 @@ def _generate_baselines_from_sigma(
             primary_tactic = tactics[0] if tactics else ""
 
             step = add_playbook_step(
-                pb.id,
+                baseline.playbook_id,
                 step_num,
                 title or f"Rule {rule_id}",
                 technique_id=primary_technique,
-                required_rule=rule_id,
                 description=rule_desc.strip(),
                 tactic=primary_tactic,
                 client_id=client_id,
@@ -1167,22 +1166,6 @@ def _generate_baselines_from_sigma(
                     add_step_technique(step.id, extra_tech, client_id=client_id)
                 except Exception:
                     pass
-
-            # Sigma rules are tracked as step_detections with source="sigma"
-            # so they appear in the detection list, but only SIEM/manual
-            # detections can be applied to systems for coverage (green).
-            add_step_detection(
-                step.id,
-                rule_ref=rule_id,
-                note=f"Sigma rule {rule_id}",
-                source="sigma",
-                client_id=client_id,
-            )
-
-        try:
-            apply_baseline(system_id, pb.id, client_id=client_id)
-        except Exception as e:
-            logger.warning(f"[GENERATE] Could not apply baseline {baseline_name}: {e}")
 
         created += 1
         logger.info(f"[GENERATE] Created baseline '{baseline_name}' ({len(rule_rows)} rules)")
@@ -1208,7 +1191,7 @@ async def api_generate_baselines(
     if not system:
         raise HTTPException(status_code=404, detail="System not found")
 
-    groups = _build_baseline_groups(techs, client_id)
+    groups = _build_baseline_groups(techs, client_id, system_id)
 
     # If the user explicitly selected baselines in the preview, only
     # generate those.  Otherwise fall back to all non-existing groups.
@@ -1451,7 +1434,7 @@ async def import_baseline_json(
         )
     baseline_info = payload.get("baseline") or {}
     if conflict == "override" and target_baseline_id:
-        baseline = get_playbook(target_baseline_id, client_id=client_id)
+        baseline = get_template(target_baseline_id, client_id=client_id)
         if not baseline:
             raise HTTPException(status_code=404, detail="Target baseline not found")
         with db.get_connection() as conn:
@@ -1488,12 +1471,15 @@ async def import_baseline_json(
         )
         for technique_id in step_data.get("techniques") or []:
             add_step_technique(step.id, technique_id, client_id=client_id)
+        # A template carries Sigma suggestions only; rule mappings are made on a system.
         for detection in step_data.get("detections") or []:
+            if (detection.get("source") or "manual") != "sigma":
+                continue
             add_step_detection(
                 step.id,
                 imported_ids.get(detection.get("rule_ref"), detection.get("rule_ref") or ""),
                 note=detection.get("display_name") or detection.get("note") or "",
-                source=detection.get("source") or "manual",
+                source="sigma",
                 client_id=client_id,
             )
     return {"status": "ok", "baseline_id": baseline.id, "imported_rules": len(imported_ids)}
@@ -1576,8 +1562,10 @@ def export_system_configuration(
     )
 
 
-async def _import_baseline_payload(payload: dict, client_id: str) -> str:
-    """Create an imported baseline copy and return its new ID."""
+async def _import_baseline_payload(payload: dict, client_id: str, system_id: str = None) -> str:
+    """Create an imported baseline and return its new ID: a template, or -- given ``system_id``
+    -- that system's own baseline, with its rule mappings applied to it. A template carries
+    techniques and Sigma suggestions only, so any other mappings in the file are left out."""
     _ensure_baseline_import_schema(client_id)
     source_rules = payload.get("rules") or []
     db = get_database_service()
@@ -1630,13 +1618,20 @@ async def _import_baseline_payload(payload: dict, client_id: str) -> str:
             original_id, original_id, source_siem_id, source_space
         )
     baseline_info = payload.get("baseline") or {}
-    existing_names = {item.get("name") for item in (get_baselines_overview(client_id=client_id) or [])}
-    imported_name = _import_name(baseline_info.get("name") or "Imported baseline", existing_names)
+    imported_name = baseline_info.get("name") or "Imported baseline"
+    if not system_id:
+        existing_names = {item.get("name") for item in (get_baselines_overview(client_id=client_id) or [])}
+        imported_name = _import_name(imported_name, existing_names)
     baseline = create_playbook(
         imported_name,
         baseline_info.get("description") or "",
         client_id=client_id,
     )
+    if system_id:
+        with db.get_connection() as conn:
+            conn.execute("UPDATE playbooks SET system_id = ? WHERE id = ?", [system_id, baseline.id])
+            conn.execute("INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?)",
+                         [system_id, baseline.id, client_id])
     for step_data in payload.get("steps") or []:
         step = add_playbook_step(
             baseline.id,
@@ -1651,13 +1646,18 @@ async def _import_baseline_payload(payload: dict, client_id: str) -> str:
         for technique_id in step_data.get("techniques") or []:
             add_step_technique(step.id, technique_id, client_id=client_id)
         for detection in step_data.get("detections") or []:
-            add_step_detection(
+            source = detection.get("source") or "manual"
+            if source != "sigma" and not system_id:
+                continue
+            det = add_step_detection(
                 step.id,
                 imported_ids.get(detection.get("rule_ref"), detection.get("rule_ref") or ""),
                 note=detection.get("display_name") or detection.get("note") or "",
-                source=detection.get("source") or "manual",
+                source=source,
                 client_id=client_id,
             )
+            if source != "sigma":
+                apply_detection(det.id, system_id=system_id, client_id=client_id)
     return baseline.id
 
 
@@ -1746,33 +1746,24 @@ async def import_system_configuration(
                         client_id=client_id,
                     )
 
-    baseline_ids = {}
-    if include_baselines:
-        for baseline_payload in payload.get("baselines") or []:
-            source_baseline_id = baseline_payload.get("baseline_id")
-            imported = await _import_baseline_payload(
-                baseline_payload if include_rules else {**baseline_payload, "rules": []},
-                client_id,
-            )
-            baseline_ids[source_baseline_id] = imported
-
-    db = get_database_service()
+    # Each system gets its own baseline. A file exported before baselines belonged to systems
+    # can list one baseline against several systems; each of them gets a full copy.
+    payloads = {b.get("baseline_id"): b for b in payload.get("baselines") or []} if include_baselines else {}
     assignments_created = 0
-    with db.get_connection() as conn:
-        for assignment in payload.get("assignments") or [] if include_baselines else []:
-            new_system_id = system_ids.get(assignment.get("system_id"))
-            new_baseline_id = baseline_ids.get(assignment.get("playbook_id"))
-            if not new_system_id or not new_baseline_id:
-                continue
-            conn.execute(
-                "INSERT INTO system_baselines (system_id, playbook_id) VALUES (?, ?)",
-                [new_system_id, new_baseline_id],
-            )
-            assignments_created += 1
+    for assignment in payload.get("assignments") or [] if include_baselines else []:
+        new_system_id = system_ids.get(assignment.get("system_id"))
+        baseline_payload = payloads.get(assignment.get("playbook_id"))
+        if not new_system_id or not baseline_payload:
+            continue
+        await _import_baseline_payload(
+            baseline_payload if include_rules else {**baseline_payload, "rules": []},
+            client_id, system_id=new_system_id,
+        )
+        assignments_created += 1
     return {
         "status": "ok",
         "systems": len(system_ids),
-        "baselines": len(baseline_ids),
+        "baselines": assignments_created,
         "assignments": assignments_created,
     }
 
@@ -1924,6 +1915,9 @@ async def api_import_baseline(
 
 @router.delete("/api/baselines/{baseline_id}", response_class=HTMLResponse)
 def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser, client_id: ActiveClient):
+    """Delete a template. Systems keep their own copies of it."""
+    if not get_template(baseline_id, client_id=client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found")
     delete_playbook(baseline_id, client_id=client_id)
     hx_target = request.headers.get("HX-Target", "")
     if not hx_target or hx_target == "body":
@@ -1938,107 +1932,141 @@ def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser, c
 def api_update_baseline(
     request: Request, baseline_id: str, user: RequireUser, client_id: ActiveClient,
     name: str = Form(...), description: str = Form(""),
-    system_id: str = Form(""),
 ):
+    if not get_template(baseline_id, client_id=client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found")
     update_playbook(baseline_id, name=name, description=description, client_id=client_id)
-    if system_id:
-        baselines = get_system_baselines(system_id, client_id=client_id)
-        playbooks = list_playbooks(client_id=client_id)
-        return _render("partials/baseline_coverage.html", request, {
-            "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
-        })
     resp = HTMLResponse("")
     resp.headers["HX-Redirect"] = f"/baselines/{baseline_id}"
     return resp
+
+
+def _template_step_or_404(step_id: str, client_id: str) -> Dict[str, Any]:
+    """The owner of a template's step. A system's step is edited from its system, never here."""
+    owner = get_step_owner(step_id)
+    if not owner or owner["system_id"] or owner["client_id"] != client_id:
+        raise HTTPException(status_code=404, detail="Technique not found")
+    return owner
+
+
+def _technique_fields(title: str, tactic: str, description: str, technique_ids: str,
+                      current_tactic: str = "") -> Dict[str, Any]:
+    """The form's fields, cleaned. The tactic is the first ATT&CK row's (the picker sends it);
+    with no rows at all, a technique keeps the tactic it had."""
+    title = (title or "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="A technique needs a title")
+    tactic = (tactic or "").strip()
+    return {"title": title, "tactic": canonical_tactic(tactic) if tactic else (current_tactic or ""),
+            "description": (description or "").strip(), "technique_ids": parse_technique_ids(technique_ids)}
+
+
+def _technique_picker_context(step=None) -> Dict[str, Any]:
+    """What components/technique_form.html needs for its tactic -> technique rows (the same
+    picker as the rule form), with the step's current ATT&CK ids preselected."""
+    from app.api.rules import _build_technique_groups
+    groups, _ = _build_technique_groups(get_database_service())
+    for g in groups:
+        g["tactic"] = canonical_tactic(g["tactic"])
+    selected = []
+    if step:
+        selected = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    return {"technique_groups": groups, "selected_ids": selected}
+
+
+def _actor(user) -> Optional[str]:
+    return (user.name or user.username) if user else None
 
 
 @router.post("/api/baselines/{baseline_id}/tactics", response_class=HTMLResponse)
 def api_add_tactic(
     request: Request, baseline_id: str, user: RequireUser, client_id: ActiveClient,
-    title: str = Form(...), step_number: int = Form(0),
-    technique_id: str = Form(""),
+    title: str = Form(...), technique_ids: str = Form(""),
     description: str = Form(""), tactic: str = Form(""),
 ):
-    if step_number < 1:
-        pb = get_playbook(baseline_id, client_id=client_id)
-        step_number = (len(pb.tactics) + 1) if pb else 1
-    add_playbook_step(baseline_id, step_number, title, technique_id, "", description, tactic=tactic or None, client_id=client_id)
-    pb = get_playbook(baseline_id, client_id=client_id)
-    from app.services.database import get_database_service as _get_db
-    _db = _get_db()
-    cov, counts = _baseline_coverage_with_step_detections(
-        baseline_id, _db.get_all_covered_ttps(client_id=client_id),
-        _db.get_ttp_rule_counts(client_id=client_id),
-    )
-    return _render("partials/baseline_tactics.html", request, {
-        "baseline": pb, "covered_ttps": cov, "ttp_rule_counts": counts,
+    if not get_template(baseline_id, client_id=client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    add_technique(baseline_id, **_technique_fields(title, tactic, description, technique_ids),
+                  actor=_actor(user), client_id=client_id)
+    resp = _template_techniques(request, baseline_id, client_id)
+    resp.headers["HX-Trigger-After-Swap"] = "tideCloseModal"
+    return resp
+
+
+@router.get("/api/baselines/{baseline_id}/tactics-new", response_class=HTMLResponse)
+def api_new_tactic_form(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Add a technique to a template, in a window over the template page."""
+    if not get_template(baseline_id, client_id=client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    return _render("components/technique_form.html", request, {
+        **_technique_picker_context(),
+        "action": f"/api/baselines/{baseline_id}/tactics", "method": "post",
+        "target": "#baseline-tactics", "heading": "Add technique",
+        "note": "Added to this template only. Systems that already use it keep their own copy.",
     })
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/edit", response_class=HTMLResponse)
+def api_edit_tactic_form(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Edit a template's technique, in a window over the template page."""
+    _template_step_or_404(tactic_id, client_id)
+    step = get_playbook_step(tactic_id)
+    return _render("components/technique_form.html", request, {
+        "step": step, **_technique_picker_context(step),
+        "action": f"/api/baselines/tactics/{tactic_id}", "method": "put",
+        "target": "#baseline-tactics", "heading": "Edit technique",
+        "note": "Changes this template only. Systems that already use it keep their own copy.",
+    })
+
+
+@router.put("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
+def api_update_tactic(
+    request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
+    title: str = Form(...), tactic: str = Form(""), description: str = Form(""),
+    technique_ids: str = Form(""),
+):
+    owner = _template_step_or_404(tactic_id, client_id)
+    current = get_playbook_step(tactic_id)
+    update_technique(tactic_id, **_technique_fields(title, tactic, description, technique_ids, current.tactic),
+                     actor=_actor(user), client_id=client_id)
+    resp = _template_techniques(request, owner["playbook_id"], client_id)
+    resp.headers["HX-Trigger-After-Swap"] = "tideCloseModal"
+    return resp
 
 
 @router.delete("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
-def api_delete_tactic(request: Request, tactic_id: str, playbook_id: str = Query(...), user: RequireUser = None, client_id: ActiveClient = None):
+def api_delete_tactic(request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient):
+    owner = _template_step_or_404(tactic_id, client_id)
     delete_playbook_step(tactic_id, client_id=client_id)
-    # When hx-target="body", HTMX does not send the HX-Target header (body has no id).
-    # An empty or absent HX-Target means we came from the tactic detail page and should
-    # navigate back to the baseline list rather than returning a bare partial.
-    hx_target = request.headers.get("HX-Target", "")
-    if not hx_target or hx_target == "body":
-        resp = HTMLResponse("")
-        resp.headers["HX-Redirect"] = f"/baselines/{playbook_id}"
-        return resp
-    pb = get_playbook(playbook_id, client_id=client_id)
-    from app.services.database import get_database_service as _get_db
-    _db = _get_db()
-    cov, counts = _baseline_coverage_with_step_detections(
-        playbook_id, _db.get_all_covered_ttps(client_id=client_id),
-        _db.get_ttp_rule_counts(client_id=client_id),
-    )
-    return _render("partials/baseline_tactics.html", request, {
-        "baseline": pb, "covered_ttps": cov, "ttp_rule_counts": counts,
-    })
+    return _template_techniques(request, owner["playbook_id"], client_id)
 
 
 @router.post("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
 def api_apply_baseline(request: Request, baseline_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
     try:
-        apply_baseline(system_id, baseline_id, client_id=client_id)
+        copy = apply_baseline(system_id, baseline_id, client_id=client_id)
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
-    if request.headers.get("HX-Target") == "baseline-coverage":
-        baselines = get_system_baselines(system_id, client_id=client_id)
-        playbooks = list_playbooks(client_id=client_id)
-        return _render("partials/baseline_coverage.html", request, {
-            "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
-        })
+    if request.query_params.get("return") == "system-dialog":
+        resp = _baselines_dialog(request, system_id, client_id)
+        resp.headers["HX-Trigger"] = "stepsChanged"
+        return resp
+    # From the template's page: show the system with its new copy.
     resp = HTMLResponse("")
-    resp.headers["HX-Redirect"] = f"/baselines/{baseline_id}"
+    resp.headers["HX-Redirect"] = f"/systems/{system_id}?baseline_id={copy.playbook_id}"
     return resp
 
 
 @router.delete("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
 def api_remove_baseline(request: Request, baseline_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
+    """Remove a system's own baseline (``baseline_id`` is the system's copy, not the template)."""
     try:
         remove_baseline(system_id, baseline_id, client_id=client_id)
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
-    if request.headers.get("HX-Target") == "baseline-coverage":
-        baselines = get_system_baselines(system_id, client_id=client_id)
-        playbooks = list_playbooks(client_id=client_id)
-        return _render("partials/baseline_coverage.html", request, {
-            "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
-        })
-    resp = HTMLResponse("")
-    resp.headers["HX-Redirect"] = f"/baselines/{baseline_id}"
+    resp = _baselines_dialog(request, system_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
-
-
-@router.get("/api/baselines/system/{system_id}/coverage", response_class=HTMLResponse)
-def api_system_baseline_coverage(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    playbooks = list_playbooks(client_id=client_id)
-    return _render("partials/baseline_coverage.html", request, {
-        "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
-    })
 
 
 # ---------------------------------------------------------------------------
@@ -2103,303 +2131,63 @@ def api_audit_history(request: Request, system_id: str, user: CurrentUser, clien
     })
 
 
-# ---------------------------------------------------------------------------
-# Tactic Detail Page + Tactic-level CRUD
-# ---------------------------------------------------------------------------
-
-def _build_technique_rules(step, client_id: str = None):
-    """Build technique_id -> {has_detection, rule_count, rules} map for pills and dropdown."""
-    from app.services.database import get_database_service
-    db = get_database_service()
-    covered_ttps = db.get_all_covered_ttps(client_id=client_id)
-    technique_rules = {}
-    for t in step.techniques:
-        tid = t.technique_id.upper()
-        rules = db.get_rules_for_technique(tid, enabled_only=False, client_id=client_id)
-        technique_rules[tid] = {
-            "has_detection": tid in covered_ttps,
-            "rule_count": len(rules),
-            "rules": rules,
-        }
-    return technique_rules
-
-
-@router.get("/baselines/{baseline_id}/tactics/{tactic_id}", response_class=HTMLResponse)
-def page_tactic_detail(request: Request, baseline_id: str, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
-    pb = get_playbook_header(baseline_id, client_id=client_id)
-    if not pb:
-        return _gone_redirect(request, "/baselines")
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    if not step:
-        return _gone_redirect(request, f"/baselines/{baseline_id}")
-    affected_systems = get_step_affected_systems(tactic_id, client_id=client_id)
-    blind_spots = get_blind_spots("tactic", tactic_id, client_id=client_id)
-    all_siem_rules = get_all_siem_rules(client_id=client_id)
-
-    technique_rules = _build_technique_rules(step, client_id=client_id)
-
-    # Sigma convert context — only when sigma detections exist on this step
-    sigma_ctx: dict = {}
-    sigma_dets = [d for d in step.detections if (d.source or "manual") == "sigma"]
-    if sigma_dets:
-        from app import sigma_helper as sigma_mod
-        from app.services.database import get_database_service
-        _db = get_database_service()
-        sigma_ctx["backends"] = sigma_mod.get_available_backends()
-        sigma_ctx["pipelines"] = sigma_mod.get_available_pipelines()
-        sigma_ctx["formats"] = sigma_mod.get_output_formats("elasticsearch")
-        sigma_ctx["pipeline_files"] = sigma_mod.list_saved_pipelines()
-        sigma_ctx["template_files"] = sigma_mod.list_saved_templates()
-        # Build deploy targets from client's linked SIEMs
-        client_siems = _db.get_client_siems(client_id) if client_id else []
-        deploy_targets = []
-        for s in client_siems:
-            if s.get("space"):
-                deploy_targets.append({
-                    "siem_id": s["id"],
-                    "space": s["space"],
-                    "label": f'{s["label"]} ({s["environment_role"].title()})',
-                    "environment_role": s["environment_role"],
-                })
-        sigma_ctx["deploy_targets"] = deploy_targets
-        # Resolve sigma rule UUIDs for all sigma detections
-        all_rules_cache = None  # lazy-load for legacy title lookups
-        sigma_rule_ids = []
-        sigma_rule_map = {}  # id → title for selector display
-        for det in sigma_dets:
-            ref = det.rule_ref or ""
-            if not ref:
-                continue
-            # Try as UUID first
-            rule_data = sigma_mod.get_rule_by_id(ref)
-            if rule_data:
-                sigma_rule_ids.append(ref)
-                sigma_rule_map[ref] = rule_data.get("title", ref)
-            else:
-                # Legacy: stored as title — search all rules for matching title
-                if all_rules_cache is None:
-                    all_rules_cache = sigma_mod.load_all_rules()
-                for r in all_rules_cache:
-                    if r.get("title") == ref:
-                        rid = r.get("id", "")
-                        if rid:
-                            sigma_rule_ids.append(rid)
-                            sigma_rule_map[rid] = ref
-                        break
-        # Deduplicate while preserving order
-        seen = set()
-        unique_ids = []
-        for rid in sigma_rule_ids:
-            if rid not in seen:
-                seen.add(rid)
-                unique_ids.append(rid)
-        sigma_ctx["sigma_rule_ids"] = unique_ids
-        sigma_ctx["sigma_rule_map"] = sigma_rule_map
-
-    return _render("pages/inventory/tactic_detail.html", request, {
-        "active_page": "baselines", "baseline": pb, "tactic": step,
-        "step": step,  # alias for partials that still reference step
-        "step_id": tactic_id,  # needed by tactic_affected_systems.html partial
-        "playbook": pb,  # alias for breadcrumb compat
-        "affected_systems": affected_systems, "blind_spots": blind_spots,
-        "all_siem_rules": all_siem_rules,
-        "technique_rules": technique_rules,
-        "rule_name_lookup": _build_rule_name_lookup(client_id),
-        "mitre_tactics": MITRE_TACTICS,
-        "user": user,
-        **sigma_ctx,
-    })
-
-
-@router.put("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
-def api_update_tactic(
-    request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
-    title: str = Form(None), tactic: str = Form(None),
-    description: str = Form(None), step_number: int = Form(None),
-):
-    step = update_playbook_step(tactic_id, title=title, tactic=tactic,
-                                description=description, step_number=step_number, client_id=client_id)
-    if not step:
-        raise HTTPException(status_code=404)
-    resp = HTMLResponse("")
-    resp.headers["HX-Redirect"] = f"/baselines/{step.playbook_id}/tactics/{tactic_id}"
-    return resp
-
-
-@router.post("/api/baselines/tactics/{tactic_id}/techniques", response_class=HTMLResponse)
-def api_add_tactic_technique(
-    request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
-    technique_id: str = Form(...),
-):
-    try:
-        add_step_technique(tactic_id, technique_id, client_id=client_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    resp = _render("partials/tactic_mitre_section.html", request, {
-        "step": step, "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
-    resp.headers["HX-Trigger"] = "stepUpdated"
-    return resp
-
-
-@router.delete("/api/baselines/tactics/{tactic_id}/techniques/{technique_row_id}", response_class=HTMLResponse)
-def api_remove_tactic_technique(
-    request: Request, tactic_id: str, technique_row_id: str, user: RequireUser, client_id: ActiveClient,
-):
-    remove_step_technique(technique_row_id, client_id=client_id)
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    resp = _render("partials/tactic_mitre_section.html", request, {
-        "step": step, "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
-    resp.headers["HX-Trigger"] = "stepUpdated"
-    return resp
-
-
-@router.put("/api/baselines/tactics/{tactic_id}/techniques/{technique_row_id}", response_class=HTMLResponse)
-def api_update_tactic_technique(
-    request: Request, tactic_id: str, technique_row_id: str, user: RequireUser, client_id: ActiveClient,
-    technique_id: str = Form(...),
-):
-    try:
-        update_step_technique(technique_row_id, technique_id, client_id=client_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    resp = _render("partials/tactic_mitre_section.html", request, {
-        "step": step, "technique_rules": _build_technique_rules(step, client_id=client_id),
-    })
-    resp.headers["HX-Trigger"] = "stepUpdated"
-    return resp
-
-
-def _build_rule_name_lookup(client_id: str = None) -> dict:
-    """Build rule name/id -> display metadata for clickable rule names.
-
-    Each entry carries ``rule_id``, ``name``, ``space``, ``siem_id`` and
-    ``environment_role`` (production / staging / '' when the SIEM is no longer
-    linked to the tenant) so the Rule modal opens the exact copy. When a
-    reference matches several copies (e.g. a rule present in staging and in
-    production), the production copy wins.
-
-    NOTE (4.1.0): Migration 37 made `detection_rules` per-tenant-scoped — the
-    shared schema no longer carries a `client_id` column. The table is already
-    tenant-scoped (by tenant DB routing) so we skip the legacy
-    `WHERE client_id = ?` filter that would BinderException against the
-    current schema."""
-    roles: dict = {}
-    if client_id:
-        db = get_database_service()
-        for role in ("staging", "production"):  # production last so it wins on overlap
-            for siem_id, space in db.get_client_siem_scopes(client_id, environment_role=role):
-                roles[(str(siem_id), str(space).lower())] = role
-    with _get_conn_inline() as conn:
-        rows = conn.execute(
-            "SELECT rule_id, name, space, siem_id, raw_data FROM detection_rules"
-        ).fetchall()
-    rank = {"production": 2, "staging": 1, "": 0}
-    lookup: dict = {}
-
-    def _put(key, info):
-        current = lookup.get(key)
-        if current is None or rank[info["environment_role"]] >= rank[current["environment_role"]]:
-            lookup[key] = info
-
-    for rule_id, name, space, siem_id, raw_data in rows:
-        info = {
-            "rule_id": rule_id,
-            "name": name or rule_id,
-            "space": space or "default",
-            "siem_id": siem_id or "",
-            "environment_role": roles.get((str(siem_id), str(space or "default").lower()), ""),
-        }
-        if name:
-            _put(name, info)
-        if rule_id:
-            _put(rule_id, info)
-        for raw_key in _rule_reference_keys({"raw_data": raw_data}):
-            _put(raw_key, info)
-    return lookup
-
-
-def _render_detection_section(request, step, client_id=None):
-    """Render tactic_detection_section.html with all required context."""
-    return _render("partials/tactic_detection_section.html", request, {
-        "step": step,
-        "rule_name_lookup": _build_rule_name_lookup(client_id),
-    })
+def _system_step_or_404(system_id: str, step_id: str, client_id: str) -> None:
+    """A step may only be changed through the system whose baseline it is in."""
+    owner = get_step_owner(step_id)
+    if not get_system(system_id, client_id=client_id) or not owner or owner["system_id"] != system_id:
+        raise HTTPException(status_code=404, detail="Technique not found on this system")
 
 
 @router.post("/api/baselines/tactics/{tactic_id}/detections", response_class=HTMLResponse)
 def api_add_tactic_detection(
     request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
     rule_ref: str = Form(""), note: str = Form(""), source: str = Form("manual"),
-    system_id: str = Form(""),
+    system_id: str = Form(...), rule_scope: str = Form(""), replace_id: str = Form(""),
 ):
-    det = add_step_detection(tactic_id, rule_ref, note, source, client_id=client_id)
-    # 4.1.4 fix: the Coverage Quest passes the quest's system_id so a
-    # rule attached through the Quest is also applied to that system, not
-    # just registered on the baseline step. Without this the rule lived in
-    # step_detections only, never produced an applied_detections row, and
-    # the system's per-host RAG status stayed red. Sigma rules can't be
-    # applied directly (they need convert+deploy first), matching the
-    # guard in api_apply_step_detection. Baseline detail page POSTs do
-    # not include system_id so their behaviour is unchanged.
-    sid = (system_id or "").strip()
-    if det and sid and (source or "manual") != "sigma":
-        try:
-            apply_detection(det.id, system_id=sid, client_id=client_id)
-        except Exception:
-            logger.exception("quest_apply_detection_failed step=%s det=%s system=%s", tactic_id, det.id, sid)
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    resp = _render_detection_section(request, step, client_id=client_id)
-    resp.headers["HX-Trigger"] = "stepUpdated"
+    """Map a rule to one of a system's techniques, from its technique window. With
+    ``replace_id`` (Relink on a mapping whose rule TIDE can't find), that mapping is pointed at
+    the chosen rule instead, keeping its id and history."""
+    _system_step_or_404(system_id, tactic_id, client_id)
+    # The SIEM picker posts "<siem_id>|<space>" alongside the rule id, so the mapping records
+    # which destination's copy was chosen. Manual and Sigma entries have no destination.
+    scope_siem, _, scope_space = (rule_scope or "").partition("|")
+    scope_siem, scope_space = scope_siem.strip() or None, scope_space.strip() or None
+    if replace_id:
+        if replace_id not in {d.id for d in get_playbook_step(tactic_id, client_id=client_id).detections}:
+            raise HTTPException(status_code=404, detail="Mapping not found on this technique")
+        if not (rule_ref and scope_siem):
+            raise HTTPException(status_code=422, detail="Relinking needs a rule picked from the SIEM")
+        relink_step_detection(replace_id, rule_ref=rule_ref, siem_id=scope_siem, space=scope_space, note=note,
+                              actor=_actor(user), client_id=client_id)
+        det_id = replace_id
+    else:
+        det = add_step_detection(
+            tactic_id, rule_ref, note, source, client_id=client_id,
+            siem_id=scope_siem, space=scope_space, created_by=_actor(user),
+        )
+        det_id = det.id if det else None
+    # The technique is this system's own, so mapping a rule to it applies it here. Sigma rules
+    # can't be applied directly (they need converting and deploying first).
+    if det_id and (source or "manual") != "sigma":
+        apply_detection(det_id, system_id=system_id, client_id=client_id)
+    resp = _step_modal_response(request, system_id, tactic_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
 
 
 @router.delete("/api/baselines/tactics/detections/{detection_row_id}", response_class=HTMLResponse)
 def api_remove_tactic_detection(
-    request: Request, detection_row_id: str, step_id: str = Query(...), user: RequireUser = None, client_id: ActiveClient = None,
+    request: Request, detection_row_id: str, user: RequireUser, client_id: ActiveClient,
+    step_id: str = Query(...), system_id: str = Query(...),
 ):
-    remove_step_detection(detection_row_id, client_id=client_id)
+    _system_step_or_404(system_id, step_id, client_id)
     step = get_playbook_step(step_id, client_id=client_id)
-    resp = _render_detection_section(request, step, client_id=client_id)
-    resp.headers["HX-Trigger"] = "stepUpdated"
+    if detection_row_id not in {d.id for d in step.detections}:
+        raise HTTPException(status_code=404, detail="Mapping not found on this technique")
+    remove_step_detection(detection_row_id, client_id=client_id, actor=_actor(user))
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
-
-
-@router.get("/api/baselines/tactics/{tactic_id}/sigma-rules", response_class=HTMLResponse)
-def api_search_sigma_rules_for_step(
-    request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
-    q: str = Query(""),
-):
-    """Return sigma rules matching the techniques on this step, as HTML options."""
-    from app import sigma_helper as sigma_mod
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    if not step:
-        return HTMLResponse("")
-    # Collect all technique IDs mapped on this step
-    technique_ids = [t.technique_id.upper() for t in step.techniques]
-    if step.technique_id and step.technique_id.upper() not in technique_ids:
-        technique_ids.append(step.technique_id.upper())
-    if not technique_ids:
-        return _render("partials/sigma_rule_options.html", request, {"sigma_results": [], "query": q})
-    # Search sigma rules for each technique and de-duplicate
-    seen = set()
-    sigma_results = []
-    for tid in technique_ids:
-        matches = sigma_mod.search_rules(query=q, technique_filter=tid, limit=50)
-        for r in matches:
-            rid = r.get("id", "")
-            if rid and rid not in seen:
-                seen.add(rid)
-                sigma_results.append(r)
-    # Sort by title
-    sigma_results.sort(key=lambda r: r.get("title", ""))
-    return _render("partials/sigma_rule_options.html", request, {
-        "sigma_results": sigma_results[:100],
-        "query": q,
-    })
 
 
 @router.get("/api/baselines/tactics/{tactic_id}/siem-rules", response_class=HTMLResponse)
@@ -2417,95 +2205,526 @@ def api_search_siem_rules_for_step(
     technique_ids = [t.technique_id.upper() for t in step.techniques]
     if step.technique_id and step.technique_id.upper() not in technique_ids:
         technique_ids.append(step.technique_id.upper())
-    # Get mapped rules (rules that cover this step's techniques)
+    # Rules whose tags match this step's techniques, suggested first. Keyed by destination as
+    # well as rule id: the same rule in staging and in production are two different things to
+    # map, so neither may hide the other from the list below.
+    def scope_of(rule) -> str:
+        return f"{getattr(rule, 'siem_id', None) or ''}|{getattr(rule, 'space', None) or 'default'}"
+
     mapped = []
-    mapped_ids = set()
+    mapped_scopes = set()
     for tid in technique_ids:
         for r in db.get_rules_for_technique(tid, enabled_only=False, client_id=client_id):
-            if r.rule_id not in mapped_ids:
-                mapped_ids.add(r.rule_id)
+            key = (r.rule_id, scope_of(r))
+            if key not in mapped_scopes:
+                mapped_scopes.add(key)
                 mapped.append(r)
-    # Get all SIEM rules
     all_rules = get_all_siem_rules(client_id=client_id)
-    # Apply search filter
     q_lower = q.strip().lower()
     if q_lower:
         mapped = [r for r in mapped if q_lower in r.name.lower()]
         all_rules = [r for r in all_rules if q_lower in r["name"].lower()]
-    # Sort
-    mapped.sort(key=lambda r: r.name)
-    all_rules.sort(key=lambda r: r["name"])
+    mapped.sort(key=lambda r: (r.name or "", scope_of(r)))
+    all_rules.sort(key=lambda r: (r["name"] or "", r.get("destination") or ""))
+
+    destinations = db.get_client_siems(client_id) or []
+    dest_key = lambda d: f"{d.get('id')}|{d.get('space') or 'default'}"  # noqa: E731
     return _render("partials/siem_rule_options.html", request, {
         "mapped_rules": mapped[:50],
         "all_rules": all_rules[:100],
         "query": q,
-        "mapped_ids": mapped_ids,
+        "mapped_scopes": {f"{rid}|{sc}" for rid, sc in mapped_scopes},
+        "dest_names": {dest_key(d): (d.get("name") or d.get("label") or d.get("space")) for d in destinations},
+        "dest_colors": {dest_key(d): d.get("color") for d in destinations},
     })
 
 
-@router.get("/api/baselines/tactics/{tactic_id}/affected-systems", response_class=HTMLResponse)
-def api_tactic_affected_systems(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
-    return _render_tactic_affected_section(request, tactic_id, client_id=client_id)
+def _system_not_found(system_id: str, client_id: str) -> Optional[HTMLResponse]:
+    """A 404 unless ``system_id`` is a system of the active client, else None.
+
+    Every system-scoped endpoint checks this before reading anything keyed by the id: a row can
+    reference a system that is not this tenant's (old data predating apply-time ownership checks
+    does exactly that), and nothing may be served for a system the active client does not own.
+    """
+    if get_system(system_id, client_id=client_id):
+        return None
+    return HTMLResponse('<div class="empty-state-text">This system no longer exists.</div>', status_code=404)
 
 
-@router.get("/api/baselines/tactics/{tactic_id}/detections", response_class=HTMLResponse)
-def api_tactic_detections(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    return _render_detection_section(request, step, client_id=client_id)
+def _coverage_destination_context(system_id: str, client_id: str = None) -> Dict[str, Any]:
+    """Every destination this client has linked, each flagged with whether this SYSTEM counts it."""
+    from app.inventory_engine import get_system_coverage_destinations
+    from app.services.database import get_database_service as _db_svc
 
-
-@router.post("/api/baselines/tactics/{tactic_id}/detections/{detection_id}/apply", response_class=HTMLResponse)
-async def api_apply_step_detection(request: Request, tactic_id: str, detection_id: str, user: RequireUser, client_id: ActiveClient):
-    """Apply a tactic detection rule to all hosts in a system."""
-    # Block sigma-sourced detections — only SIEM/manual rules can be applied
-    step = get_playbook_step(tactic_id, client_id=client_id)
-    if step:
-        det = next((d for d in step.detections if d.id == detection_id), None)
-        if det and (det.source or "manual") == "sigma":
-            raise HTTPException(status_code=422, detail="Sigma rules cannot be applied directly — convert & deploy first")
-    form = await request.form()
-    system_id = (form.get("system_id") or "").strip()
-    if not system_id:
-        raise HTTPException(status_code=422, detail="system_id is required")
-    apply_detection(detection_id, system_id=system_id, client_id=client_id)
-    # Return appropriate partial based on caller context
-    hx_target = request.headers.get("HX-Target", "")
-    if hx_target == "baseline-coverage":
-        return _render_system_baseline_coverage(request, system_id, client_id=client_id)
-    return _render_tactic_affected_section(request, tactic_id, client_id=client_id)
-
-
-@router.delete("/api/baselines/tactics/{tactic_id}/detections/{detection_id}/apply-system/{system_id}", response_class=HTMLResponse)
-def api_remove_step_detection_for_system(request: Request, tactic_id: str, detection_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
-    """Remove a tactic detection from all hosts in a system."""
-    remove_detection_for_system(detection_id, system_id, client_id=client_id)
-    hx_target = request.headers.get("HX-Target", "")
-    if hx_target == "baseline-coverage":
-        return _render_system_baseline_coverage(request, system_id, client_id=client_id)
-    return _render_tactic_affected_section(request, tactic_id, client_id=client_id)
-
-
-def _render_tactic_affected_section(request: Request, tactic_id: str, client_id: str = None):
-    """Helper: re-render the Applied Systems section for a tactic."""
-    affected = get_step_affected_systems(tactic_id, client_id=client_id)
-    blind_spots = get_blind_spots("tactic", tactic_id, client_id=client_id)
-    return _render("partials/tactic_affected_systems.html", request, {
-        "step_id": tactic_id, "affected_systems": affected, "blind_spots": blind_spots,
-    })
+    counted = {(s, sp) for s, sp in get_system_coverage_destinations(system_id, client_id=client_id)}
+    options = []
+    for d in (_db_svc().get_client_siems(client_id) or [] if client_id else []):
+        space = d.get("space") or "default"
+        options.append({
+            "siem_id": d.get("id"), "space": space,
+            "name": d.get("name") or d.get("label") or space,
+            "color": d.get("color"),
+            "counted": (d.get("id"), space) in counted,
+        })
+    options.sort(key=lambda o: (o["name"] or "").lower())
+    return {"coverage_destinations": options, "counted_total": sum(1 for o in options if o["counted"])}
 
 
 def _render_system_baseline_coverage(request: Request, system_id: str, client_id: str = None):
-    """Helper: re-render the baseline coverage section for a system."""
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    playbooks = list_playbooks(client_id=client_id)
-    return _render("partials/baseline_coverage.html", request, {
-        "baselines": baselines, "system_id": system_id, "playbooks": playbooks,
+    """Tell the system page its techniques changed. The page's metric strip and technique grid
+    each refetch themselves on ``stepsChanged`` with whatever filters are active, so a caller
+    never has to know, or reset, the view the user is looking at."""
+    resp = HTMLResponse("")
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+def _step_modal_response(request: Request, system_id: str, step_id: str, client_id: str,
+                         coverage_error: Optional[Dict[str, str]] = None):
+    """Render the step window, or a graceful note when the step is gone."""
+    from app.inventory_engine import get_step_detail_for_system
+
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    detail = get_step_detail_for_system(step_id, system_id, client_id=client_id)
+    if not detail:
+        return HTMLResponse('<div class="empty-state-text">This technique no longer exists.</div>', status_code=404)
+    return _render("components/step_modal.html", request, {
+        "detail": detail, "system_id": system_id, "coverage_error": coverage_error,
     })
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}", response_class=HTMLResponse)
+def api_system_step_modal(
+    request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
+):
+    """One baseline step, as seen from one system."""
+    return _step_modal_response(request, system_id, step_id, client_id)
+
+
+def _technique_form(request: Request, system_id: str, client_id: str, step=None, selected_baseline: str = "",
+                    part: str = ""):
+    """Add a technique to one of this system's baselines (a window), or edit one in place: the
+    form replaces its window's Description (``part='description'``: title and description) or
+    MITRE ATT&CK (``part='mitre'``) body; Save or Cancel returns the window."""
+    ctx = {"step": step, "target": "#modal-container", "selected_baseline": selected_baseline,
+           **_technique_picker_context(step)}
+    if step:
+        ctx.update(action=f"/api/systems/{system_id}/steps/{step.id}", method="put", inline=True,
+                   part=part if part in ("description", "mitre") else "",
+                   cancel=f"/api/systems/{system_id}/steps/{step.id}",
+                   note="Changes this system only. The template and other systems are not affected.")
+    else:
+        ctx.update(action=f"/api/systems/{system_id}/steps", method="post", heading="Add technique",
+                   baselines=get_system_baselines(system_id, include_detection_details=False, client_id=client_id),
+                   note="Added to this system's baseline only. The template it came from is not changed.")
+    return _render("components/technique_form.html", request, ctx)
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/sigma", response_class=HTMLResponse)
+def api_system_technique_sigma(request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
+                               q: str = Query("")):
+    """Sigma rules suggested for a technique from its ATT&CK techniques (or, with none, its
+    tactic), or, with ``q``, any SigmaHQ rule matching it. Potential rules -- never coverage."""
+    from app import sigma_helper as sigma_mod
+    _system_step_or_404(system_id, step_id, client_id)
+    step = get_playbook_step(step_id)
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    q = q.strip()
+    if q:
+        matches = sigma_mod.search_rules(query=q, limit=50)
+    else:
+        matches = []
+        for tid in ids:
+            matches += sigma_mod.search_rules(technique_filter=tid, limit=25)
+        if not ids and step.tactic:
+            slug = canonical_tactic(step.tactic).lower().replace(" ", "-")
+            matches = sigma_mod.search_rules(query=f"attack.{slug}", limit=25)
+    rules, seen = [], set()
+    for r in matches:
+        if r.get("id") and r["id"] not in seen:
+            seen.add(r["id"])
+            rules.append(r)
+    return _render("partials/technique_sigma.html", request, {
+        "rules": rules[:50 if q else 25], "query": q, "technique_ids": ids,
+        "tactic": canonical_tactic(step.tactic) if step.tactic else "",
+        "system_id": system_id, "step_id": step_id,
+    })
+
+
+@router.put("/api/systems/{system_id}/steps/{step_id}/risks", response_class=HTMLResponse)
+def api_system_technique_risks(
+    request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
+    priority: str = Form(""), category: str = Form(""),
+):
+    """Save a technique's priority and category on this system, then return its window."""
+    from app.inventory_engine import update_step_risks
+    _system_step_or_404(system_id, step_id, client_id)
+    update_step_risks(step_id, system_id, priority=priority, category=category, actor=_actor(user), client_id=client_id)
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.post("/api/systems/{system_id}/steps/{step_id}/coverage", response_class=HTMLResponse)
+def api_add_technique_coverage(
+    request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
+    kind: str = Form(...), title: str = Form(""), url: str = Form(""), rationale: str = Form(""),
+):
+    """Record a dashboard, report or log watching this technique on this system (non-alerting
+    coverage), from Add coverage. A refused entry comes back with the form open and the reason."""
+    from app.inventory_engine import add_step_coverage
+    _system_step_or_404(system_id, step_id, client_id)
+    try:
+        add_step_coverage(step_id, system_id, kind=kind, title=title, url=url, rationale=rationale,
+                          actor=_actor(user), client_id=client_id)
+    except ValueError as exc:
+        return _step_modal_response(request, system_id, step_id, client_id,
+                                    coverage_error={"message": str(exc), "kind": kind, "title": title,
+                                                    "url": url, "rationale": rationale})
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.put("/api/systems/{system_id}/steps/{step_id}/coverage/{coverage_id}", response_class=HTMLResponse)
+def api_update_technique_coverage(
+    request: Request, system_id: str, step_id: str, coverage_id: str, user: RequireUser, client_id: ActiveClient,
+    kind: str = Form(...), title: str = Form(""), url: str = Form(""), rationale: str = Form(""),
+):
+    """Change one dashboard, report or log on this technique on this system. A refused change
+    comes back with that card's form open and the reason."""
+    from app.inventory_engine import update_step_coverage
+    _system_step_or_404(system_id, step_id, client_id)
+    try:
+        found = update_step_coverage(coverage_id, step_id, system_id, kind=kind, title=title, url=url,
+                                     rationale=rationale, actor=_actor(user), client_id=client_id)
+    except ValueError as exc:
+        return _step_modal_response(request, system_id, step_id, client_id,
+                                    coverage_error={"id": coverage_id, "message": str(exc), "kind": kind,
+                                                    "title": title, "url": url, "rationale": rationale})
+    if not found:
+        raise HTTPException(status_code=404, detail="Coverage not found on this technique")
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.delete("/api/systems/{system_id}/steps/{step_id}/coverage/{coverage_id}", response_class=HTMLResponse)
+def api_remove_technique_coverage(
+    request: Request, system_id: str, step_id: str, coverage_id: str, user: RequireUser, client_id: ActiveClient,
+):
+    """Remove one dashboard, report or log from this technique on this system."""
+    from app.inventory_engine import remove_step_coverage
+    _system_step_or_404(system_id, step_id, client_id)
+    if not remove_step_coverage(coverage_id, step_id, system_id, actor=_actor(user), client_id=client_id):
+        raise HTTPException(status_code=404, detail="Coverage not found on this technique")
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+def _client_pipelines(client_id: str) -> List[Dict[str, str]]:
+    """Pipelines a conversion can use here: pySigma's built-ins, then the saved pipeline files
+    assigned to this client (Management → Sigma assets)."""
+    from app import sigma_helper as sigma_mod
+    from app.services.database import get_database_service
+    out = [{"value": k, "label": v} for k, v in sigma_mod.get_available_pipelines().items()]
+    try:
+        assigned = get_database_service().list_sigma_asset_assignments("pipeline")
+    except Exception:
+        assigned = {}
+    for p in sigma_mod.list_saved_pipelines():
+        fname = p.get("filename") or ""
+        if fname and any(c.get("id") == client_id for c in assigned.get(fname, [])):
+            out.append({"value": f"file:{fname}", "label": p.get("display") or p.get("name") or fname})
+    return out
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/sigma/convert", response_class=HTMLResponse)
+def api_technique_sigma_convert_form(
+    request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
+    sigma_id: str = Query(...),
+):
+    """Convert a suggested Sigma rule: choose the pipeline, then the Create Rule form opens."""
+    from app import sigma_helper as sigma_mod
+    _system_step_or_404(system_id, step_id, client_id)
+    rule = sigma_mod.get_rule_by_id(sigma_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Sigma rule not found")
+    return _render("partials/technique_sigma_convert.html", request, {
+        "rule": rule, "system_id": system_id, "step_id": step_id, "pipelines": _client_pipelines(client_id),
+    })
+
+
+@router.post("/api/systems/{system_id}/steps/{step_id}/sigma/convert", response_class=HTMLResponse)
+def api_technique_sigma_convert(
+    request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
+    sigma_id: str = Form(...), pipeline: str = Form("none"),
+):
+    """Convert the Sigma rule (Elastic, Lucene) and open the Create Rule form filled in with it.
+    Creating the rule does not map it here: mapping it to this technique is a separate step."""
+    import yaml
+    from app import sigma_helper as sigma_mod
+    from app.api.rules import _build_rule_form_context
+    from app.api.sigma import rule_form_prefill
+    from app.services.database import get_database_service
+    _system_step_or_404(system_id, step_id, client_id)
+    rule = sigma_mod.get_rule_by_id(sigma_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Sigma rule not found")
+    allowed = {p["value"] for p in _client_pipelines(client_id)}
+    pipeline = pipeline if pipeline in allowed else "none"
+    raw_yaml = rule.get("_raw_yaml", "")
+    ok, query = sigma_mod.convert_sigma_rule(
+        yaml_content=raw_yaml, backend="elasticsearch",
+        pipeline="none" if pipeline.startswith("file:") else pipeline,
+        pipeline_file=pipeline[5:] if pipeline.startswith("file:") else "",
+    )
+    if not ok:
+        return _render("partials/technique_sigma_convert.html", request, {
+            "rule": rule, "system_id": system_id, "step_id": step_id,
+            "pipelines": _client_pipelines(client_id), "selected": pipeline, "error": query,
+        })
+    prefill = rule_form_prefill(yaml.safe_load(raw_yaml) or {}, query, "elasticsearch", "", user.username or "")
+    return _templates(request).TemplateResponse(
+        request, "components/rule_create_form.html",
+        _build_rule_form_context(get_database_service(), client_id, user.username, "/api/rules/create",
+                                 "Create Rule", "Create Rule", prefill=prefill),
+    )
+
+
+@router.get("/api/systems/{system_id}/steps-new", response_class=HTMLResponse)
+def api_system_technique_new(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+    missing = _system_not_found(system_id, client_id)
+    return missing or _technique_form(request, system_id, client_id,
+                                      selected_baseline=request.query_params.get("baseline_id", ""))
+
+
+@router.post("/api/systems/{system_id}/steps", response_class=HTMLResponse)
+def api_system_technique_add(
+    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
+    playbook_id: str = Form(...), title: str = Form(...), tactic: str = Form(""),
+    description: str = Form(""), technique_ids: str = Form(""),
+):
+    """Add a technique to one of this system's baselines, then open it."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    if not _system_baseline_or_none(system_id, playbook_id, client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found on this system")
+    step = add_technique(playbook_id, **_technique_fields(title, tactic, description, technique_ids),
+                         actor=_actor(user), client_id=client_id)
+    resp = _step_modal_response(request, system_id, step.id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/edit", response_class=HTMLResponse)
+def api_system_technique_edit(request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
+                              part: str = Query("")):
+    _system_step_or_404(system_id, step_id, client_id)
+    return _technique_form(request, system_id, client_id, get_playbook_step(step_id), part=part)
+
+
+@router.put("/api/systems/{system_id}/steps/{step_id}", response_class=HTMLResponse)
+def api_system_technique_update(
+    request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
+    title: str = Form(...), tactic: str = Form(""), description: str = Form(""),
+    technique_ids: str = Form(""),
+):
+    _system_step_or_404(system_id, step_id, client_id)
+    current = get_playbook_step(step_id)
+    update_technique(step_id, **_technique_fields(title, tactic, description, technique_ids, current.tactic),
+                     actor=_actor(user), client_id=client_id)
+    resp = _step_modal_response(request, system_id, step_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.delete("/api/systems/{system_id}/steps/{step_id}", response_class=HTMLResponse)
+def api_system_technique_remove(request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient):
+    """Remove a technique from this system's baseline, with its mappings, gaps and history."""
+    _system_step_or_404(system_id, step_id, client_id)
+    delete_playbook_step(step_id, client_id=client_id)
+    resp = HTMLResponse("")
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/systems/{system_id}/steps", response_class=HTMLResponse)
+def api_system_steps_grid(
+    request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
+):
+    """The filtered, sorted and optionally grouped technique grid (or table) for one system."""
+    from app.inventory_engine import get_system_steps, group_system_steps
+
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    f = _step_grid_filters(request)
+    tactic_sort = f["tactic_sort"] or "attack"
+    data = get_system_steps(
+        system_id, client_id=client_id, search=f["search"], tactic=f["tactic"],
+        status=f["status"], mapping=f["mapping"], baseline_id=f["baseline_id"],
+        tactic_sort=tactic_sort, sort_name=f["sort_name"],
+    )
+    return _render("partials/system_steps_grid.html", request, {
+        "system_id": system_id, **data,
+        "groups": group_system_steps(data["steps"], f["group"], tactic_sort),
+        "view": f["view"] or "cards",
+        "tactic_sort": tactic_sort, "sort_name": f["sort_name"],
+    })
+
+
+@router.get("/api/systems/{system_id}/steps-metrics", response_class=HTMLResponse)
+def api_system_steps_metrics(
+    request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
+):
+    """Whole-baseline rollups for the metric strip -- never the filtered page's counts."""
+    from app.inventory_engine import get_system_steps
+
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    data = get_system_steps(system_id, client_id=client_id)
+    return _render("partials/system_steps_metrics.html", request, {
+        "system_id": system_id, **data,
+    })
+
+
+@router.post("/api/systems/{system_id}/coverage-destinations", response_class=HTMLResponse)
+async def api_set_coverage_destinations(
+    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
+):
+    """Set which destinations count toward this system's coverage.
+
+    Ticking nothing is allowed and means "not answered yet", which reads as undefined rather
+    than as 0% -- see get_system_baselines.
+    """
+    from app.inventory_engine import set_system_coverage_destinations
+
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    form = await request.form()
+    allowed = {
+        (d.get("id"), d.get("space") or "default")
+        for d in (get_database_service().get_client_siems(client_id) or [])
+    }
+    scopes = []
+    for raw in form.getlist("scope"):
+        siem_id, _, space = str(raw or "").partition("|")
+        pair = (siem_id.strip(), space.strip() or "default")
+        if pair[0] and pair in allowed:   # never store a destination this client isn't linked to
+            scopes.append(pair)
+    set_system_coverage_destinations(
+        system_id, scopes, client_id=client_id,
+        actor=(user.name or user.username) if user else None,
+    )
+    resp = _render("partials/system_siem_coverage_dialog.html", request, {
+        "system_id": system_id, "saved": True, **_coverage_destination_context(system_id, client_id),
+    })
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/systems/{system_id}/siem-coverage", response_class=HTMLResponse)
+def api_siem_coverage_dialog(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Which SIEM destinations count toward this system's coverage."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    return _render("partials/system_siem_coverage_dialog.html", request, {
+        "system_id": system_id, **_coverage_destination_context(system_id, client_id),
+    })
+
+
+def _baselines_dialog(request: Request, system_id: str, client_id: str):
+    """Manage baselines: this system's own (edit, remove), every template (apply, again if need
+    be: a second copy is named "<name> (copy)"), and starting an empty one."""
+    return _render("partials/system_baselines_dialog.html", request, {
+        "system_id": system_id,
+        "applied": get_system_baselines(system_id, include_detection_details=False, client_id=client_id),
+        "available": list_playbooks(client_id=client_id),
+    })
+
+
+@router.post("/api/systems/{system_id}/baselines", response_class=HTMLResponse)
+def api_system_baseline_create(
+    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
+    name: str = Form(...), description: str = Form(""),
+):
+    """Start an empty baseline of this system's own, from the Manage baselines window."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="A baseline needs a name")
+    create_system_baseline(system_id, name.strip(), description.strip(), client_id=client_id)
+    resp = _baselines_dialog(request, system_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/systems/{system_id}/baselines/{baseline_id}/edit", response_class=HTMLResponse)
+def api_system_baseline_edit_form(request: Request, system_id: str, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Rename or re-describe one of this system's own baselines (a window)."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    baseline = _system_baseline_or_none(system_id, baseline_id, client_id)
+    if not baseline:
+        raise HTTPException(status_code=404, detail="Baseline not found on this system")
+    return _render("partials/system_baseline_edit_dialog.html", request, {
+        "system": get_system(system_id, client_id=client_id), "baseline": baseline,
+    })
+
+
+@router.put("/api/systems/{system_id}/baselines/{baseline_id}", response_class=HTMLResponse)
+def api_system_baseline_update(
+    request: Request, system_id: str, baseline_id: str, user: RequireUser, client_id: ActiveClient,
+    name: str = Form(...), description: str = Form(""),
+):
+    """Rename this system's own baseline, then return to Manage baselines. Only this system's
+    baseline changes; templates and other systems keep their own name and description."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    if not _system_baseline_or_none(system_id, baseline_id, client_id):
+        raise HTTPException(status_code=404, detail="Baseline not found on this system")
+    if not name.strip():
+        raise HTTPException(status_code=422, detail="A baseline needs a name")
+    update_playbook(baseline_id, name=name.strip(), description=description.strip(), client_id=client_id)
+    resp = _baselines_dialog(request, system_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/systems/{system_id}/baselines-dialog", response_class=HTMLResponse)
+def api_system_baselines_dialog(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+    """Apply a baseline to this system, or remove one."""
+    missing = _system_not_found(system_id, client_id)
+    if missing:
+        return missing
+    return _baselines_dialog(request, system_id, client_id)
 
 
 # ---------------------------------------------------------------------------
 # Blind Spot CRUD
 # ---------------------------------------------------------------------------
+
+def _review_date(value: str):
+    """A known gap's review date from a form field: '' is no date; anything unparsable is a 400."""
+    from datetime import date
+    if not (value or "").strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Review date must be a date (YYYY-MM-DD)")
+
 
 @router.post("/api/blind-spots", response_class=HTMLResponse)
 def api_add_blind_spot(
@@ -2515,12 +2734,20 @@ def api_add_blind_spot(
     system_id: str = Form(None), host_id: str = Form(None),
     redirect_target: str = Form(""),
     override_type: str = Form("gap"),
+    review_by: str = Form(""),
 ):
+    if entity_type == "tactic":
+        # A technique's gap or N/A belongs to the system whose baseline the technique is in.
+        _system_step_or_404(system_id or "", entity_id, client_id)
     username = user.username if user else ""
     add_blind_spot(entity_type, entity_id, reason,
                    system_id=system_id or None, host_id=host_id or None,
                    created_by=username, override_type=override_type or "gap",
-                   client_id=client_id)
+                   client_id=client_id, review_by=_review_date(review_by))
+    if entity_type == "tactic":
+        resp = _step_modal_response(request, system_id, entity_id, client_id)
+        resp.headers["HX-Trigger"] = "stepsChanged"
+        return resp
     # Return the appropriate partial based on context
     if entity_type == "cve" and entity_id:
         cve = get_cve_detail(entity_id, client_id=client_id)
@@ -2536,20 +2763,41 @@ def api_add_blind_spot(
                 "grouped_systems": grouped, "detections": cve_dets,
                 "blind_spots": cve_blind_spots,
             })
-    if entity_type == "tactic" and entity_id:
-        hx_target = request.headers.get("HX-Target", "")
-        if hx_target == "baseline-coverage" and system_id:
-            return _render_system_baseline_coverage(request, system_id, client_id=client_id)
-        return _render_tactic_affected_section(request, entity_id, client_id=client_id)
     return HTMLResponse("")
+
+
+@router.put("/api/blind-spots/{blind_spot_id}", response_class=HTMLResponse)
+def api_edit_blind_spot(
+    request: Request, blind_spot_id: str, user: RequireUser, client_id: ActiveClient,
+    entity_id: str = Form(...), system_id: str = Form(...),
+    reason: str = Form(...), override_type: str = Form("gap"), review_by: str = Form(""),
+):
+    """Edit a technique's known gap / N/A on one system in place; the history keeps the old one."""
+    _system_step_or_404(system_id, entity_id, client_id)
+    owned = {b.id for b in get_blind_spots("tactic", entity_id, client_id=client_id) if b.system_id == system_id}
+    if blind_spot_id not in owned:
+        raise HTTPException(status_code=404, detail="Mark not found on this technique")
+    update_blind_spot(blind_spot_id, reason.strip(), override_type, review_by=_review_date(review_by),
+                      actor=user.username if user else None, client_id=client_id)
+    resp = _step_modal_response(request, system_id, entity_id, client_id)
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
 
 
 @router.delete("/api/blind-spots/{blind_spot_id}", response_class=HTMLResponse)
 def api_remove_blind_spot(
     request: Request, blind_spot_id: str, user: RequireUser, client_id: ActiveClient,
     entity_type: str = Query(""), entity_id: str = Query(""),
+    system_id: str = Query(""),
 ):
-    remove_blind_spot(blind_spot_id, client_id=client_id)
+    if entity_type == "tactic":
+        _system_step_or_404(system_id, entity_id, client_id)
+    remove_blind_spot(blind_spot_id, client_id=client_id,
+                      actor=(user.name or user.username) if user else None)
+    if entity_type == "tactic":
+        resp = _step_modal_response(request, system_id, entity_id, client_id)
+        resp.headers["HX-Trigger"] = "stepsChanged"
+        return resp
     if entity_type == "cve" and entity_id:
         cve = get_cve_detail(entity_id, client_id=client_id)
         if cve:
@@ -2564,8 +2812,6 @@ def api_remove_blind_spot(
                 "grouped_systems": grouped, "detections": cve_dets,
                 "blind_spots": cve_blind_spots,
             })
-    if entity_type == "tactic" and entity_id:
-        return _render_tactic_affected_section(request, entity_id, client_id=client_id)
     return HTMLResponse("")
 
 
@@ -2869,7 +3115,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines += [
             "## Baseline Coverage",
             "",
-            "| Playbook | Steps | Covered | Gaps | Coverage |",
+            "| Baseline | Techniques | Covered | Gaps | Coverage |",
             "|----------|-------|---------|------|----------|",
         ]
         for bl in baselines:
@@ -2903,7 +3149,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                 for tactic in sorted(tactics_grouped.keys()):
                     lines.append(f"#### {tactic}")
                     lines.append("")
-                    lines.append("| Step | Title | Technique | Applied Rules | Status |")
+                    lines.append("| # | Technique | ATT&CK | Applied Rules | Status |")
                     lines.append("|------|-------|-----------|----------------|--------|")
                     for step in tactics_grouped[tactic]:
                         # Determine status display
@@ -3075,11 +3321,11 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
         "",
         "| Metric | Value |",
         "|--------|-------|",
-        f"| Applied Systems | {data['total_systems']} |",
-        f"| Tactic Steps | {data['total_steps']} |",
-        f"| Mapped Techniques | {data['total_techniques']} |",
-        f"| Average Coverage | {data['avg_coverage']}% |",
-        f"| Detection Rules | {data['total_detections']} |",
+        f"| Techniques | {data['total_steps']} |",
+        f"| Mapped ATT&CK Techniques | {data['total_techniques']} |",
+        "",
+        "A template carries no coverage: each system it is applied to gets its own copy, "
+        "and that system's report shows how its copy is covered.",
         "",
     ]
 
@@ -3095,34 +3341,6 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
             dets = ", ".join(d.get("rule_ref") or d.get("note", "—") for d in s.get("detections", [])) or "None"
             lines.append(f"| {s['step_number']} | {s['title']} | {s.get('tactic', '—')} | {techs} | {dets} |")
         lines.append("")
-
-    if data.get("systems"):
-        lines += [
-            "## System Compliance Matrix",
-            "",
-            "| System | Coverage | Green | Amber | Red | N/A |",
-            "|--------|----------|-------|-------|-----|-----|",
-        ]
-        for sys in data["systems"]:
-            lines.append(
-                f"| {sys['system_name']} | {sys['coverage_pct']}% | "
-                f"{sys['covered_steps']} | {sys['gap_steps']} | "
-                f"{sys['red_steps']} | {sys['na_steps']} |"
-            )
-        lines.append("")
-
-        if audience != "CISO":
-            lines += ["## Per-System Coverage Detail", ""]
-            for sys in data["systems"]:
-                lines.append(f"### {sys['system_name']} ({sys['coverage_pct']}%)")
-                lines.append("")
-                lines.append("| # | Step | Tactic | Status | Applied Detections |")
-                lines.append("|---|------|--------|--------|--------------------|")
-                for t in sys.get("tactics", []):
-                    status = {"green": "Covered", "amber": "Known Gap", "grey": "N/A", "red": "Missing"}.get(t["status"], t["status"])
-                    dets = ", ".join(d.get("label", d.get("rule_ref", "—")) for d in t.get("applied_dets", [])) or "—"
-                    lines.append(f"| {t['step_number']} | {t['title']} | {t.get('tactic', '—')} | {status} | {dets} |")
-                lines.append("")
 
     lines += [
         "---",

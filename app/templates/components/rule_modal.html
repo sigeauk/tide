@@ -1,31 +1,19 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "macros/rule_ui.html" import state_badge %}
-{# Collapse / expand button for panels (the <details> sections use their own summary arrow). #}
-{% macro collapse_ctl(label) -%}
-<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
-{%- endmacro %}
-{# Up / down buttons that reorder the centre-column sections (order is remembered; see app.js). #}
-{% macro move_ctl() -%}
-<span class="rm-move" role="group" aria-label="Reorder section">
-    <button type="button" class="rm-move__btn" data-rm-move="up" title="Move section up" aria-label="Move section up">{{ icon('chevron-up', '13') }}</button>
-    <button type="button" class="rm-move__btn" data-rm-move="down" title="Move section down" aria-label="Move section down">{{ icon('chevron-down', '13') }}</button>
-</span>
-{%- endmacro %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl, layout_menu, remove_btn, tag %}
 {#
   Rule modal — opened by clicking a rule card / table row.
-    header : score ring · name · state/severity badges | prev/next · history toggle · close
-    left   : recent activity (edits/validations) over the score-over-time chart
+    header : score ring · name · state/severity badges | prev/next · sections menu · close
+    left   : recent activity (edits/validations) · score-over-time chart · covers
     centre : about (description, facts, tags) · logic · investigation guide ·
              references · field mappings · score breakdown (bars)
-    right  : actions · MITRE techniques (with names)
-  Sections marked data-fold are collapsible (open by default) and every centre-column
-  section (data-section) can be moved up/down; open/closed state and order are
-  remembered per browser (app.js). data-view (default | no-history) is set by the
-  header History toggle and remembered too. Prev/next walk the list the modal was opened
-  from (app.js). Every id/attribute the history filter JS relies on
-  (data-history-modal, #history-*-filter, #history-timeline-list, [data-history-row])
-  is kept.
+    right  : actions · MITRE techniques (with names) · rule id · linked
+  That is the default arrangement: every section (data-section) can be dragged to any column
+  or hidden from the header menu, and collapsible ones (data-fold) opened or closed; all of it
+  is remembered per browser (app.js, tide.ruleWindowLayout). Prev/next walk the list the modal
+  was opened from (app.js). Every id/attribute the history filter JS relies on
+  (data-history-modal, #history-*-filter, #history-timeline-list, [data-history-row]) is kept.
 #}
 {% set sev_value = (rule.severity.value if rule.severity and rule.severity.value is defined else (rule.severity | default('low'))) | lower %}
 {% set is_on = rule.enabled and not rule.deprecated %}
@@ -36,7 +24,8 @@
 {% set scope_qs = 'space=' ~ (space | urlencode) ~ ('&siem_id=' ~ (siem_id | urlencode) if siem_id else '') %}
 
 <div name="Dismiss Rule Modal" class="modal-overlay" data-history-modal data-rule-modal data-rm-overlay>
-    <div class="modal-content rule-modal" data-view="default" data-rule-id="{{ rule.rule_id }}" role="dialog" aria-modal="true" aria-labelledby="rm-title">
+    <div class="modal-content rule-modal" data-layout-key="tide.ruleWindowLayout" data-rule-id="{{ rule.rule_id }}"
+         data-rule-dom-id="{{ rule_dom_id(rule) }}" role="dialog" aria-modal="true" aria-labelledby="rm-title">
 
         <header class="rm-header">
             <div class="score-ring score-ring--sm score-ring--{{ score_class }}" style="--score: {{ rule_score }}"
@@ -50,7 +39,7 @@
                           title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ scope_label }}">
                         {{ icon('shield-check', '12') }} {{ scope_label }} · {{ 'Enabled' if is_on else 'Disabled' }}
                     </span>
-                    {{ state_badge(lifecycle_state) }}
+                    {{ state_badge(lifecycle_state, lifecycle_title | default("")) }}
                     <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
                     <span class="rm-header__meta">{{ icon('user', '12') }} {{ rule.author | default('-') }}</span>
                 </div>
@@ -61,9 +50,7 @@
                     <button name="Previous Rule" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous rule (←)" aria-label="Previous rule" disabled>{{ icon('chevron-left', '16') }}</button>
                     <button name="Next Rule" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next rule (→)" aria-label="Next rule" disabled>{{ icon('chevron-right', '16') }}</button>
                 </div>
-                <button name="Toggle History" type="button" class="rm-toggle" data-rm-history-toggle aria-pressed="true" title="Show or hide the history column">
-                    {{ icon('clipboard-list', '15') }}<span>History</span>
-                </button>
+                {{ layout_menu() }}
                 <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
             </div>
         </header>
@@ -71,32 +58,33 @@
         <div class="rm-body">
 
             {# ───────── LEFT: activity + score chart ───────── #}
-            <section class="rm-col rm-col--history" aria-label="Activity and score">
-                <div class="rm-panel rm-panel--history" data-fold="history" data-section="history">
+            <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+                <div class="rm-panel rm-panel--history" data-fold="history" data-section="history" data-section-label="History">
                     <div class="rm-panel__head">
-                        {{ collapse_ctl('recent activity') }}
-                        <h3 class="rm-panel__title">Recent activity</h3>
-                        {% if history_entries %}
-                        <div class="rm-filters">
-                            <select id="history-sort-filter" name="Date sort" aria-label="Sort by date">
-                                <option value="desc" selected>Newest</option>
-                                <option value="asc">Oldest</option>
-                            </select>
-                            <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
-                                <option value="">All</option>
-                                <option value="validation">Validation</option>
-                                <option value="edits">Edits</option>
-                            </select>
-                            <select id="history-user-filter" name="User filter" aria-label="Filter by user">
-                                <option value="">All users</option>
-                                {% for username in history_users %}
-                                <option value="{{ username }}">{{ username }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        {% endif %}
-                        {{ move_ctl() }}
+                        {{ collapse_ctl('history') }}
+                        <h3 class="rm-panel__title">History</h3>
+                        {{ drag_ctl('History') }}
                     </div>
+
+                    {% if history_entries %}
+                    <div class="rm-filters rm-filters--row">
+                        <select id="history-sort-filter" name="Date sort" aria-label="Sort by date">
+                            <option value="desc" selected>Newest</option>
+                            <option value="asc">Oldest</option>
+                        </select>
+                        <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
+                            <option value="">All</option>
+                            <option value="validation">Validation</option>
+                            <option value="edits">Edits</option>
+                        </select>
+                        <select id="history-user-filter" name="User filter" aria-label="Filter by user">
+                            <option value="">All users</option>
+                            {% for username in history_users %}
+                            <option value="{{ username }}">{{ username }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
 
                     {% if history_entries %}
                     <div class="history-timeline rm-timeline" id="history-timeline-list">
@@ -155,7 +143,7 @@
                     {% endif %}
                 </div>
 
-                <div class="rm-panel rm-panel--chart" data-fold="chart" data-section="chart">
+                <div class="rm-panel rm-panel--chart" data-fold="chart" data-section="chart" data-section-label="Rule score over time">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('score over time') }}
                         <h3 class="rm-panel__title">Rule score over time</h3>
@@ -164,7 +152,7 @@
                             {{ score_chart.latest }}%{% if score_chart.delta %} ({{ '%+d' | format(score_chart.delta) }}){% endif %}
                         </span>
                         {% endif %}
-                        {{ move_ctl() }}
+                        {{ drag_ctl('Rule score over time') }}
                     </div>
                     {% if score_chart %}
                     <svg class="rm-chart" viewBox="0 0 {{ score_chart.width }} {{ score_chart.height }}" role="img"
@@ -199,13 +187,56 @@
                     <p class="rm-empty">No score history recorded yet.</p>
                     {% endif %}
                 </div>
+
+                {# Baseline techniques this rule is mapped to, one card each (the same cards as the
+                   technique window's Detection rules). A name opens that technique's window in
+                   place, from any page. #}
+                {% set _cov = namespace(n=0) %}{% for b in covers or [] %}{% set _cov.n = _cov.n + (b.techniques | length) %}{% endfor %}
+                {% set covers_total = _cov.n %}
+                <div class="rm-panel" data-fold="covers" data-section="covers" data-section-label="Covers">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('covers') }}
+                        <h3 class="rm-panel__title">Covers {% if covers_total %}<span class="rm-fold__count">{{ covers_total }}</span>{% endif %}</h3>
+                        {{ drag_ctl('Covers') }}
+                    </div>
+                    {% if covers %}
+                    <div class="rm-items">
+                        {% for b in covers %}
+                        {% set sys = b.systems[0] if b.systems else none %}
+                        {% for t in b.techniques %}
+                        <div class="rm-item{% if t.needs_relinking %} rm-item--warn{% endif %}">
+                            <div class="rm-item__main">
+                                <div class="rm-item__name" title="{{ t.title }}">
+                                    {% if sys %}
+                                    <button type="button" class="rm-item__open"
+                                            hx-get="/api/systems/{{ sys.id }}/steps/{{ t.step_id }}"
+                                            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                            title="Open this technique on {{ sys.name }}">{{ t.title }}</button>
+                                    {% else %}{{ t.title }}{% endif %}
+                                </div>
+                                <div class="rm-item__meta">
+                                    {% if sys %}{{ tag(sys.name, title='System', kind='system') }}{% endif %}
+                                    {{ tag(b.name, title='Baseline') }}
+                                    {{ tag(t.tactic, title='Tactic') }}
+                                    {% if t.via %}<span title="Mapped to the linked copy of this rule at {{ t.via }}; it covers the technique through the link">via linked rule ({{ t.via }})</span>{% endif %}
+                                    {% if t.needs_relinking %}<span class="text-warning" title="Mapped before destinations were recorded. Map the rule again from the technique to clear this.">Needs relinking</span>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="rm-empty">Not mapped to any baseline technique yet.</p>
+                    {% endif %}
+                </div>
             </section>
 
             {# ───────── CENTRE: about + logic + folds ───────── #}
-            <section class="rm-col rm-col--logic" aria-label="Rule details and logic">
+            <section class="rm-col rm-col--logic" data-col="centre" aria-label="Centre column">
                 {% if details.description or details.tags or details.interval or details.indexes %}
-                <details class="rm-fold rm-fold--about" open data-fold="about" data-section="about">
-                    <summary><span>About this rule</span>{{ move_ctl() }}</summary>
+                <details class="rm-fold rm-fold--about" open data-fold="about" data-section="about" data-section-label="About this rule">
+                    <summary><span>About this rule</span>{{ drag_ctl('About this rule') }}</summary>
                     <div class="rm-about">
                     {% if details.description %}<p class="rm-desc">{{ details.description }}</p>{% endif %}
                     <dl class="rm-facts">
@@ -233,30 +264,30 @@
                 </details>
                 {% endif %}
 
-                <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic">
+                <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic" data-section-label="Rule logic">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('rule logic') }}
                         <h3 class="rm-panel__title">Rule logic <span class="rm-lang">{{ rule.language | default('kuery') }}</span></h3>
                         <span class="rm-panel__tools">
-                            {{ move_ctl() }}
                             <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#rm-query">
                                 {{ icon_text('copy', 'Copy', '12') }}
                             </button>
+                            {{ drag_ctl('Rule logic') }}
                         </span>
                     </div>
                     <pre class="query-display rm-query" id="rm-query">{{ rule.query | highlight_query(rule.language) }}</pre>
                 </div>
 
                 {% if details.guide_html %}
-                <details class="rm-fold" open data-fold="guide" data-section="guide">
-                    <summary><span>Investigation guide</span>{{ move_ctl() }}</summary>
+                <details class="rm-fold" open data-fold="guide" data-section="guide" data-section-label="Investigation guide">
+                    <summary><span>Investigation guide</span>{{ drag_ctl('Investigation guide') }}</summary>
                     <div class="rm-prose">{{ details.guide_html }}</div>
                 </details>
                 {% endif %}
 
                 {% if details.references %}
-                <details class="rm-fold" open data-fold="references" data-section="references">
-                    <summary><span>References <span class="rm-fold__count">{{ details.references | length }}</span></span>{{ move_ctl() }}</summary>
+                <details class="rm-fold" open data-fold="references" data-section="references" data-section-label="References">
+                    <summary><span>References <span class="rm-fold__count">{{ details.references | length }}</span></span>{{ drag_ctl('References') }}</summary>
                     <ul class="rm-links">
                         {% for url in details.references %}
                         <li><a href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '11') }} {{ url }}</a></li>
@@ -266,8 +297,8 @@
                 {% endif %}
 
                 {% if rule.field_mappings %}
-                <details class="rm-fold" open data-fold="mappings" data-section="mappings">
-                    <summary><span>Field mappings <span class="rm-fold__count">{{ rule.field_mappings | length }}</span></span>{{ move_ctl() }}</summary>
+                <details class="rm-fold" open data-fold="mappings" data-section="mappings" data-section-label="Field mappings">
+                    <summary><span>Field mappings <span class="rm-fold__count">{{ rule.field_mappings | length }}</span></span>{{ drag_ctl('Field mappings') }}</summary>
                     <div class="mapping-table-wrapper">
                         <table class="mapping-table">
                             <thead><tr><th>Index</th><th>Field</th><th class="text-center">Valid</th><th>Type</th></tr></thead>
@@ -295,8 +326,8 @@
                 <div class="rm-note rm-note--danger">{{ icon_text('triangle-alert', 'Field mapping issues: index fields missing or not checked.', '14') }}</div>
                 {% endif %}
 
-                <details class="rm-fold" open data-fold="scores" data-section="scores">
-                    <summary><span>Score breakdown <span class="rm-fold__count">{{ rule_score }}%</span> <span class="rm-fold__count" title="Scoring model version. Scores from different versions are not directly comparable.">model v{{ score_meta.version }}</span></span>{{ move_ctl() }}</summary>
+                <details class="rm-fold" open data-fold="scores" data-section="scores" data-section-label="Score breakdown">
+                    <summary><span>Score breakdown <span class="rm-fold__count">{{ rule_score }}%</span> <span class="rm-fold__count" title="Scoring model version. Scores from different versions are not directly comparable.">model v{{ score_meta.version }}</span></span>{{ drag_ctl('Score breakdown') }}</summary>
                     {% if score_meta.skipped or score_meta.version < 2 or score_meta.allocated != 100 %}
                     <p class="rm-scores__note">
                         {% if score_meta.version < 2 %}Scored with an earlier model; sync to update it and see how each part is scored for this rule.
@@ -322,12 +353,12 @@
             </section>
 
             {# ───────── RIGHT: actions + MITRE ───────── #}
-            <aside class="rm-col rm-col--actions" aria-label="Actions and MITRE">
-                <div class="rm-panel" data-fold="actions" data-section="actions">
+            <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+                <div class="rm-panel" data-fold="actions" data-section="actions" data-section-label="Actions">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('actions') }}
                         <h3 class="rm-panel__title">Actions</h3>
-                        {{ move_ctl() }}
+                        {{ drag_ctl('Actions') }}
                     </div>
                     <div class="rm-actions">
                         <button name="Validate Rule" class="btn btn-primary"
@@ -350,26 +381,20 @@
                             <span class="btn-text">{{ icon_text('refresh-cw', 'Sync this rule', '14') }}</span>
                             <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
                         </button>
-                        {% if can_promote and lifecycle_state == 'Staging' %}
-                        <button name="Promote" type="button" class="btn btn-secondary"
-                                title="Promote this rule from staging to production"
-                                onclick="showPromoteConfirm('{{ rule.rule_id | e }}', {{ rule.name | tojson | forceescape }}, '{{ siem_id | default('') | e }}', {{ 'true' if delete_source_default else 'false' }})">
-                            {{ icon_text('arrow-up-right', 'Promote', '14') }}
+                        {% if move_targets %}
+                        <button name="Move" type="button" class="btn btn-secondary"
+                                title="Move or copy this rule to another linked destination"
+                                onclick='showMoveDialog({{ rule.rule_id | tojson | forceescape }}, {{ rule.name | tojson | forceescape }}, {{ siem_id | default("") | tojson | forceescape }}, {{ space | tojson | forceescape }}, {{ "true" if delete_source_default else "false" }}, {{ move_targets | tojson | forceescape }})'>
+                            {{ icon_text('arrow-right-left', 'Move', '14') }}
                         </button>
                         {% endif %}
-                        {% if can_demote and lifecycle_state == 'Production' %}
-                        <button name="Demote" type="button" class="btn btn-secondary"
-                                title="Send this rule back to staging"
-                                onclick="showDemoteConfirm('{{ rule.rule_id | e }}', {{ rule.name | tojson | forceescape }}, '{{ siem_id | default('') | e }}')">
-                            {{ icon_text('arrow-down-left', 'Demote', '14') }}
-                        </button>
-                        {% endif %}
-                        {% if lifecycle_state == 'Migrated' %}
+                        {% set _real_links = linked_rules | rejectattr('missing') | list %}
+                        {% if _real_links %}
                         <button name="Compare Rule Versions" type="button" class="btn btn-secondary"
-                                title="Compare the staging and production copies of this rule"
-                                hx-get="/api/promotion/{{ rule.rule_id }}/diff"
+                                title="Compare this rule with a linked rule, and merge one onto the other from there"
+                                hx-get="/api/promotion/{{ rule.rule_id }}/diff?{{ scope_qs }}"
                                 hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                            {{ icon_text('git-branch', 'Compare versions', '14') }}
+                            {{ icon_text('git-branch', 'Compare', '14') }}
                         </button>
                         {% endif %}
                         {% if rule.deprecated %}
@@ -387,6 +412,11 @@
                             {{ icon_text('external-link', 'View in Kibana', '14') }}
                         </a>
                         {% endif %}
+                        <button name="Delete Rule" type="button" class="btn btn-danger"
+                                title="Delete this rule from TIDE, and optionally from {{ scope_label }} in Elastic"
+                                onclick='showDeleteRuleDialog({{ rule.rule_id | tojson | forceescape }}, {{ rule.name | tojson | forceescape }}, {{ siem_id | default("") | tojson | forceescape }}, {{ space | tojson | forceescape }}, {{ scope_label | tojson | forceescape }}, {{ "true" if rule.deprecated else "false" }})'>
+                            {{ icon_text('trash-2', 'Delete rule', '14') }}
+                        </button>
                     </div>
 
                     {% if flash %}
@@ -424,11 +454,11 @@
                     </p>
                 </div>
 
-                <div class="rm-panel" data-fold="mitre" data-section="mitre">
+                <div class="rm-panel" data-fold="mitre" data-section="mitre" data-section-label="MITRE ATT&amp;CK">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('MITRE ATT&amp;CK') }}
                         <h3 class="rm-panel__title">MITRE ATT&amp;CK <span class="rm-fold__count">{{ mitre_details | length }}</span></h3>
-                        {{ move_ctl() }}
+                        {{ drag_ctl('MITRE ATT&amp;CK') }}
                     </div>
                     {% if mitre_details %}
                     <ul class="rm-mitre">
@@ -445,22 +475,72 @@
                 </div>
 
                 {% set _portable_rule_id = (rule.raw_data.rule_id if rule.raw_data is mapping else none) or rule.rule_id %}
-                <div class="rm-panel rm-panel--ids" data-fold="ruleids" data-section="ruleids">
+                <div class="rm-panel rm-panel--ids" data-fold="ruleids" data-section="ruleids" data-section-label="Rule ID">
                     <div class="rm-panel__head">
-                        {{ collapse_ctl('Rule IDs') }}
-                        <h3 class="rm-panel__title">Rule IDs</h3>
-                        {{ move_ctl() }}
+                        {{ collapse_ctl('Rule ID') }}
+                        <h3 class="rm-panel__title">Rule ID</h3>
+                        {{ drag_ctl('Rule ID') }}
                     </div>
                     <dl class="rm-ids">
                         <div class="rm-ids__row">
-                            <dt title="TIDE's own row id for this rule, in this space (Kibana's saved-object id).">TIDE ID</dt>
-                            <dd>{{ rule.rule_id }}</dd>
-                        </div>
-                        <div class="rm-ids__row">
-                            <dt title="The id Elastic itself enforces as unique per space, and what stays the same if this rule is copied elsewhere.">Elastic ID</dt>
-                            <dd>{{ _portable_rule_id }}</dd>
+                            <dd title="The id Elastic itself enforces as unique per space, and what TIDE stores this rule under.">{{ _portable_rule_id }}</dd>
                         </div>
                     </dl>
+                </div>
+
+                <div class="rm-panel rm-panel--linked" data-fold="linked" data-section="linked" data-section-label="Linked">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('Linked') }}
+                        <h3 class="rm-panel__title">Linked{% if linked_rules %} <span class="rm-fold__count">{{ linked_rules | length }}</span>{% endif %}</h3>
+                        {{ drag_ctl('Linked') }}
+                    </div>
+                    {% if linked_rules %}
+                    <div class="rm-items rm-linked-list">
+                        {% for link in linked_rules %}
+                        <div class="rm-item rm-linked-item{% if link.deprecated or link.missing %} rm-item--muted{% endif %}">
+                            <div class="rm-item__main">
+                                <div class="rm-item__name">
+                                    {% if link.missing %}
+                                    <span title="This link was made to a rule that has since been removed from TIDE entirely.">Deleted rule</span>
+                                    {% else %}
+                                    <button type="button" class="rm-item__open" data-rule-open
+                                            hx-get="/api/rules/{{ link.rule_id }}/history-modal?space={{ link.space | urlencode }}&siem_id={{ link.siem_id | urlencode }}"
+                                            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                            title="Open this rule">{{ link.rule_name }}</button>
+                                    {% endif %}
+                                </div>
+                                <div class="rm-item__meta">
+                                    {{ tag(link.destination_name, link.destination_color, title='SIEM destination') }}
+                                    {% if link.missing %}<span class="text-muted">no longer in TIDE</span>{% elif link.deprecated %}{{ tag('Deprecated') }}{% endif %}
+                                </div>
+                            </div>
+                            {{ remove_btn('/api/rules/' ~ rule.rule_id ~ '/links/' ~ link.link_id ~ '?' ~ scope_qs,
+                                          'Remove this link (neither rule is deleted)', 'Remove this link? Neither rule is deleted.', name='Remove Link') }}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <p class="rm-empty">Not linked to another rule.</p>
+                    {% endif %}
+                    {% if move_targets %}
+                    <form class="rm-add-link" hx-post="/api/rules/{{ rule.rule_id }}/links?{{ scope_qs }}"
+                          hx-target="#modal-container" hx-swap="innerHTML">
+                        <div style="position:relative; flex: 1 1 10rem;">
+                            <input type="text" name="target_name" class="form-input" placeholder="Rule name to link…"
+                                   required autocomplete="off"
+                                   hx-get="/api/rules/link-search" hx-trigger="keyup changed delay:300ms, focus"
+                                   hx-include="closest form" hx-vals='{"exclude_rule_id": "{{ rule.rule_id }}", "exclude_siem_id": "{{ siem_id | default(rule.siem_id, true) }}", "exclude_space": "{{ space }}"}'
+                                   hx-target="next .rm-add-link__results" hx-swap="outerHTML">
+                            <div class="rm-add-link__results"></div>
+                        </div>
+                        <select name="target_scope" class="form-input">
+                            {% for t in move_targets %}
+                            <option value="{{ t.siem_id }}|{{ t.space }}">{{ t.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-secondary btn-sm">Add link</button>
+                    </form>
+                    {% endif %}
                 </div>
             </aside>
         </div>

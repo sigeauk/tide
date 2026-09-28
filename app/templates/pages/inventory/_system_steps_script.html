@@ -1,0 +1,131 @@
+<script>
+// ── A system's technique grid: one refresh event, remembered choices, URL, deep link ──
+// Navigation in TIDE is hx-boost: arriving here swaps the body rather than loading a page, so
+// this script runs again on every visit and DOMContentLoaded does not fire. Hence: listeners on
+// page elements are attached per visit (they go away with the elements); listeners on document
+// are installed once and look the page up each time; start-up work runs now if the DOM is ready.
+(function () {
+    var PREF_KEY = 'tide.systemSteps';
+    function bar() { return document.getElementById('sys-filters'); }
+    function systemId() { var b = bar(); return b ? b.getAttribute('data-system-id') : ''; }
+
+    function savePrefs() {
+        var b = bar();
+        var p = {
+            tactic_sort: document.getElementById('sys-tactic-sort').value,
+            sort_name: document.getElementById('sys-sort-name').value,
+            group: Array.prototype.map.call(b.querySelectorAll('input[name="group"][type="checkbox"]:checked'), function (c) { return c.value; }),
+            view: document.getElementById('sys-view').value || 'cards',
+        };
+        try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (_) { /* storage blocked */ }
+    }
+
+    // Button labels follow their dropdowns.
+    function updateLabels() {
+        var b = bar();
+        if (!b) return;
+        var tSort = document.getElementById('sys-tactic-sort');
+        var shown = b.querySelectorAll('input[name="tactic"]:checked');
+        var tLabel = shown.length === 1 ? shown[0].value : (shown.length ? shown.length + ' tactics' : 'All');
+        document.getElementById('sys-tactic-label').textContent =
+            tLabel + (tSort.value === 'off' ? '' : ' · ' + tSort.options[tSort.selectedIndex].text);
+        var status = document.getElementById('sys-status'), mapping = document.getElementById('sys-mapping');
+        var cParts = [];
+        if (status.value) cParts.push(status.options[status.selectedIndex].text);
+        if (mapping.value) cParts.push(mapping.options[mapping.selectedIndex].text);
+        document.getElementById('sys-coverage-label').textContent = cParts.length ? cParts.join(' · ') : 'Any';
+        var groups = Array.prototype.map.call(b.querySelectorAll('input[name="group"][type="checkbox"]:checked'), function (c) {
+            return c.nextElementSibling ? c.nextElementSibling.textContent : c.value;
+        });
+        document.getElementById('sys-group-label').textContent = groups.length ? groups.join(' › ') : 'None';
+        var view = document.getElementById('sys-view').value;
+        b.querySelectorAll('[data-sys-view]').forEach(function (btn) {
+            btn.setAttribute('aria-pressed', btn.getAttribute('data-sys-view') === view ? 'true' : 'false');
+        });
+    }
+
+    function refresh() {
+        updateLabels();
+        savePrefs();
+        if (window.htmx) htmx.trigger(document.body, 'sysFilter');
+    }
+
+    // ── Per visit: the bar's own listeners ──
+    var b = bar();
+    if (!b) return;
+    updateLabels();
+    var searchTimer = null;
+    b.addEventListener('input', function (e) {
+        if (e.target.name !== 'search') return;
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(refresh, 300);
+    });
+    b.addEventListener('change', function (e) { if (e.target.name !== 'search') refresh(); });
+    b.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-sys-view]');
+        if (!btn) return;
+        var input = document.getElementById('sys-view');
+        if (input.value === btn.getAttribute('data-sys-view')) return;
+        input.value = btn.getAttribute('data-sys-view');
+        refresh();
+    });
+
+    // ── Once per browser tab: document-level listeners ──
+    if (!window.__tideSystemStepsWired) {
+        window.__tideSystemStepsWired = true;
+        // Table headers sort the same way as the bar: technique = Name, tactic = Tactic sort.
+        document.addEventListener('click', function (e) {
+            var th = e.target.closest && e.target.closest('[data-sys-sort]');
+            if (!th || !bar()) return;
+            if (th.getAttribute('data-sys-sort') === 'name') {
+                var n = document.getElementById('sys-sort-name');
+                n.value = n.value === 'asc' ? 'desc' : 'asc';
+            } else {
+                var t = document.getElementById('sys-tactic-sort');
+                t.value = t.value === 'attack' ? 'alpha' : 'attack';
+            }
+            refresh();
+        });
+        document.addEventListener('click', function (e) {
+            document.querySelectorAll('#sys-filters .tide-filter-dropdown').forEach(function (d) {
+                if (!d.parentElement.contains(e.target)) d.style.display = 'none';
+            });
+        });
+        // The address bar mirrors the grid's filters (so a refresh or a shared link shows the
+        // same thing), plus the open technique window if there is one.
+        document.body.addEventListener('htmx:afterRequest', function (e) {
+            if (!e.detail.successful || !e.detail.target || e.detail.target.id !== 'system-steps-grid') return;
+            var path = e.detail.pathInfo && (e.detail.pathInfo.finalRequestPath || e.detail.pathInfo.requestPath) || '';
+            var i = path.indexOf('?');
+            window.__tideSystemStepsQuery = i === -1 ? '' : path.slice(i + 1);
+            writeUrl();
+        });
+    }
+    window.__tideSystemStepsQuery = window.location.search.slice(1);   // until the grid answers
+
+    function writeUrl() {
+        // The page's own path (the system).
+        var base = bar() ? bar().getAttribute('data-base-path') : '';
+        if (!systemId() || !base || window.location.pathname !== base) return;
+        var params = new URLSearchParams(window.__tideSystemStepsQuery || '');
+        params.delete('technique');
+        // Only a technique of this system: a rule's Covers can open another system's technique here.
+        var m = document.querySelector('#modal-container .rule-modal[data-step-id]');
+        if (m && document.getElementById('step-' + m.getAttribute('data-step-id'))) params.set('technique', m.getAttribute('data-step-id'));
+        var qs = params.toString();
+        window.history.replaceState(window.history.state, '', base + (qs ? '?' + qs : ''));
+    }
+
+    // ── Start-up, once the DOM (and htmx) are ready ──
+    function start() {
+        var host = document.getElementById('modal-container');
+        if (host) new MutationObserver(writeUrl).observe(host, { childList: true });
+        // Deep link: /systems/<id>?technique=<step id> opens that technique's window.
+        var t = new URLSearchParams(window.location.search).get('technique');
+        if (t) htmx.ajax('GET', '/api/systems/' + systemId() + '/steps/' + encodeURIComponent(t),
+                         { target: '#modal-container', swap: 'innerHTML' });
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+    else setTimeout(start, 0);
+})();
+</script>

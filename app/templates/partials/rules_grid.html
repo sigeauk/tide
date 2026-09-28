@@ -4,7 +4,8 @@
 {% set state = state | default([]) %}
 {% set view = view | default('cards') %}
 {% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
-{% for s in state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (s | urlencode) %}{% endfor %}
+{#- A {% set %} inside a for loop does not outlive the loop in Jinja, so build the state part in one expression. -#}
+{% if state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (state | map('urlencode') | join('&state=')) %}{% endif %}
 
 {% macro sort_arrow(current) -%}
     {%- if current == 'desc' %}<span class="rt-sort" aria-hidden="true">▼</span>{% elif current == 'asc' %}<span class="rt-sort" aria-hidden="true">▲</span>{% endif -%}

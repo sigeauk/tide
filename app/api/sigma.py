@@ -82,6 +82,37 @@ def get_rule_yaml(
     return HTMLResponse(content="# Rule not found", status_code=404)
 
 
+def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern: str, username: str) -> dict:
+    """The Create Rule form's pre-fill for a converted Sigma rule: its title, description,
+    query, level, authors (the rule's, then the converting user), tags and ATT&CK ids. Created
+    disabled. Shared by the Sigma library and a technique window's Convert."""
+    raw_author = sigma_rule.get("author") or ""
+    parts = raw_author if isinstance(raw_author, list) else str(raw_author).split(",")
+    authors: list[str] = []
+    for author in [str(a).strip() for a in parts] + [username.strip()]:
+        if author and author.lower() not in {a.lower() for a in authors}:
+            authors.append(author)
+    return {
+        "name": str(sigma_rule.get("title") or "").strip(),
+        "description": str(sigma_rule.get("description") or "").strip(),
+        "query": query,
+        "language": "kuery" if backend == "elasticsearch" else backend,
+        "severity": str(sigma_rule.get("level") or "medium").strip().lower(),
+        "author": ", ".join(authors),
+        "tags": sigma_rule.get("tags") or [],
+        "mitre_ids": sigma.extract_mitre_techniques(sigma_rule),
+        "note": str(sigma_rule.get("description") or "").strip(),
+        "risk_score": sigma_rule.get("risk_score"),
+        "index": [part.strip() for part in (index_pattern or "").split(",") if part.strip()],
+        "timestamp_override": "event.ingested",
+        "highlighted_fields": [],
+        "enabled": False,
+        "type": "query",
+        "from": "now-6m",
+        "interval": "5m",
+    }
+
+
 @router.post("/convert", response_class=HTMLResponse)
 def convert_rule(
     request: Request,
@@ -132,47 +163,10 @@ def convert_rule(
 
     prefill_payload = ""
     try:
-        sigma_rule = yaml.safe_load(yaml_content) or {}
-        raw_author = sigma_rule.get("author") or ""
-        author_parts: list[str] = []
-        if isinstance(raw_author, list):
-            author_parts.extend(str(a).strip() for a in raw_author if str(a).strip())
-        else:
-            author_parts.extend(
-                str(a).strip() for a in str(raw_author).split(",") if str(a).strip()
-            )
-        current_user = str(getattr(user, "username", "") or "").strip()
-        if current_user:
-            author_parts.append(current_user)
-        # Preserve order while deduplicating.
-        deduped_authors: list[str] = []
-        seen_authors: set[str] = set()
-        for author in author_parts:
-            key = author.lower()
-            if key in seen_authors:
-                continue
-            seen_authors.add(key)
-            deduped_authors.append(author)
-
-        prefill_payload = quote(json.dumps({
-            "name": str(sigma_rule.get("title") or "").strip(),
-            "description": str(sigma_rule.get("description") or "").strip(),
-            "query": raw_query or result,
-            "language": "kuery" if backend == "elasticsearch" else backend,
-            "severity": str(sigma_rule.get("level") or "medium").strip().lower(),
-            "author": ", ".join(deduped_authors),
-            "tags": sigma_rule.get("tags") or [],
-            "mitre_ids": sigma.extract_mitre_techniques(sigma_rule),
-            "note": str(sigma_rule.get("description") or "").strip(),
-            "risk_score": sigma_rule.get("risk_score"),
-            "index": [part.strip() for part in index_pattern.split(",") if part.strip()],
-            "timestamp_override": "event.ingested",
-            "highlighted_fields": [],
-            "enabled": False,
-            "type": "query",
-            "from": "now-6m",
-            "interval": "5m",
-        }))
+        prefill_payload = quote(json.dumps(rule_form_prefill(
+            yaml.safe_load(yaml_content) or {}, raw_query or result, backend, index_pattern,
+            str(getattr(user, "username", "") or ""),
+        )))
     except Exception:
         prefill_payload = ""
     
@@ -371,9 +365,8 @@ def get_spaces(request: Request, user: CurrentUser, db: DbDep, client_id: Active
     html = ""
     for s in client_siems:
         if s.get("space"):
-            label = f'{s["label"]} ({s["environment_role"].title()})'
-            selected = ' selected' if s["environment_role"] == "production" else ""
-            html += f'<option value="{s["space"]}" data-siem-id="{s["id"]}"{selected}>{label}</option>'
+            label = s.get("name") or s["label"]
+            html += f'<option value="{s["space"]}" data-siem-id="{s["id"]}">{label}</option>'
     if not html:
         html = '<option value="" disabled selected>No SIEMs linked</option>'
     return HTMLResponse(html)

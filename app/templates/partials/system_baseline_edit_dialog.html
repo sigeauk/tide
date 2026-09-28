@@ -1,0 +1,33 @@
+{#
+  Rename or re-describe one of a system's own baselines, from Manage baselines; Save and Cancel
+  both return to that window. Only the system's copy changes.
+  Context: system, baseline (the system's copy).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+<div name="Edit System Baseline Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sys-bl-edit-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sys-bl-edit-title">{{ icon('edit-2', '16') }} Edit baseline</h3>
+            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+        </div>
+        <form class="sys-dialog__form" hx-put="/api/systems/{{ system.id }}/baselines/{{ baseline.id }}"
+              hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+            <p class="text-muted sys-dialog__hint">{{ icon('info', '12') }} This changes {{ system.name }}'s own baseline only. Templates and other systems are not affected.</p>
+            <label class="form-label" for="sys-bl-edit-name">Name</label>
+            <input id="sys-bl-edit-name" name="name" class="form-input" required value="{{ baseline.name }}">
+            <label class="form-label" for="sys-bl-edit-desc">Description</label>
+            <textarea id="sys-bl-edit-desc" name="description" class="form-input" rows="3">{{ baseline.description }}</textarea>
+            <div class="modal-actions">
+                <button name="Remove Baseline" type="button" class="btn btn-danger" style="margin-right:auto;"
+                        hx-delete="/api/baselines/{{ baseline.id }}/apply/{{ system.id }}"
+                        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                        hx-confirm="Remove {{ baseline.name }} from {{ system.name }}? Its techniques, rule mappings, known gaps and history are deleted. Templates and other systems are not affected.">
+                    {{ icon_text('trash-2', 'Remove from system', '13') }}
+                </button>
+                <button name="Cancel" type="button" class="btn btn-secondary"
+                        hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">Cancel</button>
+                <button name="Save Baseline" type="submit" class="btn btn-primary">{{ icon_text('save', 'Save', '13') }}</button>
+            </div>
+        </form>
+    </div>
+</div>

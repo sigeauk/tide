@@ -1,5 +1,5 @@
 {#
-  Staging vs production comparison for a migrated rule. `diffs` comes from
+  Compare a rule with a linked rule (and Merge one over the other). `diffs` comes from
   services/rule_diff.build_rule_diff (None when one of the two copies no longer exists).
 #}
 {% macro seg(segments) %}{% for text, changed in segments %}{% if changed %}<mark class="rd-mark">{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}{% endmacro %}
@@ -11,14 +11,15 @@
   .rd-old { background: rgba(var(--color-danger-rgb), 0.15); }
   .rd-new { background: rgba(var(--color-success-rgb), 0.15); }
   .rd-lines { font-family: var(--font-mono, monospace); font-size: 0.8rem; line-height: 1.5; border-radius: 6px; overflow: hidden; }
-  .rd-line { display: flex; white-space: pre-wrap; word-break: break-word; padding: 0 0.5rem; }
-  .rd-line::before { content: ' '; flex: 0 0 1.25rem; opacity: 0.7; }
+  /* A block, not flex: a flex container drops the single spaces between highlighted words. */
+  .rd-line { position: relative; white-space: pre-wrap; word-break: break-word; padding: 0 0.5rem 0 1.75rem; }
+  .rd-line::before { content: ' '; position: absolute; left: 0.5rem; opacity: 0.7; }
   .rd-line.del { background: rgba(var(--color-danger-rgb), 0.12); }
   .rd-line.del::before { content: '\2212'; }
   .rd-line.add { background: rgba(var(--color-success-rgb), 0.12); }
   .rd-line.add::before { content: '+'; }
   .rd-line.same { opacity: 0.7; }
-  .rd-line.gap { justify-content: center; font-style: italic; opacity: 0.6; padding: 0.15rem 0; }
+  .rd-line.gap { text-align: center; font-style: italic; opacity: 0.6; padding: 0.15rem 0; }
   .rd-line.gap::before { content: none; }
   .rd-line.del .rd-mark { background: rgba(var(--color-danger-rgb), 0.35); color: inherit; border-radius: 2px; }
   .rd-line.add .rd-mark { background: rgba(var(--color-success-rgb), 0.35); color: inherit; border-radius: 2px; }
@@ -45,15 +46,27 @@
 <div class="modal-overlay" onclick="if(event.target===this)this.remove()">
   <div class="modal-content rd-root" data-view="inline" onclick="event.stopPropagation()" style="max-width:980px;">
     <div class="modal-header">
-      <h2>Compare staging and production</h2>
+      <h2>Compare</h2>
       <button type="button" class="btn btn-icon" onclick="this.closest('.modal-overlay').remove()">&times;</button>
     </div>
     <p class="rule-help">
-      {{ (target or source).name if (target or source) else 'Rule' }} &mdash; showing what changed from the
-      <strong>staging</strong> copy to the <strong>production</strong> copy
-      (<span class="text-danger">&minus; staging</span> / <span class="text-success">+ production</span>).
+      Showing what's different between <strong>{{ source.name if source else 'this rule' }}</strong> ({{ source_dest_name }})
+      and <strong>{{ target.name if target else 'the linked rule' }}</strong> ({{ link.destination_name }})
+      (<span class="text-danger">&minus; {{ source_dest_name }}</span> / <span class="text-success">+ {{ link.destination_name }}</span>).
       Only reviewable fields are compared; scores, run results and internal metadata are ignored.
     </p>
+    {% if all_links and all_links | length > 1 %}
+    <div class="mb-md" style="max-width:22rem;">
+      <label class="form-label" style="font-size:0.78rem;">Comparing against</label>
+      <select class="form-input" id="rm-diff-target"
+              onclick="event.stopPropagation()"
+              onchange="tideSwitchCompareTarget({{ source_rule_id | tojson | forceescape }}, {{ source_siem_id | tojson | forceescape }}, {{ source_space | tojson | forceescape }}, this.value)">
+        {% for l in all_links %}
+        <option value="{{ l.rule_id }}|{{ l.siem_id }}|{{ l.space }}" {% if l.link_id == link.link_id %}selected{% endif %}>{{ l.rule_name }} ({{ l.destination_name }})</option>
+        {% endfor %}
+      </select>
+    </div>
+    {% endif %}
     {% if diffs is none %}
     <p class="empty-state-text">One of the two copies no longer exists, so there is nothing to compare.</p>
     {% elif diffs %}
@@ -72,24 +85,24 @@
           <span class="rd-pill rd-old">{{ d.old }}</span>&rarr;<span class="rd-pill rd-new">{{ d.new }}</span>
         </div>
         <div class="rd-side rd-cols">
-          <div><div class="rd-colhead">Staging</div><span class="rd-pill rd-old">{{ d.old }}</span></div>
-          <div><div class="rd-colhead">Production</div><span class="rd-pill rd-new">{{ d.new }}</span></div>
+          <div><div class="rd-colhead">This rule</div><span class="rd-pill rd-old">{{ d.old }}</span></div>
+          <div><div class="rd-colhead">Linked rule</div><span class="rd-pill rd-new">{{ d.new }}</span></div>
         </div>
         {% elif d.kind == 'list' %}
         <div class="rd-inline rd-chips">
-          {% for item in d.removed %}<span class="rd-pill rd-old" title="Only in staging">&minus; {{ item }}</span>{% endfor %}
-          {% for item in d.added %}<span class="rd-pill rd-new" title="Only in production">+ {{ item }}</span>{% endfor %}
+          {% for item in d.removed %}<span class="rd-pill rd-old" title="Only on this rule">&minus; {{ item }}</span>{% endfor %}
+          {% for item in d.added %}<span class="rd-pill rd-new" title="Only on the linked rule">+ {{ item }}</span>{% endfor %}
         </div>
         <div class="rd-side rd-cols">
-          <div><div class="rd-colhead">Staging only</div><div class="rd-chips">{% for item in d.removed %}<span class="rd-pill rd-old">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
-          <div><div class="rd-colhead">Production only</div><div class="rd-chips">{% for item in d.added %}<span class="rd-pill rd-new">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+          <div><div class="rd-colhead">This rule only</div><div class="rd-chips">{% for item in d.removed %}<span class="rd-pill rd-old">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+          <div><div class="rd-colhead">Linked rule only</div><div class="rd-chips">{% for item in d.added %}<span class="rd-pill rd-new">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
         </div>
         {% else %}
         <div class="rd-inline rd-lines">
           {% for row in d.inline %}<div class="rd-line {{ row.type }}">{{ seg(row.segments) }}</div>{% endfor %}
         </div>
         <div class="rd-side rd-lines">
-          <div class="rd-srow"><div class="rd-colhead rd-cell left">Staging</div><div class="rd-colhead rd-cell right">Production</div></div>
+          <div class="rd-srow"><div class="rd-colhead rd-cell left">This rule</div><div class="rd-colhead rd-cell right">Linked rule</div></div>
           {% for row in d.side %}
             {% if row.type == 'gap' %}<div class="rd-srow gap">{{ seg(row.segments) }}</div>
             {% else %}<div class="rd-srow {{ row.type }}"><div class="rd-cell left {{ row.type }}">{% if row.left %}{{ seg(row.left) }}{% endif %}</div><div class="rd-cell right {{ row.type }}">{% if row.right %}{{ seg(row.right) }}{% endif %}</div></div>{% endif %}
@@ -100,19 +113,49 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="empty-state-text">The staging and production copies are identical for every reviewable field.</p>
+    <p class="empty-state-text">The two rules are identical in every field compared.</p>
     {% endif %}
-    <p class="text-muted" style="font-size:0.8rem;margin-top:1rem;">
-      Making a copy the master writes its content over the other copy in that copy's SIEM, and points baseline links at the master.
-      The other copy keeps its own enabled or disabled state.
-    </p>
-    <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:1rem;">
-      <button type="button" class="btn btn-secondary"
-              hx-post="/api/promotion/{{ migration.source_rule_id }}/master"
-              hx-vals='{"master":"staging"}' hx-target="#modal-container">Make staging master</button>
-      <button type="button" class="btn btn-primary"
-              hx-post="/api/promotion/{{ migration.source_rule_id }}/master"
-              hx-vals='{"master":"production"}' hx-target="#modal-container">Make production master</button>
+    {% if source and target %}
+    <div class="rm-merge" style="border-top:1px solid var(--color-border);margin-top:1rem;padding-top:1rem;">
+      <p class="rd-label" style="margin-bottom:0.5rem;">Merge</p>
+      <p class="text-muted" style="font-size:0.8rem;margin-bottom:0.6rem;">
+        Merging copies one side's content over the other, in the other's own SIEM, keeping the other's own enabled/disabled state. Deleting is a separate choice — pick either side, both, or neither.
+      </p>
+      {% set src_label = source.name ~ ' (' ~ source_dest_name ~ ')' %}
+      {% set tgt_label = target.name ~ ' (' ~ link.destination_name ~ ')' %}
+      <label class="form-label" style="font-size:0.72rem;">Direction</label>
+      <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:0.7rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;">
+          <input type="radio" name="rm-merge-direction" value="source_over_target" checked>
+          <span>Merge <strong>{{ src_label }}</strong> over <strong>{{ tgt_label }}</strong> &mdash; {{ tgt_label }} is overwritten</span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;">
+          <input type="radio" name="rm-merge-direction" value="target_over_source">
+          <span>Merge <strong>{{ tgt_label }}</strong> over <strong>{{ src_label }}</strong> &mdash; {{ src_label }} is overwritten</span>
+        </label>
+      </div>
+      <label class="form-label" style="font-size:0.72rem;">After merging</label>
+      <div style="display:flex;flex-direction:column;gap:0.4rem;margin-bottom:0.8rem;">
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;">
+          <input type="radio" name="rm-merge-delete" value="none" checked>
+          <span>Keep both rules</span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;">
+          <input type="radio" name="rm-merge-delete" value="source">
+          <span>Delete <strong>{{ src_label }}</strong> &mdash; permanently, from its SIEM as well as TIDE</span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:0.5rem;">
+          <input type="radio" name="rm-merge-delete" value="target">
+          <span>Delete <strong>{{ tgt_label }}</strong> &mdash; permanently, from its SIEM as well as TIDE</span>
+        </label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button type="button" class="btn btn-primary" id="rm-merge-go" onclick="tideMergeLinked(this)"
+                data-rule-id="{{ source_rule_id }}" data-siem-id="{{ source_siem_id }}" data-space="{{ source_space }}"
+                data-target-rule-id="{{ link.rule_id }}" data-target-siem-id="{{ link.siem_id }}" data-target-space="{{ link.space }}"
+                data-source-name="{{ src_label }}" data-target-name="{{ tgt_label }}">Merge</button>
+      </div>
     </div>
+    {% endif %}
   </div>
 </div>

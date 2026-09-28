@@ -1,0 +1,72 @@
+{#
+  Controls shared by the windows built on the rule window's frame (rule window, technique window).
+  Every section is a [data-section] (with a data-section-label) directly inside a .rm-col[data-col];
+  app.js moves sections between columns (drag the handle, or arrow keys on it), shows and hides
+  them from the header menu, and remembers the arrangement under the window's data-layout-key.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro collapse_ctl(label) -%}
+<button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
+{%- endmacro %}
+
+{% macro drag_ctl(label) -%}
+<button type="button" class="rm-drag" data-rm-drag draggable="true"
+        title="Move {{ label }}: drag it anywhere, or use the arrow keys" aria-label="Move {{ label }} (arrow keys move it up, down, left or right)">{{ icon('move', '13') }}</button>
+{%- endmacro %}
+
+{# A section's "…" menu (technique window): Move, plus the section's own actions from a call block
+   ({% call section_menu('Risks') %}…menu items…{% endcall %}). Move shows the move bar in the
+   section's head: drag its handle, click an arrow, or use the arrow keys; Done or Esc ends it. #}
+{% macro section_menu(label) -%}
+<div class="rh-more rm-secmenu" data-more>
+    <button name="{{ label }} Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
+            aria-haspopup="menu" aria-expanded="false" title="{{ label }} actions" aria-label="{{ label }} actions">{{ icon('more-horizontal', '14') }}</button>
+    <div class="rh-more__menu" role="menu" hidden>
+        <button name="Move Section" type="button" role="menuitem" class="rh-more__item" data-rm-move-start>{{ icon('move', '14') }}<span>Move</span></button>
+        {% if caller is defined %}{{ caller() }}{% endif %}
+    </div>
+</div>
+<div class="rm-movebar" data-rm-movebar hidden>
+    {{ drag_ctl(label) }}
+    <button type="button" class="rm-move__btn" data-rm-step="up" title="Move up" aria-label="Move {{ label }} up">{{ icon('arrow-up', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-rm-step="down" title="Move down" aria-label="Move {{ label }} down">{{ icon('arrow-down', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-rm-step="left" title="Move to the column on the left" aria-label="Move {{ label }} left">{{ icon('arrow-left', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-rm-step="right" title="Move to the column on the right" aria-label="Move {{ label }} right">{{ icon('arrow-right', '13') }}</button>
+    <button name="Done Moving" type="button" class="btn btn-secondary btn-sm" data-rm-move-done>{{ icon('check', '13') }} Done</button>
+</div>
+{%- endmacro %}
+
+{# The one remove control used on every card in these windows (a mapped rule, a gap or N/A, a
+   link). It removes the link or mark, never the thing it points at. #}
+{% macro remove_btn(url, title, confirm, name='Remove') -%}
+<button name="{{ name }}" type="button" class="rm-x" title="{{ title }}" aria-label="{{ title }}"
+        hx-delete="{{ url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        hx-confirm="{{ confirm }}">{{ icon('x', '13') }}</button>
+{%- endmacro %}
+
+{# A small square-cornered label on a card: a SIEM destination (in its colour), a system, a tactic. #}
+{% macro tag(text, color=none, title='', kind='') -%}
+<span class="rm-tag{% if kind %} rm-tag--{{ kind }}{% endif %}"{% if color %} style="--tag-color: {{ color }};"{% endif %}{% if title %} title="{{ title }}"{% endif %}>{{ text }}</span>
+{%- endmacro %}
+
+{# The header's "…" menu: which sections show, and Reset layout. A call block adds the window's own
+   actions under them (the technique window's Delete technique). #}
+{% macro layout_menu(hint='drag') -%}
+<div class="rh-more rm-layout" data-more data-rm-layout>
+    <button name="Window Sections" type="button" class="rm-iconbtn rm-iconbtn--boxed" data-more-toggle
+            aria-haspopup="menu" aria-expanded="false" title="Choose which sections to show" aria-label="Sections">{{ icon('more-horizontal', '16') }}</button>
+    <div class="rh-more__menu rm-layout__menu" role="menu" hidden data-keep-open>
+        <p class="rm-layout__head">Show sections</p>
+        <div class="rm-layout__list" data-rm-layout-list></div>
+        <div class="rh-more__sep" role="separator"></div>
+        <button name="Reset Layout" type="button" role="menuitem" class="rh-more__item" data-rm-layout-reset>{{ icon('rotate-ccw', '14') }}<span>Reset layout</span></button>
+        {% if caller is defined %}<div class="rh-more__sep" role="separator"></div>{{ caller() }}{% endif %}
+        {% if hint == 'menu' %}
+        <p class="rm-layout__hint">Use a section's {{ icon('more-horizontal', '11') }} menu, then Move, to move it.</p>
+        {% else %}
+        <p class="rm-layout__hint">Drag {{ icon('move', '11') }} on a section to move it.</p>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}

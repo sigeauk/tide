@@ -1,0 +1,28 @@
+{#
+  ATT&CK technique picker, the same way the rule form picks them: choose a tactic, then one of its
+  techniques, as many times as needed. Chosen techniques are listed like the rule window's MITRE
+  panel (pill, name, tactic), each with its own remove button. app.js wires it up
+  ([data-mitre-picker]); it posts `technique_ids` (comma-separated) and `tactic` (the first
+  technique's tactic: the one it was picked under, or for one already chosen, `tactic` when it
+  is one of that technique's tactics -- many techniques sit under several).
+  Usage: {{ mitre_picker(technique_groups, selected_ids, tactic) }}
+#}
+{% from "macros/icons.html" import icon %}
+{% macro mitre_picker(groups, selected_ids, tactic='') -%}
+<div class="mitre-picker" data-mitre-picker>
+  <script type="application/json" data-mitre-groups>{{ groups | tojson }}</script>
+  <input type="hidden" name="technique_ids" value="{{ selected_ids | join(', ') }}" data-mitre-value>
+  <input type="hidden" name="tactic" value="{{ tactic }}" data-mitre-tactic>
+  <ul class="rm-mitre mitre-picker__list" data-mitre-list></ul>
+  <p class="text-muted mitre-picker__empty" data-mitre-empty hidden>No ATT&amp;CK technique chosen yet.</p>
+  <div class="mitre-picker__add">
+    <select class="form-input form-select" data-mitre-tactic-select aria-label="Tactic">
+      <option value="">Tactic…</option>
+      {% for g in groups %}<option value="{{ g.tactic }}">{{ g.tactic }}</option>{% endfor %}
+    </select>
+    <select class="form-input form-select" data-mitre-technique-select aria-label="Technique" disabled>
+      <option value="">Choose a tactic first</option>
+    </select>
+  </div>
+</div>
+{%- endmacro %}

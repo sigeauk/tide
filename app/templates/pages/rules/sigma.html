@@ -489,14 +489,10 @@ level: medium"></textarea>
                 
                 <div class="filter-group">
                     <label>SIEM</label>
-                    {# Pick a sensible default: first production target,
-                       else first staging, else first available. Falls back
-                       to the placeholder when no targets exist so the
-                       operator always sees explanatory text instead of a
-                       blank box. #}
-                    {% set _prod = deploy_targets | selectattr('environment_role', 'equalto', 'production') | list %}
-                    {% set _stg  = deploy_targets | selectattr('environment_role', 'equalto', 'staging')    | list %}
-                    {% set _default_target = (_prod[0] if _prod else (_stg[0] if _stg else (deploy_targets[0] if deploy_targets else None))) %}
+                    {# Default to the first linked destination. Falls back to the placeholder
+                       when no targets exist so the operator always sees explanatory text
+                       instead of a blank box. #}
+                    {% set _default_target = deploy_targets[0] if deploy_targets else None %}
                     <select id="deploy-space-select" name="space">
                         {% if not deploy_targets %}
                         <option value="" disabled selected>No SIEMs linked — link one in Management</option>

@@ -2,7 +2,7 @@
 Pydantic models for Detection Rules and Rule Health metrics.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime
 from enum import Enum
@@ -163,12 +163,12 @@ class RuleHealthMetrics(BaseModel):
     quality_fair: int = 0       # 50-69
     quality_poor: int = 0       # < 50
     
-    # Lifecycle split of the (deduplicated) rules shown: Production / Staging /
-    # Migrated (present in both) / Deprecated (in neither).
-    state_production: int = 0
-    state_staging: int = 0
-    state_migrated: int = 0
+    # Every rule renders its own card now -- no more Production/Staging/Migrated role
+    # split. What's still worth summarising: how many have a link to another rule
+    # (rule_links), and how many are TIDE-only deprecated husks.
+    state_linked: int = 0
     state_deprecated: int = 0
+    state_offline: int = 0
 
     rules_by_space: Dict[str, int] = Field(default_factory=dict)
     # Composite-keyed counts: ``{f"{siem_id}|{space}": count}``. The
@@ -184,13 +184,16 @@ class RuleHealthMetrics(BaseModel):
 class RuleFilters(BaseModel):
     """Filters for rule listing endpoint."""
     search: Optional[str] = None
+    # The SIEM filter picks one destination, sent as "<siem_id>|<space>" and split into
+    # siem_id + space here. A space name alone never identifies a destination (CLAUDE.md §6).
+    siem_id: Optional[str] = None
     space: Optional[str] = None
     enabled: Optional[bool] = None
     severity: Optional[Severity] = None
     min_score: Optional[int] = None
     max_score: Optional[int] = None
-    # Lifecycle state checklist: any of "production", "staging", "migrated",
-    # "deprecated" (case-insensitive). Empty list = no state filtering.
+    # Lifecycle state checklist: any of "live", "offline", "deprecated"
+    # (case-insensitive). Empty list = no state filtering.
     state: List[str] = Field(default_factory=list)
     validated_from: Optional[datetime] = None
     validated_to: Optional[datetime] = None
@@ -208,6 +211,12 @@ class RuleFilters(BaseModel):
     # DatabaseService.get_client_siem_scopes() to populate. See CLAUDE.md
     # §8.2 guarantee 4 / §8.3 anti-patterns.
     allowed_scopes: Optional[List[Tuple[str, str]]] = None
+
+    @model_validator(mode="after")
+    def _split_scope(self):
+        if self.space and "|" in self.space:
+            self.siem_id, _, self.space = self.space.partition("|")
+        return self
 
 
 class RuleListResponse(BaseModel):

@@ -1570,16 +1570,14 @@ async def update_siem_logging(
 
 @router.post("/clients/{client_id}/siems", response_class=HTMLResponse)
 async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
-    """Link a SIEM to a client with an environment role and space."""
+    """Link one SIEM+space destination to a client, under a name the operator chooses."""
     form = await request.form()
     siem_id = str(form.get("siem_id", "")).strip()
-    environment_role = str(form.get("environment_role", "production")).strip()
     space = str(form.get("space", "")).strip() or "default"
+    name = str(form.get("name", "")).strip() or space.title()
     default_index = str(form.get("default_index", "")).strip()
     if not siem_id:
         return HTMLResponse("")
-    if environment_role not in ("production", "staging"):
-        environment_role = "production"
 
     # NOTE: prior releases (4.1.5–4.1.7) hard-rejected the literal values
     # ``'production'`` / ``'staging'`` here on the assumption they were
@@ -1617,14 +1615,16 @@ async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user:
         # Persist the canonical id to keep client_siem_map normalized.
         space = matched
 
+    color = str(form.get("color", "")).strip() or None
     db.link_client_siem(
         client_id,
         siem_id,
-        environment_role=environment_role,
+        name=name,
         space=space,
         default_index=default_index,
+        color=color,
     )
-    logger.info(f"SIEM {siem_id} linked to client {client_id} as {environment_role} by {user.username}")
+    logger.info(f"SIEM {siem_id} linked to client {client_id} as {name!r} by {user.username}")
     # Push existing rules from the shared cache into this tenant's DB.
     # Without this the tenant's ``detection_rules`` table stays empty until
     # the next scheduled global Elastic sync runs \u2014 which made the common
@@ -1648,65 +1648,89 @@ async def update_client_siem_default_index(
     db: DbDep,
     user: RequireAdmin,
 ):
-    """Persist a default index pattern for one linked (client, siem, role) row."""
+    """Persist a default index pattern for one linked (client, siem, space) destination."""
     form = await request.form()
-    environment_role = str(form.get("environment_role", "")).strip().lower()
+    space = str(form.get("space", "")).strip() or "default"
     default_index = str(form.get("default_index", "")).strip()
-
-    if environment_role not in ("production", "staging"):
-        return _render_client_siems_partial(client_id, db, toast="Invalid environment role.")
 
     updated = db.update_client_siem_default_index(
         client_id=client_id,
         siem_id=siem_id,
-        environment_role=environment_role,
+        space=space,
         default_index=default_index,
     )
     if not updated:
-        return _render_client_siems_partial(client_id, db, toast="Linked SIEM row not found.")
+        return _render_client_siems_partial(client_id, db, toast="Linked SIEM destination not found.")
 
     logger.info(
-        "Default index updated for client=%s siem=%s role=%s by %s",
-        client_id,
-        siem_id,
-        environment_role,
-        user.username,
+        "Default index updated for client=%s siem=%s space=%s by %s",
+        client_id, siem_id, space, user.username,
     )
     return _render_client_siems_partial(client_id, db, toast="Default index saved.")
 
 
-@router.post("/clients/{client_id}/siems/{siem_id}/role", response_class=HTMLResponse)
-async def change_client_siem_role(
+@router.post("/clients/{client_id}/siems/{siem_id}/rename", response_class=HTMLResponse)
+async def rename_client_siem(
     request: Request,
     client_id: str,
     siem_id: str,
     db: DbDep,
     user: RequireAdmin,
 ):
-    """Switch a linked SIEM between Production and Staging without unlinking it.
+    """Rename a linked SIEM+space destination without unlinking it.
 
-    Unlinking purges the SIEM's rules from the client and needs a re-sync; this keeps every rule,
-    score and validation in place, so a SIEM migration can start by re-tagging the old SIEM as
-    Staging and linking the new one as Production.
-    """
+    Unlinking purges the SIEM's rules from the client and needs a re-sync; renaming keeps every
+    rule, score and validation exactly in place."""
     form = await request.form()
-    from_role = str(form.get("from_role", "")).strip().lower()
-    to_role = str(form.get("to_role", "")).strip().lower()
-    error = db.set_client_siem_role(client_id, siem_id, from_role, to_role)
+    space = str(form.get("space", "")).strip() or "default"
+    name = str(form.get("name", "")).strip()
+    error = db.rename_client_siem(client_id, siem_id, space, name)
     if error:
         return _render_client_siems_partial(client_id, db, toast=error)
-    logger.info(f"SIEM {siem_id} of client {client_id} changed from {from_role} to {to_role} by {user.username}")
+    logger.info(f"SIEM {siem_id}/{space} of client {client_id} renamed to {name!r} by {user.username}")
     try:
         from app.config import get_settings
         from app.services.tenant_manager import sync_shared_data
         settings = get_settings()
         sync_shared_data(settings.data_dir, settings.db_path, client_id)
     except Exception as exc:
-        logger.warning(f"tenant mirror refresh after role change failed: {exc}")
-    toast = f"SIEM is now {to_role.capitalize()}."
-    if to_role == "production" and len(db.get_client_siems(client_id, environment_role="production")) > 1:
-        toast += " Promote needs exactly one production SIEM per client."
-    return _render_client_siems_partial(client_id, db, toast=toast)
+        logger.warning(f"tenant mirror refresh after rename failed: {exc}")
+    return _render_client_siems_partial(client_id, db, toast=f'Renamed to "{name}".')
+
+
+@router.post("/clients/{client_id}/siems/{siem_id}/edit-destination", response_class=HTMLResponse)
+async def edit_client_siem_destination(
+    request: Request,
+    client_id: str,
+    siem_id: str,
+    db: DbDep,
+    user: RequireAdmin,
+):
+    """Update a linked destination's name, colour and default index together -- the rule
+    window's "..." edit menu. Same non-effect on rules/scores/validation as rename or the
+    default-index form; this just replaces having three separate inline forms with one."""
+    form = await request.form()
+    space = str(form.get("space", "")).strip() or "default"
+    name = str(form.get("name", "")).strip()
+    color = str(form.get("color", "")).strip()
+    default_index = str(form.get("default_index", "")).strip()
+    error = db.update_client_siem_destination(
+        client_id, siem_id, space, name=name, color=color, default_index=default_index,
+    )
+    if error:
+        return _render_client_siems_partial(client_id, db, toast=error)
+    logger.info(
+        "Destination %s/%s of client %s updated (name=%r color=%r) by %s",
+        siem_id, space, client_id, name, color, user.username,
+    )
+    try:
+        from app.config import get_settings
+        from app.services.tenant_manager import sync_shared_data
+        settings = get_settings()
+        sync_shared_data(settings.data_dir, settings.db_path, client_id)
+    except Exception as exc:
+        logger.warning(f"tenant mirror refresh after destination edit failed: {exc}")
+    return _render_client_siems_partial(client_id, db, toast=f'Updated "{name}".')
 
 
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)
@@ -1723,15 +1747,13 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
     The previous "redistributor" call here was a no-op stub since 4.1.13 and
     has been removed.
 
-    Partial-unlink contract (CLAUDE.md §8.1 dual-role config): when
-    ``environment_role`` is supplied, we MUST only purge the specific
-    ``(siem_id, space)`` pair removed — the same ``siem_id`` may still be
-    mapped under the other role with a different space, and a blanket
-    ``DELETE WHERE siem_id = ?`` would destroy rules belonging to that
-    still-valid mapping. Pairs are captured BEFORE the map delete so the
-    purge is exact.
+    Partial-unlink contract: when ``space`` is supplied, we MUST only purge that specific
+    ``(siem_id, space)`` pair removed — the same ``siem_id`` may still be mapped under a
+    different space as a different destination, and a blanket ``DELETE WHERE siem_id = ?``
+    would destroy rules belonging to that still-valid mapping. Pairs are captured BEFORE the
+    map delete so the purge is exact.
     """
-    env_role = request.query_params.get("environment_role")
+    space_param = request.query_params.get("space")
 
     # 1. Capture the (siem_id, space) pairs about to be removed, BEFORE the
     #    map delete (otherwise the rows are gone and we can't know what to
@@ -1749,16 +1771,16 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
                 "WHERE client_id = ? AND siem_id = ?"
             )
             _params: list = [client_id, siem_id]
-            if env_role:
-                _q += " AND environment_role = ?"
-                _params.append(env_role)
+            if space_param:
+                _q += " AND LOWER(COALESCE(NULLIF(TRIM(space), ''), 'default')) = LOWER(?)"
+                _params.append(space_param)
             pairs_to_purge = [(sid, sp) for sid, sp in _sconn.execute(_q, _params).fetchall() if sid and sp]
     except Exception as exc:
         logger.warning(f"could not enumerate (siem_id, space) pairs prior to unlink: {exc}")
 
     # 2. Delete the client_siem_map row(s).
-    db.unlink_client_siem(client_id, siem_id, environment_role=env_role)
-    logger.info(f"SIEM {siem_id} ({env_role or 'all'}) unlinked from client {client_id} by {user.username}")
+    db.unlink_client_siem(client_id, siem_id, space=space_param)
+    logger.info(f"SIEM {siem_id} ({space_param or 'all spaces'}) unlinked from client {client_id} by {user.username}")
 
     # 3. Purge the orphaned detection_rules rows from the tenant DB. Wrapped
     #    so a missing/empty detection_rules table on a never-synced tenant
@@ -1799,7 +1821,7 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
         except Exception as exc:
             logger.warning(
                 f"ghost-rule purge after SIEM unlink failed for client={client_id} "
-                f"siem={siem_id} role={env_role or 'all'}: {exc}"
+                f"siem={siem_id} space={space_param or 'all'}: {exc}"
             )
 
     return _render_client_siems_partial(client_id, db, toast="SIEM unlinked.")
@@ -1893,7 +1915,7 @@ def system_move_check(request: Request, client_id: str,
         bl_list = ", ".join(escape(b["name"]) for b in check["baselines"])
         html_parts.append(
             f'<div style="font-size:0.875rem;"><strong>{len(check["baselines"])}</strong> '
-            f'linked baseline(s): {bl_list}</div>'
+            f'baseline(s) will move with the system: {bl_list}</div>'
         )
 
     html_parts.append('</div>')
@@ -1908,7 +1930,6 @@ async def move_system(request: Request, client_id: str,
     form = await request.form()
     system_id = str(form.get("system_id", "")).strip()
     target_client_id = str(form.get("target_client_id", "")).strip()
-    move_baselines = form.get("move_baselines") == "on"
 
     if not system_id:
         return _render_client_systems_partial(client_id, db, toast="No system specified.")
@@ -1933,10 +1954,7 @@ async def move_system(request: Request, client_id: str,
 
     def _run():
         try:
-            result = move_system_to_client(
-                system_id, client_id, target_client_id,
-                move_baselines=move_baselines,
-            )
+            result = move_system_to_client(system_id, client_id, target_client_id)
             parts = [f"System \"{result['system_name']}\" moved to {target_client['name']}."]
             if result["coverage_reset"]:
                 parts.append(f" {result['applied_detections_removed']} detection(s) reset.")
@@ -2133,7 +2151,6 @@ async def move_from(request: Request, client_id: str,
     form = await request.form()
     source_client_id = str(form.get("source_client_id", "")).strip()
     system_id = str(form.get("system_id", "")).strip()
-    move_baselines = form.get("move_baselines") == "on"
 
     if not source_client_id or not system_id:
         return _render_client_systems_partial(client_id, db, toast="Missing source or system.")
@@ -2154,10 +2171,7 @@ async def move_from(request: Request, client_id: str,
 
     def _run():
         try:
-            result = move_system_to_client(
-                system_id, source_client_id, client_id,
-                move_baselines=move_baselines,
-            )
+            result = move_system_to_client(system_id, source_client_id, client_id)
             parts = [f"System \"{result['system_name']}\" moved from {source_client['name']}."]
             if result["coverage_reset"]:
                 parts.append(f" {result['applied_detections_removed']} detection(s) reset.")
@@ -2716,22 +2730,19 @@ def _siem_logging_block_html(s: dict) -> str:
     # longer carries production_space/staging_space fields \u2014 client_siem_map
     # is the sole source of (siem, role, space).
     discovered_spaces: list[str] = []
-    prod_spaces: set[str] = set()
-    stage_spaces: set[str] = set()
+    space_names: dict[str, str] = {}
     try:
         from app.services.database import get_database_service
         _db = get_database_service()
         discovered_spaces = _db.get_siem_spaces(sid) or []
         with _db.get_shared_connection() as _conn:
-            for _sp, _role in _conn.execute(
-                "SELECT COALESCE(NULLIF(TRIM(space), ''), 'default'), environment_role "
+            for _sp, _name in _conn.execute(
+                "SELECT COALESCE(NULLIF(TRIM(space), ''), 'default'), name "
                 "FROM client_siem_map WHERE siem_id = ?",
                 [sid],
             ).fetchall():
-                if _role == "production":
-                    prod_spaces.add(_sp)
-                elif _role == "staging":
-                    stage_spaces.add(_sp)
+                if _name:
+                    space_names[_sp] = _name
         # 4.1.5 — also union live spaces from this SIEM's Kibana so freshly
         # created spaces appear in the logging picker without waiting for a
         # client mapping to be saved first.
@@ -2789,16 +2800,7 @@ def _siem_logging_block_html(s: dict) -> str:
         checkbox_rows = []
         for sp in ordered:
             checked = " checked" if sp in selected_spaces else ""
-            in_prod = sp in prod_spaces
-            in_stage = sp in stage_spaces
-            if in_prod and in_stage:
-                tag = ' <span style="opacity:0.6;">(prod / stage)</span>'
-            elif in_prod:
-                tag = ' <span style="opacity:0.6;">(prod)</span>'
-            elif in_stage:
-                tag = ' <span style="opacity:0.6;">(stage)</span>'
-            else:
-                tag = ""
+            tag = f' <span style="opacity:0.6;">({escape(space_names[sp])})</span>' if sp in space_names else ""
             checkbox_rows.append(
                 '<label style="display:flex;align-items:center;gap:0.4rem;'
                 'padding:0.2rem 0.5rem;cursor:pointer;font-size:0.8rem;">'
@@ -3599,6 +3601,12 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
     except Exception as exc:
         logger.warning(f"_render_client_siems_partial: per-SIEM space build failed: {exc!r}")
 
+    from app.services.database import DESTINATION_COLOR_PALETTE
+    used_colors = {s.get("color") for s in client_siems if s.get("color")}
+    next_free_color = next(
+        (c for c in DESTINATION_COLOR_PALETTE if c not in used_colors),
+        DESTINATION_COLOR_PALETTE[len(used_colors) % len(DESTINATION_COLOR_PALETTE)],
+    )
     html = template.render(
         client=client, client_siems=client_siems,
         available_siems=available_siems, siem_rule_counts=siem_rule_counts,
@@ -3607,6 +3615,8 @@ def _render_client_siems_partial(client_id: str, db, toast: str = None) -> HTMLR
         siem_spaces_by_id=siem_spaces_by_id,
         known_kibana_spaces=known_kibana_spaces,
         settings=_settings,
+        destination_color_palette=DESTINATION_COLOR_PALETTE,
+        next_free_color=next_free_color,
     )
 
     toast_html = ""
@@ -3832,7 +3842,6 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/move-from/systems" hx-target="#edit-move-from-system-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
             f'<select name="system_id" id="edit-move-from-system-select" class="form-input" required><option value="" disabled selected>Select a source client first&hellip;</option></select>'
-            f'<label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;"><input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);"> Also move associated baselines</label>'
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg> Move Here</button></form>'
         )
     modal_body += (
@@ -3998,11 +4007,11 @@ _QUERY_PRESETS = [
              "FROM siem_inventory ORDER BY label")},
     {"id": "client_siem_map", "label": "Tenant - SIEM - space mappings", "target": "shared",
      "sql": ("SELECT csm.client_id, c.name AS client_name, csm.siem_id, "
-             "s.label AS siem_name, csm.environment_role, csm.space "
+             "s.label AS siem_name, csm.name AS destination_name, csm.space "
              "FROM client_siem_map csm "
              "LEFT JOIN clients c ON c.id = csm.client_id "
              "LEFT JOIN siem_inventory s ON s.id = csm.siem_id "
-             "ORDER BY c.name, s.label, csm.environment_role")},
+             "ORDER BY c.name, s.label, csm.name")},
     {"id": "siem_kibana_spaces", "label": "Persisted Kibana space cache (Migration 41)",
      "target": "shared",
      "sql": ("SELECT siem_id, space, discovered_at "
@@ -4035,22 +4044,22 @@ _QUERY_PRESETS = [
     # tenant DB, not the shared DB. Running these in shared scope would
     # error with `Table does not exist`.
     {"id": "rules_per_siem_space_role",
-     "label": "Rule count per SIEM/space/role",
+     "label": "Rule count per SIEM/space destination",
      "target": "tenant",
-     "sql": ("SELECT m.siem_id, m.space, m.environment_role, "
+     "sql": ("SELECT m.siem_id, m.space, m.name AS destination_name, "
              "COUNT(r.rule_id) AS rule_count "
              "FROM client_siem_map m "
              "LEFT JOIN detection_rules r "
              "ON m.siem_id = r.siem_id AND m.space = r.space "
-             "GROUP BY m.siem_id, m.space, m.environment_role;")},
+             "GROUP BY m.siem_id, m.space, m.name;")},
     {"id": "top10_rules_prod_vs_staging",
-     "label": "Top 10 rules for production vs staging",
+     "label": "Top 10 rules per destination",
      "target": "tenant",
-     "sql": ("SELECT m.environment_role, m.siem_id, m.space, r.name "
+     "sql": ("SELECT m.name AS destination_name, m.siem_id, m.space, r.name "
              "FROM client_siem_map m "
              "JOIN detection_rules r "
              "ON m.siem_id = r.siem_id AND m.space = r.space "
-             "ORDER BY m.environment_role, r.name LIMIT 10;")},
+             "ORDER BY m.name, r.name LIMIT 10;")},
 ]
 
 

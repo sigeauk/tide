@@ -1,0 +1,75 @@
+{#
+  Manage a system's baselines, all in this window: edit (name, description) or remove each of its
+  own, apply a template (again if need be: the copy is named "<name> (copy)"), or start an empty one.
+  Applying gives the system its own copy with no link back; removing deletes that copy, with
+  everything recorded on it. Clicking a name shows the system page filtered to that baseline.
+  Context: system_id, applied (get_system_baselines rows), available (every template).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+<div name="Manage Baselines Dialog" class="modal-overlay" data-rm-overlay data-baselines-dialog
+     data-applied="{{ applied | map(attribute='playbook_id') | sort | join(',') }}">
+    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sys-bl-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sys-bl-title">{{ icon('layers', '16') }} Baselines on this system</h3>
+            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+        </div>
+
+        {% if applied %}
+        <ul class="sys-dialog__list">
+            {% for b in applied %}
+            <li class="sys-dialog__item">
+                <a href="/systems/{{ system_id }}?baseline_id={{ b.playbook_id }}" class="sys-dialog__name"
+                   title="Show only this baseline's techniques">{{ b.playbook_name }}</a>
+                <span class="text-muted">{{ b.total_steps }} technique{{ 's' if b.total_steps != 1 }}</span>
+                <button name="Edit Baseline" type="button" class="btn btn-secondary btn-sm" title="Rename or change its description"
+                        hx-get="/api/systems/{{ system_id }}/baselines/{{ b.playbook_id }}/edit"
+                        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('pencil', '12') }}<span class="sr-only">Edit</span>
+                </button>
+                <button name="Remove Baseline" type="button" class="btn btn-danger btn-sm"
+                        hx-delete="/api/baselines/{{ b.playbook_id }}/apply/{{ system_id }}"
+                        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                        hx-confirm="Remove {{ b.playbook_name }} from this system? This system's copy is deleted: its techniques, rule mappings, known gaps and history. The template and other systems are not affected.">
+                    {{ icon('x', '12') }}<span class="sr-only">Remove</span>
+                </button>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="text-muted">No baselines are applied to this system yet.</p>
+        {% endif %}
+
+        {% if available %}
+        <div class="sys-dialog__apply">
+            <label class="form-label" for="sys-bl-apply">Apply a baseline</label>
+            <div class="sys-dialog__apply-row">
+                <select id="sys-bl-apply" name="baseline" class="form-input form-select">
+                    {% for pb in available %}<option value="{{ pb.id }}">{{ pb.name }}</option>{% endfor %}
+                </select>
+                <button name="Apply Baseline" type="button" class="btn btn-primary"
+                        onclick="htmx.ajax('POST', '/api/baselines/' + encodeURIComponent(document.getElementById('sys-bl-apply').value) + '/apply/{{ system_id }}?return=system-dialog', {target: '#modal-container', swap: 'innerHTML'})">
+                    {{ icon_text('plus', 'Apply', '13') }}
+                </button>
+            </div>
+            <p class="text-muted sys-dialog__hint">The system gets its own copy. Changes made on this system never touch the template or other systems, and later changes to the template never reach this copy.</p>
+        </div>
+        {% endif %}
+
+        <details class="sys-dialog__new" {% if not applied and not available %}open{% endif %}>
+            <summary class="btn btn-secondary btn-sm">{{ icon_text('plus', 'Add baseline', '13') }}</summary>
+            <form class="sys-dialog__form" hx-post="/api/systems/{{ system_id }}/baselines"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                <p class="text-muted sys-dialog__hint">An empty baseline of this system's own, with no template behind it. Add its techniques from the Baselines section's menu.</p>
+                <label class="form-label" for="sys-bl-name">Name</label>
+                <input id="sys-bl-name" name="name" class="form-input" required placeholder="e.g. Payment gateway threats">
+                <label class="form-label" for="sys-bl-desc">Description</label>
+                <textarea id="sys-bl-desc" name="description" class="form-input" rows="2" placeholder="Optional"></textarea>
+                <div><button name="Create Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon_text('plus', 'Create baseline', '13') }}</button></div>
+            </form>
+        </details>
+
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+        </div>
+    </div>
+</div>

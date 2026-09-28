@@ -66,22 +66,16 @@
                 host.classList.toggle('rule-row--selected', on && host.classList.contains('rule-row'));
             }
         });
-        var n = selected.size, states = {};
-        selected.forEach(function (it) { states[it.state] = (states[it.state] || 0) + 1; });
-        var kinds = Object.keys(states);
+        var n = selected.size;
         document.getElementById('bulk-count').textContent = n + ' selected';
 
-        function allAre(name) { return n > 0 && kinds.length === 1 && kinds[0] === name; }
-        var can = { validate: n > 0, enable: n > 0, disable: n > 0, promote: allAre('Staging'), demote: allAre('Production') };
+        // Move has no eligibility restriction any more -- any selected rule can go to any
+        // linked destination -- so every action just needs at least one rule selected.
+        var can = { validate: n > 0, enable: n > 0, disable: n > 0, delete: n > 0, move: n > 0 };
         bar.querySelectorAll('[data-bulk-action]').forEach(function (b) { b.disabled = !can[b.dataset.bulkAction]; });
 
         var hint = document.getElementById('bulk-hint');
-        if (n > 0 && (!can.promote || !can.demote) && kinds.length) {
-            var mix = kinds.map(function (k) { return states[k] + ' ' + k.toLowerCase(); }).join(', ');
-            hint.textContent = 'Selected: ' + mix + '. Promote needs every selected rule to be staging; demote needs every one to be production.';
-        } else {
-            hint.textContent = '';
-        }
+        hint.textContent = '';
 
         // The header box (table) and the bar box (cards and table) always agree.
         var full = !!matching && matching.size > 0 && Array.from(matching).every(function (k) { return selected.has(k); });

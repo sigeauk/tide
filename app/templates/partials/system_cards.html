@@ -62,7 +62,7 @@
                     <div style="display:grid;grid-template-columns:minmax(90px, 120px) 1fr auto;gap:0.75rem;align-items:center;">
                         <div class="cve-card-item__id">{{ baseline.coverage_pct }}%</div>
                         <div class="cve-card-item__body">
-                            <div class="cve-card-item__name"><a href="/baselines/{{ baseline.playbook_id }}" onclick="event.stopPropagation();">{{ baseline.playbook_name }}</a></div>
+                            <div class="cve-card-item__name"><a href="/systems/{{ s.id }}?baseline_id={{ baseline.playbook_id }}" onclick="event.stopPropagation();" title="Show {{ s.name }}'s {{ baseline.playbook_name }} techniques">{{ baseline.playbook_name }}</a></div>
                         </div>
                         <div class="cve-card-item__right"><div class="cve-card-item__meta"><span>{{ baseline.covered_steps }}/{{ baseline.total_steps }}</span></div></div>
                     </div>
@@ -124,18 +124,18 @@
                                                                                 <div class="cve-card-item__id cve-card-item__id--pill" style="display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:0.35rem;flex-wrap:nowrap;min-width:0;width:auto;white-space:nowrap;overflow:hidden;line-height:1;">
                                                                                         {% if first_tid %}
                                                                                         {% set tid_rule_count = first_info.get('rule_count', 0) %}
-                                                                                        {{ mitre_pill(first_tid, covered=(tid_rule_count > 0), rule_count=tid_rule_count, clickable=true, size='sm', show_zero_count=true) }}
+                                                                                        {{ mitre_pill(first_tid, neutral=true, clickable=true, size='sm') }}
                                                                                         {% if step.display_technique_ids and (step.display_technique_ids | length) > 1 %}
                                                                                         <span class="text-muted" style="display:inline-flex;align-items:center;font-size:0.72rem;line-height:1;white-space:nowrap;transform:translateY(-1px);">+{{ (step.display_technique_ids | length) - 1 }}</span>
                                                                                         {% endif %}
                                                                                         {% else %}
-                                                                                        <span>{{ icon('crosshair','12') }} Step</span>
+                                                                                        <span>{{ icon('crosshair','12') }} Technique</span>
                                                                                         {% endif %}
                                                                                 </div>
                                                                                 <div class="cve-card-item__body">
                                                                                         <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;">
                                                                                                 {% if step.step_id %}
-                                                                                                <a name="Tactics" href="/baselines/{{ baseline.playbook_id }}/tactics/{{ step.step_id }}" onclick="event.stopPropagation();">{{ step.title }}</a>
+                                                                                                <a name="Tactics" href="/systems/{{ s.id }}?technique={{ step.step_id }}" onclick="event.stopPropagation();">{{ step.title }}</a>
                                                                                                 {% else %}
                                                                                                 <span>{{ step.title }}</span>
                                                                                                 {% endif %}

@@ -66,23 +66,23 @@ class SIEMInventoryUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
-# --- Client-SIEM mapping with environment role ---
+# --- Client-SIEM mapping: a named destination, not a role ---
 
 class ClientSIEMLink(BaseModel):
-    """A client's link to a SIEM with environment role and space."""
+    """A client's link to one SIEM+space destination, under a chosen name."""
     siem_id: str
-    environment_role: Literal["production", "staging"] = "production"
+    name: str = "Production"
     space: Optional[str] = None
 
 
 class ClientSIEMLinkFull(BaseModel):
-    """Full SIEM info as linked to a client, including environment context."""
+    """Full SIEM info as linked to a client, including its destination name."""
     id: str
     label: str
     siem_type: str
     elasticsearch_url: Optional[str] = None
     kibana_url: Optional[str] = None
-    environment_role: str = "production"
+    name: str = "Production"
     space: Optional[str] = None
     is_active: bool = True
     created_at: Optional[datetime] = None

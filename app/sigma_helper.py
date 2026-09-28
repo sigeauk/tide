@@ -425,6 +425,23 @@ def search_rules(
     return results
 
 
+def log_sources(rules: List[Dict], limit: int = 8) -> List[Dict]:
+    """The telemetry a set of Sigma rules reads, most common first: ``[{label, count}]`` where
+    label is ``product / service`` (or ``product / category``) from each rule's logsource."""
+    counts: Dict[str, int] = {}
+    for rule in rules:
+        ls = rule.get("logsource") if isinstance(rule, dict) else None
+        if not isinstance(ls, dict):
+            continue
+        parts = [str(ls.get(k) or "").strip() for k in ("product", "service", "category")]
+        product, detail = parts[0], parts[1] or parts[2]
+        label = " / ".join(p for p in (product, detail) if p)
+        if label:
+            counts[label] = counts.get(label, 0) + 1
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [{"label": k, "count": v} for k, v in ranked[:limit]]
+
+
 def get_rule_categories() -> List[str]:
     """Get all unique rule categories."""
     rules = load_all_rules()

@@ -570,6 +570,33 @@ def run_mitre_sync(client_id: str | None = None):
             logger.debug(f"sync_history insert (mitre) failed: {_exc!r}")
 
 
+_HOST_DOWN = ("Connection refused", "Connection timed out")
+
+
+def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: str, spaces: list) -> list:
+    """Ping each linked space of ``siem`` before pulling it; return the ones that answered.
+
+    Each result is stored per (siem_id, space) so the Rules page can show that destination's
+    rules as "SIEM offline" (kept from TIDE's last copy, never deprecated for it) until a later
+    sync reaches it again. Once the host itself is down, its other spaces are not pinged again."""
+    reachable = []
+    host_down = ""
+    for space in spaces:
+        ok, reason = (False, host_down) if host_down else elastic_helper.ping_detection_space(kibana_url, token, space)
+        if not ok and reason in _HOST_DOWN:
+            host_down = reason
+        try:
+            db.record_siem_space_status(siem["id"], space, ok, reason)
+        except Exception:
+            logger.warning("Could not store reachability for SIEM '%s' space '%s'", siem.get("label"), space, exc_info=True)
+        if ok:
+            reachable.append(space)
+        else:
+            logger.warning("SIEM '%s' space '%s' unreachable before sync: %s; keeping its rules as they are.",
+                           siem.get("label"), space, reason)
+    return reachable
+
+
 def run_elastic_sync(client_id: str, force_mapping: bool = False):
     """Per-tenant Elastic detection-rule sync.
 
@@ -748,6 +775,9 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                     logger.info(f"Skipping SIEM '{siem.get('label')}' \u2014 missing url/token/spaces")
                     continue
                 siem_id = siem["id"]
+                spaces = _reachable_spaces(db, elastic_helper, siem, kurl, token, spaces)
+                if not spaces:
+                    continue
                 siem_spaces_attempted[siem_id] = set(spaces)
                 siem_search_history = {
                     (rid, sp): samples for (rid, sid, sp), samples in search_history.items() if sid == siem_id

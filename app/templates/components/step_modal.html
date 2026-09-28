@@ -1,0 +1,599 @@
+{#
+  Technique window — one baseline technique (a "step" in code), on one system.
+
+  Context: detail (from get_step_detail_for_system), system_id, coverage_error (a refused dashboard,
+  report or log: its values and message, with its id when it was an update).
+
+  The rule window's twin (components/rule_modal.html): same header (score ring, badges, prev/next,
+  sections menu, close), same three columns, the same History, the same cards (a mapped rule here
+  is the same card as a covered technique there), the same score bars and the same MITRE ATT&CK
+  list. Every section collapses, moves anywhere and hides, remembered per browser (app.js,
+  tide.techniqueWindowLayout.v2). Each section's actions are in its own "…" menu, with Move;
+  deleting the technique is in the header's "…" menu. Default arrangement:
+    left   : History -- rules mapped / removed, known gap or N/A added / edited / removed with the
+             reason, the technique added or edited, coverage added / edited / removed, SIEM coverage changes.
+    centre : Description (title and the user's own text; Update edits them in place) · Coverage
+             (any known gap or N/A with its reason; a dashboard, report or log watching it, labelled
+             non-alerting, each with Update and Delete; each mapped rule as one card with its score
+             ring, state, field check and validation) · Sigma rules (suggested from its ATT&CK ids,
+             or searched; convert each) · Risks (priority and category; Update edits them), and,
+             opened from Coverage's "…", Add coverage (rule, gap, N/A, dashboard, report, log).
+    right  : MITRE ATT&CK (Update edits the technique's ATT&CK ids in place).
+  The header ring is the strongest counted rule's own score (app/scoring.py); a technique that is
+  not covered shows a muted ring, since its status is decided by the mark, not a rule.
+  The technique is this system's own (its copy of the template), so everything here -- the
+  technique itself included -- belongs to this system alone.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/window_ui.html" import collapse_ctl, layout_menu, remove_btn, section_menu, tag %}
+
+{% set step = detail.step %}
+{% set status = detail.status %}
+{% set rl = detail.risk_labels %}
+{% set status_class = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
+{% set status_label = {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') %}
+{% set event_labels = {
+    'rule_mapped': 'Rule mapped', 'rule_unmapped': 'Rule removed', 'rule_relinked': 'Rule relinked', 'coverage_added': 'Coverage added', 'coverage_edited': 'Coverage edited', 'coverage_removed': 'Coverage removed',
+    'gap_added': 'Known gap', 'gap_removed': 'Gap removed', 'gap_edited': 'Gap edited',
+    'na_added': 'Not applicable', 'na_removed': 'N/A removed', 'na_edited': 'N/A edited',
+    'technique_added': 'Technique added', 'technique_edited': 'Technique edited', 'risks_edited': 'Risks edited',
+    'sigma_dismissed': 'Sigma dismissed', 'sigma_restored': 'Sigma restored',
+    'siem_coverage': 'SIEM coverage',
+} %}
+{% set val_labels = {'valid': 'Validated', 'amber': 'Validation due soon', 'expired': 'Validation expired', 'never': 'Never validated'} %}
+{% set val_classes = {'valid': 'success', 'amber': 'warning', 'expired': 'danger', 'never': 'muted'} %}
+{% set step_url = '/api/systems/' ~ system_id ~ '/steps/' ~ step.id %}
+{% set mark = detail.blind_spots[0] if detail.blind_spots else none %}
+{% set mark_label = ('Not applicable' if mark.override_type == 'na' else 'Known gap') if mark else '' %}
+{% set ev = detail.evidence_score %}
+{% set ring_class = 'muted' if ev is none else ('success' if ev >= 80 else ('warning' if ev >= 50 else 'danger')) %}
+{% set ring_title = {
+    'green': 'Strongest rule protecting this system: ' ~ detail.evidence_rule ~ ', scored ' ~ ev ~ '%',
+    'amber': 'Known gap: rule scores do not count while the gap stands',
+    'grey': 'Not applicable: no rule score applies',
+}.get(status, 'No rule is protecting this system yet') %}
+
+<div name="Dismiss Technique Window" class="modal-overlay" data-step-modal data-history-modal data-rm-overlay>
+  <div class="modal-content rule-modal sm-modal" data-layout-key="tide.techniqueWindowLayout.v2" data-step-id="{{ step.id }}"
+       data-rule-dom-id="step-{{ step.id }}" role="dialog" aria-modal="true" aria-labelledby="sm-title">
+
+    <header class="rm-header">
+      <div class="score-ring score-ring--sm score-ring--{{ ring_class }}" style="--score: {{ ev or 0 }}"
+           title="{{ ring_title }}" role="img" aria-label="{{ ring_title }}">
+        <span class="score-ring__value">{{ ev if ev is not none else '–' }}</span>
+      </div>
+      <div class="rm-header__main">
+        <h2 class="rm-title" id="sm-title">{{ step.title }}</h2>
+        <div class="rm-header__badges">
+          <span class="status-pill status-{{ status_class }}" title="{{ status_label }} on this system">
+            {{ icon('shield-check', '12') }} {{ status_label }}
+          </span>
+          {% if detail.non_alerting %}
+          <span class="status-pill status-info" title="Covered by a dashboard, report or log: it is watched, but nothing alerts">{{ icon('eye', '12') }} Non-alerting</span>
+          {% endif %}
+          {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ rl.priority[step.priority] }}</span>{% endif %}
+          {% if detail.review_due %}
+          <span class="status-pill status-warning" title="The {{ mark_label | lower }} mark was due for review on {{ mark.review_by.isoformat() }}">
+            {{ icon('calendar', '12') }} Review due
+          </span>
+          {% endif %}
+          <span class="status-pill" title="Tactic">{{ detail.tactic }}</span>
+          {% for tid in detail.technique_ids %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm', close_modal=true) }}{% endfor %}
+          {% if detail.baseline_name %}<a class="rm-header__meta" href="/systems/{{ system_id }}?baseline_id={{ step.playbook_id }}" title="Show this baseline's techniques on the system page">{{ icon('layers', '12') }} {{ detail.baseline_name }}</a>{% endif %}
+        </div>
+      </div>
+      <div class="rm-header__tools">
+        <div class="rm-nav" role="group" aria-label="Browse techniques">
+          <button name="Previous Technique" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous technique (←)" aria-label="Previous technique" disabled>{{ icon('chevron-left', '16') }}</button>
+          <button name="Next Technique" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next technique (→)" aria-label="Next technique" disabled>{{ icon('chevron-right', '16') }}</button>
+        </div>
+        {% call layout_menu(hint='menu') %}
+        <button name="Remove Technique" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                title="Delete this technique from this system's baseline"
+                hx-delete="{{ step_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                hx-confirm="Delete this technique from this system? Its rule mappings, known gap and history on this system go with it. The template and other systems are not affected.">
+          {{ icon('trash-2', '14') }}<span>Delete technique</span>
+        </button>
+        {% endcall %}
+        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+      </div>
+    </header>
+
+    <div class="rm-body">
+
+      {# ───────── LEFT: history (the rule window's format) ───────── #}
+      <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+        <div class="rm-panel rm-panel--history" data-fold="tw-history" data-section="history" data-section-label="History">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('history') }}
+            <h3 class="rm-panel__title">History</h3>
+            {{ section_menu('History') }}
+          </div>
+          {% if detail.history %}
+          <div class="rm-filters rm-filters--row">
+            <select id="history-sort-filter" name="Date sort" aria-label="Sort by date">
+              <option value="desc" selected>Newest</option>
+              <option value="asc">Oldest</option>
+            </select>
+            <select id="history-action-filter" name="Action filter" aria-label="Filter by action">
+              <option value="">All</option>
+              <option value="rules">Rules &amp; coverage</option>
+              <option value="gaps">Gaps &amp; N/A</option>
+              <option value="technique">Technique</option>
+              <option value="coverage">SIEM coverage</option>
+            </select>
+            <select id="history-user-filter" name="User filter" aria-label="Filter by user">
+              <option value="">All users</option>
+              {% for u in detail.history_users %}<option value="{{ u }}">{{ u }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="history-timeline rm-timeline" id="history-timeline-list">
+            {% for h in detail.history %}
+            <details class="history-row history-kind-{{ h.kind }}" data-history-row data-kind="{{ h.kind }}"
+                     data-user="{{ h.actor or '' }}" data-time="{{ h.created_at.isoformat() if h.created_at else '' }}">
+              <summary>
+                <span class="history-time">{{ h.created_at.strftime('%Y-%m-%d %H:%M') if h.created_at else 'N/A' }}</span>
+                <span class="history-action-badge">{{ event_labels.get(h.event, h.event) }}</span>
+                <span class="history-user">{{ h.actor or 'not recorded' }}</span>
+              </summary>
+              <div class="history-row-payload">
+                {% if h.event in ('coverage_added', 'coverage_edited', 'coverage_removed') %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">Coverage</span>
+                  <span class="history-diff-values">{{ h.detail }}{% if h.reason %} · {{ h.reason }}{% endif %}</span>
+                </div>
+                {% elif h.kind == 'rules' %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">Rule</span>
+                  <span class="history-diff-values">{{ h.rule_name or h.rule_id }}{% if h.destination %} · {{ h.destination }}{% endif %}{% if h.score is not none %} · scored {{ h.score }}%{% endif %}</span>
+                </div>
+                {% if h.event == 'rule_relinked' and h.detail %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">Before</span>
+                  <span class="history-diff-values">{{ h.detail }}</span>
+                </div>
+                {% endif %}
+                {% elif h.kind == 'gaps' %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">Reason</span>
+                  <span class="history-diff-values">{{ h.reason or 'No reason given.' }}</span>
+                </div>
+                {% if h.detail %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">{{ 'Change' if h.event in ('gap_edited', 'na_edited') else 'Review' }}</span>
+                  <span class="history-diff-values">{{ h.detail }}</span>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-label">{{ 'Change' if h.kind == 'technique' else 'SIEM coverage' }}</span>
+                  <span class="history-diff-values">{{ h.detail or 'Changed which destinations count.' }}</span>
+                </div>
+                {% endif %}
+                {% if h.reconstructed %}
+                <div class="history-diff-row history-diff-row--spaced">
+                  <span class="history-diff-values text-muted" title="History from before the upgrade only includes what still existed then.">Reconstructed on upgrade from the record's own date.</span>
+                </div>
+                {% endif %}
+              </div>
+            </details>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="rm-empty">Nothing has changed this technique's coverage yet.</p>
+          {% endif %}
+        </div>
+      </section>
+
+      {# ───────── CENTRE: the technique, its rules and evidence, context ───────── #}
+      <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+
+        {# Add coverage: the one place to add anything that covers -- or decides -- this technique on
+           this system: a rule (picked from the SIEM), a known gap or N/A (one mark per technique;
+           choosing either when there is one edits it), or a dashboard, report or log (non-alerting,
+           each with a title, an optional link and a rationale). Not a movable section: it opens at
+           the top of this column from Coverage's "…" menu. A refused dashboard / report / log comes
+           back in coverage_error: with an id it was an update (its card reopens), else an add. #}
+        {% set ce = coverage_error or {} %}
+        {% set ae = {} if ce.id else ce %}
+        <div class="rm-panel sm-picker" id="sm-add-coverage"{% if not ae %} hidden{% endif %}>
+          <div class="rm-panel__head">
+            <h3 class="rm-panel__title">Add coverage</h3>
+            <button type="button" class="rm-x" onclick="document.getElementById('sm-add-coverage').hidden = true" title="Close" aria-label="Close">{{ icon('x', '13') }}</button>
+          </div>
+          <label class="rm-label" for="sm-cov-kind">Type</label>
+          <select id="sm-cov-kind" class="form-input form-select" onchange="tideCoverageKind(this.value)">
+            <option value="rule">Rule (alerting)</option>
+            <option value="gap"{% if mark and mark.override_type != 'na' %} data-edit{% endif %}>{{ 'Known gap (edit)' if mark and mark.override_type != 'na' else 'Known gap' }}</option>
+            <option value="na"{% if mark and mark.override_type == 'na' %} data-edit{% endif %}>{{ 'Not applicable (edit)' if mark and mark.override_type == 'na' else 'Not applicable' }}</option>
+            {% for k, v in rl.coverage_kind.items() %}<option value="{{ k }}"{% if ae.kind == k %} selected{% endif %}>{{ v }} (non-alerting)</option>{% endfor %}
+          </select>
+
+          <div id="sm-cov-rule" data-cov-form>
+            <p class="rm-note rm-note--info" id="sm-relink-note" hidden>{{ icon('link', '13') }} <span>Relinking <strong id="sm-relink-name"></strong>: pick the rule it should point at. It keeps its place and history.</span></p>
+            <input type="text" id="sm-rule-search" class="form-input" placeholder="Search rules…" name="q"
+                   hx-get="/api/baselines/tactics/{{ step.id }}/siem-rules"
+                   hx-trigger="input changed delay:300ms, tideOpenPicker"
+                   hx-target="#sm-rule-results" hx-swap="innerHTML">
+            <div id="sm-rule-results" class="sm-picker__results">
+              <div class="text-muted sm-picker__loading">Loading…</div>
+            </div>
+            <form id="add-siem-det-form" hx-post="/api/baselines/tactics/{{ step.id }}/detections"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+              <input type="hidden" name="rule_ref" id="siem-det-rule-ref" value="">
+              <input type="hidden" name="rule_scope" id="siem-det-rule-scope" value="">
+              <input type="hidden" name="note" value="">
+              <input type="hidden" name="source" value="siem">
+              <input type="hidden" name="system_id" value="{{ system_id }}">
+              <input type="hidden" name="replace_id" id="siem-det-replace" value="">
+            </form>
+          </div>
+
+          {# Adds the mark, or edits the one this system has in place (the history keeps the old one). #}
+          <form id="sm-cov-mark" data-cov-form class="sm-gapform" hx-target="#modal-container" hx-swap="innerHTML" hidden
+                {% if mark %}hx-put="/api/blind-spots/{{ mark.id }}"{% else %}hx-post="/api/blind-spots"{% endif %}>
+            <input type="hidden" name="entity_type" value="tactic">
+            <input type="hidden" name="entity_id" value="{{ step.id }}">
+            <input type="hidden" name="system_id" value="{{ system_id }}">
+            <input type="hidden" id="sm-gap-type" name="override_type" value="gap">
+            <label class="rm-label" for="sm-gap-reason">Reason</label>
+            <textarea id="sm-gap-reason" name="reason" class="form-input" rows="3" required
+                      placeholder="Why, so the next person knows">{{ mark.reason if mark else '' }}</textarea>
+            <label class="rm-label" for="sm-gap-review">Review by</label>
+            <input type="date" id="sm-gap-review" name="review_by" class="form-input"
+                   value="{{ mark.review_by.isoformat() if mark and mark.review_by else '' }}">
+            <p class="text-muted tf-form__note">{{ icon('info', '12') }} Optional. From this date the technique shows <strong>Review due</strong> here and on the system page.{% if mark %} This technique has one mark on this system: saving changes it.{% endif %}</p>
+            <div><button name="Save Gap" type="submit" class="btn btn-primary btn-sm">Save</button></div>
+          </form>
+
+          <form id="sm-cov-watch" data-cov-form class="sm-gapform" hx-post="{{ step_url }}/coverage"
+                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hidden>
+            <input type="hidden" id="sm-cov-watch-kind" name="kind" value="{{ ae.kind or 'dashboard' }}">
+            {% if ae.message %}<p class="inline-error" role="alert">{{ icon('alert-triangle', '12') }} {{ ae.message }}</p>{% endif %}
+            <label class="rm-label" for="sm-cov-title">Title</label>
+            <input id="sm-cov-title" name="title" class="form-input" required value="{{ ae.title or '' }}"
+                   placeholder="e.g. SOC wallboard – PowerShell activity">
+            <label class="rm-label" for="sm-cov-url">Link <span class="text-muted">(optional)</span></label>
+            <input type="url" id="sm-cov-url" name="url" class="form-input" placeholder="https://…" value="{{ ae.url or '' }}">
+            <label class="rm-label" for="sm-cov-why">Rationale <span class="text-muted">(optional)</span></label>
+            <textarea id="sm-cov-why" name="rationale" class="form-input" rows="3"
+                      placeholder="What it watches, and who looks at it">{{ ae.rationale or '' }}</textarea>
+            <p class="text-muted tf-form__note">{{ icon('info', '12') }} Counts as covered, labelled non-alerting: someone has to look, nothing alerts.</p>
+            <div><button name="Save Coverage" type="submit" class="btn btn-primary btn-sm">Add</button></div>
+          </form>
+        </div>
+
+        {% if detail.coverage_undefined %}
+        <p class="rm-note rm-note--info">{{ icon('info', '13') }} This system has no SIEM coverage chosen yet, so this technique cannot be scored.</p>
+        {% endif %}
+
+        {# The user's own description only: the tactic, baseline and ATT&CK ids are in the header
+           and the MITRE ATT&CK section. Update replaces this body with the title and description
+           form (the ATT&CK ids are updated from MITRE ATT&CK). #}
+        <div class="rm-panel" data-fold="tw-description" data-section="description" data-section-label="Description">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('description') }}
+            <h3 class="rm-panel__title">Description</h3>
+            {% call section_menu('Description') %}
+            <button name="Update Description" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="{{ step_url }}/edit?part=description" hx-target="#sm-technique-body" hx-swap="innerHTML" hx-include="unset"
+                    title="Edit this technique's title and description on this system">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+          </div>
+          <div class="rm-panel__body" id="sm-technique-body">
+            {% if step.description %}<div class="md-content">{{ step.description | md }}</div>
+            {% else %}<p class="text-muted sm-muted">No description yet. Add one from this section's menu, with Update.</p>{% endif %}
+          </div>
+        </div>
+
+        {# Coverage: one list of what is -- and isn't -- catching this technique on this system.
+           A known gap / N/A mark first; then each dashboard, report or log recorded as watching it
+           (non-alerting: watched, nothing alerts), titled and linked; then each mapped rule as one
+           card: its score ring (the rule's own score, or n/a with why when it can't count here),
+           its destination and state, and underneath whether its fields exist in the SIEM and
+           whether it has been validated. Add coverage, in the section's menu, opens the form. #}
+        <div class="rm-panel" data-fold="tw-coverage" data-section="coverage" data-section-label="Coverage">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('coverage') }}
+            <h3 class="rm-panel__title">Coverage {% if detail.mapped_count + detail.watched | length %}<span class="rm-fold__count">{{ detail.mapped_count + detail.watched | length }}</span>{% endif %}</h3>
+            {% call section_menu('Coverage') %}
+            <button name="Add Coverage" type="button" role="menuitem" class="rh-more__item" onclick="tideAddCoverage()"
+                    title="Add a rule, known gap, N/A, dashboard, report or log">{{ icon('plus', '14') }}<span>Add coverage</span></button>
+            {% endcall %}
+          </div>
+          {% if detail.blind_spots or detail.detections or detail.watched %}
+          <div class="rm-items">
+            {% for gap in detail.blind_spots %}
+            {% set gap_label = 'Not applicable' if gap.override_type == 'na' else 'Known gap' %}
+            <div class="rm-item rm-item--{{ 'na' if gap.override_type == 'na' else 'gap' }}">
+              <div class="rm-item__main">
+                <div class="rm-item__name">{{ icon('minus-circle' if gap.override_type == 'na' else 'alert-triangle', '13') }} {{ gap_label }}</div>
+                <p class="rm-item__text">{{ gap.reason }}</p>
+                <div class="rm-item__meta">
+                  {% if gap.created_by %}{{ tag(gap.created_by, title='Marked by') }}{% endif %}
+                  {% if gap.created_at %}<span class="text-muted">{{ gap.created_at.strftime('%Y-%m-%d') }}</span>{% endif %}
+                  {% if gap.updated_at %}<span class="text-muted" title="Edited{% if gap.updated_by %} by {{ gap.updated_by }}{% endif %} {{ gap.updated_at.strftime('%Y-%m-%d %H:%M') }}">edited {{ gap.updated_at.strftime('%Y-%m-%d') }}</span>{% endif %}
+                  {% if gap.review_by %}
+                  <span class="{{ 'text-warning' if gap.review_due else 'text-muted' }}" title="{{ 'Due for review since' if gap.review_due else 'To be reviewed by' }} {{ gap.review_by.isoformat() }}">
+                    {{ icon('calendar', '10') }} {{ 'Review due' if gap.review_due else 'Review by ' ~ gap.review_by.isoformat() }}
+                  </span>
+                  {% endif %}
+                </div>
+              </div>
+              {{ remove_btn('/api/blind-spots/' ~ gap.id ~ '?entity_type=tactic&entity_id=' ~ step.id ~ '&system_id=' ~ system_id,
+                            'Remove this ' ~ gap_label | lower ~ ' mark',
+                            'Remove this ' ~ gap_label | lower ~ ' mark? The technique is scored on its rules again on this system.',
+                            name='Remove Gap') }}
+            </div>
+            {% endfor %}
+            {% for w in detail.watched %}
+            {% set we = ce if ce.id == w.id else {} %}
+            <div class="rm-item rm-item--watched" data-watch-item>
+              <div class="rm-item__main" data-watch-view{% if we %} hidden{% endif %}>
+                <div class="rm-item__name" title="{{ w.kind_label }}: {{ w.title }}">
+                  {% if w.url %}<a href="{{ w.url }}" target="_blank" rel="noopener noreferrer" title="Open {{ w.url }}">{{ w.title }}</a>{% else %}{{ w.title }}{% endif %}
+                </div>
+                {% if w.rationale %}<p class="rm-item__text">{{ w.rationale }}</p>{% endif %}
+                <div class="rm-item__meta">
+                  {{ tag(w.kind_label, title='Coverage type') }}
+                  <span class="text-info" title="Watched by a {{ w.kind_label | lower }}: someone has to look, nothing alerts">Non-alerting</span>
+                  {% if w.created_by %}{{ tag(w.created_by, title='Added by') }}{% endif %}
+                  {% if w.created_at %}<span class="text-muted">{{ w.created_at.strftime('%Y-%m-%d') }}</span>{% endif %}
+                  {% if status in ('amber', 'grey') %}<span class="text-muted" title="A known gap or N/A mark decides this technique's status">not counted while the {{ mark_label | lower }} stands</span>{% endif %}
+                </div>
+              </div>
+              {# Update: this card's own form, in place of its body (the history keeps the change). #}
+              <form class="rm-item__main sm-gapform" data-watch-form hx-put="{{ step_url }}/coverage/{{ w.id }}"
+                    hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"{% if not we %} hidden{% endif %}>
+                {% if we.message %}<p class="inline-error" role="alert">{{ icon('alert-triangle', '12') }} {{ we.message }}</p>{% endif %}
+                <label class="rm-label" for="sm-watch-kind-{{ w.id }}">Type</label>
+                <select id="sm-watch-kind-{{ w.id }}" name="kind" class="form-input form-select">
+                  {% for k, v in rl.coverage_kind.items() %}<option value="{{ k }}"{% if (we.kind or w.kind) == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+                </select>
+                <label class="rm-label" for="sm-watch-title-{{ w.id }}">Title</label>
+                <input id="sm-watch-title-{{ w.id }}" name="title" class="form-input" required value="{{ we.title if we else w.title }}">
+                <label class="rm-label" for="sm-watch-url-{{ w.id }}">Link <span class="text-muted">(optional)</span></label>
+                <input type="url" id="sm-watch-url-{{ w.id }}" name="url" class="form-input" placeholder="https://…" value="{{ we.url if we else w.url }}">
+                <label class="rm-label" for="sm-watch-why-{{ w.id }}">Rationale <span class="text-muted">(optional)</span></label>
+                <textarea id="sm-watch-why-{{ w.id }}" name="rationale" class="form-input" rows="3">{{ we.rationale if we else w.rationale }}</textarea>
+                <div class="sm-risks__actions">
+                  <button name="Cancel Coverage" type="button" class="btn btn-secondary btn-sm" onclick="tideEditWatch(this, false)">Cancel</button>
+                  <button name="Save Coverage" type="submit" class="btn btn-primary btn-sm">Save</button>
+                </div>
+              </form>
+              <div class="rh-more" data-more>
+                <button name="Coverage Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
+                        aria-haspopup="menu" aria-expanded="false" title="{{ w.kind_label }} actions" aria-label="Actions for {{ w.title }}">{{ icon('more-horizontal', '14') }}</button>
+                <div class="rh-more__menu" role="menu" hidden>
+                  <button name="Update Coverage" type="button" role="menuitem" class="rh-more__item" onclick="tideEditWatch(this, true)"
+                          title="Change its type, title, link or rationale">{{ icon('pencil', '14') }}<span>Update</span></button>
+                  <button name="Remove Coverage" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                          title="Remove this {{ w.kind_label | lower }} from the technique"
+                          hx-delete="{{ step_url }}/coverage/{{ w.id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                          hx-confirm="Remove {{ w.title }} from this technique on this system?">{{ icon('trash-2', '14') }}<span>Delete</span></button>
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+            {% for d in detail.detections %}
+            {% set e = d.evidence %}
+            {% set t = d.telemetry %}
+            <div class="rm-item{% if d.unresolved or not d.counts or (t and t.missing) %} rm-item--warn{% endif %}">
+              <div class="score-ring score-ring--sm score-ring--{{ e.tone }}" style="--score: {{ e.pct }}"
+                   title="{{ e.how }}" role="img" aria-label="{{ 'Score ' ~ e.pct ~ ' percent' if e.applicable else 'Not scored on this system' }}">
+                <span class="score-ring__value">{{ e.pct if e.applicable else 'n/a' }}</span>
+              </div>
+              <div class="rm-item__main">
+                <div class="rm-item__name" title="{{ d.name }}">
+                  {% if d.rule_id and d.siem_id %}
+                  <button type="button" class="rm-item__open" data-rule-open
+                          hx-get="/api/rules/{{ d.rule_id }}/history-modal?space={{ d.space | urlencode }}&siem_id={{ d.siem_id | urlencode }}"
+                          hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                          title="Open this rule">{{ d.name }}</button>
+                  {% else %}{{ d.name }}{% endif %}
+                </div>
+                <div class="rm-item__meta">
+                  {% if d.destination %}{{ tag(d.destination, d.destination_color, title='SIEM destination') }}
+                  {% elif d.source == 'manual' %}{{ tag('Manual', title='Recorded by hand, not a SIEM rule') }}{% endif %}
+                  {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('alert-triangle', '10') }} Needs relinking</span>{% endif %}
+                  {% if d.enabled is not none %}<span class="{{ 'text-success' if d.enabled else 'text-muted' }}">{{ '● Enabled' if d.enabled else '○ Disabled' }}</span>{% endif %}
+                  {% if d.score is not none and not e.applicable %}<span class="text-muted" title="The rule's own score; it does not count here">rule scores {{ d.score }}%</span>{% endif %}
+                  {% if d.deprecated %}{{ tag('Deprecated') }}{% endif %}
+                  {% if not d.counts %}<span class="text-warning" title="Its destination is not one this system counts toward coverage">Not counted</span>{% endif %}
+                </div>
+                {% if t or d.validation_status %}
+                <div class="rm-chips" title="Whether this rule's fields exist in the SIEM, and when it was last validated">
+                  {% if t %}
+                  {% if t.ok %}<span class="text-success" title="Fields found in the SIEM's index mappings">{{ icon('check', '10') }} {{ t.ok }} found</span>{% endif %}
+                  {% if t.missing %}<span class="text-danger" title="Missing: {{ t.missing_fields | join(', ') }}">{{ icon('x', '10') }} {{ t.missing }} missing</span>{% endif %}
+                  {% if t.unknown %}<span class="text-warning" title="The SIEM could not be asked about these fields; they are not counted as missing">? {{ t.unknown }} not checked</span>{% endif %}
+                  {% if not (t.ok or t.missing or t.unknown) %}<span class="text-muted" title="Sync the rule to check its fields">fields not checked</span>{% endif %}
+                  {% endif %}
+                  {% if d.validation_status %}
+                  <span class="text-{{ val_classes.get(d.validation_status, 'muted') }}"
+                        title="{% if d.validation_date %}Validated {{ d.validation_date.strftime('%Y-%m-%d') }}{% if d.validated_by %} by {{ d.validated_by }}{% endif %}{% else %}This rule has never been validated{% endif %}">{{ icon('circle-check', '10') }} {{ val_labels.get(d.validation_status, d.validation_status) }}</span>
+                  {% endif %}
+                </div>
+                {% endif %}
+              </div>
+              {% set unmap_url = '/api/baselines/tactics/detections/' ~ d.id ~ '?step_id=' ~ step.id ~ '&system_id=' ~ system_id %}
+              {% set unmap_confirm = 'Remove this rule from this technique on this system? The rule itself is not deleted.' %}
+              {% if d.unresolved %}
+              {# A mapping whose rule TIDE can't find: Relink points it at the rule, keeping its history. #}
+              <div class="rh-more" data-more>
+                <button name="Rule Mapping Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
+                        aria-haspopup="menu" aria-expanded="false" title="Mapping actions" aria-label="Actions for {{ d.name }}">{{ icon('more-horizontal', '14') }}</button>
+                <div class="rh-more__menu" role="menu" hidden>
+                  <button name="Relink Rule" type="button" role="menuitem" class="rh-more__item"
+                          data-relink-id="{{ d.id }}" data-relink-name="{{ d.name }}" data-relink-query="{{ d.relink_query }}"
+                          onclick="tideRelinkRule(this)" title="Pick the rule this mapping should point at">{{ icon('link', '14') }}<span>Relink</span></button>
+                  <button name="Remove Mapping" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                          title="Remove this rule from the technique" hx-delete="{{ unmap_url }}" hx-target="#modal-container"
+                          hx-swap="innerHTML" hx-include="unset" hx-confirm="{{ unmap_confirm }}">{{ icon('trash-2', '14') }}<span>Remove</span></button>
+                </div>
+              </div>
+              {% else %}
+              {{ remove_btn(unmap_url, 'Remove this rule from the technique', unmap_confirm, name='Remove Mapping') }}
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <p class="rm-empty">Nothing covers this technique yet.</p>
+          {% endif %}
+        </div>
+
+        {# Sigma Rules: SigmaHQ rules suggested from this technique's ATT&CK ids, or any the search
+           finds. Never coverage; each can be converted into a detection rule, then mapped under
+           Coverage. #}
+        <div class="rm-panel" data-fold="tw-sigma" data-section="sigma" data-section-label="Sigma rules">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('Sigma rules') }}
+            <h3 class="rm-panel__title">Sigma rules</h3>
+            {{ section_menu('Sigma rules') }}
+          </div>
+          <input type="search" id="sm-sigma-search" class="form-input sm-sigma__search" name="q" placeholder="Search Sigma rules…"
+                 aria-label="Search Sigma rules" hx-get="{{ step_url }}/sigma" hx-trigger="input changed delay:300ms, search"
+                 hx-target="#sm-sigma-candidates" hx-swap="innerHTML">
+          <div id="sm-sigma-candidates" hx-get="{{ step_url }}/sigma" hx-trigger="load" hx-swap="innerHTML">
+            <p class="rm-empty">Looking for Sigma rules…</p>
+          </div>
+        </div>
+
+        {# Risks: this system's priority and category for the technique (one of each). What covers
+           it is added under Coverage. #}
+        <div class="rm-panel" data-fold="tw-risks" data-section="risks" data-section-label="Risks">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('risks') }}
+            <h3 class="rm-panel__title">Risks</h3>
+            {% call section_menu('Risks') %}
+            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" onclick="tideToggleRisks(true)"
+                    title="Edit priority and category">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+          </div>
+          <div id="sm-risks-view">
+            <dl class="rm-facts">
+              <div><dt>Priority</dt><dd>{% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}">{{ rl.priority[step.priority] }}</span>{% else %}<span class="text-muted">Not set</span>{% endif %}</dd></div>
+              <div><dt>Category</dt><dd>{{ rl.category.get(step.category) or 'Not set' }}</dd></div>
+            </dl>
+          </div>
+          <form id="sm-risks-form" class="sm-gapform" hx-put="{{ step_url }}/risks" hx-target="#modal-container" hx-swap="innerHTML"
+                hx-include="unset" hidden>
+            <label class="rm-label" for="sm-risk-priority">Priority</label>
+            <select id="sm-risk-priority" name="priority" class="form-input form-select">
+              <option value="">Not set</option>
+              {% for k, v in rl.priority.items() %}<option value="{{ k }}"{% if step.priority == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+            <label class="rm-label" for="sm-risk-category">Category</label>
+            <select id="sm-risk-category" name="category" class="form-input form-select">
+              <option value="">Not set</option>
+              {% for k, v in rl.category.items() %}<option value="{{ k }}"{% if step.category == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+            <div class="sm-risks__actions">
+              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" onclick="tideToggleRisks(false)">Cancel</button>
+              <button name="Save Risks" type="submit" class="btn btn-primary btn-sm">Save</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      {# ───────── RIGHT: MITRE ATT&CK ───────── #}
+      <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+        <div class="rm-panel" data-fold="tw-mitre" data-section="mitre" data-section-label="MITRE ATT&amp;CK">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('MITRE ATT&amp;CK') }}
+            <h3 class="rm-panel__title">MITRE ATT&amp;CK <span class="rm-fold__count">{{ detail.techniques | length }}</span></h3>
+            {% call section_menu('MITRE ATT&amp;CK') %}
+            <button name="Update MITRE" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="{{ step_url }}/edit?part=mitre" hx-target="#sm-mitre-body" hx-swap="innerHTML" hx-include="unset"
+                    title="Choose this technique's ATT&amp;CK techniques on this system">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+          </div>
+          <div id="sm-mitre-body">
+            {% if detail.techniques %}
+            <ul class="rm-mitre">
+              {% for m in detail.techniques %}
+              <li>
+                {{ mitre_pill(m.id, neutral=true, clickable=true, size='sm', close_modal=true) }}
+                <span class="rm-mitre__name">{{ m.name or 'Unknown technique' }}{% if m.tactic %}<small>{{ m.tactic }}</small>{% endif %}</span>
+              </li>
+              {% endfor %}
+            </ul>
+            {% else %}
+            <p class="rm-empty">No MITRE techniques mapped to this technique.</p>
+            {% endif %}
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+  // The picker posts the destination alongside the rule id -- the same rule at two
+  // destinations is two different mappings.
+  function selectSiemRule(btn, ruleId, ruleName, scope) {
+    document.getElementById('siem-det-rule-ref').value = ruleId;
+    document.getElementById('siem-det-rule-scope').value = scope || '';
+    document.querySelector('#add-siem-det-form input[name="note"]').value = ruleName || '';
+    htmx.trigger(document.getElementById('add-siem-det-form'), 'submit');
+  }
+  // Risks: view <-> form (priority and category).
+  function tideToggleRisks(editing) {
+    document.getElementById('sm-risks-view').hidden = editing;
+    document.getElementById('sm-risks-form').hidden = !editing;
+    if (editing) document.getElementById('sm-risk-priority').focus();
+  }
+  // Add coverage: one panel at the top of the centre column; the type picks the form under it.
+  function tideAddCoverage() {
+    tideSetRelink(null);
+    var panel = document.getElementById('sm-add-coverage');
+    panel.hidden = false;
+    panel.scrollIntoView({ block: 'nearest' });
+    tideCoverageKind(document.getElementById('sm-cov-kind').value);
+  }
+  // Relink: the rule picker, searched by the mapping's rule name; picking a rule points that
+  // mapping at it (replace_id) instead of adding another.
+  function tideSetRelink(btn) {
+    document.getElementById('siem-det-replace').value = btn ? btn.dataset.relinkId : '';
+    document.getElementById('sm-relink-name').textContent = btn ? btn.dataset.relinkName : '';
+    document.getElementById('sm-relink-note').hidden = !btn;
+  }
+  function tideRelinkRule(btn) {
+    var panel = document.getElementById('sm-add-coverage'), input = document.getElementById('sm-rule-search');
+    tideSetRelink(btn);
+    document.getElementById('sm-cov-kind').value = 'rule';
+    input.value = btn.dataset.relinkQuery || '';
+    document.getElementById('sm-cov-rule').dataset.loaded = '1';   // one search, by name
+    panel.hidden = false;
+    panel.scrollIntoView({ block: 'nearest' });
+    tideCoverageKind('rule');
+    htmx.trigger(input, 'tideOpenPicker');
+  }
+  function tideCoverageKind(kind) {
+    var forms = { rule: 'sm-cov-rule', gap: 'sm-cov-mark', na: 'sm-cov-mark' };
+    var shown = forms[kind] || 'sm-cov-watch';
+    document.querySelectorAll('#sm-add-coverage [data-cov-form]').forEach(function (el) { el.hidden = el.id !== shown; });
+    if (kind === 'rule') {
+      var input = document.getElementById('sm-rule-search'), picker = document.getElementById('sm-cov-rule');
+      input.focus();
+      if (!picker.dataset.loaded) { picker.dataset.loaded = '1'; htmx.trigger(input, 'tideOpenPicker'); }
+    } else if (kind === 'gap' || kind === 'na') {
+      document.getElementById('sm-gap-type').value = kind;
+      document.getElementById('sm-gap-reason').focus();
+    } else {
+      document.getElementById('sm-cov-watch-kind').value = kind;
+      document.getElementById('sm-cov-title').focus();
+    }
+  }
+  // A dashboard, report or log's Update: its card shows its form in place of its body.
+  function tideEditWatch(el, editing) {
+    var item = el.closest('[data-watch-item]');
+    item.querySelector('[data-watch-view]').hidden = editing;
+    item.querySelector('[data-watch-form]').hidden = !editing;
+    if (editing) item.querySelector('[data-watch-form] input[name="title"]').focus();
+  }
+  // A refused dashboard / report / log comes back with its form open.
+  if (!document.getElementById('sm-add-coverage').hidden) tideCoverageKind(document.getElementById('sm-cov-kind').value);
+</script>

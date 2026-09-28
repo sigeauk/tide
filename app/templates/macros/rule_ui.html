@@ -12,13 +12,18 @@
   Only Migrated and Deprecated are BADGED — Production and Staging are already shown by the
   SIEM pill. Used by the rule card, the table row and the rule modal so they always agree.
 #}
-{% macro state_badge(state) -%}
-{#- Only the states that are NOT already obvious from the SIEM pill: Production / Staging render nothing. -#}
-{%- if state in ['Migrated', 'Deprecated'] -%}
+{% macro state_badge(state, title='') -%}
+{#- state is 'Linked' (this rule has at least one entry in its Linked panel), 'Deprecated',
+   'SIEM offline' (its SIEM failed the check before the last sync; title carries the reason), or ''
+   for a plain standalone rule, which renders nothing -- its destination name (the SIEM pill)
+   already says where it is. -#}
+{%- if state in ['Linked', 'Deprecated', 'SIEM offline'] -%}
 {%- set meta = {
-    'Migrated': 'Migrated — exists in both staging and production (a linked pair)',
-    'Deprecated': 'Deprecated — exists in neither; not found in the SIEM at the last successful sync'
+    'Linked': 'Linked — see the Linked panel in the rule window for the other copy',
+    'Deprecated': 'Deprecated — not found in the SIEM at the last successful sync',
+    'SIEM offline': 'SIEM offline — its SIEM could not be reached before the last sync'
 } -%}
-<span class="tide-lifecycle tide-lifecycle-{{ (state | lower) }}" title="{{ meta[state] }}">{{ state }}</span>
+{%- set css_state = {'Linked': 'migrated', 'Deprecated': 'deprecated', 'SIEM offline': 'offline'}[state] -%}
+<span class="tide-lifecycle tide-lifecycle-{{ css_state }}" title="{{ title or meta[state] }}">{{ state }}</span>
 {%- endif -%}
 {%- endmacro %}

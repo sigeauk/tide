@@ -1,27 +1,47 @@
 {# Partial: siem_rule_options.html — SIEM rule search results for the Add SIEM Rule dropdown
-   Context: mapped_rules (list[DetectionRule]), all_rules (list[dict]), query (str), mapped_ids (set)
+   Context: mapped_rules (list[DetectionRule]), all_rules (list[dict]), query (str),
+            mapped_scopes (set of "<rule_id>|<siem_id>|<space>"),
+            dest_names ({"<siem_id>|<space>": "<destination name>"}), dest_colors (same keys)
+
+   Every option names its destination. The same rule can live at several destinations at once,
+   and picking one is a different decision from picking another, so two copies must never look
+   like duplicate rows.
 #}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% macro dest_pill(siem_id, space) %}
+  {% set key = (siem_id | default('', true)) ~ '|' ~ (space | default('default', true)) %}
+  {% set label = dest_names.get(key) if dest_names is defined else none %}
+  {% set colour = dest_colors.get(key) if dest_colors is defined else none %}
+  <span class="status-pill" style="font-size:0.6rem;padding:0.05rem 0.35rem;{% if colour %}border-color:{{ colour }};color:{{ colour }};{% endif %}"
+        title="Destination: {{ label or space or 'unknown' }}">
+    {{ label or space or 'unknown' }}
+  </span>
+{% endmacro %}
 
 {% if mapped_rules or all_rules %}
 <div style="max-height:280px;overflow-y:auto;">
     {% if mapped_rules %}
     <div class="u-bg-green-06" style="padding:0.35rem 0.65rem;font-size:0.68rem;font-weight:700;color:var(--color-success);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--color-border-muted)">
-        Mapped to techniques on this step
+        Carry this technique's ATT&amp;CK IDs
     </div>
     {% for rule in mapped_rules %}
     <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option u-bg-none"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}')">
+            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
         <div style="flex:1;min-width:0;">
             <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
                 {{ rule.name }}
             </div>
             <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+                {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
+                    {# Not clickable here. The whole option is one control -- picking this rule --
+                       and a clickable pill inside it swallows the click (it stops propagation to
+                       open the technique panel), so landing on one silently did something else
+                       instead of selecting the rule. #}
                     {% for tech in rule.mitre_ids[:3] %}
-                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {{ mitre_pill(tech, neutral=true, clickable=false, size='sm') }}
                     {% endfor %}
                     {% if rule.mitre_ids|length > 3 %}
                     <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>
@@ -48,19 +68,25 @@
         All SIEM Rules
     </div>
     {% for rule in all_rules %}
-    {% if rule.rule_id not in mapped_ids %}
+    {# Skip only the exact (rule, destination) already offered above -- not every copy of it. #}
+    {% if (rule.rule_id ~ '|' ~ (rule.siem_id | default('', true)) ~ '|' ~ (rule.space | default('default', true))) not in mapped_scopes %}
     <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option u-bg-none"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}')">
+            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
         <div style="flex:1;min-width:0;">
             <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
                 {{ rule.name }}
             </div>
             <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+                {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
+                    {# Not clickable here. The whole option is one control -- picking this rule --
+                       and a clickable pill inside it swallows the click (it stops propagation to
+                       open the technique panel), so landing on one silently did something else
+                       instead of selecting the rule. #}
                     {% for tech in rule.mitre_ids[:3] %}
-                    {{ mitre_pill(tech, neutral=true, clickable=true, size='sm') }}
+                    {{ mitre_pill(tech, neutral=true, clickable=false, size='sm') }}
                     {% endfor %}
                     {% if rule.mitre_ids|length > 3 %}
                     <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>

@@ -7,7 +7,7 @@
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
     <div>
         <h1 class="page-title-hero">Baselines</h1>
-        <p class="page-subtitle">Threat-based baselines — validate detection coverage across systems.</p>
+        <p class="page-subtitle">Baseline templates: the techniques to watch for. Applying one to a system gives it its own copy, where coverage is tracked.</p>
     </div>
     <div class="action-menu" style="flex-shrink:0;">
         <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
@@ -30,7 +30,7 @@
 <div class="metrics-grid" style="margin-bottom:1.5rem;">
     <div class="metric-card">
         <p class="metric-value">{{ baselines | length }}</p>
-        <p class="metric-label">Total Baselines</p>
+        <p class="metric-label">Templates</p>
         <p class="metric-sub">{{ icon_text('clipboard-list','Baselines defined','14') }}</p>
     </div>
     <div class="metric-card">
@@ -48,31 +48,9 @@
         <p class="metric-sub">{{ icon_text('target','Kill chain phases','14') }}</p>
     </div>
     <div class="metric-card">
-        {% set ns_sys = namespace(total=0) %}
-        {% for bl in baselines %}{% set ns_sys.total = ns_sys.total + bl.system_count %}{% endfor %}
-        <p class="metric-value">{{ ns_sys.total }}</p>
-        <p class="metric-label">System Assignments</p>
-        <p class="metric-sub">{{ icon_text('layers','Baselines applied','14') }}</p>
-    </div>
-    <div class="metric-card">
-        {% set ns_dets = namespace(total=0) %}
-        {% for bl in baselines %}{% set ns_dets.total = ns_dets.total + bl.detection_count %}{% endfor %}
-        <p class="metric-value {{ 'success' if ns_dets.total > 0 else '' }}">{{ ns_dets.total }}</p>
-        <p class="metric-label">Rules Mapped</p>
-        <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
-    </div>
-    <div class="metric-card">
-        {% set ns_green = namespace(count=0) %}
-        {% set ns_red = namespace(count=0) %}
-        {% for bl in baselines %}
-            {% if bl.worst_status == 'green' %}{% set ns_green.count = ns_green.count + 1 %}{% endif %}
-            {% if bl.worst_status == 'red' %}{% set ns_red.count = ns_red.count + 1 %}{% endif %}
-        {% endfor %}
-        <p class="metric-value {{ 'danger' if ns_red.count > 0 else 'success' if ns_green.count > 0 else '' }}">
-            {{ ns_green.count }} / {{ baselines | length }}
-        </p>
-        <p class="metric-label">Coverage Status</p>
-        <p class="metric-sub">{{ icon_text('shield-check','Fully covered / total','14') }}</p>
+        <p class="metric-value">{{ system_baselines }}</p>
+        <p class="metric-label">System Baselines</p>
+        <p class="metric-sub">{{ icon_text('layers','Each system keeps its own copy','14') }}</p>
     </div>
 </div>
 

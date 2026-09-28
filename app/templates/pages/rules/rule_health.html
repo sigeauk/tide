@@ -103,8 +103,8 @@
             hx-swap="innerHTML"
             hx-include="{{ rh_filter_include }}">
             <option value="" {% if not current_space %}selected{% endif %}>All SIEMs</option>
-            {% for space in spaces %}
-            <option value="{{ space }}" {% if space == current_space %}selected{% endif %}>{{ space_labels.get(space, space | capitalize) }}</option>
+            {% for scope in scopes %}
+            <option value="{{ scope }}" {% if scope == current_space %}selected{% endif %}>{{ scope_labels.get(scope, scope.split('|')[-1] | capitalize) }}</option>
             {% endfor %}
         </select>
     </div>
@@ -130,13 +130,13 @@
         <button type="button" id="rh-state-btn"
             class="btn btn-secondary form-input form-select tide-filter-btn"
             onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-state-dropdown');">
-            <span id="rh-state-label">{{ "All states" if not state else (state | join(', ') | capitalize) }}</span>
+            <span id="rh-state-label">{% set state_names = {'live': 'Live', 'offline': 'SIEM offline', 'deprecated': 'Deprecated'} %}{% for s in state %}{{ state_names.get(s | lower, s) }}{{ ', ' if not loop.last }}{% else %}All states{% endfor %}</span>
             {{ icon('chevron-down', '14') }}
         </button>
         <div id="rh-state-dropdown" class="tide-filter-dropdown" style="display:none;">
-            {% set state_opts = [('production', 'Production only'), ('staging', 'Staging only'), ('migrated', 'Migrated (both)'), ('deprecated', 'Deprecated (neither)')] %}
+            {% set state_opts = [('live', 'Live'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')] %}
             {% for opt, opt_label in state_opts %}
-            <label class="rh-checkbox-row" title="{{ {'production': 'Exists only in a production SIEM space', 'staging': 'Exists only in a staging SIEM space', 'migrated': 'Exists in both staging and production (a linked pair)', 'deprecated': 'Exists in neither — not found at the last successful sync'}[opt] }}">
+            <label class="rh-checkbox-row" title="{{ {'live': 'Still found at the last successful sync', 'offline': 'Its SIEM could not be reached before the last sync; shown from TIDE\'s last copy', 'deprecated': 'Not found at the last successful sync'}[opt] }}">
                 <input type="checkbox" name="state" value="{{ opt }}" {% if opt in state %}checked{% endif %}
                     hx-get="/api/rules"
                     hx-trigger="change"
@@ -255,11 +255,11 @@
     <button type="button" class="btn btn-secondary btn-sm" id="bulk-clear">Clear</button>
     <button type="button" class="btn btn-secondary btn-sm" id="bulk-exit">Exit bulk edit</button>
     <span class="bulk-bar__actions" role="group" aria-label="Bulk actions">
-        <button type="button" class="btn btn-primary btn-sm" data-bulk-action="promote">{{ icon('arrow-up-right', '14') }} Promote</button>
-        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="demote">Demote</button>
+        <button type="button" class="btn btn-primary btn-sm" data-bulk-action="move">{{ icon('arrow-right-left', '14') }} Move</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="enable">Enable</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="disable">Disable</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="validate">{{ icon('circle-check', '14') }} Validate</button>
+        <button type="button" class="btn btn-danger btn-sm" data-bulk-action="delete">{{ icon('trash-2', '14') }} Delete</button>
     </span>
     <p class="bulk-bar__hint" id="bulk-hint"></p>
 </div>
@@ -470,6 +470,13 @@
             window.history.replaceState(null, '', '/rules' + reqPath.slice('/api/rules'.length));
         }
     });
+
+    {% if offline_notice %}
+    (function () {
+        function notify() { if (window.showToast) window.showToast({{ offline_notice | tojson }}, 'warning', 10000); }
+        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', notify); else notify();
+    })();
+    {% endif %}
 
     document.body.addEventListener('htmx:afterSwap', function(event) {
         if (event.detail.target.id === 'toast-container') {

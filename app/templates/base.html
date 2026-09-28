@@ -55,13 +55,6 @@
                their own breadcrumb inline should migrate to use the
                component (see components/ui/breadcrumb.html). #}
             {% if user %}
-                {# 4.1.0 P6 — coverage quest tray sits above the breadcrumb
-                   so it remains visible across every page reached during
-                   the journey. Resolves to None when no quest is active. #}
-                {% set _quest = active_quest(request) %}
-                {% if _quest %}
-                    {% with quest=_quest %}{% include "components/ui/quest_tray.html" %}{% endwith %}
-                {% endif %}
                 {% from "components/ui/breadcrumb.html" import breadcrumb %}
                 {{ breadcrumb(request) }}
             {% endif %}

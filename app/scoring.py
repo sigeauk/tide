@@ -31,10 +31,12 @@ Versions
      against the mapping, tactics and techniques are one MITRE check, the query
      language is worth 0 points unless a client turns it on, weights are set per
      client and scores are a percentage of the points allocated.
-  3  when a rule's index patterns match no indices at all there is nothing to check
-     its mapping, field types or timestamp override against, so those three checks
-     earn full marks instead of being failed or left out. They are still failed when
-     the indexes exist and lack the field, and left out when the SIEM cannot be reached.
+  3  mapping and field type are scored per line of the rule's field mappings (one line per
+     index pattern and field): mapping is the share of lines found, a pattern matching no
+     indices counting as not found; field type is the share of lines mapped with a set type,
+     anything but the dynamic default text. Lines the SIEM could not be asked about are left
+     out. A timestamp override of event.ingested earns full marks when its patterns match no
+     indices (nothing to check it against).
 """
 from __future__ import annotations
 
@@ -51,20 +53,6 @@ SCORING_VERSION = 3
 #   unknown  - the indexes could not be checked (SIEM unreachable): never counted against the rule
 FOUND, MISSING, UNKNOWN = "found", "missing", "unknown"
 
-FIELD_TYPE_WEIGHTS: Dict[str, float] = {
-    "keyword": 1.0, "constant_keyword": 1.0, "alias": 1.0,
-    "wildcard": 0.8, "date": 0.8, "date_nanos": 0.8,
-    "ip": 0.7, "nested": 0.7, "version": 0.7,
-    "object": 0.6, "flattened": 0.6,
-    "text": 0.5, "match_only_text": 0.5,
-    "integer": 0.5, "long": 0.5, "short": 0.5, "byte": 0.5, "unsigned_long": 0.5,
-    "geo_point": 0.5, "ip_range": 0.5, "date_range": 0.5,
-    "integer_range": 0.5, "long_range": 0.5, "float_range": 0.5, "double_range": 0.5,
-    "float": 0.4, "double": 0.4, "half_float": 0.4, "scaled_float": 0.4, "geo_shape": 0.4,
-    "boolean": 0.3,
-    "binary": 0.2,
-}
-UNLISTED_TYPE_WEIGHT = 0.5
 
 SEARCH_TIME_TIERS = ((200, 1.0), (400, 0.8), (1000, 0.6), (2000, 0.4), (2500, 0.2))   # (max ms, fraction)
 SEARCH_TIME_SAMPLES = 10
@@ -87,11 +75,12 @@ LANGUAGE_NAMES = {"kuery": "KQL", "lucene": "Lucene", "eql": "EQL", "esql": "ES|
 # key, label, group, default points, how it is scored
 COMPONENTS = (
     ("mapping", "Mapping", "quality", 37,
-     "Share of the fields used by the rule that exist in the mapping of its index patterns. A field counts when any "
-     "of the rule's indexes has it. Indexes that could not be reached are left out, not counted as failures."),
+     "Scored per line of the field mappings: one line for each index pattern and field the rule uses (2 patterns and "
+     "5 fields are 10 lines). Each line found in that pattern's mapping earns its share; a field a pattern lacks, or a "
+     "pattern that matches no indices, earns nothing. Lines that could not be checked (SIEM unreachable) are left out."),
     ("field_type", "Field type", "quality", 12,
-     "How well the mapped field types suit detection: keyword full points, date and wildcard 80%, ip 70%, text and "
-     "numbers 50%, boolean 30%. A field the rule groups or suppresses on scores 0 when it cannot be aggregated."),
+     "Scored per line of the field mappings: each line whose field is mapped with a set type earns its share. A field "
+     "left as the default text type, or not found, earns nothing. Lines that could not be checked are left out."),
     ("search_time", "Search time", "quality", 8,
      "Median search time of the rule's last 10 executions: up to 200 ms full points, 400 ms 80%, 1 s 60%, 2 s 40%, "
      "2.5 s 20%, slower 0. Not scored until TIDE has seen the rule run."),
@@ -186,6 +175,31 @@ def facts_from_results(results: Iterable[Any]) -> Dict[str, Dict[str, Any]]:
         elif exists == "-" and cur["state"] != FOUND:
             cur["state"] = MISSING
     return facts
+
+
+def mapping_lines(results: Iterable[Any], facts: Optional[Dict[str, Dict[str, Any]]] = None) -> List[Tuple[str, str, str, str]]:
+    """The rule's ``(index pattern, field, found, type)`` lines, as the Rule modal lists them:
+    found is ``Yes``, ``-`` (not found; type ``no index`` when the pattern matches no indices)
+    or ``?`` (could not be checked). Without stored lines (older callers), one line per field
+    from its facts."""
+    lines = []
+    for row in results or []:
+        try:
+            lines.append((str(row[0]), str(row[1]), str(row[2]), str(row[3])))
+        except (IndexError, TypeError):
+            continue
+    if lines or not facts:
+        return lines
+    for field, fact in sorted(facts.items()):
+        state = fact.get("state")
+        found = "Yes" if state == FOUND else "-" if state == MISSING else "?"
+        ftype = fact.get("type") or ("no index" if fact.get("no_index") else "missing" if state == MISSING else "unknown")
+        lines.append(("-", field, found, str(ftype)))
+    return lines
+
+
+def _line_names(lines: List[Tuple[str, str, str, str]], limit: int = 4) -> str:
+    return _names([f"{ln[1]} in {ln[0]}" if ln[0] != "-" else ln[1] for ln in lines], limit)
 
 
 def _plural(n: int, word: str) -> str:
@@ -308,8 +322,7 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     """Score one rule in place and return it.
 
     Reads from ``rule_data``: ``field_facts`` (query fields), ``aux_facts``
-    (highlight / override fields), ``aggregate_fields`` (fields the rule groups
-    or suppresses on), ``search_times_ms`` (recent runs), ``note``,
+    (highlight / override fields), ``results`` (the index/field lines), ``search_times_ms`` (recent runs), ``note``,
     ``timestamp_override``, ``tactics``, ``techniques``, ``author_str`` and
     ``highlight_fields``. ``weights`` are the client's points per check (defaults
     when omitted). Writes the ``score*`` columns, ``score_detail`` and ``scoring_version``.
@@ -318,59 +331,48 @@ def score_rule(rule_data: Dict[str, Any], weights: Optional[Dict[str, Any]] = No
     if facts is None:
         facts = facts_from_results(rule_data.get("results"))
     aux = rule_data.get("aux_facts") or {}
-    aggregate_fields = set(rule_data.get("aggregate_fields") or [])
     out: Dict[str, Dict[str, Any]] = {}
 
     def put(key: str, fraction: Optional[float], result: str) -> None:
         _k, label, group, _weight, how = COMPONENT_BY_KEY[key]
         out[key] = {"key": key, "label": label, "group": group, "fraction": fraction, "how": how, "result": result}
 
-    # Mapping: per field, found on any index counts.
-    found = [f for f, v in facts.items() if v["state"] == FOUND]
-    missing = [f for f, v in facts.items() if v["state"] == MISSING]
-    unknown = [f for f, v in facts.items() if v["state"] == UNKNOWN]
-    known = len(found) + len(missing)
-    no_index = [f for f in missing if facts[f].get("no_index")]          # nothing to check against
-    really_missing = [f for f in missing if f not in no_index]
-    if not facts:
+    # Mapping and field type are scored per line of the rule's field mappings: one line per index
+    # pattern and field (2 patterns x 5 fields = 10 lines). A field an index pattern lacks, or a
+    # pattern that matches no indices at all, is a missed line. Lines TIDE could not check (the SIEM
+    # was unreachable) are left out, never counted against the rule (CLAUDE.md §9).
+    lines = mapping_lines(rule_data.get("results"), facts)
+    checked = [ln for ln in lines if ln[2] in ("Yes", "-")]
+    found = [ln for ln in checked if ln[2] == "Yes"]
+    missed = [ln for ln in checked if ln[2] == "-"]
+    no_index = [ln for ln in missed if ln[3] == "no index"]
+    unknown = [ln for ln in lines if ln[2] not in ("Yes", "-")]
+    if not lines:
         put("mapping", None, "No fields could be read from the query, so there is nothing to check.")
-    elif known == 0:
+        put("field_type", None, "Not scored: no fields to assess.")
+    elif not checked:
         put("mapping", None, "Not scored: the rule's indexes could not be checked against the SIEM.")
+        put("field_type", None, "Not scored: the rule's indexes could not be checked against the SIEM.")
     else:
-        text = f"{len(found)} of {_plural(known, 'field')} found in the mapping"
-        if really_missing:
-            text += f"; missing: {_names(really_missing)}"
+        text = f"{len(found)} of {_plural(len(checked), 'index/field line')} found in the mapping"
+        if missed:
+            text += f"; not found: {_line_names(missed)}"
         if no_index:
-            text += (f"; {_plural(len(no_index), 'field')} cannot be mapped because the rule's index patterns match no "
-                     f"indices in the SIEM, so {'it earns' if len(no_index) == 1 else 'they earn'} full marks")
+            text += f" ({_plural(len(no_index), 'line')} on index patterns that match no indices)"
         if unknown:
-            text += f"; {_plural(len(unknown), 'field')} not checked (index unreachable)"
-        put("mapping", (len(found) + len(no_index)) / known, text + ".")
+            text += f"; {_plural(len(unknown), 'line')} not checked (index unreachable)"
+        put("mapping", len(found) / len(checked), text + ".")
 
-    # Field type: fit for use, over the query fields that were found plus any grouping / suppression
-    # fields (which live outside the query but must be aggregatable).
-    typed = {f: facts[f] for f in found}
-    for f in aggregate_fields:
-        info = aux.get(f) or facts.get(f)
-        if info and info["state"] == FOUND:
-            typed.setdefault(f, info)
-    if typed:
-        weights_by_field, bad_agg = [], []
-        for f, info in typed.items():
-            if f in aggregate_fields and info.get("aggregatable") is False:
-                weights_by_field.append(0.0)
-                bad_agg.append(f)
-            else:
-                weights_by_field.append(FIELD_TYPE_WEIGHTS.get(str(info.get("type") or "").lower(), UNLISTED_TYPE_WEIGHT))
-        avg = sum(weights_by_field) / len(weights_by_field)
-        text = f"Average type weight {avg:.2f} across {_plural(len(typed), 'field')}"
-        if bad_agg:
-            text += f"; cannot be aggregated but used for grouping: {_names(bad_agg)}"
-        put("field_type", avg, text + ".")
-    elif no_index and not found:
-        put("field_type", 1.0, "Full marks: the rule's index patterns match no indices in the SIEM, so there are no mapped field types to judge.")
-    else:
-        put("field_type", None, "Not scored: no mapped fields to assess.")
+        # Field type: a line earns its share when the field is mapped with a set type -- anything
+        # but the dynamic default ``text``. A missed line has no type, so it earns nothing either.
+        typed = [ln for ln in found if str(ln[3] or "").lower() != "text"]
+        default_text = [ln for ln in found if str(ln[3] or "").lower() == "text"]
+        text = f"{len(typed)} of {_plural(len(checked), 'index/field line')} have a set field type"
+        if default_text:
+            text += f"; left as the default text: {_line_names(default_text)}"
+        if missed:
+            text += f"; {_plural(len(missed), 'line')} not found, so no type"
+        put("field_type", len(typed) / len(checked), text + ".")
 
     # Search time: median of recent executions.
     samples = [int(s) for s in (rule_data.get("search_times_ms") or []) if s is not None][:SEARCH_TIME_SAMPLES]

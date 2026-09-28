@@ -22,8 +22,16 @@
             <p class="text-secondary mb-md">Enables each selected rule in its SIEM.</p>
             {% elif action == 'disable' %}
             <p class="text-secondary mb-md">Disables each selected rule in its SIEM.</p>
-            {% elif action == 'promote' %}
-            <p class="text-secondary mb-md">Promotes each selected staging rule to the production SIEM.</p>
+            {% elif action == 'move' %}
+            <p class="text-secondary mb-md">Moves or copies each selected rule to one destination you choose here.</p>
+            <div class="mb-md">
+                <label class="form-label">Target destination</label>
+                <select name="target_scope" class="form-input" required>
+                    {% for d in destinations %}
+                    <option value="{{ d.id }}|{{ d.space }}">{{ d.name or d.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
             <fieldset style="border:0;padding:0;margin:0 0 1rem;">
                 <legend class="form-label">Validation</legend>
                 <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
@@ -33,7 +41,7 @@
                 </label>
                 <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
                     <input type="radio" name="validation" value="stamp">
-                    <span><strong>Mark every promoted rule as validated now</strong><br>
+                    <span><strong>Mark every moved rule as validated now</strong><br>
                     <span class="text-muted" style="font-size:0.78rem;">Resets the date and validator on all of them.</span></span>
                 </label>
                 <label style="display:flex;gap:0.5rem;align-items:flex-start;">
@@ -43,20 +51,21 @@
                 </label>
             </fieldset>
             <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
-                <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from the staging SIEM after promotion
+                <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from its source after moving
             </label>
-            <p class="text-muted mb-md" style="font-size:0.78rem;">Ticked by default because this client's setting in Management is {{ 'to delete' if delete_default else 'to keep' }} the source.</p>
-            {% elif action == 'demote' %}
-            <p class="text-secondary mb-md">Sends each selected production rule back to the staging SIEM.</p>
+            <p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, this is a copy: each source rule stays live and gets linked to its new copy (see the Linked panel in the rule window).</p>
+            {% elif action == 'delete' %}
+            <div class="alert alert-warning mb-md">
+                <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. Elastic is never changed; if any of these rules still exist there, the next sync will bring them straight back.</p>
+            </div>
             <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
-                <input type="checkbox" name="delete_source" value="true"> Delete each rule from the production SIEM after demotion
+                <input type="checkbox" name="remove_links" value="true" checked> Also remove any links to these rules
             </label>
-            <p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, the production copy stays live and shows as Migrated. Never ticked by default, because that would remove a live detection.</p>
             {% endif %}
 
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button name="Start Bulk Edit" type="submit" class="btn btn-primary">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</button>
+                <button name="Start Bulk Edit" type="submit" class="btn {{ 'btn-danger' if action == 'delete' else 'btn-primary' }}">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</button>
             </div>
         </form>
     {% endif %}

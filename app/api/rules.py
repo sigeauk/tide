@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 from typing import Optional, Any, List, Dict, Tuple
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
-from app.services.database import validation_key
+from app.services.database import validation_key, rule_state
 from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule
 
 import logging
@@ -37,12 +37,11 @@ def _parse_date_bound(raw_value: Optional[str], end_of_day: bool) -> Optional[da
 
 
 # Table-view column sorts beyond score / validated / name. Each maps to a key builder that
-# receives (rule, ctx) where ctx = {"state": {rule_id: state}, "siem_label": callable(rule)}.
+# receives (rule, ctx) where ctx = {"offline": get_offline_scopes(), "siem_label": callable(rule)}.
 _SEVERITY_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1}
-_STATE_RANK = {"Production": 0, "Migrated": 1, "Staging": 2, "Deprecated": 3}
 _COLUMN_SORTS = {
     "siem": lambda r, c: (c["siem_label"](r) or "").lower(),
-    "state": lambda r, c: _STATE_RANK.get(c["state"].get(r.rule_id, "Deprecated"), 9),
+    "state": lambda r, c: {"live": 0, "offline": 1, "deprecated": 2}[rule_state(r, c.get("offline") or {})],
     "severity": lambda r, c: _SEVERITY_RANK.get(str(getattr(getattr(r, "severity", None), "value", getattr(r, "severity", "")) or "").lower(), 0),
     "author": lambda r, c: str(getattr(r, "author", "") or "").lower(),
     "language": lambda r, c: str(getattr(r, "language", "") or "").lower(),
@@ -67,7 +66,7 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
     if sort_col in _COLUMN_SORTS and sort_dir in ("asc", "desc"):
         # Table header sort on a column the DB layer cannot order: stable secondary sort by name.
         rules.sort(key=lambda r: str(getattr(r, "name", "") or "").lower())
-        ctx = sort_ctx or {"state": {}, "siem_label": lambda r: ""}
+        ctx = sort_ctx or {"offline": {}, "siem_label": lambda r: ""}
         rules.sort(key=lambda r: _COLUMN_SORTS[sort_col](r, ctx), reverse=(sort_dir == "desc"))
         return rules
     if sort_validated in ("asc", "desc"):
@@ -93,79 +92,11 @@ def _resort_rules(rules: list, sort_score: str, sort_validated: str, sort_name: 
     return rules
 
 
-def _pick_display_rule(db, migration: Optional[dict], logical: Optional[dict], identity_key, fallback_rule, client_id: str):
-    """Resolve the single row to render for a migrated/merged rule identity.
-
-    Prefers the production/master copy. If that copy is itself deprecated
-    (e.g. deleted from production) this MUST fall back to the live staging/
-    source copy instead of leaving both rows in the result — the caller only
-    calls this once per ``identity_key``, so whatever it returns is the only
-    card rendered for this identity. Previously the fallback only happened
-    when a master substitution *succeeded*, so a deprecated master left the
-    staging row unsubstituted AND still separately iterated into the output,
-    showing a "Deprecated" card next to a "Staging" card for the same rule.
-    """
-    def fetch(rule_id, space, siem_id):
-        if not (rule_id and space and siem_id):
-            return None
-        return db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
-
-    info = migration or logical or {}
-    master = fetch(
-        info.get("target_rule_id") or info.get("master_rule_id"),
-        info.get("target_space") or info.get("master_space"),
-        info.get("target_siem_id") or info.get("master_siem_id"),
-    )
-    if master and not master.deprecated:
-        return master
-
-    if migration:
-        source = fetch(migration.get("source_rule_id"), migration.get("source_space"), migration.get("source_siem_id"))
-        if source and not source.deprecated:
-            return source
-    elif logical:
-        master_rule_id = info.get("master_rule_id")
-        for member in db.get_logical_rule_members(identity_key) or []:
-            if member.get("rule_id") == master_rule_id:
-                continue
-            candidate = fetch(member.get("rule_id"), member.get("space"), member.get("siem_id"))
-            if candidate and not candidate.deprecated:
-                return candidate
-
-    # Both sides deprecated/unresolvable — show whatever we have.
-    return master or fallback_rule
-
-
 def _dedupe_display_rules(db, rules: List["DetectionRule"], client_id: str) -> List["DetectionRule"]:
-    """Collapse migrated/merged identities to the single card Rule Health
-    would render for each — one row per (staging, production) pair or
-    logical merge group, preferring the production/master copy (see
-    ``_pick_display_rule``). Any aggregate computed straight from
-    un-deduped rows (e.g. raw SQL counts) double-counts these pairs, since
-    both the staging and production copy independently match the same
-    filters."""
-    display_rules = []
-    seen_migrations = set()
-    # Two bulk queries up front instead of two per rule (was ~3.4k queries
-    # for a 1.7k-rule tenant on every Rule Health request).
-    migration_by_rule, logical_by_key = db.get_rule_identity_lookups()
-    for rule in rules:
-        migration = migration_by_rule.get(rule.rule_id)
-        if rule.siem_id is not None and rule.space is not None:
-            logical = logical_by_key.get((rule.rule_id, rule.siem_id, rule.space))
-        else:
-            logical = db.get_logical_rule_identity_for_rule(
-                rule.rule_id, rule.siem_id, rule.space
-            )
-        identity_key = (migration or logical or {}).get("id")
-        if identity_key:
-            if identity_key in seen_migrations:
-                continue
-            seen_migrations.add(identity_key)
-            display_rules.append(_pick_display_rule(db, migration, logical, identity_key, rule, client_id))
-            continue
-        display_rules.append(rule)
-    return display_rules
+    """Every stored rule gets its own card now -- linked rules included. This used to collapse a
+    linked pair down to one card, picking a "winner" and silently hiding the other; that's gone,
+    kept only as a passthrough so callers that filtered/counted through it don't need to change."""
+    return rules
 
 
 def _metrics_from_rules(rules: List["DetectionRule"], all_rules: Optional[List["DetectionRule"]] = None) -> RuleHealthMetrics:
@@ -246,41 +177,38 @@ def _metrics_from_rules(rules: List["DetectionRule"], all_rules: Optional[List["
 
 
 def _apply_lifecycle_counts(metrics: RuleHealthMetrics, db, client_id: str, rules) -> None:
-    """Fill the Production / Staging / Migrated / Deprecated split on ``metrics``
-    for the deduplicated ``rules`` (one entry per card the grid renders)."""
+    """Fill the Linked / Deprecated split on ``metrics`` for ``rules`` (one entry per card the
+    grid renders). There is no more Production/Staging/Migrated split -- see rule_links."""
     if not rules:
         return
-    states = db.get_rule_lifecycle_states_bulk(
-        [r.rule_id for r in rules],
-        db.get_client_siem_scopes(client_id, environment_role="staging"),
-        db.get_client_siem_scopes(client_id, environment_role="production"),
-    )
-    counts = {"Production": 0, "Staging": 0, "Migrated": 0, "Deprecated": 0}
+    links = db.get_rule_links_bulk([(r.rule_id, r.siem_id, r.space) for r in rules])
+    offline_scopes = db.get_offline_scopes()
+    linked = deprecated = offline = 0
     for r in rules:
-        st = states.get(r.rule_id, "Deprecated")
-        counts[st] = counts.get(st, 0) + 1
-    metrics.state_production = counts["Production"]
-    metrics.state_staging = counts["Staging"]
-    metrics.state_migrated = counts["Migrated"]
-    metrics.state_deprecated = counts["Deprecated"]
+        state = rule_state(r, offline_scopes)
+        if state == "deprecated":
+            deprecated += 1
+        elif state == "offline":
+            offline += 1
+        elif links.get((r.rule_id, r.siem_id, r.space)):
+            linked += 1
+    metrics.state_linked = linked
+    metrics.state_deprecated = deprecated
+    metrics.state_offline = offline
 
 
 def _get_filtered_rules(db, filters: RuleFilters, client_id: str):
     """Every rule matching ``filters`` (unpaginated) as ``(all_rules, deduped)``.
 
-    ``deduped`` collapses migrated/merged identities to one row each, the same rule set the grid
-    renders across all of its pages. ``all_rules`` is every rule copy, for counts per SIEM."""
+    Every rule is now its own card -- ``deduped`` is kept only so callers that filtered/counted
+    through it don't need to change (see ``_dedupe_display_rules``)."""
     all_filters = filters.model_copy(update={"page": 1, "page_size": 1_000_000})
     rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id)
-    db.backfill_unique_rule_migrations(
-        db.get_client_siem_scopes(client_id, environment_role="staging"),
-        db.get_client_siem_scopes(client_id, environment_role="production"),
-    )
     return rules, _dedupe_display_rules(db, rules, client_id)
 
 
 def _get_filtered_deduped_rules(db, filters: RuleFilters, client_id: str) -> List["DetectionRule"]:
-    """Every rule matching ``filters`` with migrated/merged identities collapsed to one row each."""
+    """Every rule matching ``filters``."""
     return _get_filtered_rules(db, filters, client_id)[1]
 
 
@@ -330,14 +258,20 @@ def _split_csv(raw_value: Any) -> list[str]:
 
 
 def _build_technique_groups(db) -> tuple[list[dict], dict[str, dict]]:
+    """Tactic -> techniques for the pickers, each technique under every tactic it belongs to;
+    and technique id -> its option under its first (primary) tactic."""
     groups: dict[str, list[dict]] = {}
     lookup: dict[str, dict] = {}
-    for item in db.get_mitre_techniques() or []:
+    seen: set[tuple[str, str]] = set()
+    for item in db.get_mitre_technique_options() or []:
         technique_id = str(item.get("id") or "").strip().upper()
         technique_name = str(item.get("name") or "").strip()
         if not technique_id or not technique_name:
             continue
         tactic = _format_tactic_label(str(item.get("tactic") or ""))
+        if (tactic, technique_id) in seen:
+            continue
+        seen.add((tactic, technique_id))
         option = {
             "id": technique_id,
             "name": technique_name,
@@ -345,7 +279,8 @@ def _build_technique_groups(db) -> tuple[list[dict], dict[str, dict]]:
             "url": item.get("url") or "",
         }
         groups.setdefault(tactic, []).append(option)
-        lookup[technique_id] = option
+        if technique_id not in lookup or tactic == _format_tactic_label(str(item.get("primary_tactic") or "")):
+            lookup[technique_id] = option
 
     ordered = [
         {"tactic": tactic, "options": options}
@@ -472,7 +407,7 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         {
             "siem_id": s.get("id"),
             "space": s.get("space") or "default",
-            "label": f'{s.get("label", "SIEM")} ({(s.get("environment_role") or "staging").title()})',
+            "label": s.get("name") or s.get("label", "SIEM"),
             "default_index": s.get("default_index") or "",
         }
         for s in siems
@@ -850,7 +785,7 @@ def _build_space_labels(db, client_id: str) -> dict:
         space = s.get("space")
         if not space:
             continue
-        label = f'{s["label"]} ({s["environment_role"].title()})'
+        label = s.get("name") or s["label"]
         existing = out.get(space)
         if existing and label not in existing.split(" / "):
             out[space] = f"{existing} / {label}"
@@ -867,9 +802,38 @@ def _build_space_labels_by_pair(db, client_id: str) -> dict:
     except Exception:
         return {}
     return {
-        f'{s["id"]}|{s["space"]}': f'{s["label"]} ({s["environment_role"].title()})'
+        f'{s["id"]}|{s["space"]}': s.get("name") or s["label"]
         for s in (siems or [])
         if s.get("id") and s.get("space")
+    }
+
+
+def _build_scope_labels(db, client_id: str) -> dict:
+    """``"<siem_id>|<space lower>"`` -> destination name, matching the keys of
+    ``RuleHealthMetrics.rules_by_scope`` and the SIEM filter's option values."""
+    try:
+        siems = db.get_client_siems(client_id)
+    except Exception:
+        return {}
+    return {
+        f'{s["id"]}|{str(s["space"]).lower()}': s.get("name") or s["label"]
+        for s in (siems or [])
+        if s.get("id") and s.get("space")
+    }
+
+
+def _build_space_colors_by_pair(db, client_id: str) -> dict:
+    """``"<siem_id>|<space>"`` → the destination's chosen colour (Management → Linked SIEMs),
+    for the small colour dot on each rule card's SIEM pill. Absent/empty when a destination has
+    no colour set (pre-6.0.0 rows all get one via Migration 67, but stay defensive anyway)."""
+    try:
+        siems = db.get_client_siems(client_id)
+    except Exception:
+        return {}
+    return {
+        f'{s["id"]}|{s["space"]}': s["color"]
+        for s in (siems or [])
+        if s.get("id") and s.get("space") and s.get("color")
     }
 
 
@@ -1015,11 +979,7 @@ def list_rules(
             _labels_by_pair = _build_space_labels_by_pair(db, client_id)
             _labels = _build_space_labels(db, client_id)
             sort_ctx = {
-                "state": db.get_rule_lifecycle_states_bulk(
-                    [r.rule_id for r in all_rules],
-                    db.get_client_siem_scopes(client_id, environment_role="staging"),
-                    db.get_client_siem_scopes(client_id, environment_role="production"),
-                ) if sort_col == "state" else {},
+                "offline": db.get_offline_scopes(),
                 "siem_label": lambda r: _labels_by_pair.get(f"{r.siem_id}|{r.space}") or _labels.get(r.space or "default", ""),
             }
         all_rules = _resort_rules(all_rules, sort_score, sort_validated, sort_name, sort_by, sort_col, sort_dir, sort_ctx)
@@ -1132,7 +1092,7 @@ def get_metrics(
             "metrics": metrics,
             "last_sync_time": get_last_sync_time(all_rules),
             "space_labels": _build_space_labels(db, client_id),
-            "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
+            "scope_labels": _build_scope_labels(db, client_id),
         },
     )
 
@@ -1300,9 +1260,9 @@ async def test_rule(
     _key = siem.get("api_token_enc") or ""
     logger.info(
         "test_rule resolved SIEM client=%s space=%s siem_label=%s siem_id=%s "
-        "kibana_url=%s env_role=%s api_key_prefix=%s api_key_len=%d es_url=%s",
+        "kibana_url=%s destination=%s api_key_prefix=%s api_key_len=%d es_url=%s",
         client_id, space, siem.get("label"), siem.get("id"),
-        siem.get("kibana_url"), siem.get("environment_role"),
+        siem.get("kibana_url"), siem.get("name"),
         _key[:8] + "..." if _key else "<empty>", len(_key),
         siem.get("elasticsearch_url"),
     )
@@ -1707,10 +1667,13 @@ async def create_rule(
             },
         )
 
+        # Sync so the new rule shows up. Rule Health shows the sync's progress; from anywhere else
+        # (a technique window's Sigma Convert) the sync just runs.
         return HTMLResponse(
             '<div></div>'
             '<script>'
-            'htmx.ajax("POST","/api/rules/sync",{target:"#sync-status",swap:"outerHTML"});'
+            '(function(){var s=document.getElementById("sync-status");'
+            'htmx.ajax("POST","/api/rules/sync",s?{target:s,swap:"outerHTML"}:{target:"body",swap:"none"});})();'
             '</script>'
         )
     except Exception as e:
@@ -2014,18 +1977,32 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
     technique sidebar so every rule renders identically.
     """
     rules = list(rules)
-    states = db.get_rule_lifecycle_states_bulk(
-        [r.rule_id for r in rules],
-        db.get_client_siem_scopes(client_id, environment_role="staging"),
-        db.get_client_siem_scopes(client_id, environment_role="production"),
-    )
+    links = db.get_rule_links_bulk([(r.rule_id, r.siem_id, r.space) for r in rules])
+    offline = db.get_offline_scopes()
+    states, titles = {}, {}
+    for r in rules:
+        key = f"{r.rule_id}|{r.siem_id or ''}|{r.space or ''}"
+        states[key], titles[key] = _lifecycle(r, links.get((r.rule_id, r.siem_id, r.space)), offline)
+
     return {
         "space_labels": _build_space_labels(db, client_id),
         "space_labels_by_pair": _build_space_labels_by_pair(db, client_id),
-        "lifecycle_states": {
-            f"{r.rule_id}|{r.siem_id}|{r.space}": states.get(r.rule_id, "Deprecated") for r in rules
-        },
+        "space_colors_by_pair": _build_space_colors_by_pair(db, client_id),
+        "lifecycle_states": states,
+        "lifecycle_titles": titles,
     }
+
+
+def _lifecycle(rule, linked, offline_scopes) -> tuple[str, str]:
+    """The rule's state badge and its hover text: Deprecated, SIEM offline, Linked or none."""
+    state = rule_state(rule, offline_scopes)
+    if state == "deprecated":
+        return "Deprecated", ""
+    if state == "offline":
+        info = offline_scopes[(rule.siem_id, rule.space)]
+        at = info["checked_at"].strftime("%Y-%m-%d %H:%M") if info.get("checked_at") else "the last sync"
+        return "SIEM offline", f"SIEM offline: {info['reason']} (checked {at}). Shown from TIDE's last copy."
+    return ("Linked" if linked else ""), ""
 
 
 def _mapping_info(db, siem_id: str, rule) -> dict:
@@ -2068,6 +2045,17 @@ def _modal_with_card_oob(request, db, client_id: str, rule, space: str, siem_id:
     return HTMLResponse(modal_html + item_html)
 
 
+def _rule_covers(rule_id, siem_id, space, linked, client_id):
+    """The baseline techniques this rule covers (the rule window's Covers panel). Never fatal:
+    the rule window must open even if the baseline tables are unreadable."""
+    from app.inventory_engine import get_rule_coverage
+    try:
+        return get_rule_coverage(rule_id, siem_id, space, linked, client_id=client_id)
+    except Exception:
+        logger.warning("Covers lookup failed for rule %s", rule_id, exc_info=True)
+        return []
+
+
 def _build_rule_modal_context(
     db, client_id: str, rule, space: str, siem_id: Optional[str], just_validated: bool = False,
     flash: str = "",
@@ -2103,23 +2091,28 @@ def _build_rule_modal_context(
     for mid in getattr(rule, "mitre_ids", None) or []:
         info = technique_lookup.get(str(mid).upper()) or {}
         mitre.append({"id": str(mid).upper(), "name": info.get("name") or "", "tactic": info.get("tactic") or ""})
-    staging = db.get_client_siem_scopes(client_id, environment_role="staging")
-    production = db.get_client_siem_scopes(client_id, environment_role="production")
     scope_label = (
         _build_space_labels_by_pair(db, client_id).get(f"{actual_siem}|{space}")
         or _build_space_labels(db, client_id).get(space, space.capitalize())
     )
+    linked = db.get_rule_links_bulk([(rule.rule_id, actual_siem, space)]).get((rule.rule_id, actual_siem, space), [])
+    # Every other linked SIEM+space this client has -- the Move dialog's target picker. Any
+    # destination but this rule's own current one. Only what the client-side dialog needs to
+    # render and submit a choice -- never api_token_enc or other credential fields.
+    move_targets = [
+        {"siem_id": s.get("id"), "space": s.get("space"), "name": s.get("name") or s.get("label")}
+        for s in (db.get_client_siems(client_id) or [])
+        if not (s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower())
+    ]
     return {
         "rule": rule,
         "space": space,
         "siem_id": actual_siem,
         "scope_label": scope_label,
-        "lifecycle_state": db.get_rule_lifecycle_state(rule.rule_id, staging, production),
-        # Promote is offered only for rules living in a staging-role scope; the confirm
-        # dialog's "delete source" default comes from the client setting.
-        "can_promote": (str(actual_siem), str(space).lower()) in {(str(s), str(sp).lower()) for s, sp in staging},
-        # Demote (the reverse) is offered for rules living in a production-role scope.
-        "can_demote": (str(actual_siem), str(space).lower()) in {(str(s), str(sp).lower()) for s, sp in production},
+        **dict(zip(("lifecycle_state", "lifecycle_title"), _lifecycle(rule, linked, db.get_offline_scopes()))),
+        "linked_rules": linked,
+        "covers": _rule_covers(rule.rule_id, actual_siem, space, linked, client_id),
+        "move_targets": move_targets,
         "delete_source_default": bool((db.get_client(client_id) or {}).get("delete_source_after_promotion", True)),
         "history_entries": entries,
         "history_users": sorted({e.get("actor") for e in entries if e.get("actor")}),
@@ -2154,6 +2147,121 @@ def get_rule_history_modal(
         "components/rule_modal.html",
         _build_rule_modal_context(db, client_id, rule, space, siem_id),
     )
+
+
+@router.get("/link-search", response_class=HTMLResponse)
+async def search_rule_link_targets(
+    request: Request,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    target_name: str = Query(""),
+    target_scope: str = Query(""),
+    exclude_rule_id: Optional[str] = Query(None),
+    exclude_siem_id: Optional[str] = Query(None),
+    exclude_space: Optional[str] = Query(None),
+):
+    """Live search behind the rule modal's "Add link" box: rule names matching ``target_name``
+    inside the chosen destination, so linking doesn't require typing an exact, full name from
+    memory. Shares the same field name as the Add-link form's text input so one hx-include
+    covers both the plain submit and this search.
+
+    ``exclude_*`` identifies the exact row you're linking from -- not just its rule_id, which
+    every copy of the same rule shares across destinations by design, so excluding by rule_id
+    alone would hide every other copy too.
+    """
+    from html import escape
+    target_siem_id, _, target_space = target_scope.partition("|")
+    target_siem_id, target_space = target_siem_id.strip(), target_space.strip()
+    q = target_name.strip()
+    # The swap is outerHTML (so a click-to-pick result can replace itself and still be
+    # re-targetable by the next search), so every branch must return the wrapper div itself,
+    # never an empty string -- an empty string would delete the div outright and the next
+    # search would have nothing to target.
+    if not target_siem_id or not target_space:
+        return HTMLResponse('<div class="rm-add-link__results"><p class="rm-empty">Choose a destination first.</p></div>')
+    if len(q) < 2:
+        return HTMLResponse('<div class="rm-add-link__results"></div>')
+    matches = db.search_rule_names(
+        target_siem_id, target_space, q,
+        exclude_rule_id=exclude_rule_id, exclude_siem_id=exclude_siem_id, exclude_space=exclude_space, limit=8,
+    )
+    if not matches:
+        return HTMLResponse('<div class="rm-add-link__results"><p class="rm-empty">No matching rule in that destination.</p></div>')
+    items = "".join(
+        f'<button type="button" onclick="tidePickLinkTarget(this)" data-name="{escape(m["name"])}">{escape(m["name"])}</button>'
+        for m in matches
+    )
+    return HTMLResponse(f'<div class="rm-add-link__results">{items}</div>')
+
+
+@router.post("/{rule_id}/links", response_class=HTMLResponse)
+async def add_rule_link(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Manually link this rule to another one, found by name within a chosen destination."""
+    form = await request.form()
+    target_name = str(form.get("target_name") or "").strip()
+    target_siem_id, _, target_space = str(form.get("target_scope") or "").partition("|")
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+    flash = ""
+    if not target_name or not target_siem_id or not target_space:
+        flash = "Choose a target destination and type the rule's name."
+    else:
+        with db.get_connection() as conn:
+            matches = conn.execute(
+                "SELECT rule_id FROM detection_rules WHERE siem_id = ? AND space = ? AND name = ?",
+                [target_siem_id, target_space, target_name],
+            ).fetchall()
+        if not matches:
+            flash = f'No rule named "{target_name}" found in that destination.'
+        elif len(matches) > 1:
+            flash = f'Multiple rules named "{target_name}" found in that destination -- rename one first.'
+        else:
+            username = user.name or user.username if user else "Unknown"
+            link_id = db.create_rule_link(
+                rule_id, siem_id, space, matches[0][0], target_siem_id, target_space, username,
+            )
+            flash = "Linked." if link_id else "Could not link -- these two are already linked, or one no longer exists."
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    response = request.app.state.templates.TemplateResponse(
+        request, "components/rule_modal.html",
+        _build_rule_modal_context(db, client_id, rule, space, siem_id, flash=flash),
+    )
+    response.headers["HX-Trigger"] = "refreshRules"
+    return response
+
+
+@router.delete("/{rule_id}/links/{link_id}", response_class=HTMLResponse)
+def remove_rule_link(
+    request: Request,
+    rule_id: str,
+    link_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    space: str = Query("default"),
+    siem_id: Optional[str] = Query(None),
+):
+    """Remove a link. Neither rule, its history nor its validation is touched."""
+    db.delete_rule_link(link_id)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+    response = request.app.state.templates.TemplateResponse(
+        request, "components/rule_modal.html",
+        _build_rule_modal_context(db, client_id, rule, space, siem_id, flash="Link removed."),
+    )
+    response.headers["HX-Trigger"] = "refreshRules"
+    return response
 
 
 @router.get("/{rule_id}/edit-form", response_class=HTMLResponse)
@@ -2247,72 +2355,32 @@ async def edit_rule(
     # ID during restore or promotion. Kibana updates must use the payload's
     # actual Elastic ID, while TIDE history continues to use rule_id.
     elastic_rule_id = str(old_payload.get("rule_id") or old_payload.get("id") or rule_id)
-    migration = db.get_rule_migration_for_rule(rule_id)
-    logical = db.get_logical_rule_identity_for_rule(rule_id, actual_siem_id, space)
     if rule.deprecated:
         if not db.update_cached_rule(rule_id, actual_siem_id, space, payload):
             return HTMLResponse('<div class="empty-state-text">TIDE-only rule update failed.</div>', status_code=400)
         update_message = "Deprecated rule updated in TIDE only."
     else:
-        update_targets = [(actual_siem_id, space, elastic_rule_id, siem)]
-        if migration:
-            migration_members = [
-                (migration["source_rule_id"], migration["source_siem_id"], migration["source_space"]),
-                (migration["target_rule_id"], migration["target_siem_id"], migration["target_space"]),
-            ]
-            for member_rule_id, member_siem_id, member_space in migration_members:
-                if (member_siem_id, member_space) == (actual_siem_id, space):
-                    continue
-                member_siem = next(
-                    (item for item in (db.get_client_siems(client_id) or []) if item.get("id") == member_siem_id),
-                    None,
-                )
-                member_rule = db.get_rule_by_id(
-                    member_rule_id, member_space,
-                    siem_id=member_siem_id, client_id=client_id,
-                )
-                if member_siem and member_rule:
-                    member_payload = member_rule.raw_data or {}
-                    update_targets.append(
-                        (member_siem_id, member_space, str(member_payload.get("rule_id") or member_payload.get("id") or member_rule.rule_id), member_siem)
-                    )
-        elif logical:
-            for member in db.get_logical_rule_members(logical["id"]):
-                if (member["siem_id"], member["space"]) == (actual_siem_id, space):
-                    continue
-                member_siem = next(
-                    (item for item in (db.get_client_siems(client_id) or []) if item.get("id") == member["siem_id"]),
-                    None,
-                )
-                member_rule = db.get_rule_by_id(
-                    member["rule_id"], member["space"],
-                    siem_id=member["siem_id"], client_id=client_id,
-                )
-                if member_siem and member_rule:
-                    member_payload = member_rule.raw_data or {}
-                    update_targets.append(
-                        (member["siem_id"], member["space"], str(member_payload.get("rule_id") or member_payload.get("id") or member_rule.rule_id), member_siem)
-                    )
-        failures = []
-        for target_siem_id, target_space, target_rule_id, target in update_targets:
-            success, message = elastic_helper.update_detection_rule(
-                rule_id=target_rule_id, rule_data=payload, space=target_space,
-                kibana_url=target.get("kibana_url"), api_key=target.get("api_token_enc"),
+        # Editing updates ONLY this rule -- never a linked one. A link means these are
+        # deliberately, temporarily separate (isolate-to-edit, a SIEM migration in progress);
+        # silently pushing an edit to the linked rule too would defeat the entire point of
+        # Compare-before-Merge, since by the time you compared them the edit would already be
+        # on both sides. This used to loop over every linked rule and update them all -- a
+        # carry-over from the old staging/production auto-sync model that no longer applies.
+        # Push a reviewed edit across on purpose with Merge, from the Compare view.
+        success, message = elastic_helper.update_detection_rule(
+            rule_id=elastic_rule_id, rule_data=payload, space=space,
+            kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+        )
+        if not success:
+            logger.error(
+                "Rule edit update failed: rule_id=%s siem_id=%s space=%s message=%s",
+                rule_id, actual_siem_id, space, message,
             )
-            if not success:
-                logger.error(
-                    "Rule edit update failed: rule_id=%s siem_id=%s space=%s "
-                    "target_rule_id=%s message=%s",
-                    rule_id, target_siem_id, target_space, target_rule_id, message,
-                )
-                failures.append(f"{target.get('label', target_siem_id)} / {target_space}: {message}")
-        if failures:
             return HTMLResponse(
-                '<div class="empty-state-text">Rule update was partial. '
-                + ' | '.join(failures) + '</div>',
+                f'<div class="empty-state-text">Rule update failed: {message}</div>',
                 status_code=409,
             )
-        update_message = "Rule updated in all applicable SIEM scopes."
+        update_message = "Rule updated."
 
     change_message, changed_fields, field_diffs = _summarize_rule_changes(old_payload, payload)
     db.record_rule_history(
@@ -2445,26 +2513,6 @@ def sync_one_rule(
     return reply(message, 200, refreshed)
 
 
-@router.post("/{rule_id}/archive", response_class=HTMLResponse)
-def archive_rule(
-    rule_id: str,
-    db: DbDep,
-    user: RequireUser,
-    client_id: ActiveClient,
-    space: str = Query("default"),
-    siem_id: Optional[str] = Query(None),
-):
-    """Archive a rule in TIDE without changing Elastic."""
-    if not siem_id or not db.set_rule_deprecated(rule_id, siem_id, space, True):
-        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
-    db.record_rule_history(
-        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
-        action="deprecated", actor_user_id=user.id, actor_name=user.username,
-        detail={"message": "Rule archived in TIDE."},
-    )
-    return HTMLResponse('<div class="empty-state-text">Rule archived in TIDE.</div>')
-
-
 @router.post("/{rule_id}/restore", response_class=HTMLResponse)
 async def restore_rule(
     request: Request,
@@ -2521,8 +2569,9 @@ async def restore_rule(
     )
     # Restore is an identity replacement, not a migration mapping. The new
     # synced row is the sole TIDE record; remove the old SIEM-scope cache row
-    # after baseline references have been moved to the recreated ID.
-    db.delete_rule(rule_id, siem_id, space)
+    # after baseline references have been moved to the recreated ID. Its
+    # rule_id is gone for good, so any link it was part of goes with it too.
+    db.delete_rule(rule_id, siem_id, space, remove_links=True)
     db.record_rule_history(
         rule_id=new_rule_id, siem_id=replacement_siem_id, space=replacement_space, client_id=client_id,
         action="restored", actor_user_id=user.id, actor_name=user.username,
@@ -2547,49 +2596,51 @@ def delete_rule(
     client_id: ActiveClient,
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
+    remove_links: bool = Query(True),
+    from_elastic: bool = Query(False),
 ):
-    """Delete a rule from TIDE only; Elastic is never modified."""
-    if not siem_id or not db.delete_rule(rule_id, siem_id, space):
+    """Delete a rule from TIDE, and with ``from_elastic`` from its SIEM as well.
+
+    TIDE-only is the default and is safe to do casually: a rule still live in Elastic comes
+    back on the next sync. ``from_elastic`` deletes it in Elastic first and only then drops
+    TIDE's row, so a failed Elastic delete never leaves TIDE believing a live rule is gone.
+    ``remove_links`` (default on) also removes any rule_links row this rule was part of, so its
+    counterpart doesn't end up pointing at a rule that no longer exists."""
+    if not siem_id or not db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id):
         return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+    if from_elastic:
+        from html import escape
+        from app.elastic_helper import delete_detection_rule
+        siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
+        if not siem:
+            return HTMLResponse(
+                '<div class="empty-state-text">This rule\'s SIEM is no longer linked to this client, '
+                'so it could not be deleted from Elastic. Nothing was deleted.</div>', status_code=400)
+        ok, msg = delete_detection_rule(rule_id, space, siem.get("kibana_url"), siem.get("api_token_enc"))
+        if not ok:
+            return HTMLResponse(
+                f'<div class="empty-state-text">Elastic refused the delete ({escape(msg[:200])}). '
+                'Nothing was deleted, in Elastic or TIDE.</div>', status_code=502)
+    if not db.delete_rule(rule_id, siem_id, space, remove_links=remove_links):
+        if not from_elastic:
+            return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+    message = "Rule deleted from Elastic and TIDE." if from_elastic else "Rule deleted from TIDE."
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
         action="deleted", actor_user_id=user.id, actor_name=user.username,
-        detail={"message": "Rule deleted from TIDE."},
+        detail={"message": message + ("" if remove_links else " Its links were kept.")},
     )
-    return HTMLResponse('<div class="empty-state-text">Rule deleted from TIDE.</div>')
-
-
-@router.post("/{rule_id}/merge", response_class=HTMLResponse)
-async def merge_rule(
-    request: Request,
-    rule_id: str,
-    db: DbDep,
-    user: RequireUser,
-    client_id: ActiveClient,
-    space: str = Query("default"),
-    siem_id: Optional[str] = Query(None),
-):
-    """Merge two rule IDs into one logical TIDE rule identity."""
-    form = await request.form()
-    replacement_id = str(form.get("replacement_rule_id") or "").strip()
-    replacement_scope = str(form.get("replacement_scope") or "").strip()
-    replacement_siem_id, replacement_space = _parse_scope_pair(replacement_scope)
-    replacement_siem_id = replacement_siem_id or str(siem_id or "").strip()
-    replacement_space = replacement_space if replacement_scope else ""
-    if not siem_id or not replacement_id or not replacement_siem_id or not replacement_space:
-        return HTMLResponse('<div class="empty-state-text">Replacement rule ID, SIEM, and space are required.</div>', status_code=400)
-    logical_id = db.merge_logical_rule_identity(
-        rule_id, replacement_id, siem_id, space,
-        replacement_siem_id, replacement_space, user.username,
+    # The edit form's Back/close/Cancel controls navigate back to this same rule's history
+    # modal (see back_url in rule_create_form.html) — now 404, since the row is gone. Close the
+    # whole modal instead of leaving it open on a dead reference, and refresh the grid so the
+    # deleted card disappears without the user having to reload.
+    return HTMLResponse(
+        "<script>"
+        "var c = document.getElementById('modal-container'); if (c) c.innerHTML = '';"
+        "if (typeof showToast === 'function') showToast('Rule deleted from TIDE.', 'success');"
+        "htmx.trigger(document.body, 'refreshRules');"
+        "</script>"
     )
-    if not logical_id:
-        return HTMLResponse('<div class="empty-state-text">Both rules must exist in their selected SIEM and space.</div>', status_code=400)
-    db.record_rule_history(
-        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
-        action="merged", actor_user_id=user.id, actor_name=user.username,
-        detail={"message": "Rules merged into one logical identity.", "replacement_rule_id": replacement_id, "replacement_siem_id": replacement_siem_id, "replacement_space": replacement_space, "logical_rule_id": logical_id},
-    )
-    return HTMLResponse(f'<div class="empty-state-text">Rules merged. Baselines now follow {replacement_id}.</div>')
 
 
 @router.post("/{rule_id}/enable", response_class=HTMLResponse)
@@ -2634,7 +2685,7 @@ async def enable_rule(
     return HTMLResponse('<script>htmx.trigger(document.body,"refreshRules");</script>')
 
 
-@router.patch("/{rule_id}/disable", response_class=HTMLResponse)
+@router.post("/{rule_id}/disable", response_class=HTMLResponse)
 async def disable_rule(
     request: Request,
     rule_id: str,

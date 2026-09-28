@@ -172,10 +172,6 @@
                 <select name="system_id" id="edit-move-from-system-select" class="form-input" required>
                     <option value="" disabled selected>Select a source client first&hellip;</option>
                 </select>
-                <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;cursor:pointer;">
-                    <input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);">
-                    Also move associated baselines
-                </label>
                 <button name="Move Here" type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
             </form>
             {% endif %}
@@ -220,12 +216,6 @@
             </div>
             <div id="move-check-result">
                 <p style="color:var(--color-muted);padding:0.5rem;font-size:0.85rem;">Select a target client above.</p>
-            </div>
-            <div>
-                <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.875rem;cursor:pointer;">
-                    <input type="checkbox" name="move_baselines" checked style="accent-color:var(--color-primary);">
-                    Also move associated baselines
-                </label>
             </div>
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
                 <button name="Cancel" type="button" class="btn btn-secondary"

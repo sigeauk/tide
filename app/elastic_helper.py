@@ -72,6 +72,27 @@ def test_elastic_connection(kibana_url: str, api_key: str, timeout: int = 10):
         return False, str(exc)[:120]
 
 
+def ping_detection_space(kibana_url: str, api_key: str, space: str, timeout: int = 5):
+    """Can this space's detection rules be read right now? Returns ``(ok, reason)``.
+
+    Asks for one rule from the same endpoint sync reads, so a wrong API key, a missing space and
+    an unreachable host all fail here, before the pull, with a reason a person can act on."""
+    url = f"{kibana_url.rstrip('/')}/s/{space}/api/detection_engine/rules/_find?per_page=1&page=1"
+    headers = {"kbn-xsrf": "true", "Authorization": f"ApiKey {api_key}"}
+    try:
+        resp = requests.get(url, headers=headers, verify=False, timeout=timeout)
+    except requests.exceptions.Timeout:
+        return False, "Connection timed out"
+    except requests.exceptions.ConnectionError:
+        return False, "Connection refused"
+    except Exception as exc:
+        return False, str(exc)[:120]
+    if resp.status_code == 200:
+        return True, ""
+    reasons = {401: "Authentication failed (401)", 403: "Access denied (403)", 404: f"Space '{space}' not found (404)"}
+    return False, reasons.get(resp.status_code, f"HTTP {resp.status_code}")
+
+
 def test_elastic_connection_full(
     kibana_url: str,
     api_key: str,
@@ -2255,6 +2276,77 @@ def disable_detection_rule(
         return False, str(e)
 
 
+def delete_detection_rule(
+    rule_id: str,
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+) -> Tuple[bool, str]:
+    """Permanently delete a rule from Elastic itself (not just TIDE's cache).
+
+    Same DELETE call ``promote_rule_to_production`` already makes on the source side of a true
+    move; pulled out standalone for callers -- Merge's "delete after merging" -- that need to
+    remove a rule from Elastic without also copying it anywhere first.
+
+    Returns: (success, message)
+    """
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key"
+    session = _make_session(api_key)
+    base_url = kibana_url.rstrip("/")
+    prefix = _space_api_prefix(base_url, space)
+    try:
+        resp = session.delete(f"{prefix}/api/detection_engine/rules?rule_id={rule_id}")
+        if resp.status_code in (200, 204, 404):
+            # 404 means it's already gone from Elastic -- not a failure for a delete.
+            return True, "Deleted."
+        return False, f"HTTP {resp.status_code}: {resp.text}"
+    except Exception as e:
+        log_error(f"Delete rule failed: {e}")
+        return False, str(e)
+
+
+def _lookup_rule_by_rule_id(session, base_url: str, space: str, rule_id: str):
+    """The rule stored in ``space`` under the portable ``rule_id``, or None.
+
+    A single targeted lookup by the field Elastic itself treats as unique per space -- never a
+    paged listing, which can miss a rule that is genuinely present (see the sync pagination fix
+    in 5.1.2) and is slow on a large space besides.
+    """
+    if not rule_id:
+        return None
+    try:
+        resp = session.get(
+            f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules",
+            params={"rule_id": rule_id},
+        )
+    except Exception as exc:
+        log_error(f"Rule lookup in space '{space}' failed: {exc}")
+        raise
+    if resp.status_code == 200:
+        return resp.json() or None
+    if resp.status_code == 404:
+        return None
+    raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+
+def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
+    """Ask Elastic -- not TIDE's cache -- whether ``space`` already holds ``rule_id``.
+
+    Returns ``(state, rule_or_none)`` where state is ``"found"``, ``"absent"`` or ``"unknown"``.
+    ``"unknown"`` means the SIEM could not be reached or answered unexpectedly; callers guarding
+    against an overwrite must treat that as "do not proceed", never as "absent" -- an
+    unreachable SIEM is the one case where assuming the target is empty destroys a live rule.
+    """
+    if not (kibana_url and api_key and rule_id):
+        return "unknown", None
+    try:
+        found = _lookup_rule_by_rule_id(_make_session(api_key), kibana_url.rstrip("/"), space, rule_id)
+    except Exception:
+        return "unknown", None
+    return ("found", found) if found else ("absent", None)
+
+
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
                                source_kibana_url=None, source_api_key=None,
                                target_kibana_url=None, target_api_key=None,
@@ -2308,13 +2400,12 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # a duplicate.
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
     target_existing_id = None
-    if rule_id:
-        lookup_resp = tgt_session.get(
-            f"{tgt_prefix}/api/detection_engine/rules", params={"rule_id": rule_id},
-        )
-        if lookup_resp.status_code == 200:
-            found = lookup_resp.json() or {}
-            target_existing_id = found.get("rule_id") or found.get("id") or rule_id
+    try:
+        found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, rule_id)
+    except Exception:
+        found = None
+    if found:
+        target_existing_id = found.get("rule_id") or found.get("id") or rule_id
     if target_existing_id is None:
         # A real Elastic rule always has a rule_id, so this only fires when the source payload
         # was missing one — match by exact name as a last resort. This is a single-page scan,
@@ -2378,9 +2469,11 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     except Exception:
         response_rule = {}
     target_rule_id = response_rule.get("rule_id") or response_rule.get("id") or rule_id
-    # TIDE keys a rule by Kibana's saved-object ``id`` (``rule_id`` is the same in every space),
-    # so that is the identity the caller must record for the copy.
-    target_saved_id = response_rule.get("id") or target_rule_id
+    # TIDE keys a rule by its portable ``rule_id`` — the id Elastic enforces as unique per
+    # space and that survives a sync, not Kibana's saved-object ``id`` (a fresh, unrelated
+    # value every time a rule is created, including this copy). Returning the saved-object id
+    # here used to make ``rule_migrations`` record an identity the row itself would never
+    # actually be stored under once synced, breaking the Migrated pairing for that promotion.
     log_info(f"{action} rule '{rule_name}' in {target_space} as {target_rule_id}")
 
     # Copy-only promotion is non-destructive by contract. Kibana can take a
@@ -2388,7 +2481,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # the successful create response is sufficient to retain the source and
     # let the next tenant sync reconcile the destination copy.
     if not delete_source:
-        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_saved_id
+        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_rule_id
     
     # ── Verify the rule actually exists in the target before deleting from source ──
     verify_prefix = _space_api_prefix(tgt_base, target_space)
@@ -2410,7 +2503,6 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
             )
             if match and (match.get("rule_id") or match.get("id")):
                 target_rule_id = match.get("rule_id") or match.get("id")
-                target_saved_id = match.get("id") or target_saved_id
                 verify_resp = type("Verification", (), {"status_code": 200})()
     if verify_resp.status_code != 200:
         error_msg = (
@@ -2430,7 +2522,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     if delete_response.status_code not in (200, 204):
         warning_msg = f"Rule promoted but failed to delete from {source_space}: {delete_response.status_code}"
         log_error(warning_msg)
-        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_saved_id
+        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_rule_id
     
     log_info(f"Deleted rule '{rule_name}' from {source_space}")
-    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_saved_id
+    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_rule_id

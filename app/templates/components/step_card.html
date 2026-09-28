@@ -1,0 +1,78 @@
+{#
+  Baseline technique card (a step, in code) — the system-scoped twin of components/rule_card.html.
+
+  Context: step (a row from get_system_steps), system_id.
+
+  The coverage pill = this step's coverage status ON THIS SYSTEM. The MITRE pills are neutral labels,
+  never a verdict: the same technique sits on many steps, so "some rule carries this tag" says
+  nothing about whether this scenario is covered. The only number that does is the step's own
+  mapped-rule count, which is always shown, including at zero. The pills are plain labels here, as
+  on rule cards: the whole card is one control, and a clickable pill inside it swallowed the click.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{% set status = step.status | default('red') %}
+{% set status_class = {'green': 'success', 'amber': 'warning', 'grey': 'muted', 'red': 'danger'}.get(status, 'danger') %}
+{% set status_label = {'green': 'Covered', 'amber': 'Known gap', 'grey': 'Not applicable', 'red': 'No coverage'}.get(status, 'No coverage') %}
+{% set mapped = step.mapped_count | default(0) %}
+{% set uncounted = step.uncounted_count | default(0) %}
+
+<div name="Open Technique" class="step-card" id="step-{{ step.step_id }}"
+     data-step-open data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
+     hx-get="/api/systems/{{ system_id }}/steps/{{ step.step_id }}"
+     hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+     hx-trigger="click, keyup[key=='Enter']">
+
+    <div class="sc-head">
+        <div class="sc-main">
+            <div class="sc-title" title="{{ step.title }}">{{ step.title }}</div>
+            <div class="sc-tactic">{{ icon('git-branch', '11') }} {{ step.tactic | default('Other') }}</div>
+        </div>
+        <div class="sc-side">
+            <span class="status-pill status-{{ status_class }}" title="{{ status_label }} on this system">
+                {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ status_label }}</span>
+            </span>
+            {% if step.non_alerting %}<span class="status-pill status-info" title="Covered by a dashboard, report or log: watched, but nothing alerts">{{ icon('eye', '11') }} <span class="status-pill__text">Non-alerting</span></span>{% endif %}
+            {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
+            <div class="mitre-pills-wrap">
+                {% for tid in (step.display_technique_ids | default([]))[:3] %}
+                {{ mitre_pill(tid, neutral=true, clickable=false, size='sm') }}
+                {% endfor %}
+                {% if (step.display_technique_ids | default([])) | length > 3 %}
+                <span class="mitre-pill mitre-more mitre-sm">+{{ (step.display_technique_ids | length) - 3 }}</span>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="sc-foot">
+        {% if mapped %}
+        <span class="sc-foot__rules" title="{{ mapped }} rule{{ 's' if mapped != 1 }} mapped to this technique">
+            {{ icon('shield', '12') }} {{ mapped }} rule{{ 's' if mapped != 1 }}
+        </span>
+        {% if uncounted %}
+        <span class="sc-foot__warn"
+              title="{{ uncounted }} of them {{ 'is' if uncounted == 1 else 'are' }} only at a destination this system does not count toward coverage">
+            {{ icon('alert-triangle', '11') }} {{ uncounted }} not counted
+        </span>
+        {% endif %}
+        {% else %}
+        <span class="sc-foot__none" title="No rule has been mapped to this technique">
+            {{ icon('shield-off', '12') }} No rules mapped
+        </span>
+        {% if step.suggestion_count %}
+        <span class="sc-foot__hint"
+              title="{{ step.suggestion_count }} rule{{ 's' if step.suggestion_count != 1 }} in this tenant carry this ATT&amp;CK technique — they may or may not fit this scenario">
+            {{ step.suggestion_count }} to consider
+        </span>
+        {% endif %}
+        {% endif %}
+        {% if step.review_due %}
+        <span class="sc-foot__warn" title="This technique's {{ 'not applicable' if step.override_type == 'na' else 'known gap' }} mark was due for review on {{ step.review_by.isoformat() }}">
+            {{ icon('calendar', '11') }} Review due
+        </span>
+        {% endif %}
+        <span class="sc-foot__baseline" title="From baseline: {{ step.baseline_name }}">{{ step.baseline_name }}</span>
+    </div>
+</div>

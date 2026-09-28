@@ -435,6 +435,10 @@ def _create_tenant_schema(conn):
             name VARCHAR NOT NULL,
             description VARCHAR DEFAULT '',
             client_id VARCHAR,
+            -- NULL for a template. Set for a system's own copy of a template: its techniques,
+            -- rule mappings, gaps and history belong to that one system (Migration 71).
+            system_id VARCHAR,
+            template_id VARCHAR,       -- unused: a system's baseline keeps no link to its template (Migration 75)
             created_at TIMESTAMP DEFAULT now(),
             updated_at TIMESTAMP DEFAULT now()
         )
@@ -463,9 +467,15 @@ def _create_tenant_schema(conn):
             id VARCHAR PRIMARY KEY DEFAULT (uuid()),
             step_id VARCHAR NOT NULL,
             rule_ref VARCHAR DEFAULT '',
+            -- Which destination this mapping means. NULL for a Sigma/manual ref (not a rule at
+            -- all) or for one whose rule TIDE can no longer find -- see Migration 68.
+            siem_id VARCHAR,
+            space VARCHAR,
             logical_rule_id VARCHAR,
             note VARCHAR DEFAULT '',
-            source VARCHAR DEFAULT 'manual'
+            source VARCHAR DEFAULT 'manual',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR
         )
     """)
     conn.execute("""
@@ -508,6 +518,48 @@ def _create_tenant_schema(conn):
             relation VARCHAR DEFAULT 'associated',
             created_at TIMESTAMP DEFAULT now(),
             PRIMARY KEY (logical_rule_id, rule_id, siem_id, space)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS system_coverage_destinations (
+            id         VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            system_id  VARCHAR NOT NULL,
+            -- A row means "rules at this destination count toward this system's coverage".
+            -- Per system, not per tenant: a tenant with several estates has no single answer.
+            siem_id    VARCHAR NOT NULL,
+            space      VARCHAR NOT NULL,
+            client_id  VARCHAR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            created_by VARCHAR
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS technique_events (
+            id           VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            -- Append-only history of how a system's baseline technique (a step) came to be
+            -- covered, or not: rules mapped and unmapped, known gaps and N/A added and removed,
+            -- the technique itself added or edited, and changes to which SIEM destinations the
+            -- system counts. Every step belongs to one system, so every event has its system_id.
+            event        VARCHAR NOT NULL,
+            step_id      VARCHAR,
+            system_id    VARCHAR,
+            detection_id VARCHAR,
+            rule_id      VARCHAR,
+            siem_id      VARCHAR,
+            space        VARCHAR,
+            -- As they were at the time, so the history still reads after a rename or rescore.
+            rule_name    VARCHAR,
+            destination  VARCHAR,
+            score        INTEGER,
+            source       VARCHAR,
+            reason       VARCHAR,
+            detail       VARCHAR,
+            actor        VARCHAR,
+            client_id    VARCHAR,
+            -- The row this event was reconstructed from on upgrade (NULL for live events), so
+            -- the backfill can never insert the same event twice.
+            source_ref   VARCHAR,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.execute("""
@@ -599,9 +651,19 @@ def _create_tenant_schema(conn):
             created_by VARCHAR DEFAULT '',
             override_type VARCHAR DEFAULT 'gap',
             client_id VARCHAR,
-            created_at TIMESTAMP DEFAULT now()
+            created_at TIMESTAMP DEFAULT now(),
+            review_by DATE,
+            updated_at TIMESTAMP,
+            updated_by VARCHAR
         )
     """)
+
+    # ── Sigma suggestions dismissed per technique (same DDL as Migration 73) ──
+    from app.services.database import DatabaseService
+    DatabaseService.create_sigma_dismissals_table(conn)
+
+    # ── Risks on a system's techniques (same columns as Migration 76) ──
+    DatabaseService.add_step_risk_columns(conn)
 
     # ── App settings (key-only PK in tenant DB) ──
     conn.execute("""
@@ -661,30 +723,15 @@ def _create_tenant_schema(conn):
         CREATE TABLE IF NOT EXISTS client_siem_map (
             client_id VARCHAR NOT NULL,
             siem_id VARCHAR NOT NULL,
-            environment_role VARCHAR NOT NULL DEFAULT 'production',
-            space VARCHAR,
+            space VARCHAR NOT NULL,
+            name VARCHAR NOT NULL,
             assigned_at TIMESTAMP DEFAULT now(),
-            PRIMARY KEY (client_id, siem_id, environment_role)
+            default_index VARCHAR,
+            PRIMARY KEY (client_id, siem_id, space)
         )
     """)
-
-    # ── Coverage Quest persistence (4.1.0 P6) ──
-    # New tenant DBs get the table up front; pre-existing tenant DBs
-    # have it lazily created on first use by app/services/quest.py.
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS quests (
-            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
-            user_id VARCHAR NOT NULL,
-            threat_actor_id VARCHAR,
-            system_id VARCHAR,
-            baseline_id VARCHAR,
-            current_technique_id VARCHAR,
-            completed_technique_ids VARCHAR[],
-            status VARCHAR DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT now(),
-            updated_at TIMESTAMP DEFAULT now()
-        )
-    """)
+    # ── Rule links + per-destination reachability (same DDL as Migration 74) ──
+    DatabaseService.create_rule_link_tables(conn)
 
     logger.info("Tenant schema created successfully")
 

@@ -3,6 +3,7 @@ inventory_engine.py - Asset Inventory & CVE Mapping Engine (Phase 2: Enterprise)
 """
 from __future__ import annotations
 import json, logging, os, re, shutil, xml.etree.ElementTree as ET
+from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 import threading
 from app.config import get_settings
@@ -15,6 +16,8 @@ from app.models.inventory import (
     Playbook, PlaybookCreate, PlaybookStep, StepDetection, StepTechnique,
 )
 logger = logging.getLogger(__name__)
+# A rule id (Kibana saved-object id) rather than a name, in an older mapping's rule_ref.
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
 
 def _get_conn():
     from app.services.database import get_database_service
@@ -460,9 +463,9 @@ def move_system_to_client(
     system_id: str,
     source_client_id: str,
     target_client_id: str,
-    move_baselines: bool = False,
 ) -> Dict:
-    """Move a system between clients with SIEM-aware rule coverage handling.
+    """Move a system between clients with SIEM-aware rule coverage handling. Its baselines are
+    its own, so they always go with it.
 
     In multi-DB mode, physically copies data from the source tenant DB to
     the target tenant DB and deletes from source.
@@ -475,18 +478,11 @@ def move_system_to_client(
         raise ValueError("System not found or not owned by source client.")
 
     if is_multi_db_mode():
-        return _move_system_multi_db(
-            system_id, source_client_id, target_client_id,
-            move_baselines, check,
-        )
-    return _move_system_single_db(
-        system_id, source_client_id, target_client_id,
-        move_baselines, check,
-    )
+        return _move_system_multi_db(system_id, source_client_id, target_client_id, check)
+    return _move_system_single_db(system_id, source_client_id, target_client_id, check)
 
 
-def _move_system_single_db(system_id, source_client_id, target_client_id,
-                           move_baselines, check):
+def _move_system_single_db(system_id, source_client_id, target_client_id, check):
     """Legacy single-DB move: UPDATE client_id on all related rows."""
     coverage_reset = False
     reset_count = 0
@@ -514,15 +510,9 @@ def _move_system_single_db(system_id, source_client_id, target_client_id,
         conn.execute("UPDATE systems SET client_id = ? WHERE id = ?",
                      [target_client_id, system_id])
         _cascade_system_client(conn, system_id, target_client_id)
-
-        moved_baselines = []
-        if move_baselines and check["baselines"]:
-            for bl in check["baselines"]:
-                conn.execute("UPDATE playbooks SET client_id = ? WHERE id = ?",
-                             [target_client_id, bl["id"]])
-                conn.execute("UPDATE system_baselines SET client_id = ? WHERE playbook_id = ?",
-                             [target_client_id, bl["id"]])
-                moved_baselines.append(bl)
+        conn.execute("UPDATE playbooks SET client_id = ? WHERE system_id = ?",
+                     [target_client_id, system_id])
+        moved_baselines = check["baselines"]
 
     logger.info(
         f"System {system_id} moved from {source_client_id} to {target_client_id} "
@@ -540,8 +530,7 @@ def _move_system_single_db(system_id, source_client_id, target_client_id,
     }
 
 
-def _move_system_multi_db(system_id, source_client_id, target_client_id,
-                          move_baselines, check):
+def _move_system_multi_db(system_id, source_client_id, target_client_id, check):
     """Multi-DB move: copy rows from source tenant DB to target, then delete."""
     import duckdb
     from app.services.tenant_manager import resolve_tenant_db_path
@@ -588,41 +577,26 @@ def _move_system_multi_db(system_id, source_client_id, target_client_id,
                 f"SELECT COUNT(*) FROM applied_detections WHERE {sw_w}", sw_p
             ).fetchone()[0]
 
-        # Baselines / snapshots
-        moved_baselines = []
-        if move_baselines and check["baselines"]:
-            bl_ids = [b["id"] for b in check["baselines"]]
-            bl_ph = ",".join("?" for _ in bl_ids)
-
-            _cross_db_copy(src, tgt, "playbooks", f"id IN ({bl_ph})", bl_ids, target_client_id)
-            _cross_db_copy(src, tgt, "system_baselines", "system_id = ?", [system_id], target_client_id)
-            _cross_db_copy(src, tgt, "system_baseline_snapshots", "system_id = ?", [system_id], target_client_id)
-
-            step_ids = [r[0] for r in src.execute(
-                f"SELECT id FROM playbook_steps WHERE playbook_id IN ({bl_ph})", bl_ids
-            ).fetchall()]
-            _cross_db_copy(src, tgt, "playbook_steps", f"playbook_id IN ({bl_ph})", bl_ids)
-            if step_ids:
-                st_ph = ",".join("?" for _ in step_ids)
-                _cross_db_copy(src, tgt, "step_techniques", f"step_id IN ({st_ph})", step_ids)
-                _cross_db_copy(src, tgt, "step_detections", f"step_id IN ({st_ph})", step_ids)
-
-            moved_baselines = check["baselines"]
-
-            # Delete baselines from source (FK order)
-            if step_ids:
-                st_ph = ",".join("?" for _ in step_ids)
-                src.execute(f"DELETE FROM step_techniques WHERE step_id IN ({st_ph})", step_ids)
-                src.execute(f"DELETE FROM step_detections WHERE step_id IN ({st_ph})", step_ids)
-            src.execute(f"DELETE FROM playbook_steps WHERE playbook_id IN ({bl_ph})", bl_ids)
-            src.execute(f"DELETE FROM system_baselines WHERE playbook_id IN ({bl_ph})", bl_ids)
-            src.execute(f"DELETE FROM playbooks WHERE id IN ({bl_ph})", bl_ids)
-        else:
-            # Not moving baselines — sever the links
-            src.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
-
-        # Always delete snapshots from source (they reference the system being moved)
+        # The system's own baselines, with their techniques, mappings and history
+        _cross_db_copy(src, tgt, "playbooks", "system_id = ?", [system_id], target_client_id)
+        _cross_db_copy(src, tgt, "system_baselines", "system_id = ?", [system_id], target_client_id)
+        _cross_db_copy(src, tgt, "system_baseline_snapshots", "system_id = ?", [system_id], target_client_id)
+        _cross_db_copy(src, tgt, "technique_events", "system_id = ?", [system_id], target_client_id)
+        steps_of = "SELECT s.id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id WHERE p.system_id = ?"
+        _cross_db_copy(src, tgt, "playbook_steps", "playbook_id IN (SELECT id FROM playbooks WHERE system_id = ?)", [system_id])
+        _cross_db_copy(src, tgt, "step_techniques", f"step_id IN ({steps_of})", [system_id])
+        _cross_db_copy(src, tgt, "step_detections", f"step_id IN ({steps_of})", [system_id])
+        _cross_db_copy(src, tgt, "step_sigma_dismissals", "system_id = ?", [system_id], target_client_id)
+        from app.services.database import DatabaseService
+        for c in (src, tgt):
+            c.execute(DatabaseService.STEP_COVERAGE_DDL)
+        _cross_db_copy(src, tgt, "step_coverage", f"step_id IN ({steps_of})", [system_id])
+        moved_baselines = check["baselines"]
+        for (pb_id,) in src.execute("SELECT id FROM playbooks WHERE system_id = ?", [system_id]).fetchall():
+            _delete_playbook_rows(src, pb_id)
+        src.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
         src.execute("DELETE FROM system_baseline_snapshots WHERE system_id = ?", [system_id])
+        src.execute("DELETE FROM technique_events WHERE system_id = ?", [system_id])
 
         # ── Delete system data from source (reverse FK order) ──
         ad_w, ad_p = _sys_host_where()
@@ -697,7 +671,17 @@ def delete_system(system_id, client_id: str = None):
             conn.execute("DELETE FROM software_inventory WHERE host_id = ?", [h_id])
         conn.execute("DELETE FROM software_inventory WHERE system_id = ?", [system_id])
         conn.execute("DELETE FROM hosts WHERE system_id = ?", [system_id])
+        for (pb_id,) in conn.execute("SELECT id FROM playbooks WHERE system_id = ?", [system_id]).fetchall():
+            _delete_playbook_rows(conn, pb_id)
         conn.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
+        conn.execute("DELETE FROM system_coverage_destinations WHERE system_id = ?", [system_id])
+        if host_ids:
+            hph = ",".join("?" for _ in host_ids)
+            conn.execute(f"DELETE FROM applied_detections WHERE host_id IN ({hph})", host_ids)
+            conn.execute(f"DELETE FROM blind_spots WHERE host_id IN ({hph})", host_ids)
+        conn.execute("DELETE FROM applied_detections WHERE system_id = ?", [system_id])
+        conn.execute("DELETE FROM blind_spots WHERE system_id = ?", [system_id])
+        conn.execute("DELETE FROM technique_events WHERE system_id = ?", [system_id])
         conn.execute("DELETE FROM systems WHERE id = ?", [system_id])
     return True
 
@@ -1621,9 +1605,31 @@ def get_all_siem_rules(client_id: str = None) -> list:
     db = get_database_service()
     with db.get_connection() as conn:
         rows = conn.execute(
-            "SELECT rule_id, name, mitre_ids, severity, enabled FROM detection_rules ORDER BY name"
+            "SELECT rule_id, name, mitre_ids, severity, enabled, siem_id, space, deprecated "
+            "FROM detection_rules ORDER BY name"
         ).fetchall()
-    return [{"rule_id": r[0], "name": r[1], "mitre_ids": r[2] or [], "severity": r[3] or "", "enabled": bool(r[4])} for r in rows]
+        # Each row is one rule at one destination, and the same rule at two destinations is two
+        # genuinely different choices to map -- so they must be distinguishable in the picker,
+        # by the destination's own name, not collapsed into identical-looking duplicates.
+        dest_names = {}
+        if client_id:
+            try:
+                for d in (db.get_client_siems(client_id) or []):
+                    dest_names[(d.get("id"), str(d.get("space") or "default"))] = (
+                        d.get("name") or d.get("label") or d.get("space")
+                    )
+            except Exception:
+                logger.warning("Destination names unavailable for the rule picker", exc_info=True)
+    out = []
+    for rid, name, mitre, sev, enabled, siem_id, space, deprecated in rows:
+        space = space or "default"
+        out.append({
+            "rule_id": rid, "name": name, "mitre_ids": mitre or [], "severity": sev or "",
+            "enabled": bool(enabled), "siem_id": siem_id, "space": space,
+            "deprecated": bool(deprecated),
+            "destination": dest_names.get((siem_id, space)) or space,
+        })
+    return out
 
 
 # --- Tier 3: Applied Detection CRUD ---
@@ -1844,23 +1850,31 @@ def _enrich_detections_with_applied(detections: List[VulnDetection],
     return detections
 
 
+def _bs_cols(alias: str = "") -> str:
+    """The blind_spots columns every reader selects, in the order ``_bs_from_row`` reads them."""
+    p = f"{alias}." if alias else ""
+    return (f"{p}id, {p}entity_type, {p}entity_id, {p}system_id, {p}host_id, {p}reason, {p}created_by, "
+            f"{p}created_at, COALESCE({p}override_type, 'gap'), {p}review_by, {p}updated_at, {p}updated_by")
+
+
+def _bs_from_row(r) -> BlindSpot:
+    return BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3], host_id=r[4],
+                     reason=r[5], created_by=r[6] or "", created_at=r[7], override_type=r[8] or "gap",
+                     review_by=r[9], updated_at=r[10], updated_by=r[11] or "")
+
+
 def _load_all_blind_spots(entity_type: str, client_id: str = None) -> Dict[str, List[BlindSpot]]:
     """Load all blind spots of a given type, grouped by entity_id."""
     frag, params = _cf("", client_id)
     try:
         with _get_conn() as conn:
             rows = conn.execute(
-                "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
-                "COALESCE(override_type, 'gap') "
-                "FROM blind_spots WHERE entity_type = ?" + frag,
+                f"SELECT {_bs_cols()} FROM blind_spots WHERE entity_type = ?" + frag,
                 [entity_type] + params,
             ).fetchall()
         result: Dict[str, List[BlindSpot]] = {}
         for r in rows:
-            bs = BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                           host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
-                           override_type=r[8])
-            result.setdefault(r[2], []).append(bs)
+            result.setdefault(r[2], []).append(_bs_from_row(r))
         return result
     except Exception:
         return {}
@@ -2302,91 +2316,13 @@ def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str =
 
 
 def build_baseline_report_data(baseline_id: str, client_id: str = None) -> Optional[Dict]:
-    """Build all data needed for a Baseline Assurance Report.
-
-    Collects the baseline definition, all applied systems, and per-system
-    step-level RAG coverage.
-    """
+    """Build the data for a template's report: its definition only. A template carries no
+    coverage and has no link to the systems it was applied to -- each system's report covers
+    its own copy."""
     playbook = get_playbook(baseline_id, client_id=client_id)
     if not playbook:
         return None
-
-    # Per-step per-system RAG coverage
-    step_coverage = get_baseline_step_coverage(baseline_id, client_id=client_id)
-
-    # Collect applied systems with IDs (scoped to active client)
-    cf, cp = _cf("s.", client_id)
-    with _get_conn() as conn:
-        sys_rows = conn.execute(
-            "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ?" + cf + " ORDER BY s.name",
-            [baseline_id] + cp,
-        ).fetchall()
-    system_ids = [r[0] for r in sys_rows]
-    system_names = {r[0]: r[1] for r in sys_rows}
-
-    # Build per-system summary with step-level detail
-    systems = []
-    for sys_id in system_ids:
-        sys_name = system_names[sys_id]
-        covered = 0
-        gap = 0
-        red = 0
-        na = 0
-        step_details = []
-        for step in playbook.tactics:
-            cov_entries = step_coverage.get(step.id, [])
-            entry = next((e for e in cov_entries if e["system_id"] == sys_id), None)
-            status = entry["status"] if entry else "red"
-            if status == "green":
-                covered += 1
-            elif status == "amber":
-                gap += 1
-            elif status == "grey":
-                na += 1
-            else:
-                red += 1
-            step_details.append({
-                "step_id": step.id,
-                "step_number": step.step_number,
-                "title": step.title,
-                "tactic": step.tactic,
-                "status": status,
-                "applied_dets": [],
-                "blind_spot_reason": "",
-            })
-        total = len(playbook.tactics)
-        effective = total - na
-        pct = round(covered / effective * 100) if effective else (100 if total else 0)
-        systems.append({
-            "system_id": sys_id,
-            "system_name": sys_name,
-            "coverage_pct": pct,
-            "covered_steps": covered,
-            "gap_steps": gap,
-            "red_steps": red,
-            "na_steps": na,
-            "tactics": step_details,
-        })
-
-    # Enrich step details with applied_dets using get_system_baselines data
-    # This is slightly expensive but gives full detail for each system
-    for sys_info in systems:
-        sb_list = get_system_baselines(sys_info["system_id"])
-        matching = next((sb for sb in sb_list if sb["playbook_id"] == baseline_id), None)
-        if matching:
-            for step_detail in sys_info["tactics"]:
-                matching_step = next(
-                    (t for t in matching["tactics"] if t["step_id"] == step_detail["step_id"]), None
-                )
-                if matching_step:
-                    step_detail["applied_dets"] = matching_step.get("applied_dets", [])
-                    step_detail["blind_spot_reason"] = matching_step.get("blind_spot_reason", "")
-
-    # Aggregate metrics
     total_techniques = sum(len(step.techniques) for step in playbook.tactics)
-    total_detections = sum(len(step.detections) for step in playbook.tactics)
-    avg_coverage = round(sum(s["coverage_pct"] for s in systems) / len(systems)) if systems else 0
 
     # Build steps list for template
     steps = []
@@ -2409,13 +2345,9 @@ def build_baseline_report_data(baseline_id: str, client_id: str = None) -> Optio
         "baseline_id": baseline_id,
         "baseline_name": playbook.name,
         "description": playbook.description or "",
-        "total_systems": len(systems),
         "total_steps": len(playbook.tactics),
         "total_techniques": total_techniques,
-        "total_detections": total_detections,
-        "avg_coverage": avg_coverage,
         "steps": steps,
-        "systems": systems,
         "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
     }
 
@@ -2425,10 +2357,12 @@ def build_baseline_report_data(baseline_id: str, client_id: str = None) -> Optio
 # ---------------------------------------------------------------------------
 
 def list_playbooks(client_id: str = None) -> List[Playbook]:
+    """Every template. A system's own copies are reached through that system."""
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE 1=1" + frag + " ORDER BY name",
+            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE system_id IS NULL"
+            + frag + " ORDER BY name",
             params,
         ).fetchall()
     result = []
@@ -2440,7 +2374,7 @@ def list_playbooks(client_id: str = None) -> List[Playbook]:
 
 
 def count_playbooks(client_id: str = None) -> int:
-    """Lightweight COUNT(*) for the playbooks (baselines) table.
+    """Lightweight COUNT(*) of templates.
 
     Used by the Management hub badge count to avoid the per-playbook
     `_get_playbook_steps` fan-out triggered by `list_playbooks`.
@@ -2448,7 +2382,7 @@ def count_playbooks(client_id: str = None) -> int:
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM playbooks WHERE 1=1" + frag,
+            "SELECT COUNT(*) FROM playbooks WHERE system_id IS NULL" + frag,
             params,
         ).fetchone()
     return int(row[0]) if row else 0
@@ -2476,341 +2410,71 @@ def unassign_baseline_from_client(baseline_id: str, client_id: str, default_clie
     return True
 
 
-def get_baseline_step_coverage(baseline_id: str, client_id: str = None) -> Dict[str, List[Dict]]:
-    """Compute per-step per-system RAG status for a single baseline.
-
-    Returns {step_id: [{system_id, system_name, status}, ...]} where
-    status is one of 'green', 'amber', 'red', 'grey'.
-    """
-    with _get_conn() as conn:
-        # Applied systems (scoped to active client)
-        cf, cp = _cf("s.", client_id)
-        sys_rows = conn.execute(
-            "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id = ?" + cf + " ORDER BY s.name",
-            [baseline_id] + cp,
-        ).fetchall()
-        if not sys_rows:
-            return {}
-        system_ids = [r[0] for r in sys_rows]
-        system_names = {r[0]: r[1] for r in sys_rows}
-
-        # Steps for this baseline
-        steps = conn.execute(
-            "SELECT id FROM playbook_steps WHERE playbook_id = ?", [baseline_id]
-        ).fetchall()
-        step_ids = [r[0] for r in steps]
-        if not step_ids:
-            return {}
-
-        sp = ",".join("?" for _ in step_ids)
-
-        # Step detection IDs per step — only non-sigma detections
-        # contribute to coverage (sigma rules are potential, not applied)
-        sd_rows = conn.execute(
-            f"SELECT step_id, id FROM step_detections "
-            f"WHERE step_id IN ({sp}) AND COALESCE(source, 'manual') != 'sigma'", step_ids
-        ).fetchall()
-        step_det_ids: Dict[str, set] = {}
-        for sid, det_id in sd_rows:
-            step_det_ids.setdefault(sid, set()).add(det_id)
-
-        # Collect all step_detection IDs across all steps
-        all_step_det_ids = set()
-        for dids in step_det_ids.values():
-            all_step_det_ids |= dids
-
-        # Blind spots for tactic entity_type
-        bs_rows = conn.execute(
-            f"SELECT entity_id, system_id, COALESCE(override_type, 'gap') FROM blind_spots "
-            f"WHERE entity_type = 'tactic' AND entity_id IN ({sp})", step_ids
-        ).fetchall()
-        step_gap: Dict[str, set] = {}
-        step_na: Dict[str, set] = {}
-        for eid, sid, otype in bs_rows:
-            if otype == "na":
-                step_na.setdefault(eid, set()).add(sid)
-            else:
-                step_gap.setdefault(eid, set()).add(sid)
-
-        # Hosts per system + applied rules per system
-        sid_ph = ",".join("?" for _ in system_ids)
-        host_rows = conn.execute(
-            f"SELECT id, system_id FROM hosts WHERE system_id IN ({sid_ph})", system_ids
-        ).fetchall()
-        sys_hosts: Dict[str, list] = {}
-        all_host_ids = []
-        for hid, sid in host_rows:
-            sys_hosts.setdefault(sid, []).append(hid)
-            all_host_ids.append(hid)
-
-        # Which step_detections are applied to which hosts?
-        # Maps: system_id -> set of step_detection_ids that are applied to at least one host
-        system_applied_det_ids: Dict[str, set] = {s: set() for s in system_ids}
-        if all_host_ids and all_step_det_ids:
-            hp = ",".join("?" for _ in all_host_ids)
-            dp = ",".join("?" for _ in all_step_det_ids)
-            ad_rows = conn.execute(
-                f"SELECT host_id, detection_id FROM applied_detections "
-                f"WHERE host_id IN ({hp}) AND detection_id IN ({dp})",
-                list(all_host_ids) + list(all_step_det_ids),
-            ).fetchall()
-            # Build host->system reverse map
-            host_to_sys: Dict[str, str] = {}
-            for hid, sid in host_rows:
-                host_to_sys[hid] = sid
-            for hid, did in ad_rows:
-                sid = host_to_sys.get(hid)
-                if sid:
-                    system_applied_det_ids[sid].add(did)
-
-        # Also include system-level applications (host_id IS NULL) — required
-        # for systems that have no hosts yet but have rules attached at the
-        # system level (matches `get_system_baselines` behaviour so the system
-        # page and baseline page agree on coverage status).
-        if all_step_det_ids:
-            sysp = ",".join("?" for _ in system_ids)
-            dp2 = ",".join("?" for _ in all_step_det_ids)
-            sys_ad_rows = conn.execute(
-                f"SELECT system_id, detection_id FROM applied_detections "
-                f"WHERE system_id IN ({sysp}) AND host_id IS NULL "
-                f"AND detection_id IN ({dp2})",
-                list(system_ids) + list(all_step_det_ids),
-            ).fetchall()
-            for sid, did in sys_ad_rows:
-                if sid in system_applied_det_ids:
-                    system_applied_det_ids[sid].add(did)
-
-    # Build per-step coverage
-    result: Dict[str, List[Dict]] = {}
-    for step_id in step_ids:
-        det_ids = step_det_ids.get(step_id, set())
-        gap_sys = step_gap.get(step_id, set())
-        na_sys = step_na.get(step_id, set())
-        entries = []
-        for sys_id in system_ids:
-            # Green = at least one of this step's detections has been applied to a host in this system
-            if det_ids and (det_ids & system_applied_det_ids.get(sys_id, set())):
-                status = "green"
-            elif sys_id in na_sys:
-                status = "grey"
-            elif sys_id in gap_sys:
-                status = "amber"
-            else:
-                status = "red"
-            entries.append({"system_id": sys_id, "system_name": system_names[sys_id], "status": status})
-        result[step_id] = entries
-    return result
-
-
 def get_baselines_overview(client_id: str = None) -> List[Dict]:
-    """Efficient overview of all baselines for the listing page.
+    """Every template, for the Baselines page and the dashboard: its techniques and tactics.
 
-    Returns a list of dicts with:
-      id, name, description, step_count, detection_count,
-      system_count, worst_status ('green'|'amber'|'red'|'grey'|None)
-    Uses a single DB connection for all queries.
-    """
+    A template carries no coverage and knows nothing of the systems it was applied to -- their
+    copies have no link back. How systems are covered is :func:`get_system_baselines_rollup`."""
     frag, fparams = _cf("", client_id)
     with _get_conn() as conn:
-        # All playbooks
         pbs = conn.execute(
-            "SELECT id, name, description FROM playbooks WHERE 1=1" + frag + " ORDER BY name",
+            "SELECT id, name, description FROM playbooks WHERE system_id IS NULL" + frag + " ORDER BY name",
             fparams,
         ).fetchall()
-        if not pbs:
-            return []
-        pb_ids = [r[0] for r in pbs]
-        placeholders = ",".join("?" for _ in pb_ids)
-
-        # Step counts per playbook
-        step_rows = conn.execute(
-            f"SELECT playbook_id, COUNT(*) FROM playbook_steps WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
-            pb_ids,
+        steps = conn.execute(
+            "SELECT s.playbook_id, s.technique_id, COALESCE(NULLIF(s.tactic, ''), 'Other'), "
+            "(SELECT COUNT(*) FROM step_techniques t WHERE t.step_id = s.id) FROM playbook_steps s"
         ).fetchall()
-        step_counts = dict(step_rows)
 
-        # Technique counts per playbook.
-        # A step may have multiple step_techniques rows; if none exist, fall back
-        # to playbook_steps.technique_id when present.
-        step_rows_full = conn.execute(
-            f"SELECT id, playbook_id, technique_id FROM playbook_steps WHERE playbook_id IN ({placeholders})",
-            pb_ids,
+    step_count: Dict[str, int] = {}
+    technique_count: Dict[str, int] = {}
+    tactics: Dict[str, set] = {}
+    for pb_id, tech, tactic, n_tech in steps:
+        step_count[pb_id] = step_count.get(pb_id, 0) + 1
+        technique_count[pb_id] = technique_count.get(pb_id, 0) + (n_tech or (1 if (tech or "").strip() else 0))
+        tactics.setdefault(pb_id, set()).add(tactic)
+    return [{
+        "id": pb_id,
+        "name": name,
+        "description": desc or "",
+        "step_count": step_count.get(pb_id, 0),
+        "technique_count": technique_count.get(pb_id, 0),
+        "tactic_count": len(tactics.get(pb_id, ())),
+    } for pb_id, name, desc in pbs]
+
+
+def count_system_baselines(client_id: str = None) -> int:
+    """How many baselines systems have of their own (each applied template is one copy)."""
+    frag, fparams = _cf("p.", client_id)
+    with _get_conn() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) FROM playbooks p JOIN systems s ON s.id = p.system_id WHERE 1=1" + frag, fparams,
+        ).fetchone()[0]
+
+
+def get_system_baselines_rollup(client_id: str = None) -> Dict[str, int]:
+    """Every system's own baselines, scored exactly as each system's page scores them: how many
+    there are, rules mapped across them, and how many have an uncovered technique (red) or are
+    fully covered (green). For the dashboard and the Baselines page."""
+    frag, fparams = _cf("p.", client_id)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT p.system_id, p.id FROM playbooks p JOIN systems s ON s.id = p.system_id "
+            "WHERE p.system_id IS NOT NULL" + frag,
+            fparams,
         ).fetchall()
-        step_ids_all = [r[0] for r in step_rows_full]
-        step_tech_counts = {}
-        if step_ids_all:
-            stp = ",".join("?" for _ in step_ids_all)
-            st_rows = conn.execute(
-                f"SELECT step_id, COUNT(*) FROM step_techniques WHERE step_id IN ({stp}) GROUP BY step_id",
-                step_ids_all,
-            ).fetchall()
-            step_tech_counts = {sid: int(cnt or 0) for sid, cnt in st_rows}
-
-        technique_counts = {}
-        for step_id, pb_id, technique_id in step_rows_full:
-            cnt = step_tech_counts.get(step_id, 0)
-            if cnt <= 0 and (technique_id or "").strip():
-                cnt = 1
-            technique_counts[pb_id] = technique_counts.get(pb_id, 0) + cnt
-
-        # Tactic counts per playbook (distinct tactics)
-        tactic_rows = conn.execute(
-            f"SELECT playbook_id, COUNT(DISTINCT COALESCE(NULLIF(tactic,''),'Other')) "
-            f"FROM playbook_steps WHERE playbook_id IN ({placeholders}) GROUP BY playbook_id",
-            pb_ids,
-        ).fetchall()
-        tactic_counts = dict(tactic_rows)
-
-        # Detection counts per playbook (via step_detections)
-        det_rows = conn.execute(
-            f"SELECT ps.playbook_id, COUNT(DISTINCT sd.id) "
-            f"FROM playbook_steps ps JOIN step_detections sd ON sd.step_id = ps.id "
-            f"WHERE ps.playbook_id IN ({placeholders}) GROUP BY ps.playbook_id",
-            pb_ids,
-        ).fetchall()
-        det_counts = dict(det_rows)
-
-        # System counts per playbook (JOIN systems to exclude orphaned rows)
-        sys_rows = conn.execute(
-            f"SELECT sb.playbook_id, COUNT(DISTINCT sb.system_id) "
-            f"FROM system_baselines sb JOIN systems s ON s.id = sb.system_id "
-            f"WHERE sb.playbook_id IN ({placeholders}) GROUP BY sb.playbook_id",
-            pb_ids,
-        ).fetchall()
-        sys_counts = dict(sys_rows)
-
-        # Compute worst-case RAG per playbook for baselines with applied systems
-        # Load all step IDs per playbook
-        all_steps = conn.execute(
-            f"SELECT id, playbook_id FROM playbook_steps WHERE playbook_id IN ({placeholders})",
-            pb_ids,
-        ).fetchall()
-        step_to_pb = {r[0]: r[1] for r in all_steps}
-        all_step_ids = list(step_to_pb.keys())
-
-        # Load detection IDs per step (for applied_detections matching)
-        step_det_id_sets = {}
-        all_step_det_ids_flat = set()
-        if all_step_ids:
-            sp = ",".join("?" for _ in all_step_ids)
-            sd_rows = conn.execute(
-                f"SELECT step_id, id FROM step_detections WHERE step_id IN ({sp})",
-                all_step_ids,
-            ).fetchall()
-            for sid, det_id in sd_rows:
-                step_det_id_sets.setdefault(sid, set()).add(det_id)
-                all_step_det_ids_flat.add(det_id)
-
-        # Load blind spots for tactics (with override_type)
-        bs_rows = conn.execute(
-            "SELECT entity_id, system_id, COALESCE(override_type, 'gap') FROM blind_spots WHERE entity_type = 'tactic'"
-        ).fetchall()
-        step_blind_spots = {}      # step_id -> set(system_id) for gap
-        step_na_spots = {}         # step_id -> set(system_id) for na
-        for eid, sid, otype in bs_rows:
-            if otype == "na":
-                step_na_spots.setdefault(eid, set()).add(sid)
-            else:
-                step_blind_spots.setdefault(eid, set()).add(sid)
-
-        # Load all system_baselines
-        sb_rows = conn.execute(
-            f"SELECT playbook_id, system_id FROM system_baselines WHERE playbook_id IN ({placeholders})",
-            pb_ids,
-        ).fetchall()
-        pb_systems = {}
-        for pbid, sid in sb_rows:
-            pb_systems.setdefault(pbid, set()).add(sid)
-
-        # Load hosts per system and applied rules per system (for systems in baselines)
-        all_system_ids = set()
-        for sids in pb_systems.values():
-            all_system_ids |= sids
-
-        # Build set of applied step_detection IDs per system
-        system_applied_det_ids = {}
-        if all_system_ids:
-            sid_list = list(all_system_ids)
-            sp = ",".join("?" for _ in sid_list)
-            # Batch: get all hosts for all relevant systems in one query
-            all_host_rows = conn.execute(
-                f"SELECT id, system_id FROM hosts WHERE system_id IN ({sp})", sid_list,
-            ).fetchall()
-            sys_hosts = {}
-            all_host_ids = []
-            for hid, sid in all_host_rows:
-                sys_hosts.setdefault(sid, []).append(hid)
-                all_host_ids.append(hid)
-
-            # Batch: get applied_detections that match our step_detection IDs
-            host_applied_dets = {}  # host_id -> set(detection_id)
-            if all_host_ids and all_step_det_ids_flat:
-                hp = ",".join("?" for _ in all_host_ids)
-                dp = ",".join("?" for _ in all_step_det_ids_flat)
-                ad_rows = conn.execute(
-                    f"SELECT host_id, detection_id FROM applied_detections "
-                    f"WHERE host_id IN ({hp}) AND detection_id IN ({dp})",
-                    all_host_ids + list(all_step_det_ids_flat),
-                ).fetchall()
-                for hid, did in ad_rows:
-                    host_applied_dets.setdefault(hid, set()).add(did)
-
-            for sid in all_system_ids:
-                det_ids_for_sys = set()
-                for hid in sys_hosts.get(sid, []):
-                    det_ids_for_sys |= host_applied_dets.get(hid, set())
-                system_applied_det_ids[sid] = det_ids_for_sys
-        else:
-            for sid in all_system_ids:
-                system_applied_det_ids[sid] = set()
-
-    # Compute worst status per playbook.
-    # Grey (N/A) should not drag down mixed states:
-    # red > amber > green > grey
-    STATUS_PRIORITY = {"red": 0, "amber": 1, "green": 2, "grey": 3}
-
-    results = []
-    for pb_id, pb_name, pb_desc in pbs:
-        system_ids = pb_systems.get(pb_id, set())
-        step_ids_for_pb = [sid for sid, pid in step_to_pb.items() if pid == pb_id]
-        worst = "green"
-
-        if system_ids and step_ids_for_pb:
-            for step_id in step_ids_for_pb:
-                det_ids = step_det_id_sets.get(step_id, set())
-                bs_systems = step_blind_spots.get(step_id, set())
-                na_systems = step_na_spots.get(step_id, set())
-                for sys_id in system_ids:
-                    if det_ids and (det_ids & system_applied_det_ids.get(sys_id, set())):
-                        status = "green"
-                    elif sys_id in na_systems:
-                        status = "grey"
-                    elif sys_id in bs_systems:
-                        status = "amber"
-                    else:
-                        status = "red"
-                    if STATUS_PRIORITY.get(status, 4) < STATUS_PRIORITY.get(worst, 4):
-                        worst = status
-                    if worst == "red":
-                        break
-                if worst == "red":
-                    break
-        elif not system_ids:
-            worst = None  # Not applied to any system
-
-        results.append({
-            "id": pb_id,
-            "name": pb_name,
-            "description": pb_desc or "",
-            "step_count": step_counts.get(pb_id, 0),
-            "technique_count": technique_counts.get(pb_id, 0),
-            "tactic_count": tactic_counts.get(pb_id, 0),
-            "detection_count": det_counts.get(pb_id, 0),
-            "system_count": sys_counts.get(pb_id, 0),
-            "worst_status": worst,
-        })
-    return results
+    by_system: Dict[str, List[str]] = {}
+    for sys_id, pb_id in rows:
+        by_system.setdefault(sys_id, []).append(pb_id)
+    out = {"baselines": 0, "rules_mapped": 0, "red": 0, "green": 0}
+    for sys_id, ids in by_system.items():
+        for b in get_system_baselines(sys_id, playbook_ids=ids, include_detection_details=False, client_id=client_id):
+            red = b["total_steps"] - b["covered_steps"] - b["gap_steps"] - b["na_steps"]
+            out["baselines"] += 1
+            out["rules_mapped"] += sum(t["mapped_count"] for t in b["tactics"])
+            out["red"] += 1 if red else 0
+            out["green"] += 1 if not red and not b["gap_steps"] and b["covered_steps"] else 0
+    return out
 
 
 def get_playbook_header(playbook_id: str, client_id: str = None) -> Optional[Playbook]:
@@ -2818,32 +2482,44 @@ def get_playbook_header(playbook_id: str, client_id: str = None) -> Optional[Pla
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?" + frag,
+            "SELECT id, name, description, created_at, updated_at, system_id "
+            "FROM playbooks WHERE id = ?" + frag,
             [playbook_id] + params,
         ).fetchone()
     if not r:
         return None
-    return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
+    return Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4],
+                    system_id=r[5])
 
 
 def get_playbook(playbook_id: str, client_id: str = None) -> Optional[Playbook]:
-    frag, params = _cf("", client_id)
-    with _get_conn() as conn:
-        r = conn.execute(
-            "SELECT id, name, description, created_at, updated_at FROM playbooks WHERE id = ?" + frag,
-            [playbook_id] + params,
-        ).fetchone()
-    if not r:
-        return None
-    pb = Playbook(id=r[0], name=r[1], description=r[2] or "", created_at=r[3], updated_at=r[4])
-    pb.tactics = _get_playbook_steps(playbook_id)
+    pb = get_playbook_header(playbook_id, client_id=client_id)
+    if pb:
+        pb.tactics = _get_playbook_steps(playbook_id)
     return pb
+
+
+def get_template(playbook_id: str, client_id: str = None) -> Optional[Playbook]:
+    """A template with its techniques, or None -- including for a system's own copy, which is
+    only ever reached through its system."""
+    pb = get_playbook(playbook_id, client_id=client_id)
+    return pb if pb and not pb.system_id else None
+
+
+def _step_system_id(conn, step_id: str) -> Optional[str]:
+    """The system a step's baseline belongs to; None for a template's step (or no such step)."""
+    row = conn.execute(
+        "SELECT p.system_id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id WHERE s.id = ?",
+        [step_id],
+    ).fetchone()
+    return row[0] if row else None
 
 
 def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic "
+            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
+            "priority, category "
             "FROM playbook_steps WHERE playbook_id = ? ORDER BY step_number",
             [playbook_id],
         ).fetchall()
@@ -2864,13 +2540,16 @@ def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
 
         # Batch: all detections for all steps
         det_rows = conn.execute(
-            f"SELECT id, step_id, rule_ref, note, source FROM step_detections WHERE step_id IN ({sp}) ORDER BY rule_ref",
+            f"SELECT id, step_id, rule_ref, note, source, siem_id, space, created_at, created_by "
+            f"FROM step_detections WHERE step_id IN ({sp}) ORDER BY rule_ref",
             step_ids,
         ).fetchall()
         step_dets = {}
-        for did, sid, rref, note, source in det_rows:
+        for did, sid, rref, note, source, dsiem, dspace, made_at, made_by in det_rows:
             step_dets.setdefault(sid, []).append(
-                StepDetection(id=did, step_id=sid, rule_ref=rref or "", note=note or "", source=source or "manual")
+                StepDetection(id=did, step_id=sid, rule_ref=rref or "", note=note or "",
+                              source=source or "manual", siem_id=dsiem, space=dspace,
+                              created_at=made_at, created_by=made_by)
             )
 
     steps = []
@@ -2879,7 +2558,7 @@ def _get_playbook_steps(playbook_id: str) -> List[PlaybookStep]:
         step = PlaybookStep(
             id=step_id, playbook_id=r[1], step_number=r[2], title=r[3],
             technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-            tactic=r[7] or "",
+            tactic=r[7] or "", **_risk_fields(r[8:10]),
         )
         step.techniques = step_techs.get(step_id, [])
         step.detections = step_dets.get(step_id, [])
@@ -2899,10 +2578,16 @@ def _get_step_techniques(step_id: str) -> List[StepTechnique]:
 def _get_step_detections(step_id: str) -> List[StepDetection]:
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, step_id, rule_ref, note, source FROM step_detections WHERE step_id = ? ORDER BY rule_ref",
+            "SELECT id, step_id, rule_ref, note, source, siem_id, space, created_at, created_by "
+            "FROM step_detections WHERE step_id = ? ORDER BY rule_ref",
             [step_id],
         ).fetchall()
-    return [StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual") for r in rows]
+    return [
+        StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "",
+                      source=r[4] or "manual", siem_id=r[5], space=r[6],
+                      created_at=r[7], created_by=r[8])
+        for r in rows
+    ]
 
 
 def create_playbook(name: str, description: str = "", client_id: str = None) -> Playbook:
@@ -2999,26 +2684,91 @@ def generate_baseline_from_actor(
     return playbook
 
 
+def _delete_steps(conn, step_ids: List[str]) -> int:
+    """Delete steps and everything recorded on them: ATT&CK techniques, rule mappings (and where
+    they were applied), known gaps and N/A, and history. Returns the number of steps deleted."""
+    if not step_ids:
+        return 0
+    ph = ",".join("?" for _ in step_ids)
+    conn.execute(
+        f"DELETE FROM applied_detections WHERE detection_id IN (SELECT id FROM step_detections WHERE step_id IN ({ph}))",
+        step_ids,
+    )
+    conn.execute(f"DELETE FROM step_detections WHERE step_id IN ({ph})", step_ids)
+    conn.execute(f"DELETE FROM step_techniques WHERE step_id IN ({ph})", step_ids)
+    conn.execute(f"DELETE FROM technique_events WHERE step_id IN ({ph})", step_ids)
+    conn.execute(f"DELETE FROM step_sigma_dismissals WHERE step_id IN ({ph})", step_ids)
+    conn.execute(f"DELETE FROM blind_spots WHERE entity_type = 'tactic' AND entity_id IN ({ph})", step_ids)
+    from app.services.database import DatabaseService
+    conn.execute(DatabaseService.STEP_COVERAGE_DDL)
+    conn.execute(f"DELETE FROM step_coverage WHERE step_id IN ({ph})", step_ids)
+    return conn.execute(f"DELETE FROM playbook_steps WHERE id IN ({ph})", step_ids).rowcount
+
+
+def _delete_playbook_rows(conn, playbook_id: str) -> int:
+    step_ids = [r[0] for r in conn.execute(
+        "SELECT id FROM playbook_steps WHERE playbook_id = ?", [playbook_id]
+    ).fetchall()]
+    _delete_steps(conn, step_ids)
+    conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
+    conn.execute("DELETE FROM system_baseline_snapshots WHERE baseline_id = ?", [playbook_id])
+    return conn.execute("DELETE FROM playbooks WHERE id = ?", [playbook_id]).rowcount
+
+
 def delete_playbook(playbook_id: str, client_id: str = None) -> bool:
-    frag, params = _cf("", client_id)
+    """Delete a template, or a system's copy with everything recorded on it. Deleting a template
+    leaves the systems' copies of it alone: they belong to those systems."""
     with _get_conn() as conn:
-        # Verify ownership when client_id is provided
         if client_id:
             owner = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
             if not owner or owner[0] != client_id:
                 return False
-        # Cascade: delete child rows of each step first
-        step_ids = [r[0] for r in conn.execute(
-            "SELECT id FROM playbook_steps WHERE playbook_id = ?", [playbook_id]
-        ).fetchall()]
-        if step_ids:
-            ph = ",".join("?" for _ in step_ids)
-            conn.execute(f"DELETE FROM step_detections WHERE step_id IN ({ph})", step_ids)
-            conn.execute(f"DELETE FROM step_techniques WHERE step_id IN ({ph})", step_ids)
-        conn.execute("DELETE FROM playbook_steps WHERE playbook_id = ?", [playbook_id])
-        conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
-        cnt = conn.execute("DELETE FROM playbooks WHERE id = ?" + frag, [playbook_id] + params).rowcount
-    return cnt > 0
+        return _delete_playbook_rows(conn, playbook_id) > 0
+
+
+def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
+                   system_id: str = None) -> Tuple[str, int]:
+    """Copy a baseline's techniques into a new baseline with fresh ids. Rule mappings, gaps and
+    history are never copied -- they describe one system. ``src`` and ``tgt`` may be the same
+    connection. Returns (new baseline id, number of techniques).
+
+    With ``system_id`` the copy is that system's own and keeps nothing of the template but each
+    technique's title, ATT&CK techniques (its tactic follows the first) and description -- no
+    link back to the template, no Sigma suggestions (the technique window suggests those from
+    its ATT&CK ids), no required rule. A template copied to another client keeps everything."""
+    import uuid
+    new_id = str(uuid.uuid4())
+    desc = src.execute("SELECT description FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+    tgt.execute(
+        "INSERT INTO playbooks (id, name, description, client_id, system_id) VALUES (?, ?, ?, ?, ?)",
+        [new_id, name, (desc[0] if desc else "") or "", client_id, system_id],
+    )
+    steps = src.execute(
+        "SELECT id, step_number, title, technique_id, required_rule, description, tactic "
+        "FROM playbook_steps WHERE playbook_id = ?",
+        [playbook_id],
+    ).fetchall()
+    for step in steps:
+        new_step = str(uuid.uuid4())
+        _sid, number, title, technique_id, required_rule, step_desc, tactic = step
+        tgt.execute(
+            "INSERT INTO playbook_steps (id, playbook_id, step_number, title, technique_id, required_rule, "
+            "description, tactic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [new_step, new_id, number, title, technique_id, "" if system_id else required_rule, step_desc, tactic],
+        )
+        for (tech,) in src.execute("SELECT technique_id FROM step_techniques WHERE step_id = ?", [step[0]]).fetchall():
+            tgt.execute("INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)", [new_step, tech])
+        if system_id:
+            continue
+        for ref, note in src.execute(
+            "SELECT rule_ref, note FROM step_detections WHERE step_id = ? AND source = 'sigma'", [step[0]]
+        ).fetchall():
+            tgt.execute(
+                "INSERT INTO step_detections (step_id, rule_ref, note, source, created_at) "
+                "VALUES (?, ?, ?, 'sigma', CURRENT_TIMESTAMP)",
+                [new_step, ref, note],
+            )
+    return new_id, len(steps)
 
 
 def add_playbook_step(playbook_id: str, step_number: int, title: str,
@@ -3043,13 +2793,23 @@ def add_playbook_step(playbook_id: str, step_number: int, title: str,
 
 def delete_playbook_step(step_id: str, client_id: str = None) -> bool:
     with _get_conn() as conn:
-        conn.execute("DELETE FROM step_techniques WHERE step_id = ?", [step_id])
-        conn.execute("DELETE FROM step_detections WHERE step_id = ?", [step_id])
-        cnt = conn.execute("DELETE FROM playbook_steps WHERE id = ?", [step_id]).rowcount
-    return cnt > 0
+        return _delete_steps(conn, [step_id]) > 0
+
+
+def _unique_baseline_name(conn, system_id: str, name: str) -> str:
+    """``name``, or ``name (copy)``, ``name (copy) (copy)``… -- whichever this system does not
+    already have. A template can be applied to one system more than once."""
+    taken = {r[0] for r in conn.execute("SELECT name FROM playbooks WHERE system_id = ?", [system_id]).fetchall()}
+    while name in taken:
+        name = f"{name} (copy)"
+    return name
 
 
 def apply_baseline(system_id: str, playbook_id: str, client_id: str = None) -> SystemBaseline:
+    """Give a system its own copy of a template. From then on the copy is the system's alone,
+    with no link back: its techniques, mappings and gaps never touch the template or any other
+    system, and changing the template never reaches it. Applying the same template again makes
+    another copy, named "<name> (copy)"."""
     with _get_conn() as conn:
         # Validate same-client ownership when client_id is provided
         if client_id:
@@ -3059,35 +2819,762 @@ def apply_baseline(system_id: str, playbook_id: str, client_id: str = None) -> S
                 raise ValueError(f"System {system_id} does not belong to active client")
             if not pb_client or pb_client[0] != client_id:
                 raise ValueError(f"Baseline {playbook_id} does not belong to active client")
-        dup = conn.execute(
-            "SELECT id FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
-            [system_id, playbook_id],
-        ).fetchone()
-        if dup:
-            return SystemBaseline(id=dup[0], system_id=system_id, playbook_id=playbook_id)
+        template = conn.execute("SELECT name, system_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+        if not template or template[1]:
+            raise ValueError("Only a baseline template can be applied to a system")
+        copy_id, _ = _copy_playbook(conn, conn, playbook_id, client_id=client_id, system_id=system_id,
+                                    name=_unique_baseline_name(conn, system_id, template[0]))
         r = conn.execute(
-            "INSERT INTO system_baselines (system_id, playbook_id) VALUES (?, ?) "
+            "INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?) "
             "RETURNING id, system_id, playbook_id, applied_at",
-            [system_id, playbook_id],
+            [system_id, copy_id, client_id],
+        ).fetchone()
+    return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
+
+
+def create_system_baseline(system_id: str, name: str, description: str = "",
+                           client_id: str = None) -> SystemBaseline:
+    """Start an empty baseline that belongs to this system alone, with no template behind it.
+    A name the system already has becomes "<name> (copy)"."""
+    import uuid
+    with _get_conn() as conn:
+        if client_id:
+            owner = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
+            if not owner or owner[0] != client_id:
+                raise ValueError(f"System {system_id} does not belong to active client")
+        name = _unique_baseline_name(conn, system_id, name)
+        pb_id = str(uuid.uuid4())
+        conn.execute(
+            "INSERT INTO playbooks (id, name, description, client_id, system_id) VALUES (?, ?, ?, ?, ?)",
+            [pb_id, name, description, client_id, system_id],
+        )
+        r = conn.execute(
+            "INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?) "
+            "RETURNING id, system_id, playbook_id, applied_at",
+            [system_id, pb_id, client_id],
         ).fetchone()
     return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
 
 
 def remove_baseline(system_id: str, playbook_id: str, client_id: str = None) -> bool:
+    """Remove a system's own baseline, and with it the rule mappings, known gaps and history
+    recorded on it. The template it came from is untouched."""
     with _get_conn() as conn:
-        # Validate same-client ownership when client_id is provided
         if client_id:
             sys_client = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
-            pb_client = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
             if not sys_client or sys_client[0] != client_id:
                 raise ValueError(f"System {system_id} does not belong to active client")
-            if not pb_client or pb_client[0] != client_id:
-                raise ValueError(f"Baseline {playbook_id} does not belong to active client")
-        cnt = conn.execute(
-            "DELETE FROM system_baselines WHERE system_id = ? AND playbook_id = ?",
-            [system_id, playbook_id],
-        ).rowcount
-    return cnt > 0
+        owner = conn.execute("SELECT system_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+        if not owner or owner[0] != system_id:
+            raise ValueError("That baseline does not belong to this system")
+        return _delete_playbook_rows(conn, playbook_id) > 0
+
+
+def get_system_coverage_destinations(system_id: str, client_id: str = None) -> List[Tuple[str, str]]:
+    """The ``(siem_id, space)`` destinations whose rules count toward this system's coverage.
+
+    Per system, not per tenant: a system is watched by whichever SIEM+space actually watches it.
+    An empty list means nobody has answered the question for this system yet -- callers must
+    treat that as *undefined*, never as "nothing counts", or an unanswered question reads as a
+    total failure of coverage.
+    """
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT siem_id, space FROM system_coverage_destinations WHERE system_id = ?",
+            [system_id],
+        ).fetchall()
+    return [(r[0], r[1] or "default") for r in rows]
+
+
+def set_system_coverage_destinations(system_id: str, scopes: List[Tuple[str, str]],
+                                     client_id: str = None, actor: str = None) -> int:
+    """Replace this system's counted destinations with ``scopes``. Returns how many are counted."""
+    before = set(get_system_coverage_destinations(system_id, client_id=client_id))
+    after = {(s, sp or "default") for s, sp in scopes if s}
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM system_coverage_destinations WHERE system_id = ?", [system_id])
+        for siem_id, space in sorted(after):
+            conn.execute(
+                "INSERT INTO system_coverage_destinations (system_id, siem_id, space, client_id, created_by) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [system_id, siem_id, space, client_id, actor],
+            )
+        if before != after:
+            name = lambda sc: _destination_name(sc[0], sc[1], client_id) or sc[1]  # noqa: E731
+            parts = []
+            if after - before:
+                parts.append("now counts " + ", ".join(sorted(name(x) for x in after - before)))
+            if before - after:
+                parts.append("stopped counting " + ", ".join(sorted(name(x) for x in before - after)))
+            _record_technique_event(
+                conn, "siem_coverage", system_id=system_id, detail="; ".join(parts),
+                actor=actor, client_id=client_id,
+            )
+    return len(after)
+
+
+def _counted_scope_resolver(system_id: str, steps_detections, client_id: str = None):
+    """Build ``(detection) -> bool`` for "does this mapping count toward this system?".
+
+    A mapping names one destination, but the same detection may have been copied to others --
+    that is what Move-as-copy does, and ``rule_links`` records it. So the anchor destination the
+    user picked AND every destination it is linked to are considered; if any of them is one this
+    system counts, the mapping counts.
+
+    Returns ``(counts_fn, counted_scopes, undefined)``. ``undefined`` is True when the system has
+    no answer recorded at all, in which case ``counts_fn`` passes everything through -- coverage
+    is unchanged until somebody says what counts.
+    """
+    counted = {(s, sp) for s, sp in get_system_coverage_destinations(system_id, client_id=client_id)}
+    if not counted:
+        return (lambda _d: True), counted, True
+
+    anchors = [
+        (d.rule_ref, d.siem_id, d.space or "default")
+        for d in steps_detections
+        if getattr(d, "siem_id", None) and d.rule_ref
+    ]
+    linked_map: Dict[Tuple[str, str, str], set] = {}
+    if anchors:
+        try:
+            from app.services.database import get_database_service
+            links = get_database_service().get_rule_links_bulk(anchors)
+            for key, entries in (links or {}).items():
+                linked_map[key] = {
+                    (e.get("siem_id"), str(e.get("space") or "default"))
+                    for e in entries if not e.get("missing")
+                }
+        except Exception:
+            logger.warning("Rule links unavailable while scoring coverage; using anchors only", exc_info=True)
+
+    def counts(d) -> bool:
+        source = (getattr(d, "source", None) or "manual")
+        if source == "manual":
+            return True   # a human assertion of coverage, not a SIEM rule -- no destination to check
+        anchor_siem = getattr(d, "siem_id", None)
+        if not anchor_siem:
+            return True   # unresolved mapping: flagged for relinking, not silently failed
+        anchor_space = d.space or "default"
+        scopes = {(anchor_siem, anchor_space)}
+        scopes |= linked_map.get((d.rule_ref, anchor_siem, anchor_space), set())
+        return bool(scopes & counted)
+
+    return counts, counted, False
+
+
+def _applied_detection_ids(system_id: str, client_id: str = None) -> set:
+    """Detection ids applied to this system, whether pinned to its hosts or to the system."""
+    host_ids = [h.id for h in list_hosts(system_id, client_id=client_id)]
+    applied = set()
+    with _get_conn() as conn:
+        if host_ids:
+            hp = ",".join("?" for _ in host_ids)
+            applied |= {
+                r[0] for r in conn.execute(
+                    f"SELECT DISTINCT detection_id FROM applied_detections WHERE host_id IN ({hp})",
+                    host_ids,
+                ).fetchall()
+            }
+        applied |= {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT detection_id FROM applied_detections "
+                "WHERE system_id = ? AND host_id IS NULL",
+                [system_id],
+            ).fetchall()
+        }
+    return applied
+
+
+def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = None) -> Optional[Dict]:
+    """Everything the step window needs, for ONE step on ONE system.
+
+    Every step belongs to one system's own baseline; a step of another system (or of a template)
+    is not found here, so no system's window can ever show another's techniques.
+    """
+    with _get_conn() as conn:
+        if _step_system_id(conn, step_id) != system_id:
+            return None
+    step = get_playbook_step(step_id, client_id=client_id)
+    if not step:
+        return None
+
+    counts_toward_coverage, counted_scopes, coverage_undefined = _counted_scope_resolver(
+        system_id, step.detections, client_id=client_id,
+    )
+    applied_ids = _applied_detection_ids(system_id, client_id=client_id)
+
+    bs = [b for b in get_blind_spots("tactic", step_id, client_id=client_id) if b.system_id == system_id]
+    has_na = any(b.override_type == "na" for b in bs)
+    has_gap = any(b.override_type == "gap" for b in bs)
+
+    # What a rule looks like right now, per destination -- the mapping names one, so look it up
+    # by (rule_id, siem_id, space) and never by rule_id alone.
+    rules_now: Dict[Tuple[str, str, str], object] = {}
+    dest_names: Dict[Tuple[str, str], Dict] = {}
+    try:
+        from app.services.database import get_database_service
+        _db = get_database_service()
+        for d in step.detections:
+            if d.siem_id and d.rule_ref and (d.source or "manual") != "sigma":
+                key = (d.rule_ref, d.siem_id, d.space or "default")
+                if key not in rules_now:
+                    rules_now[key] = _db.get_rule_by_id(d.rule_ref, key[2], siem_id=d.siem_id, client_id=client_id)
+        for d in (_db.get_client_siems(client_id) or [] if client_id else []):
+            dest_names[(d.get("id"), d.get("space") or "default")] = {
+                "name": d.get("name") or d.get("label") or d.get("space"), "color": d.get("color"),
+            }
+    except Exception:
+        logger.warning("Rule/destination lookup failed for the step window", exc_info=True)
+
+    detections = []
+    for d in step.detections:
+        source = d.source or "manual"
+        rule = rules_now.get((d.rule_ref, d.siem_id, d.space or "default")) if d.siem_id else None
+        dest = dest_names.get((d.siem_id, d.space or "default")) if d.siem_id else None
+        detections.append({
+            "id": d.id,
+            "source": source,
+            "rule_ref": d.rule_ref,
+            "note": d.note,
+            "rule_id": d.rule_ref if rule else None,
+            "name": (rule.name if rule else None) or d.note or d.rule_ref,
+            "enabled": rule.enabled if rule else None,
+            "score": rule.score if rule else None,
+            "deprecated": bool(rule and rule.deprecated),
+            "validation_status": rule.validation_status if rule else None,
+            "validation_date": rule.validation_date if rule else None,
+            "validated_by": rule.validated_by if rule else None,
+            "telemetry": _rule_telemetry(rule) if rule else None,
+            "siem_id": d.siem_id,
+            "space": d.space,
+            "destination": (dest or {}).get("name"),
+            "destination_color": (dest or {}).get("color"),
+            # Mapped but pointing at a rule TIDE can't find, or at a destination this system
+            # isn't measured on: both are worth saying out loud rather than hiding.
+            "unresolved": source == "siem" and not rule,
+            "unresolved_reason": (
+                "" if source != "siem" or rule else
+                "This mapping predates destination tracking, so it does not say which SIEM its rule is in."
+                if not d.siem_id else
+                f"The rule is no longer at {(dest or {}).get('name') or d.space or 'its destination'}: "
+                "it was moved, renamed in the SIEM or deleted."
+            ),
+            # What Relink searches for: the rule's name (older mappings stored it as the rule id).
+            "relink_query": d.note or ("" if _UUID_RE.match(d.rule_ref or "") else d.rule_ref),
+            "counts": counts_toward_coverage(d),
+            "applied": d.id in applied_ids,
+            "created_at": d.created_at,
+            "created_by": d.created_by,
+        })
+
+    # Sigma entries are suggestions carried over from the template, not detection: they are listed
+    # apart and never count.
+    live = [x for x in detections if x["source"] != "sigma"]
+    for x in live:
+        x["evidence"] = _evidence(x)
+    sigma_refs = [x for x in detections if x["source"] == "sigma"]
+    is_applied = any(x["applied"] and x["counts"] for x in live)
+    watched = get_step_coverage([step_id]).get(step_id, [])
+    status = _technique_status(is_applied, has_gap, has_na, bool(watched))
+
+    technique_ids = []
+    for t in step.techniques:
+        tid = normalize_technique_id(t.technique_id)
+        if tid and tid not in technique_ids:
+            technique_ids.append(tid)
+    primary = normalize_technique_id(step.technique_id)
+    if primary and primary not in technique_ids:
+        technique_ids.append(primary)
+
+    history = get_technique_history(step_id, system_id, client_id=client_id)
+
+    # The header ring: the strongest rule actually protecting this system, from the scores
+    # app/scoring.py already gave each rule. Only a covered technique has one -- a known gap or
+    # N/A is decided by the mark, so a rule score there would contradict the status.
+    protecting = [x for x in live if x["counts"] and x["applied"] and x["score"] is not None]
+    best = max(protecting, key=lambda x: x["score"]) if status == "green" and protecting else None
+
+    mark = bs[0] if bs else None
+    system = get_system(system_id, client_id=client_id)
+    return {
+        "step": step,
+        "system_id": system_id,
+        "system_name": system.name if system else "",
+        "as_of": datetime.now(),
+        "status": status,
+        "blind_spot_reason": next((b.reason for b in bs), ""),
+        "override_type": "na" if has_na else ("gap" if has_gap else ""),
+        "technique_ids": technique_ids,
+        "techniques": _technique_names(technique_ids, canonical_tactic(step.tactic) if step.tactic else ""),
+        # Covered only by a dashboard, report or log: watched, but nothing alerts.
+        "non_alerting": status == "green" and not is_applied,
+        # Dashboards, reports and logs watching it (non-alerting coverage).
+        "watched": watched,
+        "risk_labels": {"priority": dict(STEP_PRIORITIES), "category": dict(STEP_CATEGORIES),
+                        "coverage_kind": dict(COVERAGE_KINDS)},
+        "detections": live,
+        "sigma_refs": sigma_refs,
+        "mapped_count": len(live),
+        "uncounted_count": sum(1 for x in live if not x["counts"]),
+        "coverage_undefined": coverage_undefined,
+        "counted_destinations": sorted(counted_scopes),
+        "tactic": canonical_tactic(step.tactic),
+        "baseline_name": _playbook_name(step.playbook_id),
+        # This system's known gap / N/A, with what is needed to remove it.
+        "blind_spots": [
+            {"id": b.id, "reason": b.reason, "override_type": b.override_type or "gap",
+             "created_by": b.created_by, "created_at": b.created_at,
+             "review_by": b.review_by, "review_due": b.review_due,
+             "updated_by": b.updated_by, "updated_at": b.updated_at}
+            for b in bs
+        ],
+        "review_due": bool(mark and mark.review_due),
+        "evidence_score": best["score"] if best else None,
+        "evidence_rule": best["name"] if best else "",
+        # Newest first, as Recent activity is in the rule window.
+        "history": history,
+        "history_users": sorted({h["actor"] for h in history if h["actor"]}),
+    }
+
+
+def _rule_telemetry(rule) -> Dict:
+    """Where a rule reads from and whether its fields exist there (the rule's own index patterns
+    and the field-mapping check sync stored with it). A '?' is unknown, never missing (§9)."""
+    raw = rule.raw_data if isinstance(rule.raw_data, dict) else {}
+    index = raw.get("index") or []
+    indexes = [str(i) for i in (index if isinstance(index, list) else [index]) if i]
+    ok = missing = unknown = 0
+    missing_fields = []
+    for row in rule.field_mappings or []:
+        if not isinstance(row, (list, tuple)) or len(row) < 3:
+            continue
+        if row[2] in ("Yes", True):
+            ok += 1
+        elif row[2] == "?":
+            unknown += 1
+        else:
+            missing += 1
+            missing_fields.append(f"{row[1]} ({row[0]})")
+    return {"indexes": indexes, "ok": ok, "missing": missing, "unknown": unknown,
+            "missing_fields": missing_fields}
+
+
+def _evidence(x: Dict) -> Dict:
+    """How far one mapped rule is evidence for this technique on this system, for the score ring
+    on its card: the rule's own score (app/scoring.py) when it counts and is applied here, else
+    n/a with the reason -- never a zero that reads as a bad rule."""
+    where = f" at {x['destination']}" if x["destination"] else ""
+    if x["unresolved"]:
+        why = f"Needs relinking. {x['unresolved_reason']}"
+    elif x["source"] == "manual":
+        why = "Recorded by hand, not a SIEM rule, so it has no score."
+    elif not x["rule_id"]:
+        why = "This rule is no longer in TIDE."
+    elif not x["counts"]:
+        why = f"Mapped{where}, which this system is not measured on."
+    elif not x["applied"]:
+        why = "Mapped, but not applied to this system."
+    else:
+        why = f"Applied to this system{where}. Its rule score is {x['score']}%."
+    scored = x["score"] is not None and x["counts"] and x["applied"] and not x["unresolved"]
+    pct = max(0, min(100, int(x["score"] or 0))) if scored else 0
+    tone = "muted" if not scored else "success" if pct >= 80 else "warning" if pct >= 50 else "danger"
+    if x["validation_status"] == "expired":
+        why += " Its validation has expired."
+    elif x["validation_status"] == "never":
+        why += " It has never been validated."
+    return {"pct": pct, "tone": tone, "applicable": scored, "how": why}
+
+
+STEP_PRIORITIES = [("critical", "Critical"), ("high", "High"), ("medium", "Medium"), ("low", "Low")]
+STEP_CATEGORIES = [
+    ("identity", "Identity"), ("endpoint", "Endpoint"), ("network", "Network"),
+    ("cloud_saas", "Cloud & SaaS"), ("container", "Container"), ("impex", "IMPEX (Import/Export)"),
+    ("email", "Email"), ("secops", "SecOps"), ("ot_ics", "OT/ICS"),
+]
+# Non-alerting coverage a technique can have on a system, besides mapped rules: each is watched,
+# but nothing alerts -- a person has to look. Any one of them makes the technique covered.
+COVERAGE_KINDS = [("dashboard", "Dashboard"), ("report", "Report"), ("log", "Log")]
+
+
+def _risk_fields(values) -> Dict[str, str]:
+    return {k: (v or "") for k, v in zip(("priority", "category"), values)}
+
+
+def _technique_status(covered: bool, has_gap: bool, has_na: bool, non_alerting: bool = False) -> str:
+    """A technique shows its lowest setting. Not applicable wins -- a rule there doesn't apply,
+    but the mark says the risk was considered, and it is left out of the score. A known gap
+    wins over a mapped rule: the rule is on record, but the gap is what is true. Then covered
+    -- by a counted rule, or by a dashboard, report or log (non-alerting) -- then nothing."""
+    if has_na:
+        return "grey"
+    if has_gap:
+        return "amber"
+    return "green" if covered or non_alerting else "red"
+
+
+def update_step_risks(step_id: str, system_id: str, *, priority: str, category: str,
+                      actor: str = None, client_id: str = None) -> None:
+    """Save a system technique's priority and category, recorded in its history."""
+    priority = priority if priority in dict(STEP_PRIORITIES) else ""
+    category = category if category in dict(STEP_CATEGORIES) else ""
+    before = get_playbook_step(step_id)
+    if not before:
+        raise ValueError("Technique not found")
+    labels = {**dict(STEP_PRIORITIES), **dict(STEP_CATEGORIES), "": "not set"}
+    changed = [f"{name} {labels.get(old, old)} → {labels.get(new, new)}" for name, old, new in (
+        ("priority", before.priority, priority), ("category", before.category, category),
+    ) if old != new]
+    with _get_conn() as conn:
+        conn.execute("UPDATE playbook_steps SET priority = ?, category = ? WHERE id = ?", [priority, category, step_id])
+        if changed:
+            _record_technique_event(conn, "risks_edited", step_id=step_id, system_id=system_id,
+                                    detail="Changed " + "; ".join(changed), actor=actor, client_id=client_id)
+
+
+def get_step_coverage(step_ids: List[str]) -> Dict[str, List[Dict]]:
+    """``step_id`` -> its dashboards, reports and logs, oldest first. Empty for a tenant DB that
+    has not got the table yet."""
+    if not step_ids:
+        return {}
+    ph = ",".join("?" for _ in step_ids)
+    out: Dict[str, List[Dict]] = {}
+    with _get_conn() as conn:
+        try:
+            rows = conn.execute(
+                f"SELECT id, step_id, kind, title, url, rationale, created_by, created_at FROM step_coverage "
+                f"WHERE step_id IN ({ph}) ORDER BY created_at, title", list(step_ids),
+            ).fetchall()
+        except Exception:
+            return {}
+    labels = dict(COVERAGE_KINDS)
+    for cid, sid, kind, title, url, why, by, at in rows:
+        out.setdefault(sid, []).append({"id": cid, "kind": kind, "kind_label": labels.get(kind, kind), "title": title,
+                                        "url": url or "", "rationale": why or "", "created_by": by, "created_at": at})
+    return out
+
+
+def _coverage_fields(kind: str, title: str, url: str, rationale: str) -> Tuple[str, str, str]:
+    """A dashboard, report or log's title, link and rationale, cleaned. It needs a title; the
+    link is optional and must be a web address."""
+    title, url, rationale = (title or "").strip(), (url or "").strip(), (rationale or "").strip()
+    if kind not in dict(COVERAGE_KINDS):
+        raise ValueError("Choose a dashboard, report or log.")
+    if not title:
+        raise ValueError("Give it a title, so it can be told apart from the others.")
+    if url and not re.match(r"^https?://", url, re.I):
+        raise ValueError("The link must be a web address starting http:// or https://.")
+    return title, url, rationale
+
+
+def add_step_coverage(step_id: str, system_id: str, *, kind: str, title: str, url: str = "", rationale: str = "",
+                      actor: str = None, client_id: str = None) -> None:
+    """Record a dashboard, report or log watching this technique on this system."""
+    title, url, rationale = _coverage_fields(kind, title, url, rationale)
+    from app.services.database import DatabaseService
+    with _get_conn() as conn:
+        conn.execute(DatabaseService.STEP_COVERAGE_DDL)
+        conn.execute(
+            "INSERT INTO step_coverage (step_id, system_id, kind, title, url, rationale, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [step_id, system_id, kind, title, url, rationale, actor],
+        )
+        _record_technique_event(conn, "coverage_added", step_id=step_id, system_id=system_id,
+                                detail=f"{dict(COVERAGE_KINDS)[kind]}: {title}", reason=rationale or None,
+                                actor=actor, client_id=client_id)
+
+
+def update_step_coverage(coverage_id: str, step_id: str, system_id: str, *, kind: str, title: str, url: str = "",
+                         rationale: str = "", actor: str = None, client_id: str = None) -> bool:
+    """Change one dashboard, report or log on this technique on this system, recording what
+    changed. False if it is not on this technique."""
+    title, url, rationale = _coverage_fields(kind, title, url, rationale)
+    labels = dict(COVERAGE_KINDS)
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT kind, title, url, rationale FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
+            [coverage_id, step_id, system_id],
+        ).fetchone()
+        if not row:
+            return False
+        changed = [name for name, old, new in (
+            ("type", row[0], kind), ("title", row[1], title), ("link", row[2] or "", url), ("rationale", row[3] or "", rationale),
+        ) if old != new]
+        if not changed:
+            return True
+        conn.execute("UPDATE step_coverage SET kind = ?, title = ?, url = ?, rationale = ? WHERE id = ?",
+                     [kind, title, url, rationale, coverage_id])
+        _record_technique_event(conn, "coverage_edited", step_id=step_id, system_id=system_id,
+                                detail=f"{labels[kind]}: {title} (changed {', '.join(changed)})",
+                                reason=rationale or None, actor=actor, client_id=client_id)
+    return True
+
+
+def remove_step_coverage(coverage_id: str, step_id: str, system_id: str, actor: str = None,
+                         client_id: str = None) -> bool:
+    """Remove one dashboard, report or log from this technique on this system."""
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT kind, title FROM step_coverage WHERE id = ? AND step_id = ? AND system_id = ?",
+            [coverage_id, step_id, system_id],
+        ).fetchone()
+        if not row:
+            return False
+        conn.execute("DELETE FROM step_coverage WHERE id = ?", [coverage_id])
+        _record_technique_event(conn, "coverage_removed", step_id=step_id, system_id=system_id,
+                                detail=f"{dict(COVERAGE_KINDS).get(row[0], row[0])}: {row[1]}",
+                                actor=actor, client_id=client_id)
+    return True
+
+
+def _technique_names(technique_ids: List[str], prefer_tactic: str = "") -> List[Dict]:
+    """``[{id, name, tactic}]`` for ATT&CK ids, in the order given, for pills with names. A
+    technique under several tactics shows ``prefer_tactic`` (the one it was picked under) when
+    that is one of them, else its first."""
+    if not technique_ids:
+        return []
+    found: Dict[str, Tuple[str, str]] = {}
+    tactics: Dict[str, set] = {}
+    try:
+        ph = ",".join("?" for _ in technique_ids)
+        with _get_conn() as conn:
+            for tid, name, tactic in conn.execute(
+                f"SELECT id, name, tactic FROM mitre_techniques WHERE id IN ({ph})", technique_ids,
+            ).fetchall():
+                found[str(tid).upper()] = (name or "", canonical_tactic(tactic) if tactic else "")
+            if prefer_tactic:
+                for tid, short in conn.execute(
+                    "SELECT mt.id, t.shortname FROM mitre_techniques mt "
+                    "JOIN mitre_technique_tactics mtt ON mtt.technique_stix_id = mt.stix_id AND LOWER(mtt.domain) = LOWER(mt.domain) "
+                    "JOIN mitre_tactics t ON t.stix_id = mtt.tactic_stix_id AND LOWER(t.domain) = LOWER(mtt.domain) "
+                    f"WHERE mt.id IN ({ph})", technique_ids,
+                ).fetchall():
+                    tactics.setdefault(str(tid).upper(), set()).add(canonical_tactic(short))
+    except Exception:
+        logger.warning("ATT&CK names unavailable for %s", technique_ids, exc_info=True)
+
+    def tactic_of(t: str) -> str:
+        return prefer_tactic if prefer_tactic in tactics.get(t, ()) else found.get(t, ("", ""))[1]
+    return [{"id": t, "name": found.get(t, ("", ""))[0], "tactic": tactic_of(t)} for t in technique_ids]
+
+
+def _playbook_name(playbook_id: Optional[str]) -> str:
+    if not playbook_id:
+        return ""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT name FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+    return row[0] if row else ""
+
+
+def get_rule_coverage(rule_id: str, siem_id: str, space: str, linked: List[Dict] = None,
+                      client_id: str = None) -> List[Dict]:
+    """The baseline techniques this rule covers, grouped by baseline, for the rule window.
+
+    A mapping names the destination that was picked; a rule copied onward by Move still covers
+    it (coverage follows ``rule_links``), so mappings made to a linked copy are included and
+    marked with the destination they were made at. A mapping recorded before destinations were
+    tracked, against this rule id, is included too, flagged as needing relinking.
+
+    ``linked`` is the rule window's own ``get_rule_links_bulk`` entry for this rule.
+    """
+    anchors = [(rule_id, siem_id, space or "default", None)]
+    for l in linked or []:
+        if not l.get("missing"):
+            anchors.append((l["rule_id"], l["siem_id"], l.get("space") or "default", l.get("destination_name")))
+    pred = " OR ".join("(sd.rule_ref = ? AND sd.siem_id = ? AND sd.space = ?)" for _ in anchors)
+    params = [v for a in anchors for v in a[:3]]
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT sd.step_id, sd.rule_ref, sd.siem_id, sd.space, ps.title, ps.tactic, ps.step_number, "
+            "ps.playbook_id, p.name FROM step_detections sd "
+            "JOIN playbook_steps ps ON ps.id = sd.step_id JOIN playbooks p ON p.id = ps.playbook_id "
+            f"WHERE {pred} OR (sd.rule_ref = ? AND sd.siem_id IS NULL)",
+            params + [rule_id],
+        ).fetchall()
+        playbook_ids = sorted({r[7] for r in rows})
+        systems: Dict[str, List[Dict]] = {}
+        if playbook_ids:
+            ph = ",".join("?" for _ in playbook_ids)
+            for pb_id, sys_id, sys_name in conn.execute(
+                "SELECT sb.playbook_id, s.id, s.name FROM system_baselines sb "
+                f"JOIN systems s ON s.id = sb.system_id WHERE sb.playbook_id IN ({ph}) ORDER BY s.name",
+                playbook_ids,
+            ).fetchall():
+                systems.setdefault(pb_id, []).append({"id": sys_id, "name": sys_name})
+
+    via = {(a[0], a[1], a[2]): a[3] for a in anchors}
+    baselines: Dict[str, Dict] = {}
+    for step_id, ref, sid, sp, title, tactic, number, pb_id, pb_name in rows:
+        b = baselines.setdefault(pb_id, {"id": pb_id, "name": pb_name, "systems": systems.get(pb_id, []),
+                                         "techniques": {}})
+        entry = {
+            "step_id": step_id, "title": title, "tactic": canonical_tactic(tactic),
+            "step_number": number or 0,
+            "via": via.get((ref, sid, sp or "default")) if sid else None,
+            "needs_relinking": not sid,
+        }
+        seen = b["techniques"].get(step_id)
+        # One row per technique; a direct mapping beats one made through a link or a legacy one.
+        if not seen or (seen["via"] or seen["needs_relinking"]) and not (entry["via"] or entry["needs_relinking"]):
+            b["techniques"][step_id] = entry
+    out = []
+    for b in sorted(baselines.values(), key=lambda x: (x["name"] or "").lower()):
+        b["techniques"] = sorted(b["techniques"].values(), key=lambda t: (t["step_number"], t["title"] or ""))
+        out.append(b)
+    return out
+
+
+def attack_plain_text(text: Optional[str]) -> str:
+    """ATT&CK's STIX description as readable prose: markdown links become their text, and the
+    "(Citation: ...)" markers -- references into a bibliography TIDE doesn't show -- are dropped."""
+    import re
+    out = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text or "")
+    out = re.sub(r"\(Citation:[^)]*\)", "", out)
+    out = re.sub(r"<code>(.*?)</code>", r"\1", out)
+    return re.sub(r"[ \t]{2,}", " ", out).replace(" .", ".").strip()
+
+
+_TACTIC_ALIASES = {
+    "resource dev": "Resource Development", "c2": "Command and Control",
+    "command & control": "Command and Control", "privesc": "Privilege Escalation",
+    "recon": "Reconnaissance", "exfil": "Exfiltration",
+}
+
+
+def canonical_tactic(raw: Optional[str]) -> str:
+    """A baseline step's free-text tactic as the ATT&CK tactic it means, or "Other".
+
+    Steps are typed by hand and imported from several places, so the same tactic turns up as
+    "Resource Dev", "resource-development" or blank. Grouping and ATT&CK ordering need one name.
+    """
+    from app.models.inventory import MITRE_TACTICS
+    text = " ".join((raw or "").replace("-", " ").replace("_", " ").split()).lower()
+    if not text:
+        return "Other"
+    for t in MITRE_TACTICS:
+        if t.lower() == text:
+            return t
+    raw = raw.strip()
+    # An ATT&CK shortname this list doesn't know yet ("stealth", "defense-impairment") reads as
+    # a name; anything typed with capitals is kept as typed.
+    return _TACTIC_ALIASES.get(text) or (text.title() if raw == raw.lower() else raw)
+
+
+def tactic_sort_key(tactic: str, mode: str = "attack"):
+    """ATT&CK kill-chain order (unknown tactics after the fourteen, A-Z, then Other), or plain A-Z."""
+    from app.models.inventory import MITRE_TACTICS
+    if mode == "alpha":
+        return (0, tactic.lower())
+    known = MITRE_TACTICS[:-1]            # "Other" always sorts last
+    if tactic in known:
+        return (known.index(tactic), "")
+    return (len(known) + (1 if tactic == "Other" else 0), tactic.lower())
+
+
+def group_system_steps(steps: List[Dict], group_by: List[str], tactic_sort: str = "attack") -> List[Dict]:
+    """Nest already-sorted steps into collapsible groups: by baseline, by tactic, or tactics
+    within each baseline. Each group carries its own covered/scored counts. Step order inside a
+    group is preserved, so the chosen sort still applies within it."""
+    def counts(rows):
+        scored = [r for r in rows if r["status"] != "grey"]
+        covered = sum(1 for r in scored if r["status"] == "green")
+        return {"total": len(rows), "scored": len(scored), "covered": covered,
+                "pct": round(covered / len(scored) * 100) if scored else None}
+
+    def by(rows, field, order_key):
+        buckets: Dict[str, List[Dict]] = {}
+        labels: Dict[str, str] = {}
+        for r in rows:
+            k = r[field]
+            buckets.setdefault(k, []).append(r)
+            labels[k] = r["baseline_name"] if field == "baseline_id" else r["tactic"]
+        keys = sorted(buckets, key=lambda k: order_key(labels[k]))
+        kind = "baseline" if field == "baseline_id" else "tactic"
+        return [{"key": k, "kind": kind, "label": labels[k], "steps": buckets[k], **counts(buckets[k])} for k in keys]
+
+    by_tactic = lambda rows: by(rows, "tactic", lambda t: tactic_sort_key(t, tactic_sort))  # noqa: E731
+    if "baseline" in group_by:
+        groups = by(steps, "baseline_id", lambda n: (n or "").lower())
+        if "tactic" in group_by:
+            for g in groups:
+                g["groups"] = by_tactic(g["steps"])
+        return groups
+    if "tactic" in group_by:
+        return by_tactic(steps)
+    return []
+
+
+def get_system_steps(system_id: str, client_id: str = None, search: str = "", tactic=None,
+                     status: str = "", mapping: str = "", baseline_id: str = "",
+                     tactic_sort: str = "attack", sort_name: str = "") -> Dict:
+    """Every step across this system's baselines, flattened and filtered, plus its own totals.
+
+    Flat rather than nested baseline > tactic > step: the question a system's owner asks is
+    "where are my gaps", which is a property of steps, and three levels of accordion between
+    them and the answer is what the old page made them click through.
+
+    ``baseline_id`` is a filter, and leaves the totals whole.
+    """
+    baselines = get_system_baselines(system_id, client_id=client_id)
+    steps, tactics, baseline_names = [], [], []
+    for bl in baselines:
+        if bl["playbook_name"] not in baseline_names:
+            baseline_names.append(bl["playbook_name"])
+        for st in bl["tactics"]:
+            row = dict(st)
+            row["baseline_id"] = bl["playbook_id"]
+            row["baseline_name"] = bl["playbook_name"]
+            row["coverage_undefined"] = bl.get("coverage_undefined", False)
+            row["tactic"] = canonical_tactic(row.get("tactic"))
+            steps.append(row)
+            if row["tactic"] not in tactics:
+                tactics.append(row["tactic"])
+
+    totals = {
+        "total": len(steps),
+        "covered": sum(1 for s in steps if s["status"] == "green"),
+        "gap": sum(1 for s in steps if s["status"] == "amber"),
+        "na": sum(1 for s in steps if s["status"] == "grey"),
+        "none": sum(1 for s in steps if s["status"] == "red"),
+        "unmapped": sum(1 for s in steps if not s.get("mapped_count")),
+        "uncounted": sum(1 for s in steps if s.get("uncounted_count")),
+    }
+
+    q = (search or "").strip().lower()
+    if q:
+        steps = [
+            s for s in steps
+            if q in (s.get("title") or "").lower()
+            or q in (s.get("description") or "").lower()
+            or any(q in (t or "").lower() for t in (s.get("display_technique_ids") or []))
+        ]
+    wanted = {tactic} if isinstance(tactic, str) else set(tactic or [])
+    wanted.discard("")
+    if wanted:
+        steps = [s for s in steps if s["tactic"] in wanted]
+    if status:
+        steps = [s for s in steps if s["status"] == status]
+    if baseline_id:
+        steps = [s for s in steps if s["baseline_id"] == baseline_id]
+    if mapping == "unmapped":
+        steps = [s for s in steps if not s.get("mapped_count")]
+    elif mapping == "mapped":
+        steps = [s for s in steps if s.get("mapped_count")]
+    elif mapping == "uncounted":
+        steps = [s for s in steps if s.get("uncounted_count")]
+
+    # Tactic first (kill-chain order by default -- an attack tree reads in sequence), then name
+    # if asked, else the baseline's own step order. Stable sorts, applied innermost first.
+    steps.sort(key=lambda s: ((s.get("baseline_name") or "").lower(), s.get("step_number") or 0))
+    if sort_name in ("asc", "desc"):
+        steps.sort(key=lambda s: (s.get("title") or "").lower(), reverse=sort_name == "desc")
+    if tactic_sort in ("attack", "alpha"):
+        steps.sort(key=lambda s: tactic_sort_key(s["tactic"], tactic_sort))
+    tactics.sort(key=lambda t: tactic_sort_key(t, "attack"))
+    return {
+        "steps": steps, "totals": totals, "tactics": tactics,
+        "baselines": [{"id": b["playbook_id"], "name": b["playbook_name"]} for b in baselines],
+        "coverage_undefined": all(b.get("coverage_undefined") for b in baselines) if baselines else False,
+    }
 
 
 def get_system_baselines(
@@ -3179,9 +3666,18 @@ def get_system_baselines(
         except Exception:
             pass
 
+    # Which destinations count toward THIS system, resolved once for every step below.
+    _all_steps_by_pb = {row[1]: _get_playbook_steps(row[1]) for row in rows}
+    _all_dets = [d for sts in _all_steps_by_pb.values() for st in sts for d in st.detections]
+    # Dashboards, reports and logs watching each step (non-alerting coverage), in one query.
+    _watched = get_step_coverage([st.id for sts in _all_steps_by_pb.values() for st in sts])
+    counts_toward_coverage, counted_scopes, coverage_undefined = _counted_scope_resolver(
+        system_id, _all_dets, client_id=client_id,
+    )
+
     result = []
     for sb_id, pb_id, applied_at, pb_name, pb_desc in rows:
-        steps = _get_playbook_steps(pb_id)
+        steps = _all_steps_by_pb[pb_id]
         step_results = []
         covered = 0
         gap_count = 0
@@ -3193,23 +3689,36 @@ def get_system_baselines(
             has_na = any(bs.override_type == "na" for bs in sys_blind_spots)
             has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
             bs_reason = next((bs.reason for bs in sys_blind_spots), "")
+            review_by = min((bs.review_by for bs in sys_blind_spots if bs.review_by), default=None)
 
-            # Check if any non-sigma detection for this step is applied to a host on this system
-            step_det_ids = {d.id for d in step.detections if (d.source or 'manual') != 'sigma'}
+            # A detection counts for this step only if it is applied to a host on this system AND
+            # its rule lives somewhere this system is actually graded on (§4.3). A rule sitting
+            # only in staging protects nothing, so it must not read as covered here.
+            step_det_ids = {
+                d.id for d in step.detections
+                if (d.source or 'manual') != 'sigma' and counts_toward_coverage(d)
+            }
             is_applied = bool(step_det_ids & applied_step_det_ids) if step_det_ids else False
+            # Mapped but not counted: there IS a rule for this step, it just isn't anywhere this
+            # system is graded on. Shown distinctly rather than as "nothing here".
+            uncounted_count = sum(
+                1 for d in step.detections
+                if (d.source or 'manual') != 'sigma' and not counts_toward_coverage(d)
+            )
+            # How many rules are mapped to *this step* -- every one of them, counted or not, so
+            # the card can say "2 rules, 1 not counted" rather than quietly showing 1. Deliberately
+            # separate from the per-technique rule counts below, which are tenant-wide ("some rule
+            # somewhere carries this tag") and were being rendered on step cards as if they meant
+            # the same thing.
+            mapped_count = len(step_det_ids) + uncounted_count
 
-            # 4-tier: green > grey > amber > red
-            if is_applied:
-                status = "green"
+            status = _technique_status(is_applied, has_gap, has_na, bool(_watched.get(step.id)))
+            if status == "green":
                 covered += 1
-            elif has_na:
-                status = "grey"
+            elif status == "grey":
                 na_count += 1
-            elif has_gap:
-                status = "amber"
+            elif status == "amber":
                 gap_count += 1
-            else:
-                status = "red"
 
             # Build normalized tagged techniques for display/heatmap consumers.
             normalized_tagged = []
@@ -3250,8 +3759,22 @@ def get_system_baselines(
                 "display_technique": normalized_tagged[0] if normalized_tagged else "",
                 "description": step.description,
                 "status": status,
+                # Covered only by a dashboard, report or log: watched, but nothing alerts.
+                "non_alerting": status == "green" and not is_applied,
+                "priority": step.priority,
+                "category": step.category,
                 "blind_spot_reason": bs_reason,
                 "override_type": "na" if has_na else ("gap" if has_gap else ""),
+                "review_by": review_by,
+                "review_due": bool(review_by and review_by <= date.today()),
+                "mapped_count": mapped_count,
+                "uncounted_count": uncounted_count,
+                # Tenant-wide: how many rules anywhere carry this step's techniques. A prompt to go
+                # looking, never a statement about this step. `rule_count`/`has_detection` below are
+                # the same number per technique and are named for the technique, not the step.
+                "suggestion_count": max(
+                    [ttp_rule_counts.get(tid.upper(), 0) for tid in normalized_tagged] or [0]
+                ),
                 "techniques": [
                     {
                         "technique_id": normalize_technique_id(t.technique_id),
@@ -3275,6 +3798,11 @@ def get_system_baselines(
             "playbook_name": pb_name,
             "playbook_description": pb_desc or "",
             "applied_at": applied_at,
+            # True when nobody has said which destinations count for this system. The percentage
+            # is still computed, but callers must present it as unanswered rather than as a score:
+            # an unanswered question is not a gap.
+            "coverage_undefined": coverage_undefined,
+            "counted_destinations": sorted(counted_scopes),
             "tactics": step_results,
             "total_steps": total,
             "covered_steps": covered,
@@ -3442,28 +3970,101 @@ def add_step_technique(step_id: str, technique_id: str, client_id: str = None) -
     return StepTechnique(id=r[0], step_id=step_id, technique_id=normalized_technique_id)
 
 
-def remove_step_technique(technique_row_id: str, client_id: str = None) -> bool:
-    with _get_conn() as conn:
-        cnt = conn.execute("DELETE FROM step_techniques WHERE id = ?", [technique_row_id]).rowcount
-    return cnt > 0
-
-
-def update_step_technique(technique_row_id: str, technique_id: str, client_id: str = None) -> Optional[StepTechnique]:
-    normalized_technique_id = normalize_technique_id(technique_id)
-    if not normalized_technique_id:
-        raise ValueError("technique_id is required")
-
-    with _get_conn() as conn:
-        r = conn.execute(
-            "UPDATE step_techniques SET technique_id = ? WHERE id = ? RETURNING id, step_id, technique_id",
-            [normalized_technique_id, technique_row_id],
-        ).fetchone()
-    if not r:
+def _destination_name(siem_id: Optional[str], space: Optional[str], client_id: Optional[str]) -> Optional[str]:
+    if not siem_id:
         return None
-    return StepTechnique(id=r[0], step_id=r[1], technique_id=r[2])
+    try:
+        from app.services.database import get_database_service
+        for d in get_database_service().get_client_siems(client_id) or [] if client_id else []:
+            if d.get("id") == siem_id and (d.get("space") or "default") == (space or "default"):
+                return d.get("name") or d.get("label") or space
+    except Exception:
+        logger.warning("Destination name unavailable for %s/%s", siem_id, space, exc_info=True)
+    return space
 
 
-def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual", client_id: str = None) -> StepDetection:
+def _record_technique_event(conn, event: str, *, step_id: str = None, system_id: str = None,
+                            detection_id: str = None, rule_id: str = None, siem_id: str = None,
+                            space: str = None, source: str = None, reason: str = None,
+                            detail: str = None, actor: str = None, client_id: str = None) -> None:
+    """Append one row to the technique history. Rule name, destination and score are captured
+    as they are now, so the history still reads correctly after a rename, move or rescore. A
+    step's event is filed under the system that owns the step; a template's steps have no history.
+
+    Never raises: history is a record of the change, not a condition of it.
+    """
+    try:
+        if step_id and not system_id:
+            system_id = _step_system_id(conn, step_id)
+            if not system_id:
+                return
+        rule_name, score = None, None
+        if rule_id:
+            if siem_id:
+                row = conn.execute(
+                    "SELECT name, score FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                    [rule_id, siem_id, space or "default"],
+                ).fetchone()
+            else:
+                row = None
+            rule_name, score = (row[0], row[1]) if row else (None, None)
+        conn.execute(
+            "INSERT INTO technique_events (event, step_id, system_id, detection_id, rule_id, siem_id, "
+            "space, rule_name, destination, score, source, reason, detail, actor, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [event, step_id, system_id, detection_id, rule_id, siem_id, space,
+             rule_name or detail if event in ("rule_mapped", "rule_unmapped") else rule_name,
+             _destination_name(siem_id, space, client_id), score, source, reason,
+             None if event in ("rule_mapped", "rule_unmapped") else detail, actor, client_id],
+        )
+    except Exception:
+        logger.warning("Could not record technique event %s for step %s", event, step_id, exc_info=True)
+
+
+_EVENT_KIND = {
+    "rule_mapped": "rules", "rule_unmapped": "rules", "rule_relinked": "rules", "coverage_added": "rules", "coverage_edited": "rules", "coverage_removed": "rules",
+    "gap_added": "gaps", "gap_removed": "gaps", "na_added": "gaps", "na_removed": "gaps",
+    "gap_edited": "gaps", "na_edited": "gaps",
+    "sigma_dismissed": "technique", "sigma_restored": "technique",
+    "technique_added": "technique", "technique_edited": "technique", "risks_edited": "technique",
+    "siem_coverage": "coverage",
+}
+
+
+def get_technique_history(step_id: str, system_id: str, client_id: str = None) -> List[Dict]:
+    """Everything that changed this technique on this system, newest first: rules mapped and
+    removed, known gaps and N/A, edits to the technique itself, and the system's SIEM coverage
+    changes (which can move every technique)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, event, step_id, system_id, rule_id, siem_id, space, rule_name, destination, "
+            "score, source, reason, detail, actor, source_ref, created_at FROM technique_events "
+            "WHERE system_id = ? AND (step_id = ? OR (step_id IS NULL AND event = 'siem_coverage')) "
+            "ORDER BY created_at DESC",
+            [system_id, step_id],
+        ).fetchall()
+    cols = ["id", "event", "step_id", "system_id", "rule_id", "siem_id", "space", "rule_name",
+            "destination", "score", "source", "reason", "detail", "actor", "source_ref", "created_at"]
+    out = []
+    for r in rows:
+        e = dict(zip(cols, r))
+        e["kind"] = _EVENT_KIND.get(e["event"], "other")
+        e["system_scoped"] = e["system_id"] is not None
+        e["reconstructed"] = e["source_ref"] is not None
+        out.append(e)
+    return out
+
+
+def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str = "manual",
+                       client_id: str = None, siem_id: str = None, space: str = None,
+                       created_by: str = None) -> StepDetection:
+    """Map a rule to a step.
+
+    ``siem_id``/``space`` record which destination's copy was picked. They are the caller's to
+    supply and are stored exactly as given -- resolving the mapping onward to the rule's other
+    destinations is a read-time concern (``rule_links``), deliberately not baked in here, so the
+    stored row always says what the person actually chose.
+    """
     with _get_conn() as conn:
         logical_row = conn.execute(
             "SELECT id FROM logical_rule_identities WHERE canonical_rule_id = ? "
@@ -3472,40 +4073,138 @@ def add_step_detection(step_id: str, rule_ref: str, note: str = "", source: str 
         ).fetchone()
         logical_rule_id = logical_row[0] if logical_row else None
         r = conn.execute(
-            "INSERT INTO step_detections (step_id, rule_ref, logical_rule_id, note, source) VALUES (?, ?, ?, ?, ?) "
-            "RETURNING id, step_id, rule_ref, note, source",
-            [step_id, rule_ref, logical_rule_id, note, source],
+            "INSERT INTO step_detections (step_id, rule_ref, logical_rule_id, note, source, "
+            "siem_id, space, created_at, created_by) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?) "
+            "RETURNING id, step_id, rule_ref, note, source, siem_id, space, created_at, created_by",
+            [step_id, rule_ref, logical_rule_id, note, source, siem_id, space, created_by],
         ).fetchone()
-    return StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "", source=r[4] or "manual")
+        _record_technique_event(
+            conn, "rule_mapped", step_id=step_id, detection_id=r[0], rule_id=rule_ref,
+            siem_id=siem_id, space=space, source=source, detail=note or rule_ref,
+            actor=created_by, client_id=client_id,
+        )
+    return StepDetection(id=r[0], step_id=r[1], rule_ref=r[2] or "", note=r[3] or "",
+                         source=r[4] or "manual", siem_id=r[5], space=r[6],
+                         created_at=r[7], created_by=r[8])
 
 
-def remove_step_detection(detection_row_id: str, client_id: str = None) -> bool:
+def relink_step_detection(detection_row_id: str, *, rule_ref: str, siem_id: str, space: str, note: str = "",
+                          actor: str = None, client_id: str = None, conn=None) -> bool:
+    """Point an existing rule mapping at a rule copy that exists, keeping the mapping itself (its
+    id, so where it is applied, and its history). For a mapping whose rule TIDE can no longer find
+    at the destination it names -- one made before destinations were recorded, one that stored
+    the rule's name, or one whose rule has moved. ``conn`` lets a repair script pass its own
+    connection to a tenant DB. False if the mapping does not exist."""
+    def _relink(c) -> bool:
+        old = c.execute("SELECT step_id, rule_ref, siem_id, space, note FROM step_detections WHERE id = ?",
+                        [detection_row_id]).fetchone()
+        if not old:
+            return False
+        logical = c.execute("SELECT id FROM logical_rule_identities WHERE canonical_rule_id = ? ORDER BY created_at LIMIT 1",
+                            [rule_ref]).fetchone()
+        c.execute("UPDATE step_detections SET rule_ref = ?, siem_id = ?, space = ?, note = ?, logical_rule_id = ? WHERE id = ?",
+                  [rule_ref, siem_id, space, note or old[4], logical[0] if logical else None, detection_row_id])
+        was = old[4] or old[1]
+        was_at = _destination_name(old[2], old[3], client_id) if old[2] else "no destination recorded"
+        _record_technique_event(c, "rule_relinked", step_id=old[0], detection_id=detection_row_id, rule_id=rule_ref,
+                                siem_id=siem_id, space=space, source="siem", detail=f"was {was} ({was_at})",
+                                actor=actor, client_id=client_id)
+        return True
+    if conn is not None:
+        return _relink(conn)
+    with _get_conn() as c:
+        return _relink(c)
+
+
+def remove_step_detection(detection_row_id: str, client_id: str = None, actor: str = None) -> bool:
     with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT step_id, rule_ref, siem_id, space, source, note FROM step_detections WHERE id = ?",
+            [detection_row_id],
+        ).fetchone()
         cnt = conn.execute("DELETE FROM step_detections WHERE id = ?", [detection_row_id]).rowcount
+        conn.execute("DELETE FROM applied_detections WHERE detection_id = ?", [detection_row_id])
+        if row and cnt:
+            _record_technique_event(
+                conn, "rule_unmapped", step_id=row[0], detection_id=detection_row_id, rule_id=row[1],
+                siem_id=row[2], space=row[3], source=row[4], detail=row[5] or row[1],
+                actor=actor, client_id=client_id,
+            )
     return cnt > 0
 
 
-def update_playbook_step(step_id: str, title: str = None, tactic: str = None,
-                         description: str = None, step_number: int = None,
-                         client_id: str = None) -> Optional[PlaybookStep]:
-    """Update editable fields on a playbook step.
-    client_id accepted for API compatibility; steps are scoped via their parent playbook."""
+def parse_technique_ids(raw: str) -> List[str]:
+    """ATT&CK ids typed as free text ("T1003, t1059.001 T1078"): normalised, de-duplicated and
+    kept in the order given. Anything that is not a technique id is ignored."""
+    out: List[str] = []
+    for part in re.split(r"[\s,;]+", raw or ""):
+        tid = normalize_technique_id(part)
+        if tid and tid not in out:
+            out.append(tid)
+    return out
+
+
+def get_step_owner(step_id: str) -> Optional[Dict]:
+    """Which baseline a step is in: ``{playbook_id, system_id, client_id}``, where system_id is
+    None for a template's step. None if there is no such step."""
     with _get_conn() as conn:
-        row = conn.execute("SELECT playbook_id FROM playbook_steps WHERE id = ?", [step_id]).fetchone()
-        if not row:
-            return None
-        sets, vals = [], []
-        if title is not None:
-            sets.append("title = ?"); vals.append(title)
-        if tactic is not None:
-            sets.append("tactic = ?"); vals.append(tactic)
-        if description is not None:
-            sets.append("description = ?"); vals.append(description)
-        if step_number is not None:
-            sets.append("step_number = ?"); vals.append(step_number)
-        if sets:
-            vals.append(step_id)
-            conn.execute(f"UPDATE playbook_steps SET {', '.join(sets)} WHERE id = ?", vals)
+        row = conn.execute(
+            "SELECT p.id, p.system_id, p.client_id FROM playbook_steps s "
+            "JOIN playbooks p ON p.id = s.playbook_id WHERE s.id = ?",
+            [step_id],
+        ).fetchone()
+    return {"playbook_id": row[0], "system_id": row[1], "client_id": row[2]} if row else None
+
+
+def _set_step_techniques(conn, step_id: str, technique_ids: List[str]) -> None:
+    conn.execute("DELETE FROM step_techniques WHERE step_id = ?", [step_id])
+    for tid in technique_ids:
+        conn.execute("INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)", [step_id, tid])
+    conn.execute("UPDATE playbook_steps SET technique_id = ? WHERE id = ?",
+                 [technique_ids[0] if technique_ids else "", step_id])
+
+
+def add_technique(playbook_id: str, *, title: str, tactic: str = "", description: str = "",
+                  technique_ids: List[str] = (), actor: str = None, client_id: str = None) -> PlaybookStep:
+    """Add a technique at the end of a template, or of a system's own baseline (where it is
+    recorded in the technique's history)."""
+    with _get_conn() as conn:
+        number = conn.execute(
+            "SELECT COALESCE(MAX(step_number), 0) + 1 FROM playbook_steps WHERE playbook_id = ?", [playbook_id],
+        ).fetchone()[0]
+        step_id = conn.execute(
+            "INSERT INTO playbook_steps (playbook_id, step_number, title, technique_id, required_rule, description, tactic) "
+            "VALUES (?, ?, ?, '', '', ?, ?) RETURNING id",
+            [playbook_id, number, title, description, tactic],
+        ).fetchone()[0]
+        _set_step_techniques(conn, step_id, list(technique_ids))
+        _record_technique_event(conn, "technique_added", step_id=step_id, detail=title,
+                                actor=actor, client_id=client_id)
+    return get_playbook_step(step_id)
+
+
+def update_technique(step_id: str, *, title: str, tactic: str, description: str,
+                     technique_ids: List[str], actor: str = None, client_id: str = None) -> Optional[PlaybookStep]:
+    """Edit a technique's title, tactic, description and ATT&CK ids. On a system's own baseline
+    the edit is recorded in the technique's history, naming what changed."""
+    before = get_playbook_step(step_id)
+    if not before:
+        return None
+    old_ids = [t.technique_id for t in before.techniques] or ([before.technique_id] if before.technique_id else [])
+    changed = [label for label, old, new in (
+        ("title", before.title, title),
+        # "execution" from a Sigma rule and "Execution" from the form are the same tactic
+        ("tactic", canonical_tactic(before.tactic) if before.tactic else "", canonical_tactic(tactic) if tactic else ""),
+        ("description", before.description, description), ("ATT&CK", old_ids, list(technique_ids)),
+    ) if old != new]
+    with _get_conn() as conn:
+        conn.execute("UPDATE playbook_steps SET title = ?, tactic = ?, description = ? WHERE id = ?",
+                     [title, tactic, description, step_id])
+        _set_step_techniques(conn, step_id, list(technique_ids))
+        if changed:
+            _record_technique_event(conn, "technique_edited", step_id=step_id,
+                                    detail="Changed " + ", ".join(changed), actor=actor, client_id=client_id)
     return get_playbook_step(step_id)
 
 
@@ -3514,7 +4213,8 @@ def get_playbook_step(step_id: str, client_id: str = None) -> Optional[PlaybookS
     client_id accepted for API compatibility; steps are scoped via their parent playbook."""
     with _get_conn() as conn:
         r = conn.execute(
-            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic "
+            "SELECT id, playbook_id, step_number, title, technique_id, required_rule, description, tactic, "
+            "priority, category "
             "FROM playbook_steps WHERE id = ?",
             [step_id],
         ).fetchone()
@@ -3523,141 +4223,11 @@ def get_playbook_step(step_id: str, client_id: str = None) -> Optional[PlaybookS
     step = PlaybookStep(
         id=r[0], playbook_id=r[1], step_number=r[2], title=r[3],
         technique_id=r[4] or "", required_rule=r[5] or "", description=r[6] or "",
-        tactic=r[7] or "",
+        tactic=r[7] or "", **_risk_fields(r[8:10]),
     )
     step.techniques = _get_step_techniques(step_id)
     step.detections = _get_step_detections(step_id)
     return step
-
-
-def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]:
-    """Get systems where the baseline containing this tactic is applied, with per-system RAG status.
-    4-tier RAG logic:
-      GREEN = detection rule applied (covered)
-      AMBER = user explicitly marked as known gap (override_type='gap')
-      GREY  = user explicitly marked as N/A (override_type='na')
-      RED   = no action taken (default)
-    Also returns per-system applied_dets / unapplied_dets for the apply-to-system UI."""
-    step = get_playbook_step(step_id)
-    if not step:
-        return []
-    # Find which systems have this playbook applied
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT sb.system_id, s.name FROM system_baselines sb "
-            "JOIN systems s ON s.id = sb.system_id "
-            "WHERE sb.playbook_id = ? ORDER BY s.name",
-            [step.playbook_id],
-        ).fetchall()
-    if not rows:
-        return []
-
-    rule_name_lookup: Dict[str, str] = {}
-    with _get_conn() as conn:
-        try:
-            rule_rows = conn.execute(
-                "SELECT rule_id, name, raw_data FROM detection_rules"
-            ).fetchall()
-        except Exception:
-            rule_rows = []
-    for rule_id, rule_name, raw_data in rule_rows:
-        keys = {str(rule_id or "").strip()}
-        try:
-            raw = json.loads(raw_data) if isinstance(raw_data, str) and raw_data.strip() else (raw_data or {})
-            if isinstance(raw, dict):
-                keys.add(str(raw.get("id") or "").strip())
-                keys.add(str(raw.get("rule_id") or "").strip())
-                params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
-                keys.add(str(params.get("rule_id") or "").strip())
-        except Exception:
-            pass
-        for key in keys:
-            if key and rule_name:
-                rule_name_lookup[key] = rule_name
-
-    def detection_label(detection: StepDetection) -> str:
-        ref = detection.rule_ref or ""
-        if ref and ref in rule_name_lookup:
-            return rule_name_lookup[ref]
-        if detection.note:
-            return detection.note
-        if ref and "-" in ref and len(ref) >= 32:
-            return "Unresolved SIEM rule" if (detection.source or "manual") == "siem" else "Unresolved rule"
-        return ref or "Rule"
-
-    # Pre-load applied_detections for this step's detection IDs
-    det_ids = [d.id for d in step.detections]
-    applied_host_map: Dict[str, set] = {}  # {detection_id: set(host_id)}
-    applied_sys_map: Dict[str, set] = {}   # {detection_id: set(system_id)} for system-level rows
-    if det_ids:
-        with _get_conn() as conn:
-            ph = ",".join("?" for _ in det_ids)
-            ad_rows = conn.execute(
-                f"SELECT detection_id, host_id, system_id FROM applied_detections WHERE detection_id IN ({ph})",
-                det_ids,
-            ).fetchall()
-        for det_id, host_id, sys_id in ad_rows:
-            if host_id:
-                applied_host_map.setdefault(det_id, set()).add(host_id)
-            elif sys_id:
-                applied_sys_map.setdefault(det_id, set()).add(sys_id)
-
-    # Load blind spots for this tactic
-    blind_spots = get_blind_spots("tactic", step_id, client_id=client_id)
-
-    result = []
-    for system_id, system_name in rows:
-        # Fetch system description
-        sys_obj = get_system(system_id, client_id=client_id)
-        system_description = sys_obj.description if sys_obj else ""
-        hosts = list_hosts(system_id, client_id=client_id)
-        host_ids = {h.id for h in hosts}
-
-        # Check direct application: detection applied to at least one host in system,
-        # or applied at system level (for systems with no hosts).
-        # Sigma-sourced detections are excluded — they cannot be applied for coverage.
-        sys_applied = []
-        sys_unapplied = []
-        for d in step.detections:
-            if (d.source or "manual") == "sigma":
-                continue  # sigma rules are not appliable
-            det_hosts = applied_host_map.get(d.id, set())
-            det_systems = applied_sys_map.get(d.id, set())
-            label = detection_label(d)
-            if (host_ids and (det_hosts & host_ids)) or (system_id in det_systems):
-                sys_applied.append({"id": d.id, "label": label})
-            else:
-                sys_unapplied.append({"id": d.id, "label": label})
-
-        # Check for blind spot on this system — distinguish gap vs na
-        sys_blind_spots = [bs for bs in blind_spots if bs.system_id == system_id]
-        has_na = any(bs.override_type == "na" for bs in sys_blind_spots)
-        has_gap = any(bs.override_type == "gap" for bs in sys_blind_spots)
-        bs_reason = next((bs.reason for bs in sys_blind_spots), "")
-
-        # 4-tier status: green > grey > amber > red
-        if sys_applied:
-            status = "green"
-        elif has_na:
-            status = "grey"
-        elif has_gap:
-            status = "amber"
-        else:
-            status = "red"
-
-        result.append({
-            "system_id": system_id,
-            "system_name": system_name,
-            "system_description": system_description or "",
-            "host_count": len(hosts),
-            "status": status,
-            "blind_spot_reason": bs_reason,
-            "override_type": "na" if has_na else ("gap" if has_gap else ""),
-            "matched_rules": [],
-            "applied_dets": sys_applied,
-            "unapplied_dets": sys_unapplied,
-        })
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -3667,33 +4237,88 @@ def get_step_affected_systems(step_id: str, client_id: str = None) -> List[Dict]
 def add_blind_spot(entity_type: str, entity_id: str, reason: str,
                    system_id: str = None, host_id: str = None,
                    created_by: str = "", override_type: str = "gap",
-                   client_id: str = None) -> BlindSpot:
+                   client_id: str = None, review_by: Optional[date] = None) -> BlindSpot:
     """Record a known blind spot (negative coverage).
-    override_type: 'gap' (amber/known gap) or 'na' (grey/not applicable)."""
+    override_type: 'gap' (amber/known gap) or 'na' (grey/not applicable).
+    review_by: when the mark should be looked at again (None = no date)."""
     if override_type not in ("gap", "na"):
         override_type = "gap"
+    cols = ["entity_type", "entity_id", "system_id", "host_id", "reason", "created_by", "override_type", "review_by"]
+    vals = [entity_type, entity_id, system_id, host_id, reason, created_by, override_type, review_by]
+    if client_id:
+        cols.append("client_id")
+        vals.append(client_id)
     with _get_conn() as conn:
-        if client_id:
-            r = conn.execute(
-                "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type, client_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
-                [entity_type, entity_id, system_id, host_id, reason, created_by, override_type, client_id],
-            ).fetchone()
-        else:
-            r = conn.execute(
-                "INSERT INTO blind_spots (entity_type, entity_id, system_id, host_id, reason, created_by, override_type) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, override_type",
-                [entity_type, entity_id, system_id, host_id, reason, created_by, override_type],
-            ).fetchone()
-    return BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                     host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
-                     override_type=r[8] if r[8] else "gap")
+        r = conn.execute(
+            f"INSERT INTO blind_spots ({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)}) "
+            f"RETURNING {_bs_cols()}",
+            vals,
+        ).fetchone()
+        if entity_type == "tactic":
+            _record_technique_event(
+                conn, "na_added" if override_type == "na" else "gap_added", step_id=entity_id,
+                system_id=system_id, reason=reason, detail=_review_note(review_by),
+                actor=created_by or None, client_id=client_id,
+            )
+    return _bs_from_row(r)
 
 
-def remove_blind_spot(blind_spot_id: str, client_id: str = None) -> bool:
+def _review_note(review_by: Optional[date]) -> Optional[str]:
+    return f"Review by {review_by.isoformat()}" if review_by else None
+
+
+def update_blind_spot(blind_spot_id: str, reason: str, override_type: str,
+                      review_by: Optional[date] = None, actor: str = None,
+                      client_id: str = None) -> Optional[BlindSpot]:
+    """Edit a known gap / N/A mark in place: its type, reason and review date. The history
+    records what it was changed from, so the previous reasoning is never lost."""
+    if override_type not in ("gap", "na"):
+        override_type = "gap"
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
+        before = conn.execute(
+            f"SELECT {_bs_cols()} FROM blind_spots WHERE id = ?" + frag, [blind_spot_id] + params,
+        ).fetchone()
+        if not before:
+            return None
+        old = _bs_from_row(before)
+        r = conn.execute(
+            "UPDATE blind_spots SET reason = ?, override_type = ?, review_by = ?, "
+            "updated_at = now(), updated_by = ? WHERE id = ?" + frag + f" RETURNING {_bs_cols()}",
+            [reason, override_type, review_by, actor or "", blind_spot_id] + params,
+        ).fetchone()
+        new = _bs_from_row(r)
+        if old.entity_type == "tactic":
+            label = {"gap": "Known gap", "na": "Not applicable"}
+            changes = []
+            if old.override_type != new.override_type:
+                changes.append(f"{label[old.override_type]} → {label[new.override_type]}")
+            if old.reason != new.reason:
+                changes.append(f"was: {old.reason}")
+            if old.review_by != new.review_by:
+                changes.append(_review_note(new.review_by) or "Review date cleared")
+            if changes:
+                _record_technique_event(
+                    conn, "na_edited" if new.override_type == "na" else "gap_edited",
+                    step_id=old.entity_id, system_id=old.system_id, reason=new.reason,
+                    detail="; ".join(changes), actor=actor, client_id=client_id,
+                )
+    return new
+
+
+def remove_blind_spot(blind_spot_id: str, client_id: str = None, actor: str = None) -> bool:
+    frag, params = _cf("", client_id)
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT entity_type, entity_id, system_id, reason, COALESCE(override_type, 'gap') "
+            "FROM blind_spots WHERE id = ?" + frag, [blind_spot_id] + params,
+        ).fetchone()
         cnt = conn.execute("DELETE FROM blind_spots WHERE id = ?" + frag, [blind_spot_id] + params).rowcount
+        if row and cnt and row[0] == "tactic":
+            _record_technique_event(
+                conn, "na_removed" if row[4] == "na" else "gap_removed", step_id=row[1],
+                system_id=row[2], reason=row[3], actor=actor, client_id=client_id,
+            )
     return cnt > 0
 
 
@@ -3702,37 +4327,29 @@ def get_blind_spots(entity_type: str, entity_id: str, client_id: str = None) -> 
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
-            "COALESCE(override_type, 'gap') "
-            "FROM blind_spots WHERE entity_type = ? AND entity_id = ?" + frag + " ORDER BY created_at",
+            f"SELECT {_bs_cols()} FROM blind_spots WHERE entity_type = ? AND entity_id = ?" + frag
+            + " ORDER BY created_at",
             [entity_type, entity_id] + params,
         ).fetchall()
-    return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
-                      override_type=r[8]) for r in rows]
+    return [_bs_from_row(r) for r in rows]
 
 
 def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
     """Get all blind spots affecting a system (by system_id or by host_id belonging to system)."""
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT id, entity_type, entity_id, system_id, host_id, reason, created_by, created_at, "
-            "COALESCE(override_type, 'gap') "
-            "FROM blind_spots WHERE system_id = ? ORDER BY created_at",
+            f"SELECT {_bs_cols()} FROM blind_spots WHERE system_id = ? ORDER BY created_at",
             [system_id],
         ).fetchall()
         host_rows = conn.execute(
-            "SELECT bs.id, bs.entity_type, bs.entity_id, bs.system_id, bs.host_id, bs.reason, bs.created_by, bs.created_at, "
-            "COALESCE(bs.override_type, 'gap') "
-            "FROM blind_spots bs JOIN hosts h ON h.id = bs.host_id WHERE h.system_id = ? ORDER BY bs.created_at",
+            f"SELECT {_bs_cols('bs')} FROM blind_spots bs JOIN hosts h ON h.id = bs.host_id "
+            "WHERE h.system_id = ? ORDER BY bs.created_at",
             [system_id],
         ).fetchall()
     all_rows = {r[0]: r for r in rows}
     for r in host_rows:
         all_rows[r[0]] = r
-    return [BlindSpot(id=r[0], entity_type=r[1], entity_id=r[2], system_id=r[3],
-                      host_id=r[4], reason=r[5], created_by=r[6], created_at=r[7],
-                      override_type=r[8]) for r in all_rows.values()]
+    return [_bs_from_row(r) for r in all_rows.values()]
 
 
 # ---------------------------------------------------------------------------
@@ -3898,73 +4515,14 @@ def clone_baseline_cross_tenant(
 
 
 def _clone_baseline_inner(src, tgt, baseline_id: str, target_client_id: str) -> Dict:
-    """Core cloning logic shared by both single-DB and multi-DB paths."""
-    import uuid
-
-    # 1. Fetch source playbook
+    """Core cloning logic shared by both single-DB and multi-DB paths. Only a template can be
+    cloned; a system's own copy belongs to that system."""
     pb = src.execute(
-        "SELECT id, name, description FROM playbooks WHERE id = ?",
+        "SELECT name FROM playbooks WHERE id = ? AND system_id IS NULL",
         [baseline_id],
     ).fetchone()
     if not pb:
         raise ValueError("Baseline not found in source tenant.")
-
-    new_pb_id = str(uuid.uuid4())
-    clone_name = f"{pb[1]} (clone)"
-
-    tgt.execute(
-        "INSERT INTO playbooks (id, name, description, client_id) "
-        "VALUES (?, ?, ?, ?)",
-        [new_pb_id, clone_name, pb[2] or "", target_client_id],
-    )
-
-    # 2. Copy playbook_steps with new IDs
-    steps = src.execute(
-        "SELECT id, step_number, title, technique_id, required_rule, "
-        "description, tactic FROM playbook_steps WHERE playbook_id = ?",
-        [baseline_id],
-    ).fetchall()
-
-    step_id_map: Dict[str, str] = {}
-    for s in steps:
-        new_step_id = str(uuid.uuid4())
-        step_id_map[s[0]] = new_step_id
-        tgt.execute(
-            "INSERT INTO playbook_steps "
-            "(id, playbook_id, step_number, title, technique_id, "
-            "required_rule, description, tactic) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [new_step_id, new_pb_id, s[1], s[2], s[3], s[4], s[5], s[6]],
-        )
-
-    # 3. Copy step_techniques
-    if step_id_map:
-        old_ids = list(step_id_map.keys())
-        ph = ",".join("?" for _ in old_ids)
-        techs = src.execute(
-            f"SELECT id, step_id, technique_id FROM step_techniques "
-            f"WHERE step_id IN ({ph})",
-            old_ids,
-        ).fetchall()
-        for t in techs:
-            tgt.execute(
-                "INSERT INTO step_techniques (id, step_id, technique_id) "
-                "VALUES (?, ?, ?)",
-                [str(uuid.uuid4()), step_id_map[t[1]], t[2]],
-            )
-
-        # 4. Copy step_detections
-        dets = src.execute(
-            f"SELECT id, step_id, rule_ref, note, source "
-            f"FROM step_detections WHERE step_id IN ({ph})",
-            old_ids,
-        ).fetchall()
-        for d in dets:
-            tgt.execute(
-                "INSERT INTO step_detections "
-                "(id, step_id, rule_ref, note, source) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [str(uuid.uuid4()), step_id_map[d[1]], d[2], d[3], d[4]],
-            )
-
-    return {"id": new_pb_id, "name": clone_name, "steps": len(steps)}
+    clone_name = f"{pb[0]} (clone)"
+    new_pb_id, steps = _copy_playbook(src, tgt, baseline_id, name=clone_name, client_id=target_client_id)
+    return {"id": new_pb_id, "name": clone_name, "steps": steps}

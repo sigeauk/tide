@@ -1,0 +1,38 @@
+{#
+  SIEM coverage: which destinations count toward THIS system's coverage.
+  Context: system_id, coverage_destinations, counted_total, saved (optional).
+#}
+{% from "macros/icons.html" import icon %}
+<div name="SIEM Coverage Dialog" class="modal-overlay" data-rm-overlay>
+    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="siem-cov-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="siem-cov-title">{{ icon('target', '16') }} SIEM coverage</h3>
+            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+        </div>
+        <p class="rule-help">
+            A rule only counts as covering a technique on this system if it lives at one of these
+            destinations. A rule sitting only in staging protects nothing here.
+        </p>
+        {% if coverage_destinations %}
+        <form hx-post="/api/systems/{{ system_id }}/coverage-destinations"
+              hx-target="#modal-container" hx-swap="innerHTML" class="sys-dialog__form">
+            {% for d in coverage_destinations %}
+            <label class="sys-dialog__row">
+                <input type="checkbox" name="scope" value="{{ d.siem_id }}|{{ d.space }}" {% if d.counted %}checked{% endif %}>
+                <span class="status-pill"{% if d.color %} style="border-color:{{ d.color }};color:{{ d.color }};"{% endif %}>{{ d.name }}</span>
+                <span class="text-muted">{{ d.space }}</span>
+            </label>
+            {% endfor %}
+            {% if saved %}
+            <p class="sys-dialog__saved" role="status">{{ icon('circle-check', '13') }} Saved. {{ counted_total }} of {{ coverage_destinations | length }} destination{{ 's' if (coverage_destinations | length) != 1 }} count toward this system.</p>
+            {% endif %}
+            <div class="modal-actions">
+                <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+                <button name="Save SIEM Coverage" type="submit" class="btn btn-primary">Save</button>
+            </div>
+        </form>
+        {% else %}
+        <p class="text-muted">This client has no linked SIEM destinations yet. Link one under Management.</p>
+        {% endif %}
+    </div>
+</div>

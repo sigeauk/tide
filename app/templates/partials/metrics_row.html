@@ -4,30 +4,30 @@
 {# Compact cards: a one-line summary on the face, full detail in the hover/focus tip (.metric-tip). #}
 
 {# ── 1. Total Rules ── #}
-{% set has_states = (metrics.state_production + metrics.state_staging + metrics.state_migrated + metrics.state_deprecated) > 0 %}
-{% set spaces = metrics.rules_by_space.items() | list %}
+{% set has_states = (metrics.state_linked + metrics.state_deprecated + metrics.state_offline) > 0 %}
+{% set scopes = metrics.rules_by_scope.items() | list %}
+{% set scope_labels = scope_labels | default({}) %}
 <div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ metrics.total_rules }}</p>
     <p class="metric-label">Total Rules</p>
     <p class="metric-sub">
         {% if has_states %}
-            <span>P:{{ metrics.state_production }}</span> <span>S:{{ metrics.state_staging }}</span> <span>M:{{ metrics.state_migrated }}</span> <span>D:{{ metrics.state_deprecated }}</span>
-        {% elif spaces %}
-            {% for name, count in spaces[:3] %}<span style="display:block;">{{ space_labels.get(name, name | capitalize) }}: {{ count }}</span>{% endfor %}
+            <span>Linked:{{ metrics.state_linked }}</span> <span>Deprecated:{{ metrics.state_deprecated }}</span>{% if metrics.state_offline %} <span>SIEM offline:{{ metrics.state_offline }}</span>{% endif %}
+        {% elif scopes %}
+            {% for key, count in scopes[:3] %}<span style="display:block;">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }}: {{ count }}</span>{% endfor %}
         {% else %}
             No spaces
         {% endif %}
     </p>
     <div class="metric-tip" role="tooltip">
         {% if has_states %}
-        <div class="metric-tip__row"><b>P</b> Production only <span>{{ metrics.state_production }}</span></div>
-        <div class="metric-tip__row"><b>S</b> Staging only<span>{{ metrics.state_staging }}</span></div>
-        <div class="metric-tip__row"><b>M</b> Migrated (in production and staging) <span>{{ metrics.state_migrated }}</span></div>
-        <div class="metric-tip__row"><b>D</b> Deprecated (in no active SIEM) <span>{{ metrics.state_deprecated }}</span></div>
+        <div class="metric-tip__row"><b>Linked</b> Has another rule in its Linked panel <span>{{ metrics.state_linked }}</span></div>
+        <div class="metric-tip__row"><b>Deprecated</b> Not found in the SIEM at the last successful sync <span>{{ metrics.state_deprecated }}</span></div>
+        {% if metrics.state_offline %}<div class="metric-tip__row"><b>SIEM offline</b> Its SIEM could not be reached before the last sync <span>{{ metrics.state_offline }}</span></div>{% endif %}
         {% endif %}
-        {% if spaces %}
+        {% if scopes %}
         <div class="metric-tip__head">Rules per SIEM</div>
-        {% for name, count in spaces %}<div class="metric-tip__row">{{ space_labels.get(name, name | capitalize) }} <span>{{ count }}</span></div>{% endfor %}
+        {% for key, count in scopes %}<div class="metric-tip__row">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }} <span>{{ count }}</span></div>{% endfor %}
         {% endif %}
     </div>
 </div>

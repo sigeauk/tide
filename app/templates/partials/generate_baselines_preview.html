@@ -40,8 +40,7 @@
         <button name="Generate Baseline" class="btn btn-primary gen-btn-generate"
                 hx-post="/api/baselines/generate"
                 hx-include="#gen-baselines-form"
-                hx-target="#baseline-coverage"
-                hx-swap="innerHTML"
+                hx-swap="none"
                 hx-indicator="#gen-execute-indicator"
                 hx-on::after-request="document.getElementById('generate-baselines-modal').style.display='none';"
                 style="display:flex;align-items:center;gap:0.35rem;">

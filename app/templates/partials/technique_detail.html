@@ -1,288 +1,128 @@
-{% from "components/mitre_pill.html" import mitre_pill %}
+{#
+  MITRE technique side panel (heatmap, rule and technique windows' ATT&CK pills).
+  Built from the windows' parts: header badges as in the rule/technique window, one rm-fold per
+  section, related ATT&CK items in the rm-mitre list format, Sigma rules in the technique window's
+  sm-sigma format. The folds share one name, so opening one closes the others.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
 
-<style>
-    .slide-panel .tech-section-card {
-        margin-top: 0.55rem;
-        padding: 0.28rem 0.4rem;
-    }
-    .slide-panel .tech-collapse-title {
-        list-style: none;
-        display: flex;
-        align-items: center;
-        gap: 0.35rem;
-        min-height: 1.84rem;
-        padding: 0.22rem 0.5rem;
-        margin: 0;
-        line-height: 1.2;
-        cursor: pointer;
-    }
-    .slide-panel .tech-collapse-title::-webkit-details-marker {
-        display: none;
-    }
-    .slide-panel .tech-collapse-title-link {
-        color: inherit;
-        text-decoration: none;
-    }
-    .slide-panel .tech-collapse-title-link:hover {
-        color: var(--color-primary);
-        text-decoration: underline;
-    }
-    .slide-panel .tech-rel-list {
-        margin-top: 0.35rem;
-    }
-    .slide-panel .tech-rel-item {
-        display: block;
-    }
-    .slide-panel .tech-rel-item > summary {
-        list-style: none;
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        gap: 0.38rem;
-        padding: 0.22rem 0.5rem;
-        min-height: 1.65rem;
-    }
-    .slide-panel .tech-rel-item > summary::-webkit-details-marker {
-        display: none;
-    }
-    .slide-panel .tech-rel-item .cve-card-item__id {
-        min-width: 4.9rem;
-        width: 4.9rem;
-        font-size: 0.62rem;
-        font-weight: 700;
-        letter-spacing: 0.03em;
-        text-transform: uppercase;
-    }
-    .slide-panel .tech-rel-item .cve-card-item__name {
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .slide-panel .tech-rel-item[open] .cve-card-item__name {
-        white-space: normal;
-        overflow: visible;
-        text-overflow: unset;
-        overflow-wrap: anywhere;
-    }
-    .slide-panel .tech-rel-item .tech-rel-description {
-        margin: 0.1rem 0.5rem 0.45rem;
-        font-size: 0.75rem;
-        color: var(--color-text-muted);
-        line-height: 1.42;
-    }
-</style>
+{% set cov_class = {'active': 'success', 'latent': 'warning'}.get(coverage_state, 'danger') %}
 
-{% macro relation_row(item_id, item_name, item_url, item_description='') %}
-<details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-    <summary>
-        <div class="cve-card-item__id">{{ item_id }}</div>
-        <div class="cve-card-item__body"><div class="cve-card-item__name"><a href="{{ item_url }}">{{ item_name }}</a></div></div>
-    </summary>
-    <div class="tech-rel-description md-content">
-        {{ (item_description or 'No description available.') | md }}
+{% macro relation_fold(title, items) -%}
+<details class="rm-fold" name="technique-panel">
+    <summary><span>{{ title }} <span class="rm-fold__count">{{ items | length }}</span></span></summary>
+    <div class="rm-about">
+        <ul class="rm-mitre">
+            {% for it in items %}
+            <li>
+                <span class="rm-chip rm-chip--mono">{{ it.id }}</span>
+                <span class="rm-mitre__name">
+                    <a href="{{ it.url }}">{{ it.name }}</a>
+                    {% if it.summary %}<small title="{{ it.summary }}">{{ it.summary | truncate(160) }}</small>{% endif %}
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
     </div>
 </details>
-{% endmacro %}
+{%- endmacro %}
 
-<!-- Technique Detail Slide-Over Panel -->
 <div name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
     <div name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
         <div class="slide-panel-resize-handle" data-slide-panel-resize title="Resize panel" aria-hidden="true"></div>
         <div class="slide-panel-header">
-            <div style="min-width:0;">
+            <div class="rm-header__main">
                 {% if parent_technique %}
                 <div class="technique-crumb">
                     <a href="{{ parent_technique.url }}">{{ parent_technique.id }} - {{ parent_technique.name }}</a>
-                    <span>></span>
+                    <span>&gt;</span>
                     <span>{{ technique.id }}</span>
                 </div>
                 {% endif %}
-                <h2 class="technique-name"><a class="tech-collapse-title-link" href="/mitre/technique/{{ technique.id }}">{{ technique.id }} - {{ technique.name }}</a></h2>
-                <div class="tech-head-lines" style="margin-top:0.5rem;">
-                    {% if tactic_pills %}
-                    <div class="tech-head-line">
-                        <span class="tech-head-title">Tactics: </span>
-                        <span class="tech-head-value">{{ tactic_pills | join(', ') }}</span>
-                    </div>
-                    {% endif %}
-                    {% if platform_pills %}
-                    <div class="tech-head-line">
-                        <span class="tech-head-title">Platforms: </span>
-                        <span class="tech-head-value">{{ platform_pills | join(', ') }}</span>
-                    </div>
-                    {% endif %}
-                    <div class="tech-head-line">
-                        <span class="tech-head-title">Data Sources: </span>
-                        <span class="tech-head-value">{{ required_logs | join(', ') if required_logs else 'N/A' }}</span>
-                    </div>
+                <h2 class="technique-name"><a class="rm-item__open" href="/mitre/technique/{{ technique.id }}" title="Open the technique page">{{ technique.id }} - {{ technique.name }}</a></h2>
+                <div class="rm-header__badges">
+                    <span class="status-pill status-{{ cov_class }}" title="{{ coverage_detail }}">{{ icon('shield-check', '12') }} {{ coverage_label }}</span>
+                    {% for t in tactic_pills %}<span class="status-pill" title="Tactic">{{ t }}</span>{% endfor %}
+                    {% for p in platform_pills %}<span class="rm-chip" title="Platform">{{ p }}</span>{% endfor %}
                 </div>
             </div>
-            <button name="Close Technique Panel" class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M18 6L6 18M6 6l12 12"/>
-                </svg>
+            <button name="Close Technique Panel" class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close" aria-label="Close">
+                {{ icon('x', '20') }}
             </button>
         </div>
 
         <div class="slide-panel-content">
-            <div class="technique-popup-stack">
-                <section class="technique-main-column">
-                    <div class="card card-padded tech-section-card">
-                    <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                        <summary class="rules-title tech-collapse-title">Description</summary>
-                        {% set desc = (technique_description or 'No description available.') %}
-                        <div class="technique-description">{{ desc | md }}</div>
-                    </details>
+            <div class="tech-section-body">
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>Description</span></summary>
+                    <div class="rm-about">
+                        <div class="technique-description md-content">{{ (technique_description or 'No description available.') | md }}</div>
                     </div>
+                </details>
 
-                    {% if required_logs %}
-                    <div class="card card-padded" style="margin-top:0.75rem;">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                        <summary class="rules-title tech-collapse-title">Data Sources</summary>
-                        <ul class="tech-simple-list">
-                            {% for ds in required_logs %}
-                            <li>{{ ds }}</li>
+                {% if required_logs %}
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>Data sources <span class="rm-fold__count">{{ required_logs | length }}</span></span></summary>
+                    <div class="rm-about">
+                        <div class="rm-chips" title="Log sources named by this technique's rules">
+                            {% for ds in required_logs %}<span class="rm-chip rm-chip--mono">{{ ds }}</span>{% endfor %}
+                        </div>
+                    </div>
+                </details>
+                {% endif %}
+
+                {% if subtechniques %}{{ relation_fold('Sub-techniques', subtechniques) }}{% endif %}
+                {% if related_groups %}{{ relation_fold('Groups', related_groups) }}{% endif %}
+                {% if related_campaigns %}{{ relation_fold('Campaigns', related_campaigns) }}{% endif %}
+                {% if related_software %}{{ relation_fold('Software & tools', related_software) }}{% endif %}
+                {% if related_mitigations %}{{ relation_fold('Mitigations', related_mitigations) }}{% endif %}
+                {% if related_procedure_examples %}{{ relation_fold('Procedure examples', related_procedure_examples) }}{% endif %}
+
+                {% if nist_capabilities %}
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>NIST 800-53 capabilities <span class="rm-fold__count">{{ nist_capabilities | length }}</span></span></summary>
+                    <div class="rm-about">
+                        <ul class="rm-mitre">
+                            {% for c in nist_capabilities %}
+                            <li>
+                                <span class="rm-chip rm-chip--mono">{{ c.group_code }}</span>
+                                <span class="rm-mitre__name"><a href="{{ c.url }}">{{ c.title }}</a>{% if c.group_name %}<small>{{ c.group_name }}</small>{% endif %}</span>
+                            </li>
                             {% endfor %}
                         </ul>
-                        </details>
                     </div>
-                    {% endif %}
+                </details>
+                {% endif %}
 
-                    {% if subtechniques %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                        <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/techniques" onclick="event.stopPropagation();">Sub-techniques</a> <span>({{ subtechniques|length }})</span></summary>
-                        <div class="cve-list tech-rel-list">
-                            {% for sub in subtechniques %}
-                            {{ relation_row(sub.id, sub.name, sub.url, sub.description) }}
+                {% if sigma_related_rules %}
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>Sigma rules <span class="rm-fold__count">{{ sigma_related_rules | length }}</span></span></summary>
+                    <div class="rm-about">
+                        <p class="text-muted sm-sigma__note">
+                            {% if sigma_related_rules | length > 40 %}The first 40 are shown.{% endif %}
+                            <a href="/sigma?technique={{ technique.id | urlencode }}">Open all in the Sigma library</a>
+                        </p>
+                        <ul class="sm-sigma">
+                            {% for srule in sigma_related_rules[:40] %}
+                            <li class="sm-sigma__item">
+                                <a class="sm-sigma__title" href="/sigma?technique={{ technique.id | urlencode }}&rule={{ (srule.id or '') | urlencode }}"
+                                   title="{{ srule.description or srule.title }}">{{ srule.title }}</a>
+                                <span class="sm-sigma__meta">
+                                    {% if srule.level %}<span class="sev-pill sev-{{ srule.level | lower }}">{{ srule.level | upper }}</span>{% endif %}
+                                    <span class="text-muted">{{ (srule.status or 'experimental') | lower }}</span>
+                                </span>
+                            </li>
                             {% endfor %}
-                        </div>
-                        </details>
+                        </ul>
                     </div>
-                    {% endif %}
+                </details>
+                {% endif %}
 
-                    {% if related_groups %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/groups" onclick="event.stopPropagation();">Groups</a> <span>({{ related_groups|length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for g in related_groups %}
-                                {{ relation_row(g.id, g.name, g.url, g.description) }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if related_campaigns %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/campaigns" onclick="event.stopPropagation();">Campaigns</a> <span>({{ related_campaigns|length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for c in related_campaigns %}
-                                {{ relation_row(c.id, c.name, c.url, c.description) }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if related_software %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/software" onclick="event.stopPropagation();">Software &amp; Tools</a> <span>({{ related_software|length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for s in related_software %}
-                                {{ relation_row(s.id, s.name, s.url, s.description) }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if related_mitigations %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/mitigations" onclick="event.stopPropagation();">Mitigations</a> <span>({{ related_mitigations|length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for m in related_mitigations %}
-                                {{ relation_row(m.id, m.name, m.url, m.description) }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if related_procedure_examples %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title">Procedure Examples ({{ related_procedure_examples | length }})</summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for ex in related_procedure_examples %}
-                                {{ relation_row(ex.id, ex.name, ex.url, ex.use) }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if nist_capabilities %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/mitre/nist" onclick="event.stopPropagation();">NIST 800-53 Capabilities</a> <span>({{ nist_capabilities | length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for capability in nist_capabilities %}
-                                {{ relation_row(capability.group_code, capability.title, capability.url, capability.description or capability.detail or '') }}
-                                {% endfor %}
-                            </div>
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if sigma_related_rules %}
-                    <div class="card card-padded tech-section-card">
-                        <details class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                            <summary class="rules-title tech-collapse-title"><a class="tech-collapse-title-link" href="/sigma?technique={{ technique.id | urlencode }}" onclick="event.stopPropagation();">Sigma Rules</a> <span>({{ sigma_related_rules | length }})</span></summary>
-                            <div class="cve-list tech-rel-list">
-                                {% for srule in sigma_related_rules[:40] %}
-                                {% set s_status = (srule.status | default('experimental')) | lower %}
-                                {% set s_status_class = 'text-success' if s_status == 'stable' else ('text-primary' if s_status == 'test' else ('text-warning' if s_status == 'experimental' else 'text-danger')) %}
-                                <details class="cve-card-item cve-card-item--available tech-rel-item" ontoggle="if(this.open){var wrap=this.closest('.tech-rel-list');if(wrap){wrap.querySelectorAll('details.tech-rel-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                                    <summary>
-                                        <div class="cve-card-item__id">
-                                            <span class="{{ s_status_class }}">{{ s_status | upper }}</span>
-                                        </div>
-                                        <div class="cve-card-item__body"><div class="cve-card-item__name"><a href="/sigma?technique={{ technique.id | urlencode }}&rule={{ (srule.id or '') | urlencode }}">{{ srule.title }}</a></div></div>
-                                    </summary>
-                                    <div class="tech-rel-description md-content">
-                                        {{ (srule.description or 'No description available.') | md }}
-                                    </div>
-                                </details>
-                                {% endfor %}
-                            </div>
-                            {% if sigma_related_rules | length > 40 %}
-                            <div class="cve-card-item__meta" style="margin-top:0.4rem;">Showing first 40 rules. Open Sigma page to view all.</div>
-                            {% endif %}
-                        </details>
-                    </div>
-                    {% endif %}
-
-                    {% if has_rules %}
-                    <div class="card card-padded tech-section-card">
-                        <details open class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                        <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">({{ total_rule_count }} rule{{ '' if total_rule_count == 1 else 's' }})</span>{% if search %}<span class="rules-title-filter text-primary"> filtered by "{{ search }}"</span>{% endif %}</summary>
-                        <div class="tech-section-body">
-                        <div class="technique-status {{ 'status-covered' if coverage_state == 'active' else ('status-latent' if coverage_state == 'latent' else 'status-gap') }}">
-                            {% if coverage_state == 'active' %}
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-                            {% elif coverage_state == 'latent' %}
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                            {% else %}
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                            {% endif %}
-                            {{ coverage_label }}
-                        </div>
-                        <div class="text-muted">{{ coverage_detail }}</div>
+                <details class="rm-fold" name="technique-panel" open>
+                    <summary><span>Detection rules <span class="rm-fold__count">{{ total_rule_count }}</span>{% if search %} <span class="rm-fold__count">filtered by "{{ search }}"</span>{% endif %}</span></summary>
+                    <div class="rm-about">
+                        <p class="text-muted sm-muted">{{ coverage_detail if has_rules else 'No detection rules found for this technique.' }}</p>
+                        {% if has_rules %}
                         <div name="Open Rules" id="technique-rules"
                              hx-get="/api/heatmap/technique/{{ technique.id }}/rules{% if search %}?search={{ search | urlencode }}{% endif %}"
                              hx-trigger="load"
@@ -292,27 +132,10 @@
                                 <span>Loading rules...</span>
                             </div>
                         </div>
-                        </div>
-                        </details>
+                        {% endif %}
                     </div>
-                    {% else %}
-                    <div class="card card-padded tech-section-card">
-                        <details open class="tech-accordion-item" ontoggle="if(this.open){var p=this.closest('.slide-panel');if(p){p.querySelectorAll('details.tech-accordion-item[open]').forEach(function(d){if(d!==this)d.open=false;},this);}}">
-                        <summary class="rules-title tech-collapse-title">Detection Rules <span class="rules-title-filter text-muted">(0 rules)</span></summary>
-                        <div class="tech-section-body">
-                        <div class="technique-status status-gap">
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-                            No Coverage
-                        </div>
-                        <div class="text-muted">No related Sigma rules detected</div>
-                        <div class="text-muted">No detection rules found for this technique.</div>
-                        </div>
-                        </details>
-                    </div>
-                    {% endif %}
-                </section>
+                </details>
             </div>
         </div>
     </div>
 </div>
-

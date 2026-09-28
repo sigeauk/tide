@@ -1,7 +1,10 @@
-{# Partial: baseline_tactics.html — Techniques grouped by MITRE Kill Chain Phase
-   Context: baseline (Baseline with tactics list), step_coverage (dict step_id -> [{system_id, system_name, status}])
+{# Partial: baseline_tactics.html — a template's techniques, grouped by MITRE kill-chain phase.
+   Context: baseline (a template, with its tactics list), editable (show Edit / Remove)
+
+   A template is techniques and descriptions only. A system that applies it gets its own copy,
+   and coverage, rule mappings and gaps live on that copy, on the system's page.
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 
 {% set KILL_CHAIN = ["Reconnaissance","Resource Development","Initial Access","Execution",
@@ -59,51 +62,6 @@
     {% for step in baseline.tactics %}
     {% if (step.tactic or "Other") == tactic %}
 
-    {# Compute per-system coverage for this step #}
-    {% set cov = step_coverage.get(step.id, []) if step_coverage is defined else [] %}
-
-    {# Compute worst-case status #}
-    {% set ns_worst = namespace(val=4) %}
-    {% for c in cov %}
-      {% set p = STATUS_PRIORITY.get(c.status, 4) %}
-      {% if p < ns_worst.val %}{% set ns_worst.val = p %}{% endif %}
-    {% endfor %}
-    {% if cov %}
-      {% if ns_worst.val == 0 %}{% set worst = "red" %}
-      {% elif ns_worst.val == 1 %}{% set worst = "amber" %}
-      {% elif ns_worst.val == 2 %}{% set worst = "green" %}
-      {% else %}{% set worst = "grey" %}{% endif %}
-    {% else %}
-      {% set worst = "red" %}
-    {% endif %}
-
-    {% if worst == 'green' %}
-      {% set step_color = 'var(--color-success)' %}
-    {% elif worst == 'amber' %}
-      {% set step_color = 'var(--color-warning)' %}
-    {% elif worst == 'grey' %}
-      {% set step_color = 'var(--color-muted)' %}
-    {% else %}
-      {% set step_color = 'var(--color-danger)' %}
-    {% endif %}
-
-    {# Count per-status #}
-    {% set ns_g = namespace(c=0) %}{% set ns_a = namespace(c=0) %}{% set ns_r = namespace(c=0) %}{% set ns_y = namespace(c=0) %}
-    {% set ns_gn = namespace(names=[]) %}{% set ns_an = namespace(names=[]) %}{% set ns_rn = namespace(names=[]) %}{% set ns_yn = namespace(names=[]) %}
-    {% for c in cov %}
-      {% if c.status == 'green' %}{% set ns_g.c = ns_g.c + 1 %}{% set ns_gn.names = ns_gn.names + [c.system_name] %}
-      {% elif c.status == 'amber' %}{% set ns_a.c = ns_a.c + 1 %}{% set ns_an.names = ns_an.names + [c.system_name] %}
-      {% elif c.status == 'red' %}{% set ns_r.c = ns_r.c + 1 %}{% set ns_rn.names = ns_rn.names + [c.system_name] %}
-      {% elif c.status == 'grey' %}{% set ns_y.c = ns_y.c + 1 %}{% set ns_yn.names = ns_yn.names + [c.system_name] %}
-      {% endif %}
-    {% endfor %}
-
-    {# Build JSON coverage data for JS filtering #}
-    {% set cov_json = [] %}
-    {% for c in cov %}
-      {% set _ = cov_json.append('{"sid":"' ~ c.system_id ~ '","n":"' ~ c.system_name ~ '","s":"' ~ c.status ~ '"}') %}
-    {% endfor %}
-
     {% set primary_tid = step.techniques[0].technique_id if step.techniques else step.technique_id %}
     {% set display_tids = step.display_technique_ids if step.display_technique_ids is defined and step.display_technique_ids else ([primary_tid] if primary_tid else []) %}
     {% set first_tid = display_tids[0] if display_tids else '' %}
@@ -111,14 +69,13 @@
     <details class="cve-card-item cve-card-item--available baseline-technique-card"
          data-collapse-key="baseline-{{ baseline.id }}-step-{{ step.id }}"
          data-step-id="{{ step.id }}"
-         data-coverage='[{{ cov_json | join(",") }}]'
-         style="display:block;border-left-color:{{ step_color }};">
+         style="display:block;">
       <summary style="cursor:pointer;list-style:none;">
         <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
           <div class="cve-card-item__id cve-card-item__id--pill" style="display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:0.35rem;flex-wrap:nowrap;min-width:0;width:auto;white-space:nowrap;overflow:hidden;line-height:1;">
             {% if first_tid %}
-            {% set tid_rule_count = (ttp_rule_counts.get(first_tid_upper, 0) if ttp_rule_counts is defined else 0) %}
-            {{ mitre_pill(first_tid, covered=(tid_rule_count > 0), rule_count=tid_rule_count, clickable=true, size='sm', show_zero_count=true) }}
+            {# Neutral: a technique is a label on this step, not a verdict about it. #}
+            {{ mitre_pill(first_tid, neutral=true, clickable=true, size='sm') }}
             {% if display_tids and (display_tids | length) > 1 %}
             <span class="text-muted" style="display:inline-flex;align-items:center;font-size:0.72rem;line-height:1;white-space:nowrap;transform:translateY(-1px);">+{{ (display_tids | length) - 1 }}</span>
             {% endif %}
@@ -127,14 +84,29 @@
             {% endif %}
           </div>
           <div class="cve-card-item__body">
-            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;"><a name="Tactics" href="/baselines/{{ baseline.id }}/tactics/{{ step.id }}" onclick="event.stopPropagation();">{{ step.title }}</a></div>
+            <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;">{{ step.title }}</div>
           </div>
           <div class="cve-card-item__right">
-            <div class="cve-card-item__meta"><span>{{ cov | length }} system{{ 's' if (cov | length) != 1 else '' }}</span></div>
+            <div class="cve-card-item__meta">
+              <span title="ATT&amp;CK techniques tagged on this technique">{{ display_tids | length }} technique{{ 's' if (display_tids | length) != 1 }}</span>
+            </div>
           </div>
         </div>
       </summary>
       <div class="md-content" style="margin-top:0.45rem;">{{ (step.description or 'No description available.') | md }}</div>
+      {% if editable %}
+      <div class="bl-tech__actions">
+        <button name="Edit Technique" type="button" class="btn btn-secondary btn-sm"
+                hx-get="/api/baselines/tactics/{{ step.id }}/edit" hx-target="#modal-container" hx-swap="innerHTML">
+          {{ icon_text('edit-2', 'Edit', '12') }}
+        </button>
+        <button name="Remove Technique" type="button" class="btn btn-danger btn-sm"
+                hx-delete="/api/baselines/tactics/{{ step.id }}" hx-target="#baseline-tactics" hx-swap="innerHTML"
+                hx-confirm="Remove this technique from the template? Systems that already use the template keep their own copy of it.">
+          {{ icon_text('x', 'Remove', '12') }}
+        </button>
+      </div>
+      {% endif %}
     </details>
     {% endif %}
     {% endfor %}

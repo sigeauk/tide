@@ -47,6 +47,7 @@ TENANT_TABLES: List[str] = [
     "playbook_steps",
     "step_techniques",
     "step_detections",
+    "step_sigma_dismissals",
     "systems",
     "hosts",
     "software_inventory",
@@ -55,7 +56,6 @@ TENANT_TABLES: List[str] = [
     "applied_detections",
     "blind_spots",
     "classifications",
-    "quests",
     "vuln_detections",
     "cve_technique_overrides",
 ]
@@ -119,18 +119,23 @@ def import_tenant(conn, tables: Dict[str, dict], client_id: Optional[str] = None
     """
     present = _existing_tables(conn)
     summary: Dict[str, dict] = {}
-    # A baseline whose name already exists in the target (e.g. the two default
+    # A template whose name already exists in the target (e.g. the two default
     # baselines every new tenant is seeded with) is not imported a second time:
     # its steps are skipped and references to it are pointed at the existing one.
+    # A system's own baseline is never merged by name: it belongs to its system.
     pb_remap: Dict[str, str] = {}      # exported playbook id -> existing playbook id
     skip_steps: set = set()            # exported step ids belonging to skipped playbooks
     if "playbooks" in present and (tables.get("playbooks") or {}).get("rows"):
         block = tables["playbooks"]
         cols = block.get("columns") or []
         if "id" in cols and "name" in cols:
-            existing = {r[0]: r[1] for r in conn.execute("SELECT name, id FROM playbooks").fetchall()}
+            existing = {r[0]: r[1] for r in conn.execute(
+                "SELECT name, id FROM playbooks WHERE system_id IS NULL").fetchall()}
+            owner = cols.index("system_id") if "system_id" in cols else None
             for row in block["rows"]:
                 rid, rname = row[cols.index("id")], row[cols.index("name")]
+                if owner is not None and row[owner]:
+                    continue
                 if rname in existing and existing[rname] != rid:
                     pb_remap[rid] = existing[rname]
     if pb_remap and (tables.get("playbook_steps") or {}).get("rows"):
@@ -141,7 +146,8 @@ def import_tenant(conn, tables: Dict[str, dict], client_id: Optional[str] = None
                     skip_steps.add(row[cols.index("id")])
     # (table, column) -> rows to drop / values to rewrite
     drop_where = {("playbooks", "id"): set(pb_remap), ("playbook_steps", "playbook_id"): set(pb_remap),
-                  ("step_techniques", "step_id"): skip_steps, ("step_detections", "step_id"): skip_steps}
+                  ("step_techniques", "step_id"): skip_steps, ("step_detections", "step_id"): skip_steps,
+                  ("step_sigma_dismissals", "step_id"): skip_steps}
     remap_cols = {("system_baselines", "playbook_id"): pb_remap, ("system_baseline_snapshots", "baseline_id"): pb_remap}
 
     for table in TENANT_TABLES:
@@ -186,6 +192,10 @@ def import_tenant(conn, tables: Dict[str, dict], client_id: Optional[str] = None
             added += len(cur.fetchall()) if keyed else 1
         note = f"{dropped} already present by name" if dropped else ""
         summary[table] = {"added": added, "skipped": len(rows) - added, "note": note}
+    # An export from before baselines belonged to systems shares one baseline between them;
+    # give each system its own copy, exactly as upgrading does.
+    from app.services.database import DatabaseService
+    DatabaseService.split_system_baselines(conn)
     return summary
 
 

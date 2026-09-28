@@ -4,7 +4,76 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [5.1.2] - 2026-09-22
+## [6.0.0] - 2026-09-28
+
+### Added
+- **Name your SIEM destinations.** Every space in a linked Elastic SIEM can now be linked to a client as its own destination, with a name and colour you choose (Management → a client → Linked SIEMs). Existing links become "Staging" and "Production", so nothing looks different until you change them. Renaming a destination never touches its rules, scores or validation.
+- **Destination colours.** Each destination has a colour, shown on the left edge of its rules' cards and on its tags. New destinations get one automatically; change it from the destination's **…** menu, which also holds its name and default index.
+- **Linked rules.** The rule window lists every rule linked to this one, by name and destination. Each link has its own **×**, and **Add link** (with search as you type) links two rules yourself. On upgrade, rules that were promoted or demoted with the original kept are linked automatically.
+- **Compare and Merge.** **Compare**, in the rule window, shows what differs between a rule and a linked rule. **Merge**, inside Compare, lets you choose which side wins and whether to delete the other side afterwards.
+- **SIEM offline.** A SIEM that can't be reached during a sync is skipped rather than having its rules marked as lost. Its rules keep showing with a **SIEM offline** state, with the reason on hover, and Rule Health shows a notice. The state clears on the next sync that reaches the SIEM, and the State filter can list these rules, so a retired SIEM's rules can be removed in bulk.
+- **Delete from TIDE in bulk edit.** Removes the selected rules from TIDE only. Elastic is never touched, so a rule still in Elastic comes back on the next sync.
+- **A window for each technique on a system**, laid out like the rule window: **History**, **Description**, **Coverage**, **Sigma rules**, **Risks** and **MITRE ATT&CK**.
+  - Each section's **…** menu holds its actions: **Update** for the description (and title), the ATT&CK techniques and the risks, **Add coverage** under Coverage, and **Move** in every section (arrows, drag or arrow keys, until you press Done). **Delete technique** is in the window's own **…** menu.
+  - **Coverage** lists everything that catches the technique: a known gap or N/A with its reason; dashboards, reports and logs; and each mapped rule with its score, destination, whether it is enabled and counted, its field check and its validation.
+  - The header's score ring shows the strongest rule protecting the system. Previous/next (and the arrow keys) step through techniques in the order the page shows them, and each technique has its own link to share or bookmark.
+- **Non-alerting coverage.** A technique can be covered by dashboards, reports and logs as well as rules, each with a title, an optional link and a rationale, and each can be updated or deleted from its **…** menu. They count as covered and are labelled **Non-alerting**, since someone has to look and nothing alerts.
+- **Risks for each technique.** Set a **Priority** (Critical, High, Medium or Low) and a **Category** (Identity, Endpoint, Network, Cloud & SaaS, Container, IMPEX, Email, SecOps or OT/ICS) per system. Priority shows on the technique's card.
+- **Sigma rules for each technique.** SigmaHQ rules are suggested from the technique's ATT&CK techniques (or its tactic), and a search finds any other. **Convert** opens the Create Rule form filled in with the converted rule; creating it starts a sync, so it can be mapped once the sync finishes. Suggestions never count as coverage until created and mapped.
+- **A history for every technique.** Rules mapped, relinked or removed (with the rule's score at the time), known gaps and N/A marks, dashboards, reports and logs, edits to the technique and changes to SIEM coverage are recorded with who and when, and can be filtered. On upgrade it starts from what already exists.
+- **Review dates on known gaps and N/A marks.** From the date you set, the technique shows **Review due** in its window and on the system page. Marks can also be edited in place, and the history keeps what they said before.
+- **Choose which destinations count for each system.** A rule only covers a system's technique if it lives at a destination that system is measured on; a rule in staging alone no longer counts. Set it under **SIEM coverage** in the Baselines section's menu. Every system starts out counting all of its destinations, a rule that doesn't count says **Not counted**, and a system with none ticked reads **Not set** rather than 0%.
+- **Covers, in the rule window.** Lists every technique the rule is mapped to, with its system, baseline and tactic, including through a linked copy. Clicking one opens its technique window.
+- **Relink a mapped rule TIDE can't find.** A mapping whose rule has been deleted, moved or renamed, or that predates destinations, is marked **Needs relinking** with the reason on hover. **Relink**, in its **…** menu, opens the rule picker searched by its name; the rule you pick replaces it, keeping its history. Administrators can relink every unambiguous one at once with the `relink_rule_mappings` maintenance script.
+
+### Changed
+- **Move replaces Promote and Demote.** Move a rule to any linked destination, from the rule window or bulk edit. Keep the original to link the two copies, or tick **Delete source after move**. A move that would overwrite a rule already at the destination is refused, with a note to link the two and use Merge instead; if the SIEM can't be reached to check, nothing is moved.
+- **Every rule has its own card.** Rule Health no longer folds a staging and production pair into one "Migrated" card. The State filter is now **Live**, **SIEM offline** or **Deprecated**, and validating or editing a rule refreshes only that copy's card.
+- **Delete rule removes the rule from TIDE straight away**, and a sync brings it back if it is still in Elastic. Tick **Also delete it from Elastic** to remove it from the SIEM too; only that asks you to confirm, and if Elastic refuses, nothing is deleted. Sync and Delete are no longer in the Edit rule form.
+- **Editing a rule changes only that rule**, never a rule it is linked to; bring them back in line with Merge. Deleting a rule also removes its links.
+- **Arrange the rule window.** The **…** menu in its header shows or hides each section, sections can be dragged to any column, and the layout is remembered until **Reset layout**. The technique window works the same way.
+- **The rule and technique windows look alike.** "Recent activity" is now **History**, mapped rules, linked rules and gaps share one card style, destinations show as tags in their colour, and Delete is now **Delete rule**.
+- **A system's page has been rebuilt.** The header's **…** menu holds Edit system and Export report. A metric strip summarises the whole system, and the **Baselines**, **Devices** and **Heatmap** sections collapse and reorder, remembered per browser.
+  - The Baselines section has its own **…** menu (Manage baselines, Add technique, Generate baselines, SIEM coverage) and a filter bar: search, baseline, tactic (kill-chain order or A–Z), coverage, name, group by, and cards or table. Your choices are kept in the address bar, so a refresh or shared link shows the same view.
+  - Each technique shows its coverage as a coloured label, and each group heading shows its coverage, such as "7/10 covered (70%)".
+- **Baselines are now templates, and each system has its own copy.** Applying a template copies its techniques to the system; changing a system's copy never changes the template or another system, and changing a template never changes an existing copy. A template can be applied to a system more than once.
+  - Manage a system's baselines from its page: apply, rename, remove, or start an empty one with **Add baseline**. **Generate baselines** creates baselines of the system's own.
+  - The Baselines page and dashboard count and score the systems' own baselines, and a template's report describes the template alone.
+  - On upgrade, each system keeps its own copy of its baselines with their mappings, known gaps and history. Rule mappings on a template no system used are not carried over, so keep a copy of the data folder if you may want them back.
+  - A system's baselines always move with it to another client.
+- **Adding or editing a technique picks ATT&CK techniques the way the rule form does**: a tactic, then a technique, as many as needed, shown as pills with their names.
+- **A mapped rule records which destination it means.** The Add SIEM Rule list shows each copy with its destination's name and colour, and the mapping keeps the one you picked, with who and when. Existing mappings are matched to their destination on upgrade wherever TIDE can tell.
+- **A known gap or N/A decides a technique's status, even with a rule mapped.** Not applicable comes first, then known gap, then covered, then no coverage.
+- **"Step" is now "technique"** throughout, including reports.
+- **The ATT&CK technique side panel matches the rule and technique windows**, with badges for coverage, tactics and platforms and one line per related item.
+- **Confirmation prompts open in TIDE's own window**, with the destructive choice marked. Cancel is focused, and Esc cancels.
+
+### Removed
+- **Coverage Quests.** Map rules from each technique's window on the system's page.
+- **The separate page for each baseline technique.** Templates are edited on the Baselines page, and a system's techniques in their window.
+- **"Also move associated baselines" when moving a system to another client.** Its baselines always go with it.
+- **Snapshot all and the Audit History tab on a system's page.** The technique history records every change instead. Existing snapshots are kept and still appear in the system report.
+- **Merge rule ID in the Edit rule form.** Link the two rules and use Compare and Merge instead. Find duplicate rules is unaffected.
+- **Archive in TIDE.** Sync already marks a rule deprecated once it is gone from Elastic.
+
+### Fixed
+- **Some ATT&CK techniques were missing from tactic lists** when writing a rule or picking a technique. A technique with several tactics was only offered under the first; for example, T1078 Valid Accounts was missing from Initial Access.
+- **Users who could only view systems could add, edit or remove known gaps and N/A marks.** This now needs permission to edit Systems.
+- **Removing a rule from a baseline, or deleting a technique, baseline or system, left orphaned records behind.** They are now removed with it.
+- **In the Add SIEM Rule list, clicking a rule's MITRE tag didn't select the rule.** The whole row now selects it.
+- **A technique with no rule mapped could show a green tag, as if covered**, whenever any rule in the client mentioned its ATT&CK technique. The tag is now a plain label, the technique's own rule count is always shown, and matching rules elsewhere show as "N to consider".
+- **Bulk edit's progress showed rule ids instead of names.** Rules are now named throughout, including in failures.
+- **Red and amber notifications were unreadable, and could appear behind an open window.** They are now styled and always in front.
+- **Merge rule failed the first time two rules were merged**, with "Both rules must exist in their selected SIEM and space".
+- **Filtering Rule Health by SIEM could show rules from other states or other SIEMs.** The SIEM and State filters now work together on every page, and two SIEMs with a space of the same name are separate choices.
+- **Deleting a rule left its window open** on a rule that no longer existed. The window now closes and Rule Health refreshes.
+- **The rule window showed the rule's id twice.**
+- **The rule window's History controls moved when its filters wrapped onto a second line.**
+- **Mapping and Field type scored rules with half-mapped fields as fully mapped.** Both are now scored per field and index pattern, and an index pattern that matches nothing counts as not found. Scores update on the next sync.
+- **The rule window flashed when stepping to the next or previous rule.**
+- **Compare ran changed words together**, dropping the spaces between them (for example "additionofanewmember").
+
+## [5.1.3] - 2026-09-22
 
 ### Changed
 - **Promoting, demoting, restoring, choosing a master copy, deploying a Sigma rule, and bulk edit no longer re-sync the whole client afterwards.** Each of those already knows exactly which rule it just changed in Elastic, so it now refreshes only that one row (the same lightweight check "Sync this rule" uses) instead of re-fetching and re-scoring every rule in every linked space. A deliberate full sync — the Sync button, or a scheduled run — is unaffected. On a large ruleset this removes most of the "continuously running" full syncs a busy day of promotions used to cause.
@@ -12,6 +81,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ### Added
 - **Find duplicate rules, from Rule Health.** The "&hellip;" menu can find rules TIDE has stored more than once — they always share a validated date, since validation follows Elastic's own rule id and that is identical across the copies. Pick which row to keep in each group, or mark it as not a duplicate; merging moves any baseline links to the kept row and removes the others from TIDE's database only, nothing in Elastic is touched. The rule window also now shows the rule's id (TIDE's own row id and Elastic's own id, when they differ), under MITRE ATT&CK, collapsible and reorderable like the other sections.
+
+## [5.1.2] - 2026-09-22
 
 ### Fixed
 - **Sync could wrongly mark live rules as deprecated on tenants with a few hundred rules or more.** Rules are fetched a page at a time; if a rule appeared on two pages while another fell through the gap between them, the total row count still looked complete even though a real rule was missing, and that rule was then marked deprecated (a direct "Sync this rule" always found it, since that path never paginates). Sync now keeps fetching until every rule Kibana advertised has actually been seen at least once, and never reconciles a space unless that is confirmed — a rule that was genuinely deleted may now take one extra sync to be marked deprecated, which is the safer side to land on.

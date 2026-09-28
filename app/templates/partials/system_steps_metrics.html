@@ -1,0 +1,45 @@
+{#
+  Metric strip for one system's baseline steps.
+  Whole-system rollups, never the filtered page's counts — mirrors Rule Health.
+  Context: totals, coverage_undefined.
+#}
+{% set t = totals %}
+{% set scored = t.total - t.na %}
+
+<div class="metric-card">
+    <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.covered / scored) >= 0.8 %}success{% elif scored and (t.covered / scored) >= 0.4 %}warning{% else %}danger{% endif %}">
+        {% if coverage_undefined %}—{% else %}{{ ((t.covered / scored * 100) | round | int) if scored else 0 }}%{% endif %}
+    </p>
+    <p class="metric-label">Covered</p>
+    <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ t.total }}</p>
+    <p class="metric-label">Techniques</p>
+    <p class="metric-sub">across this system's baselines</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value danger">{{ t.none }}</p>
+    <p class="metric-label">No coverage</p>
+    <p class="metric-sub">nothing catching this yet</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value warning">{{ t.gap }}</p>
+    <p class="metric-label">Known gaps</p>
+    <p class="metric-sub">accepted, with a reason</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ t.unmapped }}</p>
+    <p class="metric-label">Unmapped</p>
+    <p class="metric-sub">no rule chosen for them</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if t.uncounted %}warning{% endif %}">{{ t.uncounted }}</p>
+    <p class="metric-label">Not counted</p>
+    <p class="metric-sub">rule is only where this system isn't measured</p>
+</div>

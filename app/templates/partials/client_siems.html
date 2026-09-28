@@ -18,18 +18,16 @@
 <div id="siems-body">
 {% if client_siems %}
 <div class="client-list">
-    {% for s in client_siems | sort(attribute='environment_role') %}
+    {% for s in client_siems | sort(attribute='name') %}
     {% set pair_key = s.id ~ '|' ~ ((s.space or 'default') | lower) %}
     {% set rc = siem_rule_counts_by_pair.get(pair_key, {}) if siem_rule_counts_by_pair is defined and siem_rule_counts_by_pair else (siem_rule_counts.get(s.space, {}) if siem_rule_counts is defined and siem_rule_counts else {}) %}
+    {% set edit_id = 'siem-edit-' ~ loop.index %}
     <div class="client-list-item client-list-item--{% if s.is_active %}active{% else %}inactive{% endif %}">
         <div class="client-list-item__body">
+            <span class="client-siem-dot" style="background:{{ s.color or 'var(--color-border)' }};" title="This destination's card colour"></span>
             <span class="client-list-item__title" style="cursor:default;">{{ s.label }}</span>
             <span class="badge badge-muted" style="font-size:0.72rem;">{{ s.siem_type }}</span>
-            {% if s.environment_role == 'production' %}
-            <span class="badge badge-info" style="font-size:0.68rem;">Production</span>
-            {% elif s.environment_role == 'staging' %}
-            <span class="badge badge-warning" style="font-size:0.68rem;">Staging</span>
-            {% endif %}
+            <span class="badge badge-info" style="font-size:0.68rem;">{{ s.name }}</span>
             {% if s.is_active %}
             <span class="badge badge-success" style="font-size:0.68rem;">Active</span>
             {% else %}
@@ -43,33 +41,35 @@
                 <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
             </span>
             {% endif %}
-            <form name="Change SIEM Role" hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/role"
-                  hx-target="#client-siems-section"
-                  hx-swap="innerHTML"
-                  hx-confirm="Switch this SIEM to {{ 'Staging' if s.environment_role == 'production' else 'Production' }}? Its rules, scores and validations stay in place."
-                  style="display:inline-flex;margin-top:0.35rem;">
-                <input type="hidden" name="from_role" value="{{ s.environment_role }}">
-                <input type="hidden" name="to_role" value="{{ 'staging' if s.environment_role == 'production' else 'production' }}">
-                <button name="Change Role" type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;"
-                        title="Re-tag this SIEM without unlinking it">
-                    {{ icon('refresh-cw', '12') }} Switch to {{ 'Staging' if s.environment_role == 'production' else 'Production' }}
-                </button>
-            </form>
-            <form name="Submit Default Index" hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/default-index"
-                  hx-target="#client-siems-section"
-                  hx-swap="innerHTML"
-                  style="display:flex;gap:0.4rem;align-items:center;margin-top:0.35rem;">
-                <input type="hidden" name="environment_role" value="{{ s.environment_role }}">
-                <input type="text"
-                       name="default_index"
-                       class="form-input"
-                       style="max-width:20rem;height:30px;padding:0.35rem 0.55rem;font-size:0.78rem;"
-                       placeholder="Default index (e.g. logs-*)"
-                       value="{{ s.default_index or '' }}">
-                <button name="Save" type="submit" class="btn btn-secondary btn-sm" style="height:30px;padding:0 0.55rem;">
-                    {{ icon('save', '12') }} Save
-                </button>
-            </form>
+        </div>
+        <div style="position:relative;flex:0 0 auto;">
+            <button type="button" class="btn btn-ghost btn-sm" title="Edit this destination's name, default index and card colour"
+                    onclick="event.stopPropagation(); tideToggleSiemEdit('{{ edit_id }}')">
+                {{ icon('more-vertical', '16') }}
+            </button>
+            <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" onclick="event.stopPropagation()">
+                <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/edit-destination"
+                      hx-target="#client-siems-section" hx-swap="innerHTML">
+                    <input type="hidden" name="space" value="{{ s.space or 'default' }}">
+                    <label class="form-label" style="font-size:0.72rem;">Name</label>
+                    <input type="text" name="name" value="{{ s.name }}" class="form-input" required>
+                    <label class="form-label" style="font-size:0.72rem;margin-top:0.5rem;">Default index</label>
+                    <input type="text" name="default_index" value="{{ s.default_index or '' }}" class="form-input" placeholder="logs-*">
+                    <label class="form-label" style="font-size:0.72rem;margin-top:0.5rem;">Card colour</label>
+                    <div class="client-siem-color-row">
+                        {% for c in destination_color_palette %}
+                        <button type="button" class="client-siem-swatch{% if (s.color or '') | lower == c | lower %} client-siem-swatch--selected{% endif %}"
+                                style="background:{{ c }};" data-color="{{ c }}"
+                                title="{{ c }}" onclick="tidePickSiemColor(this)"></button>
+                        {% endfor %}
+                        <input type="color" name="color" value="{{ s.color or destination_color_palette[0] }}" class="client-siem-color-input" title="Custom colour">
+                    </div>
+                    <div style="display:flex;justify-content:flex-end;gap:0.4rem;margin-top:0.65rem;">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="tideToggleSiemEdit('{{ edit_id }}')">Cancel</button>
+                        <button type="submit" class="btn btn-primary btn-sm">{{ icon('save', '12') }} Save</button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
     {% endfor %}
@@ -157,11 +157,11 @@
                 <div style="display:flex;flex-direction:column;gap:0.35rem;">
                     {% for s in client_siems %}
                     <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
-                        <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.environment_role }}</span></span>
+                        <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.name }}</span></span>
                         <button name="Remove" class="btn btn-ghost btn-sm text-danger"
-                                hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?environment_role={{ s.environment_role }}"
+                                hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?space={{ s.space or 'default' }}"
                                 hx-target="#client-siems-section" hx-swap="innerHTML"
-                                hx-confirm="Unlink '{{ s.label }}' ({{ s.environment_role }}) from this client?"
+                                hx-confirm="Unlink '{{ s.label }}' ({{ s.name }}) from this client?"
                                 style="padding:0.15rem 0.35rem;font-size:0.75rem;">
                             {{ icon('x', '12') }} Remove
                         </button>
@@ -185,13 +185,15 @@
                     <option value="{{ si.id }}" data-siem-type="{{ si.siem_type }}">{{ si.label }} ({{ si.siem_type }})</option>
                     {% endfor %}
                 </select>
-                <select name="environment_role" class="form-input" required>
-                    <option value="production">Production</option>
-                    <option value="staging">Staging</option>
-                </select>
+                <div>
+                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                        Name this destination (e.g. "Legacy Prod", "New SIEM Prod", "QA Sandbox")
+                    </label>
+                    <input type="text" name="name" class="form-input" placeholder="Production" required>
+                </div>
                 <div id="siem-space-field" style="display:none;">
                     <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
-                        Kibana space name (NOT the environment role above).
+                        Kibana space id (NOT the name above -- this is the actual space in Kibana).
                         Leave blank for Kibana's built-in <code>default</code> space.
                     </label>
                     <input type="text" name="space" id="add-siem-space-input"
@@ -222,6 +224,19 @@
                     </label>
                     <input type="text" name="default_index" class="form-input" placeholder="logs-*">
                 </div>
+                <div>
+                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                        Card colour &mdash; a free one is pre-selected; pick another if you'd rather
+                    </label>
+                    <div class="client-siem-color-row">
+                        {% for c in destination_color_palette %}
+                        <button type="button" class="client-siem-swatch{% if c | lower == next_free_color | lower %} client-siem-swatch--selected{% endif %}"
+                                style="background:{{ c }};" data-color="{{ c }}"
+                                title="{{ c }}" onclick="tidePickSiemColor(this)"></button>
+                        {% endfor %}
+                        <input type="color" name="color" value="{{ next_free_color }}" class="client-siem-color-input" title="Custom colour">
+                    </div>
+                </div>
                 <button name="Link SIEM" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
             </form>
             {% endif %}
@@ -238,6 +253,36 @@
 // underneath the space input. Keyed by siem_id → space → total. CLAUDE.md
 // §8.2 guarantee 4: never key by space alone.
 window.__siemSpaceCounts = {{ (siem_space_counts | default({})) | tojson }};
+
+// Per-destination edit popover ("..." menu): one open at a time, closes on an outside click.
+window.tideToggleSiemEdit = function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var opening = el.style.display === 'none';
+    document.querySelectorAll('.client-siem-edit-popover').forEach(function (p) { p.style.display = 'none'; });
+    el.style.display = opening ? 'block' : 'none';
+};
+document.addEventListener('click', function (e) {
+    if (e.target.closest('.client-siem-edit-popover') || e.target.closest('[onclick*="tideToggleSiemEdit"]')) return;
+    document.querySelectorAll('.client-siem-edit-popover').forEach(function (p) { p.style.display = 'none'; });
+});
+
+// Colour swatches (edit popover + Add SIEM form) write into the sibling <input type="color">
+// and reflect the pick in the swatch row itself.
+window.tidePickSiemColor = function (btn) {
+    var row = btn.closest('.client-siem-color-row');
+    if (!row) return;
+    var input = row.querySelector('input[type="color"]');
+    if (input) input.value = btn.dataset.color;
+    row.querySelectorAll('.client-siem-swatch').forEach(function (s) { s.classList.remove('client-siem-swatch--selected'); });
+    btn.classList.add('client-siem-swatch--selected');
+};
+document.addEventListener('input', function (e) {
+    if (e.target.matches && e.target.matches('.client-siem-color-input')) {
+        var row = e.target.closest('.client-siem-color-row');
+        if (row) row.querySelectorAll('.client-siem-swatch').forEach(function (s) { s.classList.remove('client-siem-swatch--selected'); });
+    }
+});
 
 window.__toggleValidationModeFields = function(mode) {
     var grid = document.getElementById('criticality-validation-grid');

@@ -22,9 +22,11 @@
 {% set lifecycle_state = lifecycle_states.get(lifecycle_key, 'Deprecated') %}
 {% set siem_label = (space_labels_by_pair.get((rule.siem_id ~ '|' ~ (rule.space | default('default'))), '') if (space_labels_by_pair is defined and rule.siem_id) else '')
     or space_labels.get(rule.space | default('default'), (rule.space | default('default')) | capitalize) %}
+{% set dest_color = space_colors_by_pair.get(rule.siem_id ~ '|' ~ (rule.space | default('default'))) if (space_colors_by_pair is defined and rule.siem_id) else none %}
 {% set is_on = rule.enabled and not rule.deprecated %}
 
-<div name="Open Rule Modal" class="rule-card rule-card--val-{{ val_class }}" id="rule-{{ rule.rule_id }}"{% if oob %} hx-swap-oob="true"{% endif %}
+<div name="Open Rule Modal" class="rule-card rule-card--val-{{ val_class }}" id="{{ rule_dom_id(rule) }}"{% if oob %} hx-swap-oob="true"{% endif %}
+    {% if dest_color %}style="--edge: {{ dest_color }};"{% endif %}
     data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ rule.name }}"
     hx-get="/api/rules/{{ rule.rule_id }}/history-modal?space={{ rule.space | default('default') }}{% if rule.siem_id %}&siem_id={{ rule.siem_id }}{% endif %}"
     hx-trigger="click[!event.target.closest('.bulk-check')], keyup[key=='Enter' && !event.target.closest('.bulk-check')]"
@@ -54,7 +56,7 @@
             </div>
             {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=4) }}
             <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
-            {{ state_badge(lifecycle_state) }}
+            {{ state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") }}
         </div>
     </div>
 

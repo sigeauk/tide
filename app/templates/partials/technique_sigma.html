@@ -1,0 +1,40 @@
+{#
+  The technique window's Sigma Rules section: SigmaHQ rules suggested from the technique's ATT&CK
+  ids (its tactic when it has none), or, with a query from the section's search, any SigmaHQ rule
+  that matches. Potential rules, never coverage. Each rule's "…" menu converts it -- the Create
+  Rule form opens filled in with it; creating the rule does not map it, that is the next step,
+  from Coverage -- or opens it in the Sigma library.
+  Context: rules, query, technique_ids, tactic, system_id, step_id.
+#}
+{% from "macros/icons.html" import icon %}
+<p class="text-muted sm-sigma__note">Candidate rules to convert. They do not count as coverage until converted, created and mapped under Coverage.</p>
+{% if rules %}
+<div class="sm-sigma__group">{% if query %}Matching “{{ query }}”{% else %}Suggested for {{ technique_ids | join(', ') if technique_ids else tactic }}{% endif %}</div>
+<ul class="sm-sigma">
+  {% for r in rules %}
+  <li class="sm-sigma__item">
+    <span class="sm-sigma__title" title="{{ r.description or r.title or r.id }}">{{ r.title or r.id }}</span>
+    <span class="sm-sigma__meta">
+      {% if r.level %}<span class="sev-pill sev-{{ r.level | lower }}">{{ r.level | upper }}</span>{% endif %}
+      {% if r.status %}<span class="text-muted">{{ r.status }}</span>{% endif %}
+      <span class="rh-more" data-more>
+        <button name="Sigma Rule Actions" type="button" class="rm-iconbtn" data-more-toggle
+                aria-haspopup="menu" aria-expanded="false" title="Rule actions" aria-label="Actions for {{ r.title or r.id }}">{{ icon('more-horizontal', '14') }}</button>
+        <span class="rh-more__menu" role="menu" hidden>
+          <button name="Convert Sigma Rule" type="button" role="menuitem" class="rh-more__item"
+                  hx-get="/api/systems/{{ system_id }}/steps/{{ step_id }}/sigma/convert?sigma_id={{ r.id | urlencode }}"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                  title="Convert it and open the Create Rule form, filled in">{{ icon('zap', '14') }}<span>Convert</span></button>
+          <a name="Open in Sigma Library" role="menuitem" class="rh-more__item" href="/sigma?rule={{ r.id | urlencode }}"
+             title="Open it in the Sigma library">{{ icon('external-link', '14') }}<span>Open in Sigma library</span></a>
+        </span>
+      </span>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% elif query %}
+<p class="text-muted sm-muted">No Sigma rules match “{{ query }}”.</p>
+{% else %}
+<p class="text-muted sm-muted">{% if technique_ids or tactic %}No Sigma rules found for {{ technique_ids | join(', ') if technique_ids else tactic }}.{% else %}Map an ATT&amp;CK technique to see suggested Sigma rules.{% endif %}</p>
+{% endif %}

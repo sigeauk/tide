@@ -1,0 +1,141 @@
+{#
+  The technique filter bar on a system's page, in Rule Health's controls.
+  Context: system_id, tactics, filters (from _step_grid_filters).
+
+  Controls carry no hx-* of their own: the page script turns any change here into one
+  "sysFilter" event and the grid refetches itself with #sys-filters' inputs. Values come from
+  the URL; where the URL is silent the page script fills the presentation choices (tactic sort,
+  name sort, group, view) from what this browser last used, before the grid first loads.
+#}
+{% from "macros/icons.html" import icon %}
+{% set f = filters %}
+
+<div class="filters-bar sys-filters" id="sys-filters" data-system-id="{{ system_id }}"
+     data-base-path="/systems/{{ system_id }}"
+     data-url-keys="{{ ['tactic_sort' if f.tactic_sort, 'sort_name' if f.sort_name, 'group' if f.group, 'view' if f.view] | select | join(',') }}">
+    <div class="filter-group grow">
+        <label class="form-label" for="sys-search">Search</label>
+        <input type="text" id="sys-search" name="search" value="{{ f.search }}" class="form-input"
+               placeholder="Technique, description, ATT&amp;CK id…" autocomplete="off">
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label" for="sys-baseline">Baseline</label>
+        <select id="sys-baseline" name="baseline_id" class="form-input form-select">
+            <option value="">All baselines</option>
+            {% for b in baselines %}
+            <option value="{{ b.id }}" {% if b.id == f.baseline_id %}selected{% endif %}>{{ b.name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    <div class="filter-group" style="position:relative;">
+        <label class="form-label">Tactic</label>
+        <button type="button" id="sys-tactic-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
+                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-tactic-dropdown');">
+            <span id="sys-tactic-label">Tactic</span>{{ icon('chevron-down', '14') }}
+        </button>
+        <div id="sys-tactic-dropdown" class="tide-filter-dropdown" style="display:none;">
+            <div class="tide-filter-section-label">Sort</div>
+            <select id="sys-tactic-sort" name="tactic_sort" class="form-input form-select">
+                <option value="attack" {% if f.tactic_sort in ('', 'attack') %}selected{% endif %}>ATT&amp;CK order</option>
+                <option value="alpha" {% if f.tactic_sort == 'alpha' %}selected{% endif %}>A → Z</option>
+                <option value="off" {% if f.tactic_sort == 'off' %}selected{% endif %}>Off</option>
+            </select>
+            <div class="tide-filter-section-label">Show</div>
+            <div class="sys-filter-list">
+                {% for t in tactics %}
+                <label class="rh-checkbox-row">
+                    <input type="checkbox" name="tactic" value="{{ t }}" {% if t in f.tactic %}checked{% endif %}>
+                    <span>{{ t }}</span>
+                </label>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="filter-group" style="position:relative;">
+        <label class="form-label">Coverage</label>
+        <button type="button" id="sys-coverage-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
+                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-coverage-dropdown');">
+            <span id="sys-coverage-label">Coverage</span>{{ icon('chevron-down', '14') }}
+        </button>
+        <div id="sys-coverage-dropdown" class="tide-filter-dropdown" style="display:none;">
+            <div class="tide-filter-section-label">Status</div>
+            <select id="sys-status" name="status" class="form-input form-select">
+                <option value="">Any</option>
+                <option value="green" {% if f.status == 'green' %}selected{% endif %}>Covered</option>
+                <option value="red" {% if f.status == 'red' %}selected{% endif %}>No coverage</option>
+                <option value="amber" {% if f.status == 'amber' %}selected{% endif %}>Known gap</option>
+                <option value="grey" {% if f.status == 'grey' %}selected{% endif %}>Not applicable</option>
+            </select>
+            <div class="tide-filter-section-label">Rules</div>
+            <select id="sys-mapping" name="mapping" class="form-input form-select">
+                <option value="">Any</option>
+                <option value="unmapped" {% if f.mapping == 'unmapped' %}selected{% endif %}>No rules mapped</option>
+                <option value="mapped" {% if f.mapping == 'mapped' %}selected{% endif %}>Has rules</option>
+                <option value="uncounted" {% if f.mapping == 'uncounted' %}selected{% endif %}>Has rules that don't count</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label" for="sys-sort-name">Name</label>
+        <select id="sys-sort-name" name="sort_name" class="form-input form-select">
+            <option value="" {% if not f.sort_name %}selected{% endif %}>Off</option>
+            <option value="asc" {% if f.sort_name == 'asc' %}selected{% endif %}>A → Z</option>
+            <option value="desc" {% if f.sort_name == 'desc' %}selected{% endif %}>Z → A</option>
+        </select>
+    </div>
+
+    <div class="filter-group" style="position:relative;">
+        <label class="form-label">Group by</label>
+        <button type="button" id="sys-group-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
+                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-group-dropdown');">
+            <span id="sys-group-label">None</span>{{ icon('chevron-down', '14') }}
+        </button>
+        <div id="sys-group-dropdown" class="tide-filter-dropdown" style="display:none;">
+            {# "none" is always sent, so a URL can say "no grouping" explicitly rather than
+               looking as if it said nothing and picking up the remembered choice. #}
+            <input type="hidden" name="group" value="none">
+            <label class="rh-checkbox-row" title="One collapsible group per baseline">
+                <input type="checkbox" name="group" value="baseline" {% if 'baseline' in f.group %}checked{% endif %}>
+                <span>Baseline</span>
+            </label>
+            <label class="rh-checkbox-row" title="One collapsible group per tactic; inside each baseline if both are ticked">
+                <input type="checkbox" name="group" value="tactic" {% if 'tactic' in f.group %}checked{% endif %}>
+                <span>Tactic</span>
+            </label>
+        </div>
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label">View</label>
+        <div class="rh-viewtoggle" role="group" aria-label="Technique view">
+            <button type="button" name="Cards View" data-sys-view="cards" aria-pressed="{{ 'false' if f.view == 'table' else 'true' }}" title="Cards">{{ icon('layout-grid', '16') }}<span class="sr-only">Cards</span></button>
+            <button type="button" name="Table View" data-sys-view="table" aria-pressed="{{ 'true' if f.view == 'table' else 'false' }}" title="Table">{{ icon('table', '16') }}<span class="sr-only">Table</span></button>
+        </div>
+        <input type="hidden" id="sys-view" name="view" value="{{ f.view }}">
+    </div>
+</div>
+<script>
+// Remembered choices, applied before the grid below first loads. Placed here, ahead of the grid,
+// because that is the one order that holds both on a full page load (htmx is deferred) and on a
+// boosted navigation (htmx runs swapped-in scripts in document order, before later elements'
+// load triggers). Only sets values: htmx may not exist yet.
+(function () {
+    var bar = document.getElementById('sys-filters');
+    if (!bar) return;
+    var fromUrl = (bar.getAttribute('data-url-keys') || '').split(',');
+    var p = {};
+    try { p = JSON.parse(localStorage.getItem('tide.systemSteps') || '{}') || {}; } catch (_) { /* storage blocked */ }
+    if (fromUrl.indexOf('tactic_sort') === -1 && p.tactic_sort) document.getElementById('sys-tactic-sort').value = p.tactic_sort;
+    if (fromUrl.indexOf('sort_name') === -1 && typeof p.sort_name === 'string') document.getElementById('sys-sort-name').value = p.sort_name;
+    if (fromUrl.indexOf('group') === -1 && Array.isArray(p.group)) {
+        bar.querySelectorAll('input[name="group"][type="checkbox"]').forEach(function (c) { c.checked = p.group.indexOf(c.value) !== -1; });
+    }
+    var view = document.getElementById('sys-view');
+    if (fromUrl.indexOf('view') === -1) view.value = p.view === 'table' ? 'table' : 'cards';
+    if (!view.value) view.value = 'cards';
+})();
+</script>

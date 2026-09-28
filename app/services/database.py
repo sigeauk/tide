@@ -88,8 +88,34 @@ def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
         return text
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
+def rule_state(rule, offline_scopes) -> str:
+    """A rule's lifecycle state for the State filter and badge: "deprecated", "offline" or "live".
+
+    ``offline_scopes`` is :meth:`DatabaseService.get_offline_scopes`."""
+    if rule.deprecated:
+        return "deprecated"
+    if (rule.siem_id, rule.space) in offline_scopes:
+        return "offline"
+    return "live"
+
+
 # Schema version for migrations
-SCHEMA_VERSION = 64
+SCHEMA_VERSION = 77
+
+# Default colours offered (and auto-assigned) for a linked SIEM+space destination -- distinct
+# from each other at a glance, and legible as small dots/pills in both light and dark themes.
+DESTINATION_COLOR_PALETTE = [
+    "#3b82f6",  # blue
+    "#22c55e",  # green
+    "#f97316",  # orange
+    "#a855f7",  # purple
+    "#ec4899",  # pink
+    "#14b8a6",  # teal
+    "#eab308",  # yellow
+    "#ef4444",  # red
+    "#6366f1",  # indigo
+    "#84cc16",  # lime
+]
 
 
 def _scope_predicate(
@@ -2930,7 +2956,950 @@ class DatabaseService:
             self._set_schema_version(conn, 64)
             logger.info("Migration 64: removed per-tenant tables from the shared DB.")
 
+        # ── Migration 65: named SIEM destinations, not a staging/production role ──
+        # A linked (client, siem, space) triple used to be forced into exactly one of two
+        # roles (PK included environment_role, capping a client at one staging + one
+        # production row per SIEM). It's now a free-text name the operator chooses, and the
+        # PK moves to (client_id, siem_id, space) -- what actually distinguishes destinations
+        # on one cluster, letting every space in a SIEM be linked as its own destination.
+        if current_version < 65:
+            try:
+                cols = {r[1] for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()}
+                if "name" not in cols:
+                    conn.execute("ALTER TABLE client_siem_map ADD COLUMN name VARCHAR")
+                if "environment_role" in cols:
+                    conn.execute("""
+                        UPDATE client_siem_map SET name = CASE
+                            WHEN environment_role = 'production' THEN 'Production'
+                            WHEN environment_role = 'staging' THEN 'Staging'
+                            ELSE environment_role
+                        END
+                        WHERE name IS NULL
+                    """)
+                    # A client could only ever have had one row per (siem_id, role) under the
+                    # old PK, but two DIFFERENT roles could coincidentally target the same
+                    # space -- that's now a straight PK collision. Keep the first, rename it
+                    # to note the merge rather than silently dropping the other's identity.
+                    dupes = conn.execute("""
+                        SELECT client_id, siem_id, COALESCE(space, 'default') AS space, COUNT(*) c
+                        FROM client_siem_map GROUP BY 1, 2, 3 HAVING COUNT(*) > 1
+                    """).fetchall()
+                    for cid, sid, space, _ in dupes:
+                        rows = conn.execute(
+                            "SELECT environment_role, name FROM client_siem_map "
+                            "WHERE client_id = ? AND siem_id = ? AND COALESCE(space, 'default') = ? "
+                            "ORDER BY environment_role", [cid, sid, space],
+                        ).fetchall()
+                        keep_role = rows[0][0]
+                        merged_name = " / ".join(r[1] or r[0] for r in rows)
+                        conn.execute(
+                            "UPDATE client_siem_map SET name = ? "
+                            "WHERE client_id = ? AND siem_id = ? AND COALESCE(space, 'default') = ? "
+                            "AND environment_role = ?",
+                            [merged_name, cid, sid, space, keep_role],
+                        )
+                        conn.execute(
+                            "DELETE FROM client_siem_map WHERE client_id = ? AND siem_id = ? "
+                            "AND COALESCE(space, 'default') = ? AND environment_role != ?",
+                            [cid, sid, space, keep_role],
+                        )
+                        logger.warning(
+                            "Migration 65: %s/%s/%s had roles %s pointing at the same space -- "
+                            "merged into one destination named %r.",
+                            cid[:8], sid[:8], space, [r[0] for r in rows], merged_name,
+                        )
+                    dst_cols = {r[1] for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()}
+                    extra_cols = [c for c in ("assigned_at", "default_index") if c in dst_cols]
+                    extra_select = "".join(f", {c}" for c in extra_cols)
+                    extra_ddl = "".join(
+                        f", {c} TIMESTAMP DEFAULT now()" if c == "assigned_at" else f", {c} VARCHAR"
+                        for c in extra_cols
+                    )
+                    conn.execute(f"""
+                        CREATE OR REPLACE TABLE client_siem_map_v65 (
+                            client_id VARCHAR NOT NULL,
+                            siem_id VARCHAR NOT NULL,
+                            space VARCHAR NOT NULL,
+                            name VARCHAR NOT NULL
+                            {extra_ddl},
+                            PRIMARY KEY (client_id, siem_id, space)
+                        )
+                    """)
+                    conn.execute(f"""
+                        INSERT INTO client_siem_map_v65 (client_id, siem_id, space, name{extra_select})
+                        SELECT client_id, siem_id, COALESCE(NULLIF(TRIM(space), ''), 'default'), name{extra_select}
+                        FROM client_siem_map
+                    """)
+                    conn.execute("DROP TABLE client_siem_map")
+                    conn.execute("ALTER TABLE client_siem_map_v65 RENAME TO client_siem_map")
+            except Exception as exc:
+                logger.error(f"Migration 65 failed: {exc}")
+                raise
+            self._set_schema_version(conn, 65)
+            logger.info("Migration 65: client_siem_map now keys on (client_id, siem_id, space) with a free-text name.")
+
+        # ── Migration 66: repair rule_links siem_id drift from the rule_migrations backfill ──
+        # rule_links (Migration 65) was backfilled from the old rule_migrations table, which
+        # recorded whichever siem_id was true AT THE TIME a rule was promoted/demoted. Some
+        # tenants' detection_rules rows have since been re-synced under a different siem_id for
+        # the same (rule_id, space) -- an existing sync-attribution drift, not something the
+        # backfill got wrong. That left links whose stored siem_id no longer matches any real
+        # row, so the linked-rule lookup silently failed on one side (or both). This walks every
+        # tenant DB's rule_links and repoints each side's siem_id to whatever siem_id
+        # detection_rules actually has for that (rule_id, space) today, when exactly one such
+        # siem_id exists. Where the rule_id/space has no row at all any more (the other rule was
+        # since deleted from TIDE), the link is left untouched -- there's nothing to repoint it
+        # to, and the display layer (not this migration) is responsible for showing that
+        # gracefully instead of a raw id.
+        if current_version < 66:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 66: could not list tenant DBs: {exc}")
+                rows = []
+            import os as _os
+            data_dir = _os.path.dirname(self.db_path)
+            fixed_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = _os.path.join(data_dir, fname)
+                if not _os.path.exists(tdb_path):
+                    logger.warning(f"Migration 66: tenant DB missing for client {cname} ({cid[:8]}): {tdb_path} — skipping")
+                    continue
+                try:
+                    import duckdb as _duckdb
+                    tconn = _duckdb.connect(tdb_path)
+                    try:
+                        fixed_here = self.repair_rule_link_siem_ids(tconn)
+                        if fixed_here:
+                            logger.info(
+                                "Migration 66: repointed %d stale siem_id reference(s) in "
+                                "rule_links for tenant %s (%s).", fixed_here, cname, fname,
+                            )
+                        fixed_total += fixed_here
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 66: failed to repair {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 66)
+            logger.info(f"Migration 66: repaired {fixed_total} stale rule_links siem_id reference(s) across all tenant DBs.")
+
+        # ── Migration 67: a colour per linked SIEM+space destination ──────────────
+        # Lets a rule card show which destination it's from at a glance, distinct from the
+        # card's own left-edge colour (validation status). Every client's own destinations get a
+        # distinct colour from DESTINATION_COLOR_PALETTE, assigned once here in a stable order
+        # (by name) so a re-run is idempotent; a client with more destinations than palette
+        # colours cycles back to the start. New destinations linked from now on get the next
+        # unused colour in link_client_siem, and any of these can be changed by hand afterward.
+        if current_version < 67:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()}
+            if "color" not in cols:
+                conn.execute("ALTER TABLE client_siem_map ADD COLUMN color VARCHAR")
+            rows = conn.execute(
+                "SELECT client_id, siem_id, space FROM client_siem_map WHERE color IS NULL ORDER BY client_id, name"
+            ).fetchall()
+            by_client: Dict[str, List[Tuple[str, str]]] = {}
+            for cid, sid, sp in rows:
+                by_client.setdefault(cid, []).append((sid, sp))
+            assigned = 0
+            for cid, pairs in by_client.items():
+                for i, (sid, sp) in enumerate(pairs):
+                    color = DESTINATION_COLOR_PALETTE[i % len(DESTINATION_COLOR_PALETTE)]
+                    conn.execute(
+                        "UPDATE client_siem_map SET color = ? WHERE client_id = ? AND siem_id = ? AND space = ?",
+                        [color, cid, sid, sp],
+                    )
+                    assigned += 1
+            self._set_schema_version(conn, 67)
+            logger.info(f"Migration 67: assigned a default colour to {assigned} client_siem_map destination(s).")
+
+        # ── Migration 68: a baseline's rule mapping records WHICH destination it means ────────
+        # step_detections.rule_ref is a bare string: no siem_id, no space. Since a rule now
+        # legitimately lives at several destinations at once, "covered by rule X" no longer says
+        # where, and the display layer was resolving it to whichever row it happened to find
+        # first. Adds the scope columns (plus who/when, which the mapping has never recorded at
+        # all) and backfills the scope wherever detection_rules can answer unambiguously.
+        #
+        # A ref that resolves to nothing is LEFT ALONE, not deleted: it is somebody's mapping
+        # work, and a rule that is temporarily missing (SIEM unlinked, sync not yet run) must not
+        # cost them that. Those stay NULL and are surfaced as "needs relinking" in the UI.
+        if current_version < 68:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 68: could not list tenant DBs: {exc}")
+                rows = []
+            import os as _os
+            import re as _re
+            data_dir = _os.path.dirname(self.db_path)
+            _uuidish = _re.compile(r"^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$")
+            resolved_total = unresolved_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = _os.path.join(data_dir, fname)
+                if not _os.path.exists(tdb_path):
+                    logger.warning(f"Migration 68: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    import duckdb as _duckdb
+                    tconn = _duckdb.connect(tdb_path)
+                    try:
+                        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+                        if "step_detections" not in tables:
+                            continue
+                        cols = {r[1] for r in tconn.execute("PRAGMA table_info('step_detections')").fetchall()}
+                        for col, ddl in (
+                            ("siem_id", "VARCHAR"), ("space", "VARCHAR"),
+                            ("created_at", "TIMESTAMP"), ("created_by", "VARCHAR"),
+                        ):
+                            if col not in cols:
+                                tconn.execute(f"ALTER TABLE step_detections ADD COLUMN {col} {ddl}")
+                        # When each mapping was made has never been stored. The parent baseline's
+                        # created_at is the tightest true upper bound available, so use it rather
+                        # than stamping "now" and implying these were all made today.
+                        if "playbooks" in tables and "playbook_steps" in tables:
+                            tconn.execute("""
+                                UPDATE step_detections SET created_at = (
+                                    SELECT p.created_at FROM playbook_steps s
+                                    JOIN playbooks p ON p.id = s.playbook_id
+                                    WHERE s.id = step_detections.step_id
+                                ) WHERE created_at IS NULL
+                            """)
+                        if "detection_rules" not in tables:
+                            continue
+                        refs = tconn.execute(
+                            "SELECT DISTINCT rule_ref FROM step_detections "
+                            "WHERE rule_ref IS NOT NULL AND rule_ref <> '' AND siem_id IS NULL"
+                        ).fetchall()
+                        for (ref,) in refs:
+                            if not _uuidish.match(str(ref or "").strip()):
+                                continue  # a Sigma rule name or free text: not a rule reference
+                            # Prefer a live row over a deprecated one, then the least recently
+                            # updated, so the choice is stable across re-runs.
+                            cands = tconn.execute(
+                                "SELECT siem_id, space FROM detection_rules WHERE rule_id = ? "
+                                "ORDER BY deprecated ASC, last_updated ASC, siem_id, space",
+                                [ref],
+                            ).fetchall()
+                            if not cands:
+                                unresolved_total += 1
+                                continue
+                            tconn.execute(
+                                "UPDATE step_detections SET siem_id = ?, space = ? "
+                                "WHERE rule_ref = ? AND siem_id IS NULL",
+                                [cands[0][0], cands[0][1], ref],
+                            )
+                            resolved_total += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 68: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 68)
+            logger.info(
+                "Migration 68: baseline rule mappings now record their destination — "
+                "%d reference(s) resolved, %d left for manual relinking.",
+                resolved_total, unresolved_total,
+            )
+
+        # ── Migration 69: which destinations count toward a system's coverage ────────────────
+        # Per SYSTEM, not per tenant: a system is watched by whichever SIEM+space actually
+        # watches it, and a tenant with several estates has no single answer. A row here means
+        # "rules at this destination count toward this system's coverage"; no row means they
+        # don't. Seeded with every (system x linked destination) pair, so every system keeps
+        # counting exactly what it counted before and nobody's coverage moves on upgrade --
+        # unticking is then a deliberate act.
+        if current_version < 69:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 69: could not list tenant DBs: {exc}")
+                rows = []
+            import os as _os
+            data_dir = _os.path.dirname(self.db_path)
+            seeded_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = _os.path.join(data_dir, fname)
+                if not _os.path.exists(tdb_path):
+                    logger.warning(f"Migration 69: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    import duckdb as _duckdb
+                    tconn = _duckdb.connect(tdb_path)
+                    try:
+                        tconn.execute("""
+                            CREATE TABLE IF NOT EXISTS system_coverage_destinations (
+                                id         VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                                system_id  VARCHAR NOT NULL,
+                                siem_id    VARCHAR NOT NULL,
+                                space      VARCHAR NOT NULL,
+                                client_id  VARCHAR,
+                                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                                created_by VARCHAR
+                            )
+                        """)
+                        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+                        if "systems" not in tables or "client_siem_map" not in tables:
+                            continue
+                        seeded = tconn.execute("""
+                            INSERT INTO system_coverage_destinations
+                                (system_id, siem_id, space, client_id, created_by)
+                            SELECT s.id, m.siem_id, m.space, s.client_id, 'upgrade'
+                            FROM systems s
+                            JOIN client_siem_map m ON m.client_id = s.client_id
+                            WHERE NOT EXISTS (
+                                SELECT 1 FROM system_coverage_destinations d
+                                WHERE d.system_id = s.id AND d.siem_id = m.siem_id AND d.space = m.space
+                            )
+                            RETURNING 1
+                        """).fetchall()
+                        seeded_total += len(seeded)
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 69: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 69)
+            logger.info(
+                "Migration 69: every system now counts every destination it is linked to "
+                "(%d pair(s) seeded); untick from a system's page.", seeded_total,
+            )
+
+        # ── Migration 70: technique history (replaces baseline snapshots as the record) ──────
+        # Mapping and gap rows are hard-deleted, so nothing recorded when coverage was lost.
+        # technique_events is append-only from here on. The backfill reconstructs what can be
+        # known -- when each surviving mapping and gap was made, and by whom -- from those rows'
+        # own timestamps. Removals before this migration are unrecoverable by any means.
+        # Snapshots hold totals only (no per-technique detail), so they cannot seed it; they are
+        # left in place as early coverage-trend points.
+        if current_version < 70:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 70: could not list tenant DBs: {exc}")
+                rows = []
+            import os as _os
+            data_dir = _os.path.dirname(self.db_path)
+            mapped_total = gaps_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = _os.path.join(data_dir, fname)
+                if not _os.path.exists(tdb_path):
+                    logger.warning(f"Migration 70: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    import duckdb as _duckdb
+                    tconn = _duckdb.connect(tdb_path)
+                    try:
+                        tconn.execute("""
+                        CREATE TABLE IF NOT EXISTS technique_events (
+                            id           VARCHAR PRIMARY KEY DEFAULT (uuid()),
+                            -- Append-only history of how a baseline technique (a step) came to be covered, or
+                            -- not: rules mapped and unmapped, known gaps and N/A added and removed, and changes
+                            -- to which SIEM destinations a system counts. Mappings are baseline-wide, so their
+                            -- events have no system_id; gaps and SIEM coverage belong to one system.
+                            event        VARCHAR NOT NULL,
+                            step_id      VARCHAR,
+                            system_id    VARCHAR,
+                            detection_id VARCHAR,
+                            rule_id      VARCHAR,
+                            siem_id      VARCHAR,
+                            space        VARCHAR,
+                            -- As they were at the time, so the history still reads after a rename or rescore.
+                            rule_name    VARCHAR,
+                            destination  VARCHAR,
+                            score        INTEGER,
+                            source       VARCHAR,
+                            reason       VARCHAR,
+                            detail       VARCHAR,
+                            actor        VARCHAR,
+                            client_id    VARCHAR,
+                            -- The row this event was reconstructed from on upgrade (NULL for live events), so
+                            -- the backfill can never insert the same event twice.
+                            source_ref   VARCHAR,
+                            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """)
+                        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+                        if "step_detections" in tables:
+                            has_rules = "detection_rules" in tables
+                            mapped_total += len(tconn.execute(f"""
+                                INSERT INTO technique_events
+                                    (event, step_id, detection_id, rule_id, siem_id, space, rule_name,
+                                     source, actor, client_id, source_ref, created_at)
+                                SELECT 'rule_mapped', sd.step_id, sd.id, sd.rule_ref, sd.siem_id, sd.space,
+                                       {"COALESCE(NULLIF(dr.name, ''), NULLIF(sd.note, ''), sd.rule_ref)" if has_rules else "COALESCE(NULLIF(sd.note, ''), sd.rule_ref)"},
+                                       sd.source, sd.created_by, ?, sd.id, sd.created_at
+                                FROM step_detections sd
+                                {"LEFT JOIN detection_rules dr ON dr.rule_id = sd.rule_ref AND dr.siem_id = sd.siem_id AND dr.space = sd.space" if has_rules else ""}
+                                WHERE sd.created_at IS NOT NULL
+                                  AND NOT EXISTS (SELECT 1 FROM technique_events e
+                                                  WHERE e.source_ref = sd.id AND e.event = 'rule_mapped')
+                                RETURNING 1
+                            """, [cid]).fetchall())
+                        if "blind_spots" in tables:
+                            gaps_total += len(tconn.execute("""
+                                INSERT INTO technique_events
+                                    (event, step_id, system_id, reason, actor, client_id, source_ref, created_at)
+                                SELECT CASE WHEN COALESCE(b.override_type, 'gap') = 'na' THEN 'na_added' ELSE 'gap_added' END,
+                                       b.entity_id, b.system_id, b.reason, NULLIF(b.created_by, ''), ?, b.id, b.created_at
+                                FROM blind_spots b
+                                WHERE b.entity_type = 'tactic' AND b.created_at IS NOT NULL
+                                  AND NOT EXISTS (SELECT 1 FROM technique_events e
+                                                  WHERE e.source_ref = b.id AND e.event IN ('gap_added', 'na_added'))
+                                RETURNING 1
+                            """, [cid]).fetchall())
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 70: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 70)
+            logger.info(
+                "Migration 70: technique history started; reconstructed %d rule mapping(s) and "
+                "%d known gap/N-A record(s) from their own timestamps.", mapped_total, gaps_total,
+            )
+
+        # ── Migration 71: a baseline on a system is that system's own copy ─────────────────────
+        # Until now one baseline was shared by every system it was applied to, so a rule mapped
+        # or a technique edited for one system changed all of them. From here a baseline with no
+        # system_id is a template (techniques and descriptions only), and applying it makes the
+        # system its own copy. Each existing (system, baseline) pair becomes a copy carrying what
+        # that system showed: the rule mappings applied to it, its known gaps and N/A, its history
+        # and snapshots. Templates then keep only their techniques (and Sigma suggestions), so
+        # SIEM/manual mappings on a template no system used are not carried anywhere. Coverage
+        # Quests are retired with the quests table. No rollback other than a copy of data/.
+        if current_version < 71:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 71: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            copies_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 71: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        copies_total += self.split_system_baselines(tconn)
+                        tconn.execute("DROP TABLE IF EXISTS quests")
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 71: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 71)
+            logger.info(
+                "Migration 71: %d system baseline(s) now have their own copy; templates keep "
+                "techniques only; Coverage Quests removed.", copies_total,
+            )
+
+        # ── Migration 72: a known gap / N/A mark can be reviewed and edited ──────────────────
+        # blind_spots recorded only who made a mark and when. Air-gapped sites have no mail to
+        # chase a re-check, so the mark itself carries the date it should be looked at again
+        # (review_by, NULL = no date set), and who last edited it in place. Additive only.
+        if current_version < 72:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 72: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 72: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        if self.add_blind_spot_review_columns(tconn):
+                            migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 72: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 72)
+            logger.info("Migration 72: known gap / N/A review and edit columns added in %d tenant DB(s).", migrated)
+
+        # ── Migration 73: Sigma suggestions an analyst dismissed for a technique ─────────────
+        # A technique's Sigma suggestions come from its template and from rules carrying its
+        # ATT&CK tags. A dismissal is kept per technique (so per system), so an irrelevant rule
+        # is not suggested again there. New table only; nothing existing changes.
+        if current_version < 73:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 73: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 73: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        self.create_sigma_dismissals_table(tconn)
+                        migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 73: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 73)
+            logger.info("Migration 73: Sigma suggestion dismissals table created in %d tenant DB(s).", migrated)
+
+        # ── Migration 74: rule_links in tenant DBs created before 6.0.0, plus destination status ──
+        # rule_links was only ever created for brand-new tenant DBs, so every tenant that existed
+        # before 6.0.0 had no such table and Rule Health failed as soon as it held one rule. This
+        # creates it, fills it from the promotions rule_migrations recorded (Migration 66 then
+        # repoints stale siem_ids), and adds siem_space_status: whether each linked (siem_id,
+        # space) answered the reachability check before the last sync. Additive only.
+        if current_version < 74:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 74: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = backfilled = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 74: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        backfilled += self.create_rule_link_tables(tconn)
+                        self.repair_rule_link_siem_ids(tconn)
+                        migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 74: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 74)
+            logger.info(
+                "Migration 74: rule_links and siem_space_status ensured in %d tenant DB(s); "
+                "%d link(s) recovered from earlier promotions.", migrated, backfilled,
+            )
+
+        # ── Migration 75: a system's baselines keep no trace of the template they came from ──
+        # Applying a template now copies only each technique's title, ATT&CK techniques and
+        # description, with no link back. Existing copies are brought in line: the link to the
+        # template is cleared, and the Sigma suggestions and required rule a technique carried
+        # over from it are dropped (the technique window suggests Sigma rules from its ATT&CK
+        # ids). Rule mappings, known gaps and history are untouched; templates are untouched.
+        if current_version < 75:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 75: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            totals = [0, 0, 0]
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 75: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        for i, n in enumerate(self.detach_system_baselines(tconn)):
+                            totals[i] += n
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 75: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 75)
+            logger.info(
+                "Migration 75: %d system baseline(s) unlinked from their template; %d carried-over "
+                "Sigma suggestion(s) and %d required rule(s) removed from system techniques.", *totals,
+            )
+
+        # ── Migration 76: Risks and non-alerting coverage on a system's techniques ─────────────
+        # Priority and category for each technique on a system, and step_coverage: the dashboards,
+        # reports and logs recorded as watching it (each with a title, optional link and
+        # rationale). Additive only: every existing technique starts with nothing set.
+        if current_version < 76:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 76: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 76: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        self.add_step_risk_columns(tconn)
+                        migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 76: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 76)
+            logger.info("Migration 76: technique risks and coverage entries added in %d tenant DB(s).", migrated)
+
+        # ── Migration 77: relink rule mappings that recorded Kibana's saved-object id ──────────
+        # Older mappings stored the rule's Kibana object id (raw_data.id) instead of its rule_id
+        # and no destination, so the technique window could not find the rule: no name, score or
+        # link, and "Needs relinking". Where exactly one detection_rules row carries that object
+        # id, the mapping is pointed at that row (rule_id, siem_id, space). Ambiguous or deleted
+        # ones are left as they are.
+        if current_version < 77:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 77: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            relinked = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 77: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        relinked += self.relink_mappings_by_object_id(tconn)
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 77: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 77)
+            logger.info("Migration 77: relinked %d rule mapping(s) recorded by Kibana object id.", relinked)
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
+
+    @staticmethod
+    def relink_mappings_by_object_id(tconn) -> int:
+        """Migration 77 for one tenant DB. Idempotent (a relinked mapping has a destination)."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if not {"step_detections", "detection_rules"} <= tables:
+            return 0
+        matches = tconn.execute("""
+            SELECT sd.id, MIN(d.rule_id), MIN(d.siem_id), MIN(d.space)
+            FROM step_detections sd
+            JOIN detection_rules d ON json_extract_string(d.raw_data, '$.id') = sd.rule_ref
+            WHERE sd.siem_id IS NULL AND COALESCE(sd.source, 'manual') = 'siem'
+            GROUP BY sd.id HAVING COUNT(*) = 1
+        """).fetchall()
+        for det_id, rule_id, siem_id, space in matches:
+            tconn.execute("UPDATE step_detections SET rule_ref = ?, siem_id = ?, space = ? WHERE id = ?",
+                          [rule_id, siem_id, space, det_id])
+        return len(matches)
+
+    STEP_COVERAGE_DDL = """
+        CREATE TABLE IF NOT EXISTS step_coverage (
+            id         VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            step_id    VARCHAR NOT NULL,
+            system_id  VARCHAR,
+            kind       VARCHAR NOT NULL,
+            title      VARCHAR NOT NULL,
+            url        VARCHAR DEFAULT '',
+            rationale  VARCHAR DEFAULT '',
+            created_by VARCHAR,
+            created_at TIMESTAMP DEFAULT now()
+        )
+    """
+
+    @classmethod
+    def add_step_risk_columns(cls, tconn) -> None:
+        """Migration 76 for one tenant DB (and every new tenant). Idempotent."""
+        for col in ("priority", "category"):
+            tconn.execute(f"ALTER TABLE playbook_steps ADD COLUMN IF NOT EXISTS {col} VARCHAR DEFAULT ''")
+        tconn.execute(cls.STEP_COVERAGE_DDL)
+
+    @staticmethod
+    def detach_system_baselines(tconn) -> Tuple[int, int, int]:
+        """Migration 75 for one tenant DB. Idempotent. Returns (baselines unlinked, Sigma
+        suggestions removed, required rules cleared) -- all on systems' own baselines only."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if "playbooks" not in tables:
+            return 0, 0, 0
+        cols = {r[1] for r in tconn.execute("PRAGMA table_info('playbooks')").fetchall()}
+        if "system_id" not in cols:
+            return 0, 0, 0
+        unlinked = 0
+        if "template_id" in cols:
+            unlinked = tconn.execute(
+                "UPDATE playbooks SET template_id = NULL WHERE system_id IS NOT NULL AND template_id IS NOT NULL"
+            ).fetchone()[0]
+        system_steps = ("SELECT s.id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id "
+                        "WHERE p.system_id IS NOT NULL")
+        sigma = 0
+        if "step_detections" in tables:
+            sigma = tconn.execute(
+                f"DELETE FROM step_detections WHERE source = 'sigma' AND step_id IN ({system_steps})"
+            ).fetchone()[0]
+        required = tconn.execute(
+            f"UPDATE playbook_steps SET required_rule = '' WHERE COALESCE(required_rule, '') <> '' "
+            f"AND id IN ({system_steps})"
+        ).fetchone()[0]
+        return unlinked, sigma, required
+
+    RULE_LINKS_DDL = """
+        CREATE TABLE IF NOT EXISTS rule_links (
+            id VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            rule_a_id VARCHAR NOT NULL,
+            siem_a_id VARCHAR NOT NULL,
+            space_a VARCHAR NOT NULL,
+            rule_b_id VARCHAR NOT NULL,
+            siem_b_id VARCHAR NOT NULL,
+            space_b VARCHAR NOT NULL,
+            created_by VARCHAR,
+            created_at TIMESTAMP DEFAULT now()
+        )
+    """
+
+    SIEM_SPACE_STATUS_DDL = """
+        CREATE TABLE IF NOT EXISTS siem_space_status (
+            siem_id    VARCHAR NOT NULL,
+            space      VARCHAR NOT NULL,
+            reachable  BOOLEAN NOT NULL,
+            reason     VARCHAR,
+            checked_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY (siem_id, space)
+        )
+    """
+
+    @classmethod
+    def create_rule_link_tables(cls, tconn) -> int:
+        """Migration 74 for one tenant DB (and every new tenant). Idempotent.
+
+        Returns how many links were recovered from ``rule_migrations`` -- a promotion that kept
+        its source is a link between the two copies. Only when rule_links is created here: a
+        tenant that already had it may have removed some of those links on purpose. Only pairs
+        where both rows still exist are recovered."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        tconn.execute(cls.RULE_LINKS_DDL)
+        tconn.execute(cls.SIEM_SPACE_STATUS_DDL)
+        if "rule_links" in tables or "rule_migrations" not in tables or "detection_rules" not in tables:
+            return 0
+        tconn.execute("""
+            INSERT INTO rule_links (rule_a_id, siem_a_id, space_a, rule_b_id, siem_b_id, space_b, created_by, created_at)
+            SELECT m.source_rule_id, m.source_siem_id, m.source_space,
+                   m.target_rule_id, m.target_siem_id, m.target_space, MIN(m.actor_name), MIN(m.created_at)
+            FROM rule_migrations m
+            WHERE NOT (m.source_rule_id = m.target_rule_id AND m.source_siem_id = m.target_siem_id
+                       AND m.source_space = m.target_space)
+              AND EXISTS (SELECT 1 FROM detection_rules d WHERE d.rule_id = m.source_rule_id
+                          AND d.siem_id = m.source_siem_id AND d.space = m.source_space)
+              AND EXISTS (SELECT 1 FROM detection_rules d WHERE d.rule_id = m.target_rule_id
+                          AND d.siem_id = m.target_siem_id AND d.space = m.target_space)
+            GROUP BY 1, 2, 3, 4, 5, 6
+        """)
+        return tconn.execute("SELECT COUNT(*) FROM rule_links").fetchone()[0]
+
+    @staticmethod
+    def repair_rule_link_siem_ids(tconn) -> int:
+        """Repoint each side of a link whose stored siem_id no longer matches a rule to the one
+        siem_id ``detection_rules`` has for that (rule_id, space) today (Migration 66)."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if "rule_links" not in tables or "detection_rules" not in tables:
+            return 0
+        links = tconn.execute(
+            "SELECT id, rule_a_id, siem_a_id, space_a, rule_b_id, siem_b_id, space_b FROM rule_links"
+        ).fetchall()
+        fixed = 0
+        for link_id, ra, sa, spa, rb, sb, spb in links:
+            for rid, sid, sp, a_side in ((ra, sa, spa, True), (rb, sb, spb, False)):
+                exact = tconn.execute(
+                    "SELECT 1 FROM detection_rules WHERE rule_id=? AND siem_id=? AND space=?",
+                    [rid, sid, sp],
+                ).fetchone()
+                if exact:
+                    continue
+                candidates = tconn.execute(
+                    "SELECT DISTINCT siem_id FROM detection_rules WHERE rule_id=? AND space=?",
+                    [rid, sp],
+                ).fetchall()
+                if len(candidates) == 1 and candidates[0][0] != sid:
+                    col = "siem_a_id" if a_side else "siem_b_id"
+                    tconn.execute(f"UPDATE rule_links SET {col} = ? WHERE id = ?", [candidates[0][0], link_id])
+                    fixed += 1
+        return fixed
+
+    SIGMA_DISMISSALS_DDL = """
+        CREATE TABLE IF NOT EXISTS step_sigma_dismissals (
+            step_id      VARCHAR NOT NULL,
+            sigma_id     VARCHAR NOT NULL,
+            system_id    VARCHAR,
+            dismissed_by VARCHAR DEFAULT '',
+            client_id    VARCHAR,
+            dismissed_at TIMESTAMP DEFAULT now(),
+            PRIMARY KEY (step_id, sigma_id)
+        )
+    """
+
+    @classmethod
+    def create_sigma_dismissals_table(cls, tconn) -> None:
+        """Migration 73 for one tenant DB (and every new tenant). Idempotent."""
+        tconn.execute(cls.SIGMA_DISMISSALS_DDL)
+
+    @staticmethod
+    def add_blind_spot_review_columns(tconn) -> bool:
+        """Migration 72 for one tenant DB: review_by, updated_at, updated_by on blind_spots.
+        Idempotent; returns False when the tenant has no blind_spots table yet."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if "blind_spots" not in tables:
+            return False
+        cols = {r[1] for r in tconn.execute("PRAGMA table_info('blind_spots')").fetchall()}
+        for col, ddl in (("review_by", "DATE"), ("updated_at", "TIMESTAMP"), ("updated_by", "VARCHAR")):
+            if col not in cols:
+                tconn.execute(f"ALTER TABLE blind_spots ADD COLUMN {col} {ddl}")
+        return True
+
+    @staticmethod
+    def split_system_baselines(tconn) -> int:
+        """Migration 71 for one tenant DB (and after a tenant import): turn every system's use of
+        a shared baseline into its own copy, then strip templates back to techniques. Returns
+        the number of copies made.
+
+        Idempotent: only links still pointing at a template are copied, and a template stripped
+        once has nothing left to strip."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if "playbooks" not in tables:
+            return 0
+        pb_cols = {r[1] for r in tconn.execute("PRAGMA table_info('playbooks')").fetchall()}
+        for col in ("system_id", "template_id"):
+            if col not in pb_cols:
+                tconn.execute(f"ALTER TABLE playbooks ADD COLUMN {col} VARCHAR")
+        if not {"playbook_steps", "system_baselines"} <= tables:
+            return 0
+
+        columns: Dict[str, List[str]] = {}
+
+        def clone(table: str, row_id: str, overrides: Dict[str, Any]) -> None:
+            """Copy one row by id, replacing the given columns (whatever else the table has)."""
+            cols = columns.setdefault(table, [r[1] for r in tconn.execute(f"PRAGMA table_info('{table}')").fetchall()])
+            names = ", ".join(f'"{c}"' for c in cols)
+            select = ", ".join("?" if c in overrides else f'"{c}"' for c in cols)
+            tconn.execute(
+                f"INSERT INTO {table} ({names}) SELECT {select} FROM {table} WHERE id = ?",
+                [overrides[c] for c in cols if c in overrides] + [row_id],
+            )
+
+        has = tables.__contains__
+        # A link left behind by a deleted system has nobody to copy for.
+        links = tconn.execute(
+            "SELECT sb.id, sb.system_id, sb.playbook_id FROM system_baselines sb "
+            "JOIN playbooks p ON p.id = sb.playbook_id "
+            + ("JOIN systems s ON s.id = sb.system_id " if has("systems") else "")
+            + "WHERE p.system_id IS NULL"
+        ).fetchall()
+        for link_id, system_id, template_id in links:
+            copy_id = str(uuid.uuid4())
+            clone("playbooks", template_id, {"id": copy_id, "system_id": system_id, "template_id": template_id})
+
+            host_ids = [r[0] for r in tconn.execute("SELECT id FROM hosts WHERE system_id = ?", [system_id]).fetchall()] if has("hosts") else []
+            host_in = ",".join("?" for _ in host_ids)
+            applied_where = "system_id = ?" + (f" OR host_id IN ({host_in})" if host_ids else "")
+            applied_params = [system_id] + host_ids
+            applied = set()
+            if has("applied_detections"):
+                applied = {r[0] for r in tconn.execute(
+                    f"SELECT DISTINCT detection_id FROM applied_detections WHERE {applied_where}", applied_params,
+                ).fetchall()}
+
+            step_map: Dict[str, str] = {}
+            for (old_step,) in tconn.execute("SELECT id FROM playbook_steps WHERE playbook_id = ?", [template_id]).fetchall():
+                step_map[old_step] = str(uuid.uuid4())
+                clone("playbook_steps", old_step, {"id": step_map[old_step], "playbook_id": copy_id})
+            det_map: Dict[str, str] = {}
+            for old_step, new_step in step_map.items():
+                if has("step_techniques"):
+                    for (tid,) in tconn.execute("SELECT id FROM step_techniques WHERE step_id = ?", [old_step]).fetchall():
+                        clone("step_techniques", tid, {"id": str(uuid.uuid4()), "step_id": new_step})
+                if has("step_detections"):
+                    # Sigma suggestions are part of the technique; a SIEM/manual mapping comes along
+                    # only if it was applied to this system, which is what made it count here.
+                    for did, source in tconn.execute(
+                        "SELECT id, COALESCE(source, 'manual') FROM step_detections WHERE step_id = ?", [old_step],
+                    ).fetchall():
+                        if source != "sigma" and did not in applied:
+                            continue
+                        det_map[did] = str(uuid.uuid4())
+                        clone("step_detections", did, {"id": det_map[did], "step_id": new_step})
+                if has("blind_spots"):
+                    tconn.execute(
+                        "UPDATE blind_spots SET entity_id = ? WHERE entity_type = 'tactic' AND entity_id = ? AND system_id = ?",
+                        [new_step, old_step, system_id],
+                    )
+                if has("technique_events"):
+                    tconn.execute(
+                        "UPDATE technique_events SET step_id = ? WHERE step_id = ? AND system_id = ?",
+                        [new_step, old_step, system_id],
+                    )
+                    # Baseline-wide events were shown on every system; each copy keeps them, bar
+                    # those about a mapping that still exists but was not carried to this system.
+                    for eid, det_id in tconn.execute(
+                        "SELECT id, detection_id FROM technique_events WHERE step_id = ? AND system_id IS NULL", [old_step],
+                    ).fetchall():
+                        if det_id and det_id not in det_map and tconn.execute(
+                            "SELECT 1 FROM step_detections WHERE id = ?", [det_id]
+                        ).fetchone():
+                            continue
+                        clone("technique_events", eid, {
+                            "id": str(uuid.uuid4()), "step_id": new_step, "system_id": system_id,
+                            "detection_id": det_map.get(det_id, det_id),
+                        })
+            if has("applied_detections"):
+                for old_det, new_det in det_map.items():
+                    tconn.execute(
+                        f"UPDATE applied_detections SET detection_id = ? WHERE detection_id = ? AND ({applied_where})",
+                        [new_det, old_det] + applied_params,
+                    )
+            if has("system_baseline_snapshots"):
+                tconn.execute(
+                    "UPDATE system_baseline_snapshots SET baseline_id = ? WHERE system_id = ? AND baseline_id = ?",
+                    [copy_id, system_id, template_id],
+                )
+            tconn.execute("UPDATE system_baselines SET playbook_id = ? WHERE id = ?", [copy_id, link_id])
+
+        # Templates keep their techniques and Sigma suggestions; everything about coverage has
+        # moved to the copies above.
+        tpl_steps = "SELECT s.id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id WHERE p.system_id IS NULL"
+        if has("step_detections"):
+            mappings = f"SELECT id FROM step_detections WHERE step_id IN ({tpl_steps}) AND COALESCE(source, 'manual') <> 'sigma'"
+            if has("applied_detections"):
+                tconn.execute(f"DELETE FROM applied_detections WHERE detection_id IN ({mappings})")
+            tconn.execute(f"DELETE FROM step_detections WHERE id IN ({mappings})")
+        if has("blind_spots"):
+            tconn.execute(f"DELETE FROM blind_spots WHERE entity_type = 'tactic' AND entity_id IN ({tpl_steps})")
+        if has("technique_events"):
+            tconn.execute(f"DELETE FROM technique_events WHERE step_id IN ({tpl_steps})")
+        return len(links)
 
     # Tables that belong to one tenant. Since 4.1.2 they are read and written in
     # the tenant's own DB; the shared copies are stale leftovers (children first).
@@ -3673,10 +4642,16 @@ class DatabaseService:
                     query += f" AND ({frag} OR COALESCE(deprecated, false) = true)"
                     params.extend(scope_params)
             
-            # Apply filters
+            # Apply filters. The SIEM filter is one destination: siem_id AND space, never the
+            # space name alone (CLAUDE.md §6). A value without a siem_id matches nothing.
             if filters.space:
-                query += " AND space = ?"
-                params.append(filters.space)
+                query += " AND siem_id = ? AND LOWER(space) = LOWER(?)"
+                params.extend([filters.siem_id or "", filters.space])
+                if not filters.state:
+                    # With no State chosen, a SIEM means "what is actually there now": a
+                    # deprecated leftover is only a record that the rule USED to be here. Picking
+                    # Deprecated (or SIEM offline) in State asks for those rows explicitly.
+                    query += " AND COALESCE(deprecated, false) = false"
             
             if filters.enabled is not None:
                 query += " AND enabled = ?"
@@ -3737,10 +4712,10 @@ class DatabaseService:
             # Check if sorting by validation date (Python-side sort needed)
             is_validation_sort = any(field == "validated" for field, _ in sort_spec)
 
-            # ``state`` (production/staging/migrated/deprecated) and the
-            # validated-timestamp range are not plain DB columns — state is
-            # derived from rule_migrations/logical_rule_identities and the
-            # validated date comes from the JSON validation file — so both
+            # ``state`` (live/offline/deprecated) and the validated-timestamp
+            # range are not plain DB columns — offline comes from
+            # siem_space_status and the validated date from the JSON
+            # validation file — so both
             # require a Python-side pass after row hydration, same as the
             # validation-date sort above.
             needs_state_filter = bool(filters.state)
@@ -3809,13 +4784,11 @@ class DatabaseService:
                     and (hi is None or r.validation_date <= hi)
                 ]
             if needs_state_filter:
+                # Deprecated (not found at the last good sync), else offline (its SIEM failed the
+                # reachability check before the last sync, so the row is kept from cache), else live.
                 wanted_states = {s.strip().lower() for s in filters.state if s and s.strip()}
-                staging_scopes = self.get_client_siem_scopes(client_id, environment_role="staging") if client_id else []
-                production_scopes = self.get_client_siem_scopes(client_id, environment_role="production") if client_id else []
-                states = self.get_rule_lifecycle_states_bulk(
-                    [r.rule_id for r in rules], staging_scopes, production_scopes
-                )
-                rules = [r for r in rules if states.get(r.rule_id, "Deprecated").lower() in wanted_states]
+                offline = self.get_offline_scopes()
+                rules = [r for r in rules if rule_state(r, offline) in wanted_states]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
@@ -4014,9 +4987,18 @@ class DatabaseService:
             ).fetchone()
         return row is not None
 
-    def delete_rule(self, rule_id: str, siem_id: str, space: str) -> bool:
-        """Permanently delete one rule from TIDE only."""
+    def delete_rule(self, rule_id: str, siem_id: str, space: str, remove_links: bool = False) -> bool:
+        """Permanently delete one rule from TIDE only. ``remove_links=True`` also deletes any
+        rule_links row this rule was part of (on either side) -- otherwise the other side of any
+        link is left pointing at a rule that no longer exists (shown as "Deleted rule" there)."""
         with self.get_connection() as conn:
+            if remove_links:
+                conn.execute(
+                    "DELETE FROM rule_links WHERE "
+                    "(rule_a_id = ? AND siem_a_id = ? AND space_a = ?) OR "
+                    "(rule_b_id = ? AND siem_b_id = ? AND space_b = ?)",
+                    [rule_id, siem_id, space, rule_id, siem_id, space],
+                )
             deleted = conn.execute(
                 "DELETE FROM detection_rules "
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
@@ -4339,61 +5321,6 @@ class DatabaseService:
                 )
         return logical_id
 
-    def merge_logical_rule_identity(
-        self,
-        source_rule_id: str,
-        target_rule_id: str,
-        source_siem_id: str,
-        source_space: str,
-        target_siem_id: str,
-        target_space: str,
-        actor_name: str,
-    ) -> Optional[str]:
-        """Merge two rule IDs into one logical identity and move baseline links."""
-        with self.get_connection() as conn:
-            source = conn.execute(
-                "SELECT logical_rule_id FROM logical_rule_members "
-                "WHERE rule_id = ? AND siem_id = ? AND space = ? LIMIT 1",
-                [source_rule_id, source_siem_id, source_space],
-            ).fetchone()
-            target = conn.execute(
-                "SELECT logical_rule_id FROM logical_rule_members "
-                "WHERE rule_id = ? AND siem_id = ? AND space = ? LIMIT 1",
-                [target_rule_id, target_siem_id, target_space],
-            ).fetchone()
-            if not source or not target:
-                return None
-            logical_id = (target or source or [None])[0]
-            if not logical_id:
-                logical_id = str(uuid.uuid4())
-                conn.execute(
-                    "INSERT INTO logical_rule_identities (id, canonical_rule_id) VALUES (?, ?)",
-                    [logical_id, source_rule_id],
-                )
-            conn.execute(
-                "INSERT INTO logical_rule_members "
-                "(logical_rule_id, rule_id, siem_id, space, relation) VALUES (?, ?, ?, ?, 'merged') "
-                "ON CONFLICT DO NOTHING",
-                [logical_id, source_rule_id, source_siem_id, source_space],
-            )
-            conn.execute(
-                "INSERT INTO logical_rule_members "
-                "(logical_rule_id, rule_id, siem_id, space, relation) VALUES (?, ?, ?, ?, 'merged') "
-                "ON CONFLICT DO NOTHING",
-                [logical_id, target_rule_id, target_siem_id, target_space],
-            )
-            conn.execute(
-                "UPDATE step_detections SET rule_ref = ?, logical_rule_id = ? "
-                "WHERE rule_ref = ? OR logical_rule_id IN (?, ?)",
-                [target_rule_id, logical_id, source_rule_id, logical_id, logical_id],
-            )
-            conn.execute(
-                "UPDATE logical_rule_identities SET master_rule_id = ?, "
-                "master_siem_id = ?, master_space = ?, state = 'active', "
-                "updated_at = now() WHERE id = ?",
-                [target_rule_id, target_siem_id, target_space, logical_id],
-            )
-            return logical_id
 
     def normalize_baseline_rule_refs(self, client_id: Optional[str] = None) -> Dict[str, int]:
         """Resolve unique SIEM rule-name references to authoritative rule IDs.
@@ -4426,171 +5353,166 @@ class DatabaseService:
                     ambiguous += 1
         return {"changed": changed, "ambiguous": ambiguous}
 
-    def record_rule_migration(
+    def create_rule_link(
         self,
-        source_rule_id: str,
-        source_siem_id: str,
-        source_space: str,
-        target_rule_id: str,
-        target_siem_id: str,
-        target_space: str,
-        source_retained: bool,
-        actor_user_id: Optional[str],
+        rule_a_id: str, siem_a_id: str, space_a: str,
+        rule_b_id: str, siem_b_id: str, space_b: str,
         actor_name: str,
-    ) -> str:
-        """Record an old-to-new SIEM identity mapping and current master."""
+    ) -> Optional[str]:
+        """Link two existing rules together. Returns the new link id, or None if either rule
+        doesn't exist, they're the same rule, or this exact pair is already linked."""
+        a = (rule_a_id, siem_a_id, space_a)
+        b = (rule_b_id, siem_b_id, space_b)
+        if a == b:
+            return None
         with self.get_connection() as conn:
+            for rid, sid, sp in (a, b):
+                if not conn.execute(
+                    "SELECT 1 FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                    [rid, sid, sp],
+                ).fetchone():
+                    return None
+            if conn.execute(
+                "SELECT 1 FROM rule_links WHERE "
+                "(rule_a_id=? AND siem_a_id=? AND space_a=? AND rule_b_id=? AND siem_b_id=? AND space_b=?) OR "
+                "(rule_a_id=? AND siem_a_id=? AND space_a=? AND rule_b_id=? AND siem_b_id=? AND space_b=?)",
+                [*a, *b, *b, *a],
+            ).fetchone():
+                return None
             row = conn.execute(
-                """INSERT INTO rule_migrations (
-                    source_rule_id, source_siem_id, source_space,
-                    target_rule_id, target_siem_id, target_space,
-                    master_rule_id, master_siem_id, master_space,
-                    source_retained, actor_user_id, actor_name
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-                [
-                    source_rule_id, source_siem_id, source_space,
-                    target_rule_id, target_siem_id, target_space,
-                    target_rule_id, target_siem_id, target_space,
-                    source_retained, actor_user_id, actor_name,
-                ],
+                "INSERT INTO rule_links (rule_a_id, siem_a_id, space_a, rule_b_id, siem_b_id, space_b, created_by) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+                [*a, *b, actor_name],
             ).fetchone()
         return row[0]
 
-    def get_rule_lifecycle_states_bulk(
-        self,
-        rule_ids: Iterable[str],
-        staging_scopes: List[Tuple[str, str]],
-        production_scopes: List[Tuple[str, str]],
-    ) -> Dict[str, str]:
-        """Bulk form of :meth:`get_rule_lifecycle_state` — same result, 3 queries total.
-
-        States: ``Production`` (only in a production scope), ``Staging`` (only in a
-        staging scope), ``Migrated`` (in both) and ``Deprecated`` (in neither).
-        The per-rule method issues 3+ queries per rule, which made state
-        filtering/sorting on ~1.7k rules take seconds.
-        """
-        migrations: Dict[str, Tuple[Any, Any]] = {}
-        logical_master: Dict[str, Any] = {}
-
-        def ids_in(conn, scopes: List[Tuple[str, str]]) -> set:
-            if not scopes:
-                return set()
-            predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
-            params: List[Any] = [v for pair in scopes for v in pair]
-            return {
-                r[0] for r in conn.execute(
-                    f"SELECT rule_id FROM detection_rules WHERE ({predicate}) "
-                    "AND COALESCE(deprecated, false) = false", params,
-                ).fetchall()
-            }
-
-        staging_set = {(str(s), str(sp).lower()) for s, sp in staging_scopes}
-        production_set = {(str(s), str(sp).lower()) for s, sp in production_scopes}
-
-        with self.get_connection() as conn:
-            for src, s_siem, s_space, tgt, t_siem, t_space in conn.execute(
-                "SELECT source_rule_id, source_siem_id, source_space, "
-                "target_rule_id, target_siem_id, target_space "
-                "FROM rule_migrations ORDER BY updated_at ASC"
-            ).fetchall():
-                # A migration only counts while its source is still a staging scope and its target a
-                # production scope; after a SIEM role change the record is stale and ignored.
-                if (str(s_siem), str(s_space).lower()) not in staging_set \
-                        or (str(t_siem), str(t_space).lower()) not in production_set:
-                    continue
-                for rid in (src, tgt):
-                    migrations[rid] = (src, tgt)          # ascending order: latest wins
-            tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
-            if "logical_rule_identities" in tables and "logical_rule_members" in tables:
-                for rid, master in conn.execute(
-                    "SELECT m.rule_id, l.master_rule_id FROM logical_rule_identities l "
-                    "JOIN logical_rule_members m ON m.logical_rule_id = l.id ORDER BY l.updated_at ASC"
-                ).fetchall():
-                    logical_master[rid] = master
-            staging_ids = ids_in(conn, staging_scopes)
-            production_ids = ids_in(conn, production_scopes)
-
-        out: Dict[str, str] = {}
-        for rid in rule_ids:
-            mig = migrations.get(rid)
-            source_id = mig[0] if mig else rid
-            target_id = mig[1] if mig else (logical_master[rid] if rid in logical_master else rid)
-            in_source = bool(source_id) and source_id in staging_ids
-            in_target = bool(target_id) and target_id in production_ids
-            out[rid] = "Migrated" if (in_source and in_target) else "Production" if in_target else "Staging" if in_source else "Deprecated"
-        return out
-
-    def get_rule_lifecycle_state(
-        self,
-        rule_id: str,
-        staging_scopes: List[Tuple[str, str]],
-        production_scopes: List[Tuple[str, str]],
-    ) -> str:
-        """Resolve the TIDE migration state from current scoped rule presence."""
-        with self.get_connection() as conn:
-            migrations = conn.execute(
-                "SELECT source_rule_id, source_siem_id, source_space, "
-                "target_rule_id, target_siem_id, target_space "
-                "FROM rule_migrations WHERE source_rule_id = ? OR target_rule_id = ? "
-                "ORDER BY updated_at DESC LIMIT 1",
-                [rule_id, rule_id],
-            ).fetchall()
-            migration = migrations[0] if migrations else None
-            if migration and (
-                (str(migration[1]), str(migration[2]).lower()) not in {(str(a), str(b).lower()) for a, b in staging_scopes}
-                or (str(migration[4]), str(migration[5]).lower()) not in {(str(a), str(b).lower()) for a, b in production_scopes}
-            ):
-                migration = None  # stale: the SIEM roles changed since it was recorded
-            logical = None
-            if not migration:
-                logical_row = conn.execute(
-                    "SELECT l.master_rule_id, l.master_siem_id, l.master_space "
-                    "FROM logical_rule_identities l "
-                    "JOIN logical_rule_members m ON m.logical_rule_id = l.id "
-                    "WHERE m.rule_id = ? ORDER BY l.updated_at DESC LIMIT 1",
-                    [rule_id],
-                ).fetchone()
-                logical = logical_row
-
-            def present(scopes: List[Tuple[str, str]], candidate_id: str) -> bool:
-                if not scopes or not candidate_id:
-                    return False
-                predicate = " OR ".join("(siem_id = ? AND space = ?)" for _ in scopes)
-                params: List[Any] = []
-                for sid, sp in scopes:
-                    params.extend([sid, sp])
-                params.append(candidate_id)
-                return conn.execute(
-                    f"SELECT 1 FROM detection_rules WHERE ({predicate}) "
-                    "AND rule_id = ? AND COALESCE(deprecated, false) = false LIMIT 1",
-                    params,
-                ).fetchone() is not None
-
-            source_id = migration[0] if migration else rule_id
-            target_id = migration[3] if migration else (logical[0] if logical else rule_id)
-            source_present = present(staging_scopes, source_id)
-            target_present = present(production_scopes, target_id)
-            if source_present and target_present:
-                return "Migrated"
-            if target_present:
-                return "Production"
-            if source_present:
-                return "Staging"
-            return "Deprecated"
-
-    def get_rule_migration_for_rule(self, rule_id: str) -> Optional[Dict[str, Any]]:
-        """Return the latest migration record containing a rule identity."""
+    def delete_rule_link(self, link_id: str) -> bool:
+        """Remove a link. Never touches either rule, its history or its validation."""
         with self.get_connection() as conn:
             row = conn.execute(
-                "SELECT * FROM rule_migrations "
-                "WHERE source_rule_id = ? OR target_rule_id = ? "
-                "ORDER BY updated_at DESC LIMIT 1",
-                [rule_id, rule_id],
+                "DELETE FROM rule_links WHERE id = ? RETURNING id", [link_id]
             ).fetchone()
-            if not row:
-                return None
-            columns = [desc[0] for desc in conn.description]
-            return dict(zip(columns, row))
+        return row is not None
+
+    def search_rule_names(
+        self, siem_id: str, space: str, query: str,
+        exclude_rule_id: Optional[str] = None, exclude_siem_id: Optional[str] = None,
+        exclude_space: Optional[str] = None, limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        """Rule names in one destination matching ``query`` (case-insensitive substring) --
+        backs the rule modal's Add-link search box. Excludes deprecated rules and, if given, one
+        exact (rule_id, siem_id, space) row -- the rule you're linking from, in case the chosen
+        target destination happens to be its own. A portable rule_id is shared by every copy of
+        the same rule across destinations by design, so excluding by rule_id alone would hide
+        every *other* copy too -- the exact thing Add-link searches for.
+        """
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT rule_id, name FROM detection_rules "
+                "WHERE siem_id = ? AND space = ? AND name ILIKE ? AND NOT deprecated "
+                "AND NOT (rule_id = COALESCE(?, '') AND siem_id = COALESCE(?, '') AND space = COALESCE(?, '')) "
+                "ORDER BY name LIMIT ?",
+                [siem_id, space, f"%{query}%", exclude_rule_id, exclude_siem_id, exclude_space, limit],
+            ).fetchall()
+        return [{"rule_id": r[0], "name": r[1]} for r in rows]
+
+    def record_siem_space_status(self, siem_id: str, space: str, reachable: bool, reason: str = "") -> None:
+        """Store the result of the pre-sync reachability check for one (siem_id, space)."""
+        with self.get_connection() as conn:
+            conn.execute(self.SIEM_SPACE_STATUS_DDL)
+            conn.execute(
+                "INSERT OR REPLACE INTO siem_space_status (siem_id, space, reachable, reason, checked_at) "
+                "VALUES (?, ?, ?, ?, now())",
+                [siem_id, space, reachable, reason or None],
+            )
+
+    def get_offline_scopes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """``(siem_id, space)`` -> ``{reason, checked_at}`` for every destination that failed its
+        last reachability check. Empty when none did, or before the first check."""
+        with self.get_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT siem_id, space, reason, checked_at FROM siem_space_status WHERE NOT reachable"
+                ).fetchall()
+            except duckdb.CatalogException:
+                return {}
+        return {(sid, sp): {"reason": reason or "Unreachable", "checked_at": at} for sid, sp, reason, at in rows}
+
+    def get_rule_links_bulk(
+        self, items: List[Tuple[str, str, str]]
+    ) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
+        """For each (rule_id, siem_id, space) in ``items``, every other rule it's linked to --
+        the link id (for unlinking), the linked rule's own id/siem/space/name, and its
+        destination name and deprecated/enabled state. One query, not one per rule."""
+        keys = list({(str(r), str(s), str(sp)) for r, s, sp in items})
+        if not keys:
+            return {}
+        with self.get_connection() as conn:
+            predicate = " OR ".join(
+                "(rule_a_id=? AND siem_a_id=? AND space_a=?) OR (rule_b_id=? AND siem_b_id=? AND space_b=?)"
+                for _ in keys
+            )
+            params: List[Any] = []
+            for rid, sid, sp in keys:
+                params.extend([rid, sid, sp, rid, sid, sp])
+            try:
+                rows = conn.execute(
+                    f"SELECT id, rule_a_id, siem_a_id, space_a, rule_b_id, siem_b_id, space_b "
+                    f"FROM rule_links WHERE {predicate}",
+                    params,
+                ).fetchall()
+            except duckdb.CatalogException:
+                # A tenant DB Migration 74 has not reached yet: show rules without links, never fail.
+                logger.warning("rule_links table missing in this tenant DB; rules shown without links")
+                return {}
+            if not rows:
+                return {}
+            other_keys = set()
+            for _id, ra, sa, spa, rb, sb, spb in rows:
+                other_keys.add((ra, sa, spa)); other_keys.add((rb, sb, spb))
+            rule_predicate = " OR ".join("(rule_id=? AND siem_id=? AND space=?)" for _ in other_keys)
+            rule_params = [v for triple in other_keys for v in triple]
+            rule_info = {}
+            if other_keys:
+                for rid, sid, sp, name, dep, en in conn.execute(
+                    f"SELECT rule_id, siem_id, space, name, deprecated, enabled "
+                    f"FROM detection_rules WHERE {rule_predicate}", rule_params,
+                ).fetchall():
+                    rule_info[(rid, sid, sp)] = {"name": name, "deprecated": bool(dep), "enabled": bool(en)}
+        dest_names, dest_colors = {}, {}
+        with self.get_shared_connection() as sconn:
+            siem_ids = {sid for _, sid, _ in other_keys}
+            if siem_ids:
+                pred = " OR ".join("(siem_id=? AND space=?)" for _ in other_keys)
+                p2 = [v for (_, sid, sp) in other_keys for v in (sid, sp)]
+                for sid, sp, nm, color in sconn.execute(
+                    f"SELECT siem_id, space, name, color FROM client_siem_map WHERE {pred}", p2,
+                ).fetchall():
+                    dest_names[(sid, sp)] = nm
+                    dest_colors[(sid, sp)] = color
+
+        out: Dict[Tuple[str, str, str], List[Dict[str, Any]]] = {}
+        for link_id, ra, sa, spa, rb, sb, spb in rows:
+            a, b = (ra, sa, spa), (rb, sb, spb)
+            for me, other in ((a, b), (b, a)):
+                if me not in keys:
+                    continue
+                # ``other`` may no longer exist in detection_rules -- it was deleted from TIDE
+                # some time after this link was made. Never fall back to printing its raw id;
+                # the caller shows a plain "no longer in TIDE" state instead (missing=True).
+                missing = other not in rule_info
+                info = rule_info.get(other, {})
+                out.setdefault(me, []).append({
+                    "link_id": link_id,
+                    "rule_id": other[0], "siem_id": other[1], "space": other[2],
+                    "rule_name": None if missing else (info.get("name") or None),
+                    "destination_name": dest_names.get((other[1], other[2])) or other[2],
+                    "destination_color": dest_colors.get((other[1], other[2])),
+                    "deprecated": info.get("deprecated", False),
+                    "enabled": info.get("enabled", True),
+                    "missing": missing,
+                })
+        return out
 
     def get_logical_rule_identity_for_rule(
         self, rule_id: str, siem_id: Optional[str] = None, space: Optional[str] = None
@@ -5110,7 +6032,7 @@ class DatabaseService:
                 pass
             return origins, sources
     
-    def get_promotion_metrics(
+    def _dead_get_promotion_metrics(
         self,
         staging_scopes: Optional[List[Tuple[str, str]]] = None,
         production_scopes: Optional[List[Tuple[str, str]]] = None,
@@ -6838,37 +7760,37 @@ class DatabaseService:
     
     def get_all_covered_ttps(self, client_id: str = None) -> Set[str]:
         """Get all TTPs covered by enabled detection rules.
-        If client_id provided, restrict to that client's production SIEM spaces."""
+        If client_id provided, restrict to that client's linked destinations."""
         if client_id:
-            return self.get_covered_ttps_for_client(client_id, "production")
+            return self.get_covered_ttps_for_client(client_id)
         with self.get_connection() as conn:
             result = conn.execute(
                 "SELECT DISTINCT unnest(mitre_ids) FROM detection_rules WHERE enabled = 1"
             ).fetchall()
             return {row[0].upper() for row in result if row[0]}
-    
+
     def get_ttp_rule_counts(self, client_id: str = None) -> Dict[str, int]:
         """Get count of enabled rules per MITRE technique ID.
-        If client_id provided, restrict to that client's production SIEM spaces."""
+        If client_id provided, restrict to that client's linked destinations."""
         if client_id:
-            return self.get_technique_rule_counts_for_client(client_id, "production")
+            return self.get_technique_rule_counts_for_client(client_id)
         with self.get_connection() as conn:
             result = conn.execute("""
                 SELECT ttp_id, COUNT(*) as rule_count
                 FROM (
                     SELECT unnest(mitre_ids) as ttp_id
-                    FROM detection_rules 
+                    FROM detection_rules
                     WHERE enabled = 1
                 )
                 GROUP BY ttp_id
             """).fetchall()
             return {row[0].upper(): row[1] for row in result if row[0]}
-    
+
     def get_sigma_coverage_data(self, client_id: str = None) -> Tuple[Set[str], Dict[str, int]]:
         """Get covered TTPs and rule counts in a single DB connection (for sigma page)."""
         if client_id:
-            covered = self.get_covered_ttps_for_client(client_id, "production")
-            counts = self.get_technique_rule_counts_for_client(client_id, "production")
+            covered = self.get_covered_ttps_for_client(client_id)
+            counts = self.get_technique_rule_counts_for_client(client_id)
             return covered, counts
         with self.get_connection() as conn:
             covered_result = conn.execute(
@@ -6923,6 +7845,27 @@ class DatabaseService:
             }
             for row in rows
         ]
+
+    def get_mitre_technique_options(self) -> List[Dict[str, str]]:
+        """One row per (technique, tactic) for the tactic -> technique pickers. A technique can
+        sit under several tactics (T1078 Valid Accounts is under four); ``mitre_techniques.tactic``
+        holds only the first (``primary_tactic``), so the others come from
+        ``mitre_technique_tactics``. A technique with no tactic links falls back to that first one."""
+        with self.get_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT mt.id, mt.name, COALESCE(NULLIF(t.shortname, ''), mt.tactic, '') AS tactic,
+                       COALESCE(mt.url, '') AS url, COALESCE(mt.tactic, '') AS primary_tactic
+                FROM mitre_techniques mt
+                LEFT JOIN mitre_technique_tactics mtt
+                    ON mtt.technique_stix_id = mt.stix_id AND LOWER(mtt.domain) = LOWER(mt.domain)
+                LEFT JOIN mitre_tactics t
+                    ON t.stix_id = mtt.tactic_stix_id AND LOWER(t.domain) = LOWER(mtt.domain)
+                WHERE mt.id IS NOT NULL AND mt.name IS NOT NULL
+                ORDER BY 3, 1
+                """
+            ).fetchall()
+        return [{"id": r[0], "name": r[1], "tactic": r[2], "url": r[3], "primary_tactic": r[4]} for r in rows]
 
     def get_mitre_overview(self) -> Dict[str, int]:
         """Return high-level offline MITRE KB counts."""
@@ -8595,23 +9538,21 @@ class DatabaseService:
         }
     
     def get_rules_for_technique(self, technique_id: str, enabled_only: bool = True,
-                                search: str = None, client_id: str = None,
-                                environment_role: str = None) -> List[DetectionRule]:
+                                search: str = None, client_id: str = None) -> List[DetectionRule]:
         """Get all detection rules that cover a specific MITRE technique.
-        
+
         Args:
             technique_id: MITRE technique ID (e.g., T1059)
             enabled_only: If True, only return enabled rules (default). Matches heatmap coverage logic.
             search: Optional search filter to further restrict rules (matches name, author, rule_id, mitre_ids)
             client_id: If provided, restrict to rules in spaces linked to this client.
-            environment_role: If provided with client_id, restrict to production or staging spaces.
         """
         # Pre-fetch client scopes for filtering.
         # Use composite (siem_id, space) to prevent cross-SIEM leakage when
         # multiple SIEMs share the same Kibana space name.
         client_scopes = None
         if client_id:
-            client_scopes = self.get_client_siem_scopes(client_id, environment_role)
+            client_scopes = self.get_client_siem_scopes(client_id)
             if not client_scopes:
                 return []
         # Honour per-tenant validation thresholds when scoped to a client.
@@ -10120,32 +11061,30 @@ class DatabaseService:
             ).fetchall()
             return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
 
-    def get_client_siems(self, client_id: str, environment_role: str = None) -> List[Dict]:
-        """Get all SIEMs linked to a client via the inventory.
-        Optionally filter by environment_role ('production' or 'staging')."""
+    def get_client_siems(self, client_id: str, name: str = None) -> List[Dict]:
+        """Get every SIEM+space destination linked to a client via the inventory.
+
+        Each linked (siem, space) is a freely-named destination, not a staging/production
+        role -- ``name`` filters to one destination's exact name when given, matching how it
+        used to filter by ``environment_role``.
+        """
         with self.get_shared_connection() as conn:
-            cmap_cols = {
-                str(r[1]).lower()
-                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
-            }
-            has_default_index = "default_index" in cmap_cols
-            default_index_sql = "m.default_index" if has_default_index else "NULL AS default_index"
             query = (
                 "SELECT s.id, s.label, s.siem_type, s.elasticsearch_url, s.kibana_url, "
                 "s.api_token_enc, "
-                f"m.environment_role, m.space, {default_index_sql}, s.is_active, s.created_at "
+                "m.name, m.space, m.default_index, s.is_active, s.created_at, m.color "
                 "FROM siem_inventory s JOIN client_siem_map m ON s.id = m.siem_id "
                 "WHERE m.client_id = ?"
             )
             params = [client_id]
-            if environment_role:
-                query += " AND m.environment_role = ?"
-                params.append(environment_role)
-            query += " ORDER BY m.environment_role, s.label"
+            if name:
+                query += " AND m.name = ?"
+                params.append(name)
+            query += " ORDER BY m.name, s.label"
             rows = conn.execute(query, params).fetchall()
             cols = ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
                 "api_token_enc",
-                "environment_role", "space", "default_index", "is_active", "created_at"]
+                "name", "space", "default_index", "is_active", "created_at", "color"]
             result = []
             for r in rows:
                 d = dict(zip(cols, r))
@@ -10155,33 +11094,33 @@ class DatabaseService:
                 result.append(d)
             return result
 
-    def link_client_siem(self, client_id: str, siem_id: str,
-                         environment_role: str = "production", space: str = None,
-                         default_index: Optional[str] = None):
-        """Link a client to a SIEM from the inventory with an environment role."""
+    def link_client_siem(self, client_id: str, siem_id: str, name: str, space: str = None,
+                         default_index: Optional[str] = None, color: Optional[str] = None):
+        """Link a client to one SIEM+space destination from the inventory, under a chosen name.
+
+        ``color`` identifies this destination on rule cards; when omitted, the next colour in
+        ``DESTINATION_COLOR_PALETTE`` this client hasn't already used is assigned automatically.
+        """
         # Normalise empty/None space to 'default' (Kibana's built-in space)
         if not space or not str(space).strip():
             space = "default"
+        name = (name or "").strip() or space.title()
         default_index_val = (default_index or "").strip() or None
+        color_val = (color or "").strip() or None
         with self.get_shared_connection() as conn:
-            cmap_cols = {
-                str(r[1]).lower()
-                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
-            }
-            if "default_index" in cmap_cols:
-                conn.execute(
-                    "INSERT INTO client_siem_map "
-                    "(client_id, siem_id, environment_role, space, default_index) "
-                    "VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                    [client_id, siem_id, environment_role, space, default_index_val],
+            if not color_val:
+                used = {r[0] for r in conn.execute(
+                    "SELECT color FROM client_siem_map WHERE client_id = ? AND color IS NOT NULL", [client_id],
+                ).fetchall()}
+                color_val = next(
+                    (c for c in DESTINATION_COLOR_PALETTE if c not in used),
+                    DESTINATION_COLOR_PALETTE[len(used) % len(DESTINATION_COLOR_PALETTE)],
                 )
-            else:
-                conn.execute(
-                    "INSERT INTO client_siem_map "
-                    "(client_id, siem_id, environment_role, space) "
-                    "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                    [client_id, siem_id, environment_role, space],
-                )
+            conn.execute(
+                "INSERT INTO client_siem_map (client_id, siem_id, space, name, default_index, color) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
+                [client_id, siem_id, space, name, default_index_val, color_val],
+            )
             # Bidirectional: also populate legacy client_siem_configs
             siem = conn.execute(
                 "SELECT id, label, siem_type, kibana_url, api_token_enc "
@@ -10200,35 +11139,29 @@ class DatabaseService:
         self,
         client_id: str,
         siem_id: str,
-        environment_role: str,
+        space: str,
         default_index: Optional[str],
     ) -> bool:
-        """Update the default index pattern for one linked (client, siem, role) row."""
+        """Update the default index pattern for one linked (client, siem, space) row."""
         value = (default_index or "").strip() or None
         with self.get_shared_connection() as conn:
-            cmap_cols = {
-                str(r[1]).lower()
-                for r in conn.execute("PRAGMA table_info('client_siem_map')").fetchall()
-            }
-            if "default_index" not in cmap_cols:
-                return False
             updated = conn.execute(
                 "UPDATE client_siem_map SET default_index = ? "
-                "WHERE client_id = ? AND siem_id = ? AND environment_role = ? "
+                "WHERE client_id = ? AND siem_id = ? AND space = ? "
                 "RETURNING client_id",
-                [value, client_id, siem_id, environment_role],
+                [value, client_id, siem_id, space],
             ).fetchone()
         return updated is not None
 
-    def unlink_client_siem(self, client_id: str, siem_id: str, environment_role: str = None):
+    def unlink_client_siem(self, client_id: str, siem_id: str, space: str = None):
         """Unlink a client from a SIEM (bidirectional).
-        If environment_role is provided, only remove that specific mapping."""
+        If space is provided, only remove that specific destination."""
         with self.get_shared_connection() as conn:
-            if environment_role:
+            if space:
                 conn.execute(
                     "DELETE FROM client_siem_map "
-                    "WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
-                    [client_id, siem_id, environment_role],
+                    "WHERE client_id = ? AND siem_id = ? AND space = ?",
+                    [client_id, siem_id, space],
                 )
             else:
                 conn.execute(
@@ -10241,30 +11174,57 @@ class DatabaseService:
                 [siem_id, client_id],
             )
 
-    def set_client_siem_role(self, client_id: str, siem_id: str, from_role: str, to_role: str) -> Optional[str]:
-        """Re-tag a linked SIEM's environment role in place. Returns an error message, or None on success.
+    def rename_client_siem(self, client_id: str, siem_id: str, space: str, name: str) -> Optional[str]:
+        """Rename a linked SIEM+space destination in place. Returns an error message, or None on success.
 
-        Nothing else changes: rules are keyed by (rule_id, siem_id, space), not by role, so the client's
-        rules, scores, validations and history stay as they are and simply move between the staging and
-        production views.
+        Nothing else changes: rules are keyed by (rule_id, siem_id, space), not by name, so the
+        client's rules, scores, validations and history are entirely unaffected by a rename.
         """
-        if to_role not in ("production", "staging") or from_role not in ("production", "staging") or from_role == to_role:
-            return "Nothing to change."
+        name = (name or "").strip()
+        if not name:
+            return "Name cannot be empty."
         with self.get_shared_connection() as conn:
-            if not conn.execute(
-                "SELECT 1 FROM client_siem_map WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
-                [client_id, siem_id, from_role],
-            ).fetchone():
-                return "Linked SIEM row not found."
-            if conn.execute(
-                "SELECT 1 FROM client_siem_map WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
-                [client_id, siem_id, to_role],
-            ).fetchone():
-                return f"This SIEM is already linked as {to_role}. Unlink that link first."
+            updated = conn.execute(
+                "UPDATE client_siem_map SET name = ? "
+                "WHERE client_id = ? AND siem_id = ? AND space = ? RETURNING client_id",
+                [name, client_id, siem_id, space],
+            ).fetchone()
+        return None if updated else "Linked SIEM destination not found."
+
+    def update_client_siem_destination(
+        self, client_id: str, siem_id: str, space: str,
+        name: Optional[str] = None, color: Optional[str] = None, default_index: Optional[str] = None,
+    ) -> Optional[str]:
+        """Update a linked destination's name, colour and/or default index in one call --
+        backs the rule window's "..." edit menu. Any argument left ``None`` keeps its current
+        value. Returns an error message, or ``None`` on success. Like ``rename_client_siem``,
+        none of this touches rules, scores, validation or history -- all keyed by
+        (rule_id, siem_id, space), never by name or colour.
+        """
+        space = space or "default"
+        with self.get_shared_connection() as conn:
+            existing = conn.execute(
+                "SELECT name, color, default_index FROM client_siem_map "
+                "WHERE client_id = ? AND siem_id = ? AND space = ?",
+                [client_id, siem_id, space],
+            ).fetchone()
+            if not existing:
+                return "Linked SIEM destination not found."
+            cur_name, cur_color, cur_default_index = existing
+            new_name = cur_name
+            if name is not None:
+                name = name.strip()
+                if not name:
+                    return "Name cannot be empty."
+                new_name = name
+            new_color = color.strip() if color is not None and color.strip() else cur_color
+            new_default_index = cur_default_index
+            if default_index is not None:
+                new_default_index = default_index.strip() or None
             conn.execute(
-                "UPDATE client_siem_map SET environment_role = ? "
-                "WHERE client_id = ? AND siem_id = ? AND environment_role = ?",
-                [to_role, client_id, siem_id, from_role],
+                "UPDATE client_siem_map SET name = ?, color = ?, default_index = ? "
+                "WHERE client_id = ? AND siem_id = ? AND space = ?",
+                [new_name, new_color, new_default_index, client_id, siem_id, space],
             )
         return None
 
@@ -11163,9 +12123,9 @@ class DatabaseService:
             ).fetchone()
         return deleted is not None
 
-    def get_client_siem_spaces(self, client_id: str, environment_role: str = None) -> List[str]:
+    def get_client_siem_spaces(self, client_id: str, name: str = None) -> List[str]:
         """Get the list of Kibana space names visible to a client.
-        If environment_role is specified, filter to just production or staging.
+        If ``name`` is specified, filter to just that one named destination.
         NULL/empty spaces are normalised to 'default' (Kibana's built-in space).
 
         .. warning::
@@ -11185,13 +12145,13 @@ class DatabaseService:
                 "WHERE m.client_id = ?"
             )
             params = [client_id]
-            if environment_role:
-                query += " AND m.environment_role = ?"
-                params.append(environment_role)
+            if name:
+                query += " AND m.name = ?"
+                params.append(name)
             rows = conn.execute(query, params).fetchall()
             return [r[0] for r in rows if r[0]]
 
-    def get_client_siem_scopes(self, client_id: str, environment_role: str = None) -> List[Tuple[str, str]]:
+    def get_client_siem_scopes(self, client_id: str, name: str = None) -> List[Tuple[str, str]]:
         """Get the list of ``(siem_id, space)`` tuples a client is entitled to see.
 
         This is the tenant-isolation primitive for any query that pulls from
@@ -11205,7 +12165,8 @@ class DatabaseService:
 
         Spaces are returned lower-cased for case-insensitive matching against
         DuckDB ``LOWER(space)``. NULL/empty spaces are normalised to
-        ``'default'`` to match the Kibana built-in space.
+        ``'default'`` to match the Kibana built-in space. ``name`` restricts
+        to one named destination when a caller needs exactly that one.
         """
         with self.get_shared_connection() as conn:
             query = (
@@ -11215,18 +12176,20 @@ class DatabaseService:
                 "WHERE m.client_id = ? AND m.siem_id IS NOT NULL"
             )
             params = [client_id]
-            if environment_role:
-                query += " AND m.environment_role = ?"
-                params.append(environment_role)
+            if name:
+                query += " AND m.name = ?"
+                params.append(name)
             rows = conn.execute(query, params).fetchall()
             return [(sid, sp) for sid, sp in rows if sid and sp]
 
-    def get_covered_ttps_for_client(self, client_id: str, environment_role: str = "production") -> Set[str]:
-        """Get TTPs covered by enabled detection rules for a client's role-tagged
-        ``(siem_id, space)`` pairs. Composite key is mandatory — a space-only
-        filter would leak TTP coverage from a SIEM the tenant does not map
-        (CLAUDE.md §8.2 g4)."""
-        scopes = self.get_client_siem_scopes(client_id, environment_role)
+    def get_covered_ttps_for_client(self, client_id: str) -> Set[str]:
+        """Get TTPs covered by enabled detection rules across every destination linked to a
+        client. Composite key is mandatory — a space-only filter would leak TTP coverage from a
+        SIEM the tenant does not map (CLAUDE.md §8.2 g4).
+
+        There is no more "production only" default: named destinations replace the old
+        staging/production role, so every linked, enabled rule counts toward coverage."""
+        scopes = self.get_client_siem_scopes(client_id)
         if not scopes:
             return set()
         frag, params = _scope_predicate(scopes)
@@ -11238,11 +12201,11 @@ class DatabaseService:
             """, params).fetchall()
             return {row[0].upper() for row in result if row[0]}
 
-    def get_technique_rule_counts_for_client(self, client_id: str, environment_role: str = "production") -> Dict[str, int]:
-        """Get count of enabled rules per MITRE technique for the client's
-        role-tagged ``(siem_id, space)`` pairs. Composite key is mandatory
-        (CLAUDE.md §8.2 g4)."""
-        scopes = self.get_client_siem_scopes(client_id, environment_role)
+    def get_technique_rule_counts_for_client(self, client_id: str) -> Dict[str, int]:
+        """Get count of enabled rules per MITRE technique across every destination linked to a
+        client. Composite key is mandatory (CLAUDE.md §8.2 g4). See
+        :py:meth:`get_covered_ttps_for_client` on why there is no role filter any more."""
+        scopes = self.get_client_siem_scopes(client_id)
         if not scopes:
             return {}
         frag, params = _scope_predicate(scopes)
@@ -11260,12 +12223,12 @@ class DatabaseService:
             """, params).fetchall()
             return {row[0]: row[1] for row in result if row[0]}
 
-    def get_rules_for_client(self, client_id: str, environment_role: str = None) -> List[Dict]:
+    def get_rules_for_client(self, client_id: str, name: str = None) -> List[Dict]:
         """Get all detection rules visible to a client via linked SIEMs.
         Filtered by composite ``(siem_id, space)`` so two SIEMs sharing a
         Kibana space name never bleed into each other (CLAUDE.md §8.2 g4).
-        If ``environment_role`` is specified, restrict to that role's pairs only."""
-        scopes = self.get_client_siem_scopes(client_id, environment_role)
+        If ``name`` is specified, restrict to that one named destination."""
+        scopes = self.get_client_siem_scopes(client_id, name)
         if not scopes:
             return []
         frag, params = _scope_predicate(scopes)

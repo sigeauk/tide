@@ -9,7 +9,7 @@ Architecture:
 
 from pydantic import BaseModel, Field
 from typing import Dict, Optional, List
-from datetime import datetime
+from datetime import date, datetime
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +345,15 @@ class TacticDetection(BaseModel):
     id: Optional[str] = None
     step_id: Optional[str] = None      # DB column name kept
     rule_ref: str = ""
+    # The destination this mapping means. None for a Sigma/manual reference, or for a rule
+    # reference TIDE can no longer resolve -- which the UI shows as needing a relink, never
+    # as coverage.
+    siem_id: Optional[str] = None
+    space: Optional[str] = None
     note: str = ""
     source: str = "manual"
+    created_at: Optional[datetime] = None
+    created_by: Optional[str] = None
 
 StepDetection = TacticDetection  # noqa: backward compat alias
 
@@ -360,6 +367,9 @@ class BaselineTactic(BaseModel):
     technique_id: str = ""          # legacy single field (kept for compat)
     required_rule: str = ""         # legacy single field (kept for compat)
     description: str = ""
+    # Risks: set per system on its own technique (never on a template). '' = not set.
+    priority: str = ""              # critical / high / medium / low
+    category: str = ""              # see STEP_CATEGORIES in app/inventory_engine.py
     techniques: List[TacticTechnique] = Field(default_factory=list)
     detections: List[TacticDetection] = Field(default_factory=list)
 
@@ -372,6 +382,7 @@ class Baseline(BaseModel):
     tactics: List[BaselineTactic] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    system_id: Optional[str] = None     # set on a system's own copy; None for a template
 
 Playbook = Baseline  # noqa: backward compat alias
 
@@ -403,3 +414,10 @@ class BlindSpot(BaseModel):
     override_type: str = "gap"  # 'gap' (amber) or 'na' (grey / not applicable)
     created_by: str = ""
     created_at: Optional[datetime] = None
+    review_by: Optional[date] = None    # when the mark should be looked at again (None = no date)
+    updated_at: Optional[datetime] = None
+    updated_by: str = ""
+
+    @property
+    def review_due(self) -> bool:
+        return self.review_by is not None and self.review_by <= date.today()
