@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 ## [6.0.0] - 2026-09-28
 
 ### Added
+
 - **Name your SIEM destinations.** Every space in a linked Elastic SIEM can now be linked to a client as its own destination, with a name and colour you choose (Management → a client → Linked SIEMs). Existing links become "Staging" and "Production", so nothing looks different until you change them. Renaming a destination never touches its rules, scores or validation.
 - **Destination colours.** Each destination has a colour, shown on the left edge of its rules' cards and on its tags. New destinations get one automatically; change it from the destination's **…** menu, which also holds its name and default index.
 - **Linked rules.** The rule window lists every rule linked to this one, by name and destination. Each link has its own **×**, and **Add link** (with search as you type) links two rules yourself. On upgrade, rules that were promoted or demoted with the original kept are linked automatically.
@@ -27,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Relink a mapped rule TIDE can't find.** A mapping whose rule has been deleted, moved or renamed, or that predates destinations, is marked **Needs relinking** with the reason on hover. **Relink**, in its **…** menu, opens the rule picker searched by its name; the rule you pick replaces it, keeping its history. Administrators can relink every unambiguous one at once with the `relink_rule_mappings` maintenance script.
 
 ### Changed
+
 - **Move replaces Promote and Demote.** Move a rule to any linked destination, from the rule window or bulk edit. Keep the original to link the two copies, or tick **Delete source after move**. A move that would overwrite a rule already at the destination is refused, with a note to link the two and use Merge instead; if the SIEM can't be reached to check, nothing is moved.
 - **Every rule has its own card.** Rule Health no longer folds a staging and production pair into one "Migrated" card. The State filter is now **Live**, **SIEM offline** or **Deprecated**, and validating or editing a rule refreshes only that copy's card.
 - **Delete rule removes the rule from TIDE straight away**, and a sync brings it back if it is still in Elastic. Tick **Also delete it from Elastic** to remove it from the SIEM too; only that asks you to confirm, and if Elastic refuses, nothing is deleted. Sync and Delete are no longer in the Edit rule form.
@@ -49,6 +51,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Confirmation prompts open in TIDE's own window**, with the destructive choice marked. Cancel is focused, and Esc cancels.
 
 ### Removed
+
 - **Coverage Quests.** Map rules from each technique's window on the system's page.
 - **The separate page for each baseline technique.** Templates are edited on the Baselines page, and a system's techniques in their window.
 - **"Also move associated baselines" when moving a system to another client.** Its baselines always go with it.
@@ -57,6 +60,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - **Archive in TIDE.** Sync already marks a rule deprecated once it is gone from Elastic.
 
 ### Fixed
+
 - **Some ATT&CK techniques were missing from tactic lists** when writing a rule or picking a technique. A technique with several tactics was only offered under the first; for example, T1078 Valid Accounts was missing from Initial Access.
 - **Users who could only view systems could add, edit or remove known gaps and N/A marks.** This now needs permission to edit Systems.
 - **Removing a rule from a baseline, or deleting a technique, baseline or system, left orphaned records behind.** They are now removed with it.
