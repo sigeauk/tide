@@ -1,0 +1,106 @@
+{#
+  A technique's window body (components/mitre_window.html): Details, Coverage and NIST · Description,
+  Sub-techniques and the groups that use it (with how) · Software, Campaigns, Mitigations and Sigma
+  rules. A sub-technique, parent, group, software or campaign opens its own window where it has one.
+  Your rules are the baseline technique window's rule cards (window_ui.html: rule_card).
+  Context: detail (get_mitre_technique_detail), coverage, rules, rule_cards, enabled_rules, sigma_rules,
+  nist_capabilities, technique_groups, covered_ttps, ttp_rule_counts, window_kinds, source context.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/mitre_ui.html" import panel, related_section, technique_list %}
+
+{% set tid = (detail.id or '') | upper %}
+
+{% macro open_btn(kind, id, label) -%}
+<button type="button" class="rm-item__open" title="Open {{ id }}"
+        hx-get="/api/mitre/window/{{ kind }}/{{ id }}?src={{ source_domain }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ label }}</button>
+{%- endmacro %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
+        <div><dt>Type</dt><dd>{{ 'Sub-technique' if detail.is_subtechnique else 'Technique' }}</dd></div>
+        <div><dt>Groups</dt><dd>{{ technique_groups | length }}</dd></div>
+        <div><dt>Mitigations</dt><dd>{{ detail.mitigations | length }}</dd></div>
+      </dl>
+      {% if detail.parent_technique %}
+      <div class="rm-chips"><span class="rm-chips__label">Sub-technique of</span>
+        {% set pid = (detail.parent_technique.id or "") | upper %}{{ mitre_pill(pid, covered=(pid in covered_ttps), rule_count=ttp_rule_counts.get(pid, 0), clickable=true, size="sm", close_modal=true) }}{{ open_btn('technique', detail.parent_technique.id, detail.parent_technique.name) }}</div>
+      {% endif %}
+      {% if detail.tactics %}
+      <div class="rm-chips"><span class="rm-chips__label">Tactics</span>
+        {% for t in detail.tactics %}<a class="rm-chip" href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ t.name }}</a>{% endfor %}</div>
+      {% endif %}
+    {% endcall %}
+
+    {% call panel('rules', 'Your rules', rules | length) %}
+      <dl class="rm-facts">
+        <div><dt>Enabled</dt><dd>{{ enabled_rules }}</dd></div>
+        <div><dt>Disabled</dt><dd>{{ rules | length - enabled_rules }}</dd></div>
+      </dl>
+      <p class="rm-empty mw-note">{{ coverage.title }}.</p>
+      {% if rule_cards %}
+      <div class="rm-items mw-related">{% include "partials/mitre_rule_cards.html" %}</div>
+      {% endif %}
+    {% endcall %}
+
+    {% call panel('nist', 'NIST 800-53', nist_capabilities | length) %}
+      {% if nist_capabilities %}
+      <ul class="rm-mitre mw-related">
+        {% for c in nist_capabilities %}
+        <li>
+          <span class="rm-chip rm-chip--mono">{{ c.group_code }}</span>
+          <span class="rm-mitre__name"><a href="{{ c.url }}">{{ c.title }}</a>
+            {% set line = c.description | attack_plain(140) if c.description else '' %}{% if line %}<small>{{ line }}</small>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}
+      <p class="rm-empty">No NIST 800-53 capabilities map to this technique.</p>
+      {% endif %}
+    {% endcall %}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {% call panel('description', 'Description') %}
+      <div class="md-content">{{ (detail.description or 'No description available.') | md }}</div>
+    {% endcall %}
+
+    {% if detail.subtechniques %}
+    {% call panel('subtechniques', 'Sub-techniques', detail.subtechniques | length) %}
+      {{ technique_list(detail.subtechniques, source_domain, covered_ttps, ttp_rule_counts, scroll=true) }}
+    {% endcall %}
+    {% endif %}
+
+    {{ related_section('groups', 'Groups that use it', technique_groups, 'groups', source_domain, window_kinds, summary_field='use', empty='No group is known to use this technique.') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {{ related_section('software', 'Software', detail.software, 'software', source_domain, window_kinds, empty='No software recorded.') }}
+    {{ related_section('campaigns', 'Campaigns', detail.campaigns, 'campaigns', source_domain, window_kinds, empty='No campaigns recorded.') }}
+    {{ related_section('mitigations', 'Mitigations', detail.mitigations, 'mitigations', source_domain, window_kinds, empty='No mitigations recorded.') }}
+
+    {% call panel('sigma', 'Sigma rules', sigma_rules | length) %}
+      {% if sigma_rules %}
+      <ul class="rm-mitre mw-related">
+        {% for s in sigma_rules[:15] %}
+        {% set status = (s.status or 'experimental') | lower %}
+        <li>
+          <span class="rm-chip rm-chip--mono mw-sigma mw-sigma--{{ status }}">{{ status }}</span>
+          <span class="rm-mitre__name"><a href="/sigma?technique={{ tid | urlencode }}&amp;rule={{ (s.id or '') | urlencode }}">{{ s.title }}</a>
+            {% set line = s.description | attack_plain(140) if s.description else '' %}{% if line %}<small>{{ line }}</small>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if sigma_rules | length > 15 %}
+      <div class="mw-actions"><a class="mw-actions__link" href="/sigma?technique={{ tid | urlencode }}">{{ icon('external-link', '12') }} All {{ sigma_rules | length }} in Sigma</a></div>
+      {% endif %}
+      {% else %}
+      <p class="rm-empty">No Sigma rules carry this technique.</p>
+      {% endif %}
+    {% endcall %}
+  </aside>
+</div>

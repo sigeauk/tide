@@ -1,7 +1,7 @@
 {#
   Convert a suggested Sigma rule from a technique window: choose the pipeline, then the Create Rule
   form opens filled in with the converted rule (Elastic, Lucene). Cancel returns to the technique.
-  Context: rule (the Sigma rule), system_id, step_id, pipelines ([{value, label}]); optional
+  Context: rule (the Sigma rule), technique_url (the window it came from), pipelines ([{value, label}]); optional
            selected, error (the conversion failed).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
@@ -11,7 +11,7 @@
             <h3 class="modal-title" id="sm-convert-title">{{ icon('zap', '16') }} Convert Sigma rule</h3>
             <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
         </div>
-        <form class="sys-dialog__form" hx-post="/api/systems/{{ system_id }}/steps/{{ step_id }}/sigma/convert"
+        <form class="sys-dialog__form" hx-post="{{ technique_url }}/sigma/convert"
               hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
             <input type="hidden" name="sigma_id" value="{{ rule.id }}">
             <p><strong>{{ rule.title or rule.id }}</strong></p>
@@ -22,11 +22,11 @@
                 <option value="{{ p.value }}" {% if p.value == (selected or 'none') %}selected{% endif %}>{{ p.label }}</option>
                 {% endfor %}
             </select>
-            <p class="text-muted sys-dialog__hint">{{ icon('info', '12') }} Converted for Elastic (Lucene). The Create Rule form opens filled in, created disabled; choose where it goes there. Mapping it to this technique is the next step, from Coverage.</p>
+            <p class="text-muted sys-dialog__hint">{{ icon('info', '12') }} Converted for Elastic (Lucene). The Create Rule form opens filled in, created disabled; choose where it goes there.{% if not template %} Mapping it to this technique is the next step, from Coverage.{% endif %}</p>
             {% if error %}<div class="alert alert-warning"><p>Could not convert with this pipeline: {{ error }}</p></div>{% endif %}
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
-                        hx-get="/api/systems/{{ system_id }}/steps/{{ step_id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">Cancel</button>
+                        hx-get="{{ technique_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">Cancel</button>
                 <button name="Convert" type="submit" class="btn btn-primary">{{ icon_text('zap', 'Convert', '13') }}</button>
             </div>
         </form>

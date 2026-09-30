@@ -1,0 +1,37 @@
+{#
+  A software's window body (components/mitre_window.html): Details and Coverage · Description and
+  Techniques (how it is used) · the groups that use it and the campaigns it appeared in.
+  Context: detail (get_mitre_software_detail), coverage, uncovered_count, covered_ttps,
+  ttp_rule_counts, window_kinds, source context.
+#}
+{% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section, related_section %}
+
+{% set platforms = (detail.platforms or '').split(',') | map('trim') | reject('equalto', '') | list %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
+        <div><dt>Type</dt><dd>{{ (detail.software_type or 'Unknown') | title }}</dd></div>
+        <div><dt>Techniques</dt><dd>{{ detail.techniques | length }}</dd></div>
+        <div><dt>Groups</dt><dd>{{ detail.groups | length }}</dd></div>
+        <div><dt>Campaigns</dt><dd>{{ detail.campaigns | length }}</dd></div>
+      </dl>
+      {% if platforms %}
+      <div class="rm-chips"><span class="rm-chips__label">Platforms</span>{% for p in platforms %}<a class="rm-chip" href="/mitre/software?platform={{ p | urlencode }}&amp;src={{ source_domain }}" title="All software for {{ p }}">{{ p }}</a>{% endfor %}</div>
+      {% endif %}
+    {% endcall %}
+    {{ coverage_section(coverage, uncovered_count, 'software') }}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {{ description_section(detail) }}
+    {{ techniques_section(detail.techniques, source_domain, covered_ttps, ttp_rule_counts, 'software') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {{ related_section('groups', 'Groups that use it', detail.groups, 'groups', source_domain, window_kinds, summary_field='use', empty='No group is known to use this software.') }}
+    {{ related_section('campaigns', 'Campaigns', detail.campaigns, 'campaigns', source_domain, window_kinds, summary_field='use', empty='No campaigns recorded.') }}
+  </aside>
+</div>

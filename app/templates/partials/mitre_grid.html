@@ -1,0 +1,109 @@
+{#
+  A MITRE catalogue page's grid (mitre_catalog.grid): cards or a table, paged by infinite scroll,
+  or grouped, each group's body fetched when it is opened. The first page (flat or grouped) also
+  replaces the metric strip, out of band.
+  mode: flat | append (a later page) | groups (group heads only) | group_body (one group's items).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_ui.html" import coverage_pill, source_pills %}
+
+{% macro sort_arrow(key) -%}
+{%- if sort == key %}<span class="rt-sort" aria-hidden="true">{{ '▲' if dir == 'asc' else '▼' }}</span>{% endif -%}
+{%- endmacro %}
+
+{% macro more(view) -%}
+{% if next_url %}
+    {% if view == 'table' %}
+    <tr class="infinite-scroll-sentinel" hx-get="{{ next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
+        <td colspan="{{ spec.columns | length }}"><span class="loading-spinner"></span> <span>Loading more…</span></td>
+    </tr>
+    {% else %}
+    <div class="infinite-scroll-sentinel" hx-get="{{ next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
+        <span class="loading-spinner"></span> <span>Loading more…</span>
+    </div>
+    {% endif %}
+{% elif page > 1 %}
+    {% if view == 'table' %}<tr class="infinite-scroll-end"><td colspan="{{ spec.columns | length }}">All {{ shown_total }} loaded</td></tr>
+    {% else %}<div class="infinite-scroll-end">All {{ shown_total }} loaded</div>{% endif %}
+{% endif %}
+{%- endmacro %}
+
+{% macro row(it) -%}
+<tr class="rule-row{% if it.coverage %} cat-row--{{ it.coverage.level }}{% endif %}" id="{{ it.dom_id }}"
+    data-rule-open role="button" tabindex="0" aria-label="Open {{ spec.singular | lower }}: {{ it.name }}"
+    hx-get="{{ it.window_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+    hx-trigger="click, keyup[key=='Enter']">
+    {% for key, label, _sort in spec.columns %}
+    {% if key == 'id' %}<td class="cat-cell-id">{{ it.id }}</td>
+    {% elif key == 'name' %}<td class="rt-name"><span class="rt-title" title="{{ it.name }}">{{ it.name }}</span></td>
+    {% elif key == 'coverage' %}<td>{% if it.coverage %}{{ coverage_pill(it.coverage) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+    {% elif key == 'sources' %}<td>{{ source_pills(it.sources, source_meta) }}</td>
+    {% else %}<td class="rt-sub" title="{{ it[key] }}">{{ it[key] if it[key] not in (none, '') else '—' }}</td>
+    {% endif %}
+    {% endfor %}
+</tr>
+{%- endmacro %}
+
+{% macro listing(items) -%}
+{% if view == 'table' %}
+<div class="sys-table-wrap">
+<table class="rules-table cat-table cat-table--{{ spec.key }}">
+    <thead>
+        <tr>
+            {% for key, label, sort_key in spec.columns %}
+            {% if sort_key %}<th class="rt-th--sortable" data-cat-sort="{{ sort_key }}" title="Sort by {{ label | lower }}">{{ label }} {{ sort_arrow(sort_key) }}</th>
+            {% else %}<th>{{ label }}</th>{% endif %}
+            {% endfor %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for it in items %}{{ row(it) }}{% endfor %}
+        {{ more('table') }}
+    </tbody>
+</table>
+</div>
+{% else %}
+<div class="steps-grid cat-grid">
+    {% for it in items %}{% include "components/mitre_card.html" %}{% endfor %}
+    {{ more('cards') }}
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% if mode in ('flat', 'groups') %}
+<div class="metrics-grid" id="catalog-metrics" hx-swap-oob="true">
+    {% for m in metrics %}
+    <div class="metric-card">
+        <p class="metric-value {{ m.tone | default('') }}">{{ m.value }}</p>
+        <p class="metric-label">{{ m.label }}</p>
+        <p class="metric-sub">{{ icon_text(m.icon, m.sub, '14') }}</p>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{% if mode == 'append' %}
+    {% if view == 'table' %}{% for it in items %}{{ row(it) }}{% endfor %}{{ more('table') }}
+    {% else %}{% for it in items %}{% include "components/mitre_card.html" %}{% endfor %}{{ more('cards') }}{% endif %}
+{% elif not total %}
+<div class="empty-state-text sys-empty">
+    {{ icon('search', '22') }}
+    <p>No {{ spec.title | lower }} match these filters.</p>
+</div>
+{% elif mode == 'groups' %}
+    {% for g in groups %}
+    <details class="sys-group"{% if loop.first %} open{% endif %}>
+        <summary class="sys-group__head">
+            <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
+            <span class="sys-group__label">{{ g.label }}</span>
+            <span class="sys-group__meta">{{ g.count }} {{ spec.title | lower if g.count != 1 else spec.singular | lower }}</span>
+        </summary>
+        <div class="sys-group__body" hx-get="{{ g.url }}" hx-swap="innerHTML" hx-include="unset"
+             hx-trigger="{{ 'load' if loop.first else 'toggle once from:closest details' }}">
+            <p class="rm-empty">Loading…</p>
+        </div>
+    </details>
+    {% endfor %}
+{% else %}
+    {{ listing(items) }}
+{% endif %}

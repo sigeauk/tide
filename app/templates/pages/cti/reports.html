@@ -4,7 +4,7 @@
 {% block title %}CTI Reports | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+<div class="page-header">
     <div>
         <h1 class="page-title-hero">CTI Reports</h1>
         <p class="page-subtitle">STIX reports from configured CTI sources.</p>
@@ -19,7 +19,7 @@
 </div>
 
 {# ── Metric strip (6 cards) ─────────────────────────────── #}
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value">{{ metrics.total }}</p>
         <p class="metric-label">Total reports</p>
@@ -88,10 +88,7 @@
 
 {% if reports %}
 <div class="card card-flush" style="margin-top:1rem;">
-    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
-                border-bottom:1px solid var(--color-border);
-                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
-                text-transform:uppercase;color:var(--color-text-muted);">
+    <div class="cve-list-header">
         <div style="min-width:240px;">Report</div>
         <div style="flex:1;">Labels</div>
         <div style="white-space:nowrap;">Source · Published</div>
@@ -111,7 +108,7 @@
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
                 {% if r.labels %}
                 {% for lbl in r.labels[:5] %}
-                <span class="badge badge-secondary" style="font-size:0.7rem;margin-right:0.25rem;">{{ lbl }}</span>
+                <span class="badge badge-secondary" style="margin-right:0.25rem;">{{ lbl }}</span>
                 {% endfor %}
                 {% if r.labels|length > 5 %}<span>+{{ r.labels|length - 5 }}</span>{% endif %}
                 {% else %}
@@ -132,7 +129,7 @@
 </div>
 {% else %}
 <div class="card card-padded-lg card-center" style="margin-top:1rem;">
-    <p style="color:var(--color-muted);margin:0;">No reports match the current filters.</p>
+    <p class="text-muted" style="margin:0;">No reports match the current filters.</p>
 </div>
 {% endif %}
 

@@ -135,7 +135,9 @@
                                                                                 <div class="cve-card-item__body">
                                                                                         <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;">
                                                                                                 {% if step.step_id %}
-                                                                                                <a name="Tactics" href="/systems/{{ s.id }}?technique={{ step.step_id }}" onclick="event.stopPropagation();">{{ step.title }}</a>
+                                                                                                <button type="button" name="Open Technique" class="rm-item__open" title="Open this technique on {{ s.name }}"
+                                                                                                        onclick="event.preventDefault(); event.stopPropagation();"
+                                                                                                        hx-get="/api/systems/{{ s.id }}/steps/{{ step.step_id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ step.title }}</button>
                                                                                                 {% else %}
                                                                                                 <span>{{ step.title }}</span>
                                                                                                 {% endif %}

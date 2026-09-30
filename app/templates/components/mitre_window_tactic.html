@@ -1,0 +1,34 @@
+{#
+  A tactic's window body (components/mitre_window.html): Details and Coverage · Description and the
+  techniques under it · the groups that use them.
+  Context: detail (get_mitre_tactic_detail), coverage, uncovered_count, covered_ttps,
+  ttp_rule_counts, window_kinds, source context.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section, related_section %}
+
+{% set subs = detail.techniques | selectattr('is_subtechnique') | list | length %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
+        <div><dt>Techniques</dt><dd>{{ detail.techniques | length - subs }}</dd></div>
+        <div><dt>Sub-techniques</dt><dd>{{ subs }}</dd></div>
+        <div><dt>Groups</dt><dd>{{ detail.groups | length }}</dd></div>
+      </dl>
+      <div class="mw-actions"><a class="mw-actions__link" href="/mitre/technique?tactic={{ detail.id }}&amp;src={{ source_domain }}">{{ icon('external-link', '12') }} Every {{ detail.name }} technique</a></div>
+    {% endcall %}
+    {{ coverage_section(coverage, uncovered_count, 'tactic') }}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {{ description_section(detail) }}
+    {{ techniques_section(detail.techniques, source_domain, covered_ttps, ttp_rule_counts, 'tactic') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {{ related_section('groups', 'Groups using it', detail.groups, 'groups', source_domain, window_kinds, empty='No group is known to use its techniques.') }}
+  </aside>
+</div>

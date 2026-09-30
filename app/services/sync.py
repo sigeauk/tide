@@ -597,7 +597,8 @@ def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: st
     return reachable
 
 
-def run_elastic_sync(client_id: str, force_mapping: bool = False):
+def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: str | None = None,
+                     only_space: str | None = None):
     """Per-tenant Elastic detection-rule sync.
 
     ``client_id`` is **required**. Detection rules live in the tenant's own
@@ -619,6 +620,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
 
     ``force_mapping=True`` clears the per-pattern mapping cache so a
     re-check actually re-hits Elastic.
+
+    ``only_siem_id``/``only_space`` (both required together): narrow the
+    sync to this one linked destination instead of every (siem, space) pair
+    the client maps to. For a slow or heavily-loaded Elastic, syncing one
+    destination at a time avoids paying the cost of every other linked
+    destination just to refresh one.
     """
     if not client_id:
         raise ValueError(
@@ -665,6 +672,22 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
             client_scope: dict[str, set[str]] = {}
             for sid, sp in pairs:
                 client_scope.setdefault(sid, set()).add(sp)
+            # The client's full set of linked (siem, space) pairs, independent of
+            # ``only_siem_id``/``only_space`` below — the orphan sweep further down
+            # MUST compare against every pair the client actually has linked, not
+            # just the one being fetched this run, or it deletes every other
+            # destination's rules as "no longer mapped".
+            full_client_scope = {sid: set(spset) for sid, spset in client_scope.items()}
+
+            if only_siem_id and only_space:
+                if only_siem_id in client_scope and only_space in client_scope[only_siem_id]:
+                    client_scope = {only_siem_id: {only_space}}
+                else:
+                    logger.warning(
+                        f"Per-client sync: requested scope siem_id={only_siem_id} "
+                        f"space={only_space!r} is not linked to client_id={client_id} — nothing to sync."
+                    )
+                    return 0
 
             # Resolve the tenant's DB file and pin it as the current
             # contextvar so every subsequent ``db.get_connection()`` call
@@ -953,8 +976,11 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                 #
                 # This pass cleans them up: query DISTINCT (siem_id, space)
                 # in the tenant's ``detection_rules`` and delete every pair
-                # that is NOT in ``client_scope`` (this client's current
-                # mappings). Safe because:
+                # that is NOT in ``full_client_scope`` (this client's
+                # complete current mappings — NOT ``client_scope``, which a
+                # scoped sync narrows to just the destination being fetched;
+                # comparing against that would delete every other
+                # destination's rules as "no longer mapped"). Safe because:
                 #   * The operator deliberately removed the mapping — these
                 #     rows can never be refreshed by sync.
                 #   * ``step_detections.rule_ref`` and
@@ -975,7 +1001,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
                             ).fetchall()
                         }
                         active_pairs = {
-                            (sid, sp) for sid, spset in client_scope.items() for sp in spset
+                            (sid, sp) for sid, spset in full_client_scope.items() for sp in spset
                         }
                         orphan_pairs = present_pairs - active_pairs
                         for o_sid, o_sp in orphan_pairs:
@@ -1040,11 +1066,13 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False):
         return -1
 
 
-async def trigger_sync(client_id: str, force_mapping: bool = False):
+async def trigger_sync(client_id: str, force_mapping: bool = False, only_siem_id: str | None = None,
+                       only_space: str | None = None):
     """Async wrapper around :func:`run_elastic_sync`.
 
     ``client_id`` is **required** (per-tenant since 4.1.13). Runs the sync
     in a thread pool so the FastAPI event loop stays responsive.
+    ``only_siem_id``/``only_space``: see :func:`run_elastic_sync`.
     """
     if not client_id:
         raise ValueError(
@@ -1055,5 +1083,6 @@ async def trigger_sync(client_id: str, force_mapping: bool = False):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
         None,
-        lambda: run_elastic_sync(client_id=client_id, force_mapping=force_mapping),
+        lambda: run_elastic_sync(client_id=client_id, force_mapping=force_mapping,
+                                  only_siem_id=only_siem_id, only_space=only_space),
     )

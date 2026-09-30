@@ -1,11 +1,13 @@
 {#
-  A system's techniques, as cards or a table, flat or grouped (baseline, tactic, or tactics
-  inside each baseline). Swapped by the filter bar.
+  A system's techniques, or (template) every template's on the Baselines page, as cards or a
+  table, flat or grouped (baseline, tactic, or tactics inside each baseline). Swapped by the
+  filter bar. Templates show no coverage (they have none until applied to a system); a
+  template's group heading opens its Manage window, and an empty template still shows.
 
-  Context: steps, groups (from group_system_steps; empty = flat), view, system_id,
-           coverage_undefined, tactic_sort, sort_name.
+  Context: steps, groups (from group_system_steps; empty = flat), view, tactic_sort, sort_name,
+           and system_id + coverage_undefined (a system) or template.
 #}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon, icon_text, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 
 {% macro coverage(step) -%}
@@ -26,23 +28,31 @@
             <th>ATT&amp;CK</th>
             <th class="rt-th--sortable" data-sys-sort="tactic" title="Sort tactics in ATT&amp;CK order or A–Z">Tactic{% if tactic_sort != 'off' %} <span class="text-muted">({{ 'ATT&CK' if tactic_sort == 'attack' else 'A–Z' }})</span>{% endif %}</th>
             <th>Baseline</th>
+            {% if template %}
+            <th>Priority</th>
+            {% else %}
             <th>Coverage</th>
             <th>Rules</th>
+            {% endif %}
         </tr>
     </thead>
     <tbody>
     {% for step in rows %}
-        <tr class="rule-row rule-row--val-{{ {'green': 'success', 'amber': 'warning', 'grey': 'muted'}.get(step.status, 'danger') }}" id="step-{{ step.step_id }}"
+        <tr class="rule-row{% if not template %} rule-row--val-{{ {'green': 'success', 'amber': 'warning', 'grey': 'muted'}.get(step.status, 'danger') }}{% endif %}" id="step-{{ step.step_id }}"
             data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
-            hx-get="/api/systems/{{ system_id }}/steps/{{ step.step_id }}"
+            hx-get="{{ '/api/baselines/tactics/' ~ step.step_id if template else '/api/systems/' ~ system_id ~ '/steps/' ~ step.step_id }}"
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             hx-trigger="click, keyup[key=='Enter']">
             <td class="rt-name"><span class="rt-title" title="{{ step.title }}">{{ step.title }}</span></td>
             <td>{% for tid in (step.display_technique_ids | default([]))[:2] %}{{ mitre_pill(tid, neutral=true, clickable=false, size='sm') }}{% endfor %}{% if (step.display_technique_ids | default([])) | length > 2 %}<span class="text-muted"> +{{ (step.display_technique_ids | length) - 2 }}</span>{% endif %}</td>
-            <td>{{ step.tactic }}</td>
+            <td><span class="sys-tactic">{{ tactic_icon(step.tactic, "12") }} {{ step.tactic }}</span></td>
             <td class="rt-sub" title="{{ step.baseline_name }}">{{ step.baseline_name }}</td>
+            {% if template %}
+            <td>{% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}">{{ step.priority | capitalize }}</span>{% else %}<span class="text-muted">Not set</span>{% endif %}</td>
+            {% else %}
             <td>{{ coverage(step) }}{% if step.review_due %} <span class="text-warning" title="Due for review since {{ step.review_by.isoformat() }}">{{ icon('calendar', '11') }} Review due</span>{% endif %}</td>
             <td>{% if step.mapped_count %}{{ step.mapped_count }}{% if step.uncounted_count %} <span class="text-warning" title="{{ step.uncounted_count }} not counted on this system">({{ step.uncounted_count }} not counted)</span>{% endif %}{% else %}<span class="text-muted">None</span>{% endif %}</td>
+            {% endif %}
         </tr>
     {% endfor %}
     </tbody>
@@ -59,23 +69,37 @@
 <details class="sys-group sys-group--{{ level }}" open>
     <summary class="sys-group__head">
         <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
-        <span class="sys-group__label">{{ g.label }}</span>
+        <span class="sys-group__label">{% if g.kind == 'tactic' %}{{ tactic_icon(g.label, '14') }} {% endif %}{{ g.label }}</span>
         <span class="sys-group__meta">
             {{ g.total }} technique{{ 's' if g.total != 1 }}
             {% if not coverage_undefined and g.scored %} · {{ g.covered }}/{{ g.scored }} covered ({{ g.pct }}%){% endif %}
         </span>
         {% if g.kind == 'baseline' %}
         {# Inside <summary>: stop the click folding the group, then open the window. #}
+        {% if template %}
+        <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
+                onclick="event.preventDefault();event.stopPropagation();htmx.ajax('GET', '/api/baselines/{{ g.key }}/manage', {target: '#modal-container', swap: 'innerHTML'});"
+                title="Rename {{ g.label }}, add a technique, apply it to a system, import, export or delete it">{{ icon_text('settings', 'Manage', '12') }}</button>
+        {% else %}
         <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
                 onclick="event.preventDefault();event.stopPropagation();htmx.ajax('GET', '/api/systems/{{ system_id }}/baselines/{{ g.key }}/edit', {target: '#modal-container', swap: 'innerHTML'});"
                 title="Rename {{ g.label }}, change its description, or remove it from this system">{{ icon_text('settings', 'Manage', '12') }}</button>
+        {% endif %}
         {% endif %}
     </summary>
     <div class="sys-group__body">
         {% if g.groups %}
             {% for sub in g.groups %}{{ group_block(sub, 'inner') }}{% endfor %}
-        {% else %}
+        {% elif g.steps %}
             {{ items(g.steps) }}
+        {% else %}
+            <div class="empty-state-text sys-empty">
+                <p>No techniques in this template yet.</p>
+                <button name="Add Technique" type="button" class="btn btn-primary btn-sm"
+                        hx-get="/api/baselines/techniques-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon_text('plus', 'Add technique', '13') }}
+                </button>
+            </div>
         {% endif %}
     </div>
 </details>
@@ -89,14 +113,14 @@
 </div>
 {% endif %}
 
-{% if steps %}
+{% if steps or groups %}
     {% if groups %}
         {% for g in groups %}{{ group_block(g, 'outer') }}{% endfor %}
     {% else %}
         {{ items(steps) }}
     {% endif %}
 {% elif not baselines %}
-<div class="empty-state-text sys-empty"><p>No baselines are applied to this system.</p></div>
+<div class="empty-state-text sys-empty"><p>{{ "No templates yet. Create one from this page's menu, with New baseline." if template else "No baselines are applied to this system." }}</p></div>
 {% else %}
 <div class="empty-state-text sys-empty">
     {{ icon('search', '22') }}

@@ -1,0 +1,30 @@
+{#
+  One ATT&CK object on a MITRE catalogue page, in the baseline technique card's frame (step-card).
+  The whole card opens the object's window. Left edge = coverage by the active client's rules.
+  Context: it (a grid item from mitre_catalog), spec, source_meta.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_ui.html" import coverage_pill, source_pills %}
+
+<div name="Open {{ spec.singular }}" class="step-card cat-card{% if it.coverage %} cat-card--{{ it.coverage.level }}{% endif %}" id="{{ it.dom_id }}"
+     data-rule-open role="button" tabindex="0" aria-label="Open {{ spec.singular | lower }}: {{ it.name }}"
+     hx-get="{{ it.window_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+     hx-trigger="click, keyup[key=='Enter']">
+    <div class="sc-head">
+        <div class="sc-main">
+            <div class="sc-title" title="{{ it.name }}">{{ it.name }}</div>
+            {% if it.sub %}<div class="sc-tactic cat-card__sub" title="{{ it.sub }}">{{ it.sub }}</div>{% endif %}
+        </div>
+        <div class="sc-side">
+            <span class="cat-card__id">{{ it.id }}</span>
+            {{ source_pills(it.sources, source_meta) }}
+            {% if it.coverage %}{{ coverage_pill(it.coverage) }}{% endif %}
+        </div>
+    </div>
+    {% if it.summary %}<p class="cat-card__summary">{{ it.summary }}</p>{% endif %}
+    <div class="sc-foot">
+        {% for ico, text, title in it.meta %}
+        <span class="sc-foot__none" title="{{ title }}">{{ icon(ico, '12') }} {{ text }}</span>
+        {% endfor %}
+    </div>
+</div>

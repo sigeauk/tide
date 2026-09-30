@@ -1,14 +1,14 @@
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/mitre_ui.html" import technique_list %}
 {% from "macros/rule_ui.html" import state_badge %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, layout_menu, remove_btn, tag %}
 {#
   Rule modal — opened by clicking a rule card / table row.
     header : score ring · name · state/severity badges | prev/next · sections menu · close
-    left   : recent activity (edits/validations) · score-over-time chart · covers
+    left   : recent activity (edits/validations) · score-over-time chart · covers (each opens its baseline technique)
     centre : about (description, facts, tags) · logic · investigation guide ·
              references · field mappings · score breakdown (bars)
-    right  : actions · MITRE techniques (with names) · rule id · linked
+    right  : actions · MITRE techniques (pill: side panel; name: the MITRE technique window) · rule id · linked
   That is the default arrangement: every section (data-section) can be dragged to any column
   or hidden from the header menu, and collapsible ones (data-fold) opened or closed; all of it
   is remembered per browser (app.js, tide.ruleWindowLayout). Prev/next walk the list the modal
@@ -461,14 +461,7 @@
                         {{ drag_ctl('MITRE ATT&amp;CK') }}
                     </div>
                     {% if mitre_details %}
-                    <ul class="rm-mitre">
-                        {% for m in mitre_details %}
-                        <li>
-                            {{ mitre_pill(m.id, neutral=true, clickable=true, size='sm', close_modal=true) }}
-                            <span class="rm-mitre__name">{{ m.name or 'Unknown technique' }}{% if m.tactic %}<small>{{ m.tactic }}</small>{% endif %}</span>
-                        </li>
-                        {% endfor %}
-                    </ul>
+                    {{ technique_list(mitre_details) }}
                     {% else %}
                     <p class="rm-empty">No MITRE techniques mapped to this rule.</p>
                     {% endif %}

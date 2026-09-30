@@ -1,7 +1,9 @@
 {#
   Baseline technique card (a step, in code) — the system-scoped twin of components/rule_card.html.
 
-  Context: step (a row from get_system_steps), system_id.
+  Context: step (a row from get_system_steps), system_id; or, on the Baselines page, template and a
+  row from get_template_steps -- a template's technique, with no coverage or rule count (it has
+  none until applied to a system).
 
   The coverage pill = this step's coverage status ON THIS SYSTEM. The MITRE pills are neutral labels,
   never a verdict: the same technique sits on many steps, so "some rule carries this tag" says
@@ -9,7 +11,7 @@
   mapped-rule count, which is always shown, including at zero. The pills are plain labels here, as
   on rule cards: the whole card is one control, and a clickable pill inside it swallowed the click.
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 
 {% set status = step.status | default('red') %}
@@ -20,19 +22,21 @@
 
 <div name="Open Technique" class="step-card" id="step-{{ step.step_id }}"
      data-step-open data-rule-open role="button" tabindex="0" aria-label="Open technique: {{ step.title }}"
-     hx-get="/api/systems/{{ system_id }}/steps/{{ step.step_id }}"
+     hx-get="{{ '/api/baselines/tactics/' ~ step.step_id if template else '/api/systems/' ~ system_id ~ '/steps/' ~ step.step_id }}"
      hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
      hx-trigger="click, keyup[key=='Enter']">
 
     <div class="sc-head">
         <div class="sc-main">
             <div class="sc-title" title="{{ step.title }}">{{ step.title }}</div>
-            <div class="sc-tactic">{{ icon('git-branch', '11') }} {{ step.tactic | default('Other') }}</div>
+            <div class="sc-tactic">{{ tactic_icon(step.tactic, '12') }} {{ step.tactic | default('Other') }}</div>
         </div>
         <div class="sc-side">
+            {% if not template %}
             <span class="status-pill status-{{ status_class }}" title="{{ status_label }} on this system">
                 {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ status_label }}</span>
             </span>
+            {% endif %}
             {% if step.non_alerting %}<span class="status-pill status-info" title="Covered by a dashboard, report or log: watched, but nothing alerts">{{ icon('eye', '11') }} <span class="status-pill__text">Non-alerting</span></span>{% endif %}
             {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
             <div class="mitre-pills-wrap">
@@ -47,7 +51,11 @@
     </div>
 
     <div class="sc-foot">
-        {% if mapped %}
+        {% if template %}
+        <span class="sc-foot__none" title="{{ 'Category' if step.category_label else 'No category set' }}">
+            {{ icon('tag', '12') }} {{ step.category_label or 'No category' }}
+        </span>
+        {% elif mapped %}
         <span class="sc-foot__rules" title="{{ mapped }} rule{{ 's' if mapped != 1 }} mapped to this technique">
             {{ icon('shield', '12') }} {{ mapped }} rule{{ 's' if mapped != 1 }}
         </span>

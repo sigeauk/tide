@@ -1,0 +1,38 @@
+{#
+  An ATT&CK object's window, on the rule window's frame: header (id, name, sources, coverage),
+  prev/next through the catalogue grid it was opened from, the sections menu and close. The body
+  is the kind's own (spec.window_body): sections in three columns that collapse and move, the
+  arrangement remembered per kind in this browser.
+  Context: spec, detail, dom_id, covered_ttps, ttp_rule_counts, coverage (optional), source context.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/window_ui.html" import layout_menu %}
+{% from "components/mitre_ui.html" import coverage_pill, source_pills %}
+
+<div name="Dismiss {{ spec.singular }} Window" class="modal-overlay" data-rm-overlay>
+  <div class="modal-content rule-modal mw-modal" data-layout-key="tide.mitreWindowLayout.{{ spec.key }}"
+       data-rule-dom-id="{{ dom_id }}" data-mitre-open="{{ detail.id }}" data-mitre-kind="{{ spec.key }}"
+       role="dialog" aria-modal="true" aria-labelledby="mw-title">
+
+    <header class="rm-header">
+      <div class="rm-header__main">
+        <h2 class="rm-title" id="mw-title"><span class="mw-id">{{ detail.id }}</span> {{ detail.name }}</h2>
+        <div class="rm-header__badges">
+          <span class="status-pill status-muted" title="ATT&amp;CK object type">{{ spec.singular }}</span>
+          {{ source_pills(detail.sources, source_meta) }}
+          {% if coverage %}{{ coverage_pill(coverage) }}{% endif %}
+        </div>
+      </div>
+      <div class="rm-header__tools">
+        <div class="rm-nav" role="group" aria-label="Browse {{ spec.title | lower }}">
+          <button name="Previous {{ spec.singular }}" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous {{ spec.singular | lower }} (←)" aria-label="Previous {{ spec.singular | lower }}" disabled>{{ icon('chevron-left', '16') }}</button>
+          <button name="Next {{ spec.singular }}" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next {{ spec.singular | lower }} (→)" aria-label="Next {{ spec.singular | lower }}" disabled>{{ icon('chevron-right', '16') }}</button>
+        </div>
+        {{ layout_menu() }}
+        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+      </div>
+    </header>
+
+    {% include spec.window_body %}
+  </div>
+</div>

@@ -10,9 +10,9 @@
 
 <div  name="Linked CTI Connectors Edit" class="client-section-toggle" onclick="var b=document.getElementById('connectors-body');var c=document.getElementById('connectors-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('link', '14') }}</span>
-    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Linked CTI Connectors</h2>
-    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_connectors | length }}</span>
-    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+    <h2 class="client-section-toggle__title">Linked CTI Connectors</h2>
+    <span class="badge badge-neutral badge--xs">{{ client_connectors | length }}</span>
+    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
         <button  name="Open Edit Connectors Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-connectors-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
@@ -29,16 +29,16 @@
             <span class="client-list-item__title" style="cursor:default;">{{ c.label or '(unnamed)' }}</span>
             <span class="badge badge-muted" style="font-size:0.72rem;">{{ c.vendor_label or c.vendor }}</span>
             {% if c.is_active %}
-            <span class="badge badge-success" style="font-size:0.68rem;">Active</span>
+            <span class="badge badge-success badge--xs">Active</span>
             {% else %}
-            <span class="badge badge-grey" style="font-size:0.68rem;">Inactive</span>
+            <span class="badge badge-grey badge--xs">Inactive</span>
             {% endif %}
             {% if c.last_status == 'pass' %}
-            <span class="badge badge-success" style="font-size:0.68rem;">Test OK</span>
+            <span class="badge badge-success badge--xs">Test OK</span>
             {% elif c.last_status == 'fail' %}
-            <span class="badge badge-danger" style="font-size:0.68rem;">Test failed</span>
+            <span class="badge badge-danger badge--xs">Test failed</span>
             {% else %}
-            <span class="badge badge-grey" style="font-size:0.68rem;">Untested</span>
+            <span class="badge badge-grey badge--xs">Untested</span>
             {% endif %}
             {% if c.last_run_at %}
             <span class="client-list-item__meta" style="font-size:0.72rem;">Last run {{ c.last_run_at.strftime('%Y-%m-%d %H:%M') if c.last_run_at.strftime is defined else c.last_run_at }}</span>
@@ -48,9 +48,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+<div class="client-section-empty">
     {{ icon('link', '36') }}
-    <p style="margin-top:0.75rem;">No CTI connectors linked to this client yet.</p>
+    <p>No CTI connectors linked to this client yet.</p>
     <p style="font-size:0.8rem;">
         Register connectors in
         <a name="Management Connectors" href="/management?tab=connectors" style="color:var(--color-primary);">Management &rsaquo; Connectors</a>,
@@ -66,7 +66,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage CTI Connectors &mdash; {{ client.name }}</h3>
-            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
+            <button   name="Close Modal" class="modal-x"
                     onclick="document.getElementById('edit-connectors-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">

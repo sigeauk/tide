@@ -1,0 +1,51 @@
+{#
+  A mitigation's window body (components/mitre_window.html): Details and Coverage · Description and
+  the techniques it mitigates (with their tactics) · detection coverage per tactic, so the gaps
+  behind this control show where they sit in the kill chain.
+  Context: detail (get_mitre_mitigation_detail), coverage, uncovered_count, techniques,
+  tactic_coverage, covered_ttps, ttp_rule_counts, source context.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
+        <div><dt>Techniques</dt><dd>{{ techniques | length }}</dd></div>
+        <div><dt>Tactics</dt><dd>{{ tactic_coverage | length }}</dd></div>
+      </dl>
+      {% if detail.reference %}
+      <div class="mw-actions"><a class="mw-actions__link" href="{{ detail.reference }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} ATT&amp;CK reference</a></div>
+      {% endif %}
+    {% endcall %}
+    {{ coverage_section(coverage, uncovered_count, 'mitigation') }}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {{ description_section(detail) }}
+    {{ techniques_section(techniques, source_domain, covered_ttps, ttp_rule_counts, 'mitigation') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {% call panel('tactics', 'By tactic', tactic_coverage | length) %}
+      {% if tactic_coverage %}
+      <ul class="mw-tactics">
+        {% for t in tactic_coverage %}
+        <li>
+          <div class="mw-tactics__head">
+            <a href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ t.name }}</a>
+            <span class="text-muted">{{ t.covered }} of {{ t.total }}</span>
+          </div>
+          <div class="cov-bar cov-bar--{{ t.level }}" style="--pct: {{ t.pct }}" role="img" aria-label="{{ t.pct }}% of this mitigation's {{ t.name }} techniques covered"><span></span></div>
+        </li>
+        {% endfor %}
+      </ul>
+      <p class="rm-empty mw-note">How many of the techniques this control addresses your enabled rules would also detect, by tactic.</p>
+      {% else %}
+      <p class="rm-empty">No techniques recorded for this mitigation.</p>
+      {% endif %}
+    {% endcall %}
+  </aside>
+</div>

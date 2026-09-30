@@ -448,8 +448,10 @@ async def test_keycloak_connection(request: Request, db: DbDep, user: RequireAdm
 
     try:
         import requests as _req
+        from starlette.concurrency import run_in_threadpool
         discovery_url = f"{url.rstrip('/')}/realms/{realm}/.well-known/openid-configuration"
-        resp = _req.get(discovery_url, timeout=8, verify=False)
+        # In a worker thread: an unreachable Keycloak must not hold up the rest of TIDE.
+        resp = await run_in_threadpool(_req.get, discovery_url, timeout=8, verify=False)
         if resp.status_code == 200:
             _persist("pass", f"Realm '{realm}' discovered")
             return HTMLResponse(
@@ -466,7 +468,7 @@ async def test_keycloak_connection(request: Request, db: DbDep, user: RequireAdm
     except Exception as exc:
         logger.warning(f"Keycloak test-connection error: {exc}")
         _persist("fail", str(exc)[:140])
-        return HTMLResponse(f'<span class="badge badge-danger">Error &mdash; {str(exc)[:120]}</span>')
+        return HTMLResponse(f'<span class="badge badge-danger">Error &mdash; {_esc(str(exc)[:120])}</span>')
 
 
 @router.post("/keycloak", response_class=HTMLResponse)
@@ -1118,6 +1120,8 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
         cls = "status-pill--ok" if chk["ok"] else "status-pill--fail"
         sc = chk.get("status_code")
         sc_str = f" [HTTP {sc}]" if sc is not None else ""
+        if chk.get("elapsed_ms") is not None:
+            sc_str += f" · {chk['elapsed_ms'] / 1000:.1f}s"
         body = chk.get("body_excerpt")
         body_html = (
             f'<div style="font-family:var(--font-mono,monospace);font-size:0.75rem;'
@@ -1196,23 +1200,16 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
         )
 
     try:
+        from starlette.concurrency import run_in_threadpool
         from app.elastic_helper import test_elastic_connection_full
-        result = test_elastic_connection_full(kibana_url, api_token)
+        # In a worker thread: the checks wait on Kibana, and the rest of TIDE must not.
+        linked = db.get_siem_spaces(siem_id) if siem_id else []
+        result = await run_in_threadpool(test_elastic_connection_full, kibana_url, api_token, linked_spaces=linked)
         # Persist roll-up + per-check JSON so the SIEMs tab pill stays accurate
         # and the operator can revisit the result without re-testing.
         if siem_id:
             try:
-                import json as _json
-                msg = _json.dumps({
-                    "summary": ("All checks passed" if result["ok"]
-                                else "One or more checks failed"),
-                    "checks": [
-                        {"name": c["name"], "ok": c["ok"],
-                         "status_code": c.get("status_code"),
-                         "detail": c["detail"]}
-                        for c in result["checks"]
-                    ],
-                })[:500]
+                msg = _siem_test_message(result)
                 db.update_inventory_test_status(
                     "siems", siem_id, "pass" if result["ok"] else "fail", msg,
                 )
@@ -1255,7 +1252,22 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
 # Unified per-card Test Connection (persists last_test_status)
 # ---------------------------------------------------------------------------
 
-def _run_inventory_test(kind: str, item: dict) -> tuple[bool, str]:
+def _siem_test_message(result: dict) -> str:
+    """A SIEM test result as the JSON kept on its card (per-check detail and timing). Each
+    detail is shortened rather than the JSON cut, so it always parses back."""
+    import json as _json
+    return _json.dumps({
+        "summary": "All checks passed" if result["ok"] else "One or more checks failed",
+        "checks": [
+            {"name": c["name"], "ok": c["ok"], "status_code": c.get("status_code"),
+             "detail": (c["detail"] or "")[:300], "elapsed_ms": c.get("elapsed_ms")}
+            for c in result["checks"]
+        ],
+        "spaces": result.get("spaces", [])[:20],
+    })
+
+
+def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool, str]:
     """Dispatch to the appropriate live test for a stored inventory item.
 
     Returns ``(ok, short_message)``. The message is bounded to ~140 chars so
@@ -1273,20 +1285,8 @@ def _run_inventory_test(kind: str, item: dict) -> tuple[bool, str]:
             if not kibana_url or not api_token:
                 return False, "Missing Kibana URL or API token"
             from app.elastic_helper import test_elastic_connection_full
-            result = test_elastic_connection_full(kibana_url, api_token)
-            import json as _json
-            msg = _json.dumps({
-                "summary": ("All checks passed" if result["ok"]
-                            else "One or more checks failed"),
-                "checks": [
-                    {"name": c["name"], "ok": c["ok"],
-                     "status_code": c.get("status_code"),
-                     "detail": c["detail"]}
-                    for c in result["checks"]
-                ],
-                "spaces": result.get("spaces", []),
-            })[:500]
-            return result["ok"], msg
+            result = test_elastic_connection_full(kibana_url, api_token, linked_spaces=linked_spaces)
+            return result["ok"], _siem_test_message(result)
 
         if kind == "opencti":
             url = (item.get("url") or "").strip()
@@ -1414,7 +1414,10 @@ async def test_inventory_card(
             )
         )
 
-    ok, msg = _run_inventory_test(kind, item)
+    # In a worker thread: the live checks wait on the remote service, and the rest of TIDE must not.
+    from starlette.concurrency import run_in_threadpool
+    linked = db.get_siem_spaces(item_id) if kind == "siems" else None
+    ok, msg = await run_in_threadpool(_run_inventory_test, kind, item, linked)
     status = "pass" if ok else "fail"
     db.update_inventory_test_status(_KIND_TO_INVENTORY[kind], item_id, status, msg)
 

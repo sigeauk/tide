@@ -1,0 +1,14 @@
+{#
+  A batch of a MITRE technique window's Your rules: the baseline technique window's rule cards
+  (window_ui.html: rule_card), then a button that loads the rest in its place.
+  Context: rule_cards, rules_total, rules_more_url (mitre_catalog.technique_rule_cards).
+#}
+{% from "components/window_ui.html" import rule_card %}
+{% for d in rule_cards %}
+{% set t = d.telemetry %}
+<div class="rm-item{% if t and t.missing %} rm-item--warn{% endif %}">{{ rule_card(d, d.evidence) }}</div>
+{% endfor %}
+{% if rules_more_url %}
+<button type="button" name="Show All Rules" class="btn btn-secondary btn-sm mw-more"
+        hx-get="{{ rules_more_url }}" hx-target="this" hx-swap="outerHTML" hx-include="unset">Show all {{ rules_total }} rules</button>
+{% endif %}

@@ -23,15 +23,41 @@
                 <span class="sr-only">More actions</span>
             </button>
             <div class="rh-more__menu" id="rh-more-menu" role="menu" hidden>
-                <button name="Sync" type="button" role="menuitem" class="rh-more__item sync-btn"
-                    hx-post="/api/rules/sync" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                    <span class="sync-default">{{ icon('refresh-cw', '15') }}<span>Sync</span></span>
-                    <span class="htmx-indicator">{{ icon('refresh-cw', '15') }}<span>Syncing&hellip;</span></span>
-                </button>
-                <button name="Sync with Mappings" type="button" role="menuitem" class="rh-more__item"
-                    hx-post="/api/rules/sync?force_mapping=true" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                    {{ icon('database', '15') }}<span>Sync with mappings</span>
-                </button>
+                <div class="rh-more__item-wrap">
+                    <button name="Sync" type="button" role="menuitem" class="rh-more__item sync-btn"
+                        hx-post="/api/rules/sync" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                        <span class="sync-default">{{ icon('refresh-cw', '15') }}<span>Sync</span></span>
+                        <span class="htmx-indicator">{{ icon('refresh-cw', '15') }}<span>Syncing&hellip;</span></span>
+                    </button>
+                    {% if client_siems %}
+                    <div class="rh-more__submenu" role="menu">
+                        {% for dest in client_siems %}
+                        <button name="Sync {{ dest.name }} only" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/rules/sync?siem_id={{ dest.id }}&space={{ dest.space }}"
+                            hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                            {{ icon('refresh-cw', '14') }}<span>Sync {{ dest.name }} only</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="rh-more__item-wrap">
+                    <button name="Sync with Mappings" type="button" role="menuitem" class="rh-more__item"
+                        hx-post="/api/rules/sync?force_mapping=true" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                        {{ icon('database', '15') }}<span>Sync with mappings</span>
+                    </button>
+                    {% if client_siems %}
+                    <div class="rh-more__submenu" role="menu">
+                        {% for dest in client_siems %}
+                        <button name="Sync {{ dest.name }} only, with mappings" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/rules/sync?force_mapping=true&siem_id={{ dest.id }}&space={{ dest.space }}"
+                            hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
+                            {{ icon('database', '14') }}<span>Sync {{ dest.name }} only</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
                 <div class="rh-more__sep" role="separator"></div>
                 <button name="Create Rule" type="button" role="menuitem" class="rh-more__item"
                     hx-get="/api/rules/create-form" hx-target="#modal-container" hx-swap="innerHTML">

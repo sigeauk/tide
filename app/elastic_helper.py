@@ -43,50 +43,39 @@ _diag_lock = _threading.Lock()
 
 # --- TEST CONNECTION ---
 
-def test_elastic_connection(kibana_url: str, api_key: str, timeout: int = 10):
-    """
-    Test connectivity to a Kibana instance.
-    Returns (ok: bool, detail: str).
-    """
-    url = kibana_url.rstrip("/") + "/api/status"
-    headers = {
-        "kbn-xsrf": "true",
-        "Authorization": f"ApiKey {api_key}",
-    }
-    try:
-        resp = requests.get(url, headers=headers, verify=False, timeout=timeout)
-        if resp.status_code == 200:
-            data = resp.json()
-            version = data.get("version", {}).get("number", "unknown")
-            status = data.get("status", {}).get("overall", {}).get("level", "unknown")
-            return True, f"Kibana {version} ({status})"
-        elif resp.status_code == 401:
-            return False, "Authentication failed (401)"
-        else:
-            return False, f"HTTP {resp.status_code}"
-    except requests.exceptions.ConnectTimeout:
-        return False, "Connection timed out"
-    except requests.exceptions.ConnectionError:
-        return False, "Connection refused"
-    except Exception as exc:
-        return False, str(exc)[:120]
+# Connecting to Kibana is quick or it isn't happening; answering can take a while on a busy
+# Kibana with a large space (listing detection rules also reads their execution summaries), so
+# the two are timed separately. Sync allows 60s per page; its reachability check and Test
+# Connection allow READ_TIMEOUT for a one-rule answer.
+CONNECT_TIMEOUT = 10
+READ_TIMEOUT = 30
 
 
-def ping_detection_space(kibana_url: str, api_key: str, space: str, timeout: int = 5):
+def _request_failure(exc: Exception, read_timeout) -> str:
+    """A person-readable reason for a request that raised. "Connection timed out" and
+    "Connection refused" mean the host is not there; a read timeout means it is, but slow."""
+    if isinstance(exc, requests.exceptions.ConnectTimeout):
+        return "Connection timed out"
+    if isinstance(exc, requests.exceptions.ReadTimeout):
+        return f"Kibana accepted the connection but did not answer within {read_timeout}s"
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return "Connection refused"
+    return f"{type(exc).__name__}: {str(exc)[:120]}"
+
+
+def ping_detection_space(kibana_url: str, api_key: str, space: str,
+                         connect_timeout: int = 5, read_timeout: int = READ_TIMEOUT):
     """Can this space's detection rules be read right now? Returns ``(ok, reason)``.
 
     Asks for one rule from the same endpoint sync reads, so a wrong API key, a missing space and
-    an unreachable host all fail here, before the pull, with a reason a person can act on."""
+    an unreachable host all fail here, before the pull, with a reason a person can act on. A
+    slow answer is not an unreachable host: only a failed connection is."""
     url = f"{kibana_url.rstrip('/')}/s/{space}/api/detection_engine/rules/_find?per_page=1&page=1"
     headers = {"kbn-xsrf": "true", "Authorization": f"ApiKey {api_key}"}
     try:
-        resp = requests.get(url, headers=headers, verify=False, timeout=timeout)
-    except requests.exceptions.Timeout:
-        return False, "Connection timed out"
-    except requests.exceptions.ConnectionError:
-        return False, "Connection refused"
+        resp = requests.get(url, headers=headers, verify=False, timeout=(connect_timeout, read_timeout))
     except Exception as exc:
-        return False, str(exc)[:120]
+        return False, _request_failure(exc, read_timeout)
     if resp.status_code == 200:
         return True, ""
     reasons = {401: "Authentication failed (401)", 403: "Access denied (403)", 404: f"Space '{space}' not found (404)"}
@@ -96,7 +85,9 @@ def ping_detection_space(kibana_url: str, api_key: str, space: str, timeout: int
 def test_elastic_connection_full(
     kibana_url: str,
     api_key: str,
-    timeout: int = 10,
+    timeout: int = CONNECT_TIMEOUT,
+    read_timeout: int = READ_TIMEOUT,
+    linked_spaces=None,
 ):
     """Three-tier connectivity / privilege test against a single Kibana.
 
@@ -114,15 +105,17 @@ def test_elastic_connection_full(
                     "status_code": int | None,    # None on network error
                     "detail": str,                # short human message
                     "body_excerpt": str | None,   # first 200 chars of response on fail
+                    "elapsed_ms": int,            # how long the check took
                 },
                 ...
             ],
         }
 
-    No retries, no fallbacks — each check is one HTTP request so the result
-    panel reflects exactly what the next sync request would see. Token and
-    URL are NOT logged anywhere; only the redacted ``len/first/last`` shape
-    if logging is enabled by the caller.
+    ``timeout`` is for connecting, ``read_timeout`` for Kibana to answer. The detection-rules
+    check reads the spaces TIDE syncs (``linked_spaces``) first, then others up to five in all,
+    in parallel, each with its own time; only the linked spaces decide the result when known.
+    No retries, no fallbacks — each read is one HTTP request so the result panel reflects what
+    the next sync request would see. Token and URL are NOT logged anywhere.
     """
     base = (kibana_url or "").rstrip("/")
     headers = {
@@ -132,7 +125,7 @@ def test_elastic_connection_full(
     }
     result: dict = {"ok": False, "spaces": [], "checks": []}
 
-    def _record(name, endpoint, ok, status_code, detail, body_excerpt=None):
+    def _record(name, endpoint, ok, status_code, detail, body_excerpt=None, elapsed_ms=None):
         result["checks"].append({
             "name": name,
             "endpoint": endpoint,
@@ -140,26 +133,25 @@ def test_elastic_connection_full(
             "status_code": status_code,
             "detail": detail,
             "body_excerpt": body_excerpt,
+            "elapsed_ms": elapsed_ms,
         })
 
     def _do(method, path):
+        """(response, error, elapsed ms)."""
         url = f"{base}{path}"
+        started = _time.monotonic()
         try:
             r = requests.request(
-                method, url, headers=headers, verify=False, timeout=timeout
+                method, url, headers=headers, verify=False, timeout=(timeout, read_timeout)
             )
-            return r, None
-        except requests.exceptions.ConnectTimeout:
-            return None, "Connection timed out"
-        except requests.exceptions.ConnectionError as e:
-            return None, f"Connection refused ({type(e).__name__})"
+            return r, None, int((_time.monotonic() - started) * 1000)
         except Exception as e:
-            return None, f"{type(e).__name__}: {str(e)[:140]}"
+            return None, _request_failure(e, read_timeout), int((_time.monotonic() - started) * 1000)
 
     # ── Check 1: Kibana reachable + token format valid ────────────────
-    r, err = _do("GET", "/api/status")
+    r, err, ms = _do("GET", "/api/status")
     if err:
-        _record("kibana_status", "/api/status", False, None, err)
+        _record("kibana_status", "/api/status", False, None, err, elapsed_ms=ms)
         return result
     if r.status_code == 200:
         try:
@@ -168,12 +160,12 @@ def test_elastic_connection_full(
             status = data.get("status", {}).get("overall", {}).get("level", "unknown")
             _record(
                 "kibana_status", "/api/status", True, 200,
-                f"Kibana {version} ({status})",
+                f"Kibana {version} ({status})", elapsed_ms=ms,
             )
         except Exception:
             _record(
                 "kibana_status", "/api/status", True, 200,
-                "Reachable (non-JSON status response)",
+                "Reachable (non-JSON status response)", elapsed_ms=ms,
             )
     else:
         body = (r.text or "")[:200]
@@ -185,13 +177,13 @@ def test_elastic_connection_full(
             )
         else:
             detail = f"HTTP {r.status_code}"
-        _record("kibana_status", "/api/status", False, r.status_code, detail, body)
+        _record("kibana_status", "/api/status", False, r.status_code, detail, body, elapsed_ms=ms)
         return result
 
     # ── Check 2: spaces privilege ─────────────────────────────────────
-    r, err = _do("GET", "/api/spaces/space")
+    r, err, ms = _do("GET", "/api/spaces/space")
     if err:
-        _record("spaces", "/api/spaces/space", False, None, err)
+        _record("spaces", "/api/spaces/space", False, None, err, elapsed_ms=ms)
     elif r.status_code == 200:
         try:
             spaces = [s.get("id") for s in r.json() if isinstance(s, dict) and s.get("id")]
@@ -201,64 +193,59 @@ def test_elastic_connection_full(
         _record(
             "spaces", "/api/spaces/space", True, 200,
             f"Found {len(spaces)} space(s): {', '.join(spaces[:6])}"
-            + ("…" if len(spaces) > 6 else ""),
+            + ("…" if len(spaces) > 6 else ""), elapsed_ms=ms,
         )
     else:
         body = (r.text or "")[:200]
         detail = f"HTTP {r.status_code} — token lacks 'kibana_spaces_all' / 'spaces:read'"
-        _record("spaces", "/api/spaces/space", False, r.status_code, detail, body)
+        _record("spaces", "/api/spaces/space", False, r.status_code, detail, body, elapsed_ms=ms)
 
-    # ── Check 3: detection-engine read privilege per known space ─────
-    spaces_to_check = result["spaces"] or ["default"]
-    de_failures = []
-    de_successes = []
-    for sp in spaces_to_check[:5]:  # cap to keep panel readable
-        path = f"/s/{sp}/api/detection_engine/rules/_find?per_page=1&page=1"
-        r, err = _do("GET", path)
+    # ── Check 3: detection-engine read privilege, the linked spaces first ─────
+    linked = [s for s in dict.fromkeys(linked_spaces or []) if s]
+    others = [s for s in (result["spaces"] or ([] if linked else ["default"])) if s not in linked]
+    spaces_to_check = linked + others[:max(0, 5 - len(linked))]
+
+    def _check_space(sp):
+        """(space, ok, text) for one space, with how long it took."""
+        r, err, ms = _do("GET", f"/s/{sp}/api/detection_engine/rules/_find?per_page=1&page=1")
+        took = f"{ms / 1000:.1f}s"
         if err:
-            de_failures.append(f"{sp}: {err}")
-            continue
+            return sp, False, f"{sp}: {err} ({took})"
         if r.status_code == 200:
             try:
                 total = r.json().get("total", "?")
             except Exception:
                 total = "?"
-            de_successes.append(f"{sp} ({total} rules)")
-        else:
-            body_hint = ""
-            try:
-                jb = r.json()
-                if isinstance(jb, dict):
-                    body_hint = jb.get("message") or jb.get("error") or ""
-            except Exception:
-                pass
-            de_failures.append(
-                f"{sp}: HTTP {r.status_code}"
-                + (f" — {body_hint[:80]}" if body_hint else "")
-            )
-    if de_failures and not de_successes:
-        _record(
-            "detection_rules",
-            "/s/<space>/api/detection_engine/rules/_find",
-            False, None,
-            "All spaces failed: " + "; ".join(de_failures[:3]),
-            "; ".join(de_failures)[:200],
-        )
-    elif de_failures:
-        _record(
-            "detection_rules",
-            "/s/<space>/api/detection_engine/rules/_find",
-            True, 200,
-            "OK on: " + ", ".join(de_successes)
-            + " | failed on: " + "; ".join(de_failures[:2]),
-        )
-    else:
-        _record(
-            "detection_rules",
-            "/s/<space>/api/detection_engine/rules/_find",
-            True, 200,
-            "OK on: " + ", ".join(de_successes),
-        )
+            return sp, True, f"{sp} ({total} rules, {took})"
+        body_hint = ""
+        try:
+            jb = r.json()
+            if isinstance(jb, dict):
+                body_hint = jb.get("message") or jb.get("error") or ""
+        except Exception:
+            pass
+        return sp, False, f"{sp}: HTTP {r.status_code}" + (f" — {body_hint[:80]}" if body_hint else "") + f" ({took})"
+
+    started = _time.monotonic()
+    with ThreadPoolExecutor(max_workers=max(1, len(spaces_to_check))) as pool:
+        answers = list(pool.map(_check_space, spaces_to_check))
+    ms = int((_time.monotonic() - started) * 1000)
+
+    def _label(sp, text):
+        return text if not linked or sp in linked else f"{text} [not linked]"
+    passed = [_label(sp, t) for sp, ok, t in answers if ok]
+    failed = [_label(sp, t) for sp, ok, t in answers if not ok]
+    # With the linked spaces known, they decide: a slow or closed space TIDE never syncs is
+    # reported, but does not fail the test.
+    deciding = [ok for sp, ok, _t in answers if sp in linked] if linked else [ok for _sp, ok, _t in answers]
+    ok = all(deciding) if linked else any(deciding)
+    detail = ("OK on: " + ", ".join(passed) if passed else "") + \
+             (("; " if passed else "") + "failed on: " + "; ".join(failed) if failed else "")
+    _record(
+        "detection_rules", "/s/<space>/api/detection_engine/rules/_find",
+        ok, 200 if ok else None, detail or "No spaces to check",
+        "; ".join(failed)[:200] if failed and not ok else None, elapsed_ms=ms,
+    )
 
     result["ok"] = all(c["ok"] for c in result["checks"])
     return result
@@ -1655,6 +1642,16 @@ def _space_api_prefix(base_url: str, space: str) -> str:
     return f"{base_url}/s/{space}"
 
 
+class _TimeoutAdapter(requests.adapters.HTTPAdapter):
+    """Gives every request a timeout unless it names its own: a Kibana that accepts the connection
+    and never answers must not hold a request open forever."""
+
+    def send(self, request, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = (CONNECT_TIMEOUT, READ_TIMEOUT)
+        return super().send(request, **kwargs)
+
+
 def _make_session(api_key: str) -> "requests.Session":
     """Build a requests session with the given API key.
 
@@ -1669,7 +1666,7 @@ def _make_session(api_key: str) -> "requests.Session":
     the session-level flag.
     """
     session = requests.Session()
-    adapter = requests.adapters.HTTPAdapter(
+    adapter = _TimeoutAdapter(
         pool_connections=10, pool_maxsize=10, max_retries=3,
     )
     session.mount("http://", adapter)

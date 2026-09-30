@@ -1,0 +1,138 @@
+{#
+  Pieces shared by the MITRE catalogue pages' cards, table rows and windows
+  (app/services/mitre_catalog.py).
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+
+{# A window section: collapsible head, movable, body from the call block. #}
+{% macro panel(key, title, count=none) -%}
+<div class="rm-panel" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
+    <div class="rm-panel__head">
+        {{ collapse_ctl(title) }}
+        <h3 class="rm-panel__title">{{ title }}{% if count is not none %} <span class="rm-fold__count">{{ count }}</span>{% endif %}</h3>
+        {{ drag_ctl(title) }}
+    </div>
+    <div class="rm-panel__body">{{ caller() }}</div>
+</div>
+{%- endmacro %}
+
+{# The Coverage section of an object scored by coverage_of (a group, software, campaign,
+   mitigation): N of its techniques covered, a bar, and how coverage is judged. #}
+{% macro coverage_section(coverage, uncovered_count, noun) -%}
+{% call panel('coverage', 'Coverage') %}
+    {% if coverage %}
+    <dl class="rm-facts">
+        <div><dt>Covered</dt><dd>{{ coverage.covered }} of {{ coverage.total }}</dd></div>
+        <div><dt>Coverage</dt><dd>{{ coverage.pct }}%</dd></div>
+        <div><dt>No rule yet</dt><dd>{{ uncovered_count }}</dd></div>
+    </dl>
+    <div class="cov-bar cov-bar--{{ coverage.level }}" style="--pct: {{ coverage.pct }}" role="img" aria-label="{{ coverage.pct }}% of this {{ noun }}'s techniques covered"><span></span></div>
+    <p class="rm-empty mw-note">A technique counts as covered when at least one of your enabled rules is tagged with it.</p>
+    {% else %}
+    <p class="rm-empty">No ATT&amp;CK techniques are recorded for this {{ noun }}, so there is nothing to cover.</p>
+    {% endif %}
+{% endcall %}
+{%- endmacro %}
+
+{# ATT&CK techniques, one per line, the same in every window and the side panel: the pill opens the
+   technique's side panel, the name its MITRE technique window, with how it is used (else its
+   tactic) underneath. With covered_ttps the pill shows the client's coverage; without it the pill
+   is neutral (a rule's or a baseline technique's own ATT&CK ids). in_window: the pill closes the
+   window first, so the side panel is seen. Second line: how it is used, else its tactic, else the
+   start of its description. #}
+{% macro technique_list(techniques, src='enterprise', covered_ttps=none, ttp_rule_counts=none, in_window=true, scroll=false) -%}
+<ul class="rm-mitre{% if scroll %} mw-related{% endif %}">
+    {% for t in techniques %}
+    {% set tid = (t.id or '') | upper %}
+    <li>
+        {% if covered_ttps is not none %}
+        {{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm', close_modal=in_window) }}
+        {% else %}
+        {{ mitre_pill(tid, neutral=true, clickable=true, size='sm', close_modal=in_window) }}
+        {% endif %}
+        <span class="rm-mitre__name">
+            {% if t.name %}<button type="button" class="rm-item__open" title="Open {{ tid }} in MITRE ATT&amp;CK"
+                    hx-get="/api/mitre/window/technique/{{ tid | urlencode }}?src={{ src }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ t.name }}</button>
+            {% else %}Unknown technique{% endif %}
+            {% set use = t.use | attack_plain(180) if t.use else '' %}
+            {% if use %}<small title="{{ t.use | attack_plain(800) }}">{{ use }}</small>
+            {% elif t.tactic %}<small>{{ t.tactic }}</small>
+            {% elif t.description %}<small title="{{ t.description | attack_plain(800) }}">{{ t.description | attack_plain(140) }}</small>{% endif %}
+        </span>
+    </li>
+    {% endfor %}
+</ul>
+{%- endmacro %}
+
+{# The Techniques section of a MITRE window: technique_list with the client's coverage. #}
+{% macro techniques_section(techniques, src, covered_ttps, ttp_rule_counts, noun) -%}
+{% call panel('techniques', 'Techniques', techniques | length) %}
+    {% if techniques %}
+    {{ technique_list(techniques, src, covered_ttps, ttp_rule_counts, scroll=true) }}
+    {% else %}
+    <p class="rm-empty">No techniques recorded for this {{ noun }}.</p>
+    {% endif %}
+{% endcall %}
+{%- endmacro %}
+
+{# The Description section. #}
+{% macro description_section(detail) -%}
+{% call panel('description', 'Description') %}
+    <div class="md-content">{{ (detail.description or 'No description available.') | md }}</div>
+{% endcall %}
+{%- endmacro %}
+
+{# The ATT&CK domains an object belongs to (ENT, ICS, MOB, PRE). #}
+{% macro source_pills(sources, source_meta) -%}
+<span class="source-pill-row">
+    {%- for src in sources or [] %}{% set m = source_meta.get(src, {}) %}
+    <span class="source-pill {{ m.get('pill_class', 'src-opencti') }}" title="{{ m.get('label', src | upper) }}">{{ m.get('code', src | upper) }}</span>
+    {%- endfor %}
+</span>
+{%- endmacro %}
+
+{# How far the active client's enabled rules cover an object: coverage_of (N of its techniques), or
+   a technique's own (technique_coverage, which brings its label and title). #}
+{% macro coverage_pill(c) -%}
+{% set cls = {'full': 'success', 'partial': 'warning', 'none': 'danger'}.get(c.level, 'muted') %}
+<span class="status-pill status-{{ cls }}" title="{{ c.title if c.title else c.covered ~ ' of ' ~ c.total ~ ' technique' ~ ('s' if c.total != 1 else '') ~ ' covered by your enabled rules (' ~ c.pct ~ '%)' }}">
+    {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ c.label if c.label else c.covered ~ '/' ~ c.total ~ ' covered' }}</span>
+</span>
+{%- endmacro %}
+
+{# A window section listing related ATT&CK objects: id, name (opens that object's window when its
+   kind has one, else its page), and a short line under the name. #}
+{% macro related_section(key, title, items, kind, src, window_kinds, summary_field='description', empty='None.') -%}
+<div class="rm-panel" data-fold="mw-{{ key }}" data-section="{{ key }}" data-section-label="{{ title }}">
+    <div class="rm-panel__head">
+        {{ collapse_ctl(title) }}
+        <h3 class="rm-panel__title">{{ title }} <span class="rm-fold__count">{{ items | length }}</span></h3>
+        {{ drag_ctl(title) }}
+    </div>
+    <div class="rm-panel__body">
+        {% if items %}
+        <ul class="rm-mitre mw-related">
+            {% for it in items %}
+            <li>
+                <span class="rm-chip rm-chip--mono">{{ it.id }}</span>
+                <span class="rm-mitre__name">
+                    {% if kind in window_kinds %}
+                    <button type="button" class="rm-item__open" title="Open {{ it.id }}"
+                            hx-get="/api/mitre/window/{{ kind }}/{{ it.id }}?src={{ src }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ it.name }}</button>
+                    {% else %}
+                    <a href="{{ it.url }}?src={{ src }}">{{ it.name }}</a>
+                    {% endif %}
+                    {% set line = it[summary_field] | attack_plain(160) if it[summary_field] else '' %}
+                    {% if line %}<small title="{{ it[summary_field] | attack_plain(600) }}">{{ line }}</small>{% endif %}
+                </span>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p class="rm-empty">{{ empty }}</p>
+        {% endif %}
+    </div>
+</div>
+{%- endmacro %}

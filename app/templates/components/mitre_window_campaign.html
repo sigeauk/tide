@@ -1,0 +1,35 @@
+{#
+  A campaign's window body (components/mitre_window.html): Details and Coverage · Description and
+  Techniques (how they were used) · the groups it is attributed to and the software used.
+  Context: detail (get_mitre_campaign_detail), coverage, uncovered_count, covered_ttps,
+  ttp_rule_counts, window_kinds, source context.
+#}
+{% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section, related_section %}
+
+<div class="rm-body">
+  <section class="rm-col rm-col--history" data-col="left" aria-label="Left column">
+    {% call panel('details', 'Details') %}
+      <dl class="rm-facts">
+        <div><dt>ID</dt><dd>{{ detail.id }}</dd></div>
+        <div><dt>First seen</dt><dd>{{ detail.first_seen[:10] if detail.first_seen else '—' }}</dd></div>
+        <div><dt>Last seen</dt><dd>{{ detail.last_seen[:10] if detail.last_seen else '—' }}</dd></div>
+        <div><dt>Techniques</dt><dd>{{ detail.techniques | length }}</dd></div>
+        <div><dt>Software</dt><dd>{{ detail.software | length }}</dd></div>
+      </dl>
+      {% if detail.groups %}
+      <div class="rm-chips"><span class="rm-chips__label">Attributed to</span>{% for g in detail.groups %}<a class="rm-chip" href="/mitre/campaigns?attributed={{ g.id | urlencode }}&amp;src={{ source_domain }}" title="Every campaign attributed to {{ g.name }}">{{ g.name }}</a>{% endfor %}</div>
+      {% endif %}
+    {% endcall %}
+    {{ coverage_section(coverage, uncovered_count, 'campaign') }}
+  </section>
+
+  <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+    {{ description_section(detail) }}
+    {{ techniques_section(detail.techniques, source_domain, covered_ttps, ttp_rule_counts, 'campaign') }}
+  </section>
+
+  <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+    {{ related_section('groups', 'Attributed groups', detail.groups, 'groups', source_domain, window_kinds, empty='Not attributed to a known group.') }}
+    {{ related_section('software', 'Software', detail.software, 'software', source_domain, window_kinds, summary_field='use', empty='No software recorded.') }}
+  </aside>
+</div>

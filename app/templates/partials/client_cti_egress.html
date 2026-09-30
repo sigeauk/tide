@@ -20,9 +20,9 @@
 <div  name="CTI Egress Targets New target" class="client-section-toggle"
      onclick="var b=document.getElementById('cti-egress-body');var c=document.getElementById('cti-egress-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('upload', '14') }}</span>
-    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">CTI Egress Targets</h2>
-    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ cti_targets | length }}</span>
-    <div  name="New target" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+    <h2 class="client-section-toggle__title">CTI Egress Targets</h2>
+    <span class="badge badge-neutral badge--xs">{{ cti_targets | length }}</span>
+    <div  name="New target" class="client-section-toggle__actions" onclick="event.stopPropagation();">
         <button name="New target" class="btn btn-info btn-sm" onclick="document.getElementById('add-cti-egress-modal').style.display='flex'">
             {{ icon('plus', '14') }} New target
         </button>
@@ -39,28 +39,28 @@
         <div class="client-list-item__body" style="flex-wrap:wrap;gap:0.5rem;">
             <span class="client-list-item__title" style="cursor:default;">{{ t.label }}</span>
             {% if t.is_active %}
-            <span class="badge badge-success" style="font-size:0.68rem;">Active</span>
+            <span class="badge badge-success badge--xs">Active</span>
             {% else %}
-            <span class="badge badge-grey" style="font-size:0.68rem;">Inactive</span>
+            <span class="badge badge-grey badge--xs">Inactive</span>
             {% endif %}
-            <span class="badge badge-muted" style="font-size:0.68rem;" title="TLP ceiling: indicators stricter than this are dropped at export time">TLP &le; {{ t.tlp_ceiling or 'amber' }}</span>
+            <span class="badge badge-muted badge--xs" title="TLP ceiling: indicators stricter than this are dropped at export time">TLP &le; {{ t.tlp_ceiling or 'amber' }}</span>
             {% set kind_v = t.kind or 'elastic' %}
             {% if kind_v == 'elastic' %}
-            <span class="badge badge-info" style="font-size:0.68rem;" title="Push to Elasticsearch _bulk">Kind: elastic</span>
+            <span class="badge badge-info badge--xs" title="Push to Elasticsearch _bulk">Kind: elastic</span>
             {% elif kind_v == 'stix_folder' %}
-            <span class="badge badge-info" style="font-size:0.68rem;" title="Drop STIX bundles into {{ t.folder_path or '(unset)' }}">Kind: folder</span>
+            <span class="badge badge-info badge--xs" title="Drop STIX bundles into {{ t.folder_path or '(unset)' }}">Kind: folder</span>
             {% else %}
-            <span class="badge badge-warning" style="font-size:0.68rem;">Kind: {{ kind_v }}</span>
+            <span class="badge badge-warning badge--xs">Kind: {{ kind_v }}</span>
             {% endif %}
             {% if kind_v == 'elastic' %}
             {% if t.siem_id %}
                 {% if linked_siem %}
-                <span class="badge badge-info" style="font-size:0.68rem;" title="{{ linked_siem.url }}">SIEM: {{ linked_siem.label }}</span>
+                <span class="badge badge-info badge--xs" title="{{ linked_siem.url }}">SIEM: {{ linked_siem.label }}</span>
                 {% else %}
-                <span class="badge badge-warning" style="font-size:0.68rem;" title="siem_inventory row {{ t.siem_id }} not found in shared DB">SIEM missing ({{ t.siem_id[:8] }}&hellip;)</span>
+                <span class="badge badge-warning badge--xs" title="siem_inventory row {{ t.siem_id }} not found in shared DB">SIEM missing ({{ t.siem_id[:8] }}&hellip;)</span>
                 {% endif %}
             {% else %}
-            <span class="badge badge-grey" style="font-size:0.68rem;">No SIEM</span>
+            <span class="badge badge-grey badge--xs">No SIEM</span>
             {% endif %}
             <span class="client-list-item__meta" style="font-family:var(--font-mono,monospace);font-size:0.72rem;" title="latest index / history pattern">
                 {{ t.latest_index }} &middot; {{ t.index_pattern }}
@@ -94,9 +94,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+<div class="client-section-empty">
     {{ icon('upload', '36') }}
-    <p style="margin-top:0.75rem;">No CTI egress targets configured for this client yet.</p>
+    <p>No CTI egress targets configured for this client yet.</p>
     <p style="font-size:0.85rem;">Targets describe where this tenant's STIX indicators are pushed (Elasticsearch <code>_bulk</code> against a SIEM in the shared inventory).</p>
 </div>
 {% endif %}
@@ -108,7 +108,7 @@
     <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">New CTI Egress Target &mdash; {{ client.name }}</h3>
-            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
+            <button   name="Close Modal" class="modal-x"
                     onclick="document.getElementById('add-cti-egress-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Cti Egress" hx-post="/api/management/clients/{{ client.id }}/cti-egress"

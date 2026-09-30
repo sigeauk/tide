@@ -4,7 +4,7 @@
 {% block title %}CTI Actors | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+<div class="page-header">
     <div>
         <h1 class="page-title-hero">CTI Actors</h1>
         <p class="page-subtitle">
@@ -22,7 +22,7 @@
 </div>
 
 {# ── Metric strip (6 cards, matching Threat Landscape) ───── #}
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value">{{ metrics.total }}</p>
         <p class="metric-label">Tracked actors</p>
@@ -101,10 +101,7 @@
 {% if actors %}
 <div class="card card-flush" style="margin-top:1rem;">
     {# Column header row — aligned with .cve-card-item flex layout #}
-    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
-                border-bottom:1px solid var(--color-border);
-                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
-                text-transform:uppercase;color:var(--color-text-muted);">
+    <div class="cve-list-header">
         <div style="min-width:240px;">Actor</div>
         <div style="flex:1;">Type · Origin · Aliases</div>
         <div style="white-space:nowrap;">Source · Last seen</div>
@@ -128,10 +125,10 @@
         </div>
         <div  name="aka +" class="cve-card-item__body" onclick="event.stopPropagation();">
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
-                <span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span>
-                {% if a.origin %}<span style="margin-left:0.5rem;">{{ icon('globe','12') }} {{ a.origin }}</span>{% endif %}
+                <span class="badge badge-secondary">{{ a.stix_type }}</span>
+                {% if a.origin %}<span class="cti-meta-sep">{{ icon('globe','12') }} {{ a.origin }}</span>{% endif %}
                 {% if a.aliases %}
-                <span style="margin-left:0.5rem;">aka {{ (a.aliases or [])[:3]|join(', ') }}{% if a.aliases|length > 3 %} +{{ a.aliases|length - 3 }}{% endif %}</span>
+                <span class="cti-meta-sep">aka {{ (a.aliases or [])[:3]|join(', ') }}{% if a.aliases|length > 3 %} +{{ a.aliases|length - 3 }}{% endif %}</span>
                 {% endif %}
             </div>
         </div>
@@ -148,7 +145,7 @@
 </div>
 {% else %}
 <div class="card card-padded-lg card-center" style="margin-top:1rem;">
-    <p style="color:var(--color-muted);margin:0;">No actors match the current filters.</p>
+    <p class="text-muted" style="margin:0;">No actors match the current filters.</p>
 </div>
 {% endif %}
 

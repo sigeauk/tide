@@ -175,6 +175,9 @@ ELASTIC_URL="https://kibana.yourdomain.local:5601"
 ELASTICSEARCH_URL="https://elasticsearch.yourdomain.local:9200"
 ELASTIC_API_KEY="your-api-key"
 
+# Required - Session signing (TIDE will not start without this set)
+SESSION_SECRET="a-long-random-string"
+
 # Optional - Authentication
 AUTH_DISABLED=false
 KEYCLOAK_URL="http://keycloak:8080"
@@ -195,6 +198,7 @@ GITLAB_TOKEN="your-token"
 | `ELASTIC_URL` | Kibana URL | ✅ |
 | `ELASTICSEARCH_URL` | Elasticsearch URL | ✅ |
 | `ELASTIC_API_KEY` | API key with detection rules access | ✅ |
+| `SESSION_SECRET` | Random secret used to sign session cookies; TIDE will not start without one (unless `AUTH_DISABLED=true`) | ✅ |
 | `KIBANA_SPACES` | Comma-separated spaces (e.g., `production,staging`) | ❌ |
 | `AUTH_DISABLED` | Set `true` to bypass Keycloak | ❌ |
 | `OPENCTI_URL` | OpenCTI platform URL | ❌ |
@@ -297,10 +301,10 @@ Queries run against a specific tenant database. You specify which tenant via the
 
 | Rule | Detail |
 |------|--------|
-| **SELECT only** | The SQL must start with `SELECT` or `WITH` (CTEs are allowed) |
-| **Keyword blocklist** | `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `CREATE`, `REPLACE`, `TRUNCATE`, `ATTACH`, `DETACH`, `COPY`, `EXPORT`, `IMPORT`, `INSTALL`, `LOAD`, `CALL`, `PRAGMA`, `GRANT`, `REVOKE`, `SET` are all rejected |
+| **SELECT only** | The SQL must be a single statement starting with `SELECT` or `WITH` (CTEs are allowed) |
+| **Keyword blocklist** | `DROP`, `DELETE`, `INSERT`, `UPDATE`, `ALTER`, `CREATE`, `REPLACE`, `TRUNCATE`, `ATTACH`, `DETACH`, `COPY`, `EXPORT`, `IMPORT`, `INSTALL`, `LOAD`, `CALL`, `PRAGMA`, `GRANT`, `REVOKE`, `SET` and DuckDB's file-reading functions (`read_csv`, `read_parquet`, `read_json`, `glob` and similar) are all rejected |
+| **Own tables only** | The query is parsed by DuckDB before it runs and may read only the tenant database's own tables and views (and its CTEs). A file path used as a table, another database, and table functions other than `range`, `generate_series` and `unnest` are rejected |
 | **Max length** | 4 000 characters |
-| **Read-only DB** | Tenant database is opened in read-only mode — writes are impossible even if SQL validation were bypassed |
 | **Tenant isolation** | Each query runs against a physically separate DuckDB file — no cross-tenant data leakage |
 
 ### Available Tables

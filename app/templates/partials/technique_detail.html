@@ -2,13 +2,23 @@
   MITRE technique side panel (heatmap, rule and technique windows' ATT&CK pills).
   Built from the windows' parts: header badges as in the rule/technique window, one rm-fold per
   section, related ATT&CK items in the rm-mitre list format, Sigma rules in the technique window's
-  sm-sigma format. The folds share one name, so opening one closes the others.
+  sm-sigma format. The folds share one name, so opening one closes the others. Names open the ATT&CK
+  object's window over the page (the panel stays behind it); a sub-technique's pill opens its panel.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_ui.html" import technique_list %}
 
 {% set cov_class = {'active': 'success', 'latent': 'warning'}.get(coverage_state, 'danger') %}
 
-{% macro relation_fold(title, items) -%}
+{# A name that opens that ATT&CK object's window, over the page (the panel stays behind it). #}
+{% macro open_window(kind, id, label) -%}
+<button type="button" class="rm-item__open" title="Open {{ id }}" hx-get="/api/mitre/window/{{ kind }}/{{ id | urlencode }}"
+        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ label }}</button>
+{%- endmacro %}
+
+{# Related ATT&CK objects of one kind (a MITRE window's key: groups, software, ...): id and name,
+   which opens its window. #}
+{% macro relation_fold(title, items, kind) -%}
 <details class="rm-fold" name="technique-panel">
     <summary><span>{{ title }} <span class="rm-fold__count">{{ items | length }}</span></span></summary>
     <div class="rm-about">
@@ -17,7 +27,7 @@
             <li>
                 <span class="rm-chip rm-chip--mono">{{ it.id }}</span>
                 <span class="rm-mitre__name">
-                    <a href="{{ it.url }}">{{ it.name }}</a>
+                    {{ open_window(kind, it.id, it.name) }}
                     {% if it.summary %}<small title="{{ it.summary }}">{{ it.summary | truncate(160) }}</small>{% endif %}
                 </span>
             </li>
@@ -34,12 +44,12 @@
             <div class="rm-header__main">
                 {% if parent_technique %}
                 <div class="technique-crumb">
-                    <a href="{{ parent_technique.url }}">{{ parent_technique.id }} - {{ parent_technique.name }}</a>
+                    {{ open_window('technique', parent_technique.id, parent_technique.id ~ ' - ' ~ parent_technique.name) }}
                     <span>&gt;</span>
                     <span>{{ technique.id }}</span>
                 </div>
                 {% endif %}
-                <h2 class="technique-name"><a class="rm-item__open" href="/mitre/technique/{{ technique.id }}" title="Open the technique page">{{ technique.id }} - {{ technique.name }}</a></h2>
+                <h2 class="technique-name">{{ open_window('technique', technique.id, technique.id ~ ' - ' ~ technique.name) }}</h2>
                 <div class="rm-header__badges">
                     <span class="status-pill status-{{ cov_class }}" title="{{ coverage_detail }}">{{ icon('shield-check', '12') }} {{ coverage_label }}</span>
                     {% for t in tactic_pills %}<span class="status-pill" title="Tactic">{{ t }}</span>{% endfor %}
@@ -71,12 +81,17 @@
                 </details>
                 {% endif %}
 
-                {% if subtechniques %}{{ relation_fold('Sub-techniques', subtechniques) }}{% endif %}
-                {% if related_groups %}{{ relation_fold('Groups', related_groups) }}{% endif %}
-                {% if related_campaigns %}{{ relation_fold('Campaigns', related_campaigns) }}{% endif %}
-                {% if related_software %}{{ relation_fold('Software & tools', related_software) }}{% endif %}
-                {% if related_mitigations %}{{ relation_fold('Mitigations', related_mitigations) }}{% endif %}
-                {% if related_procedure_examples %}{{ relation_fold('Procedure examples', related_procedure_examples) }}{% endif %}
+                {% if subtechniques %}
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>Sub-techniques <span class="rm-fold__count">{{ subtechniques | length }}</span></span></summary>
+                    <div class="rm-about">{{ technique_list(subtechniques, in_window=false) }}</div>
+                </details>
+                {% endif %}
+                {% if related_groups %}{{ relation_fold('Groups', related_groups, 'groups') }}{% endif %}
+                {% if related_campaigns %}{{ relation_fold('Campaigns', related_campaigns, 'campaigns') }}{% endif %}
+                {% if related_software %}{{ relation_fold('Software & tools', related_software, 'software') }}{% endif %}
+                {% if related_mitigations %}{{ relation_fold('Mitigations', related_mitigations, 'mitigations') }}{% endif %}
+                {% if related_procedure_examples %}{{ relation_fold('Procedure examples', related_procedure_examples, 'groups') }}{% endif %}
 
                 {% if nist_capabilities %}
                 <details class="rm-fold" name="technique-panel">

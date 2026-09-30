@@ -1,17 +1,22 @@
 {#
-  The technique filter bar on a system's page, in Rule Health's controls.
-  Context: system_id, tactics, filters (from _step_grid_filters).
+  The technique filter bar on a system's page, and on the Baselines page for the templates, in
+  Rule Health's controls.
+  Context: tactics, baselines, filters (from _step_grid_filters), and either system_id (a
+           system's techniques) or template (the templates': no Coverage filter, as a template
+           has none until it is applied to a system).
 
   Controls carry no hx-* of their own: the page script turns any change here into one
   "sysFilter" event and the grid refetches itself with #sys-filters' inputs. Values come from
   the URL; where the URL is silent the page script fills the presentation choices (tactic sort,
   name sort, group, view) from what this browser last used, before the grid first loads.
+  data-window-url is a technique window's address, "{id}" standing for the technique.
 #}
 {% from "macros/icons.html" import icon %}
 {% set f = filters %}
 
-<div class="filters-bar sys-filters" id="sys-filters" data-system-id="{{ system_id }}"
-     data-base-path="/systems/{{ system_id }}"
+<div class="filters-bar sys-filters" id="sys-filters"
+     {% if template %}data-base-path="/baselines" data-window-url="/api/baselines/tactics/{id}" data-pref-key="tide.templateSteps" data-default-group="baseline"
+     {% else %}data-base-path="/systems/{{ system_id }}" data-window-url="/api/systems/{{ system_id }}/steps/{id}" data-pref-key="tide.systemSteps"{% endif %}
      data-url-keys="{{ ['tactic_sort' if f.tactic_sort, 'sort_name' if f.sort_name, 'group' if f.group, 'view' if f.view] | select | join(',') }}">
     <div class="filter-group grow">
         <label class="form-label" for="sys-search">Search</label>
@@ -54,6 +59,7 @@
         </div>
     </div>
 
+    {% if not template %}
     <div class="filter-group" style="position:relative;">
         <label class="form-label">Coverage</label>
         <button type="button" id="sys-coverage-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
@@ -78,6 +84,7 @@
             </select>
         </div>
     </div>
+    {% endif %}
 
     <div class="filter-group">
         <label class="form-label" for="sys-sort-name">Name</label>
@@ -128,11 +135,14 @@
     if (!bar) return;
     var fromUrl = (bar.getAttribute('data-url-keys') || '').split(',');
     var p = {};
-    try { p = JSON.parse(localStorage.getItem('tide.systemSteps') || '{}') || {}; } catch (_) { /* storage blocked */ }
+    try { p = JSON.parse(localStorage.getItem(bar.getAttribute('data-pref-key')) || '{}') || {}; } catch (_) { /* storage blocked */ }
     if (fromUrl.indexOf('tactic_sort') === -1 && p.tactic_sort) document.getElementById('sys-tactic-sort').value = p.tactic_sort;
     if (fromUrl.indexOf('sort_name') === -1 && typeof p.sort_name === 'string') document.getElementById('sys-sort-name').value = p.sort_name;
-    if (fromUrl.indexOf('group') === -1 && Array.isArray(p.group)) {
-        bar.querySelectorAll('input[name="group"][type="checkbox"]').forEach(function (c) { c.checked = p.group.indexOf(c.value) !== -1; });
+    // Grouping: the URL's, else this browser's last, else the page's default (the Baselines page
+    // groups by template, so an empty one still shows).
+    var group = Array.isArray(p.group) ? p.group : (bar.getAttribute('data-default-group') || '').split(',').filter(Boolean);
+    if (fromUrl.indexOf('group') === -1 && (Array.isArray(p.group) || group.length)) {
+        bar.querySelectorAll('input[name="group"][type="checkbox"]').forEach(function (c) { c.checked = group.indexOf(c.value) !== -1; });
     }
     var view = document.getElementById('sys-view');
     if (fromUrl.indexOf('view') === -1) view.value = p.view === 'table' ? 'table' : 'cards';

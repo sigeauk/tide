@@ -1,0 +1,181 @@
+{#
+  Template technique window -- one technique of a baseline template, from the Baselines page.
+
+  The system technique window's twin (components/step_modal.html) without Coverage or History: a
+  template has no coverage until it is applied to a system, and its changes are not tracked. Same
+  header (tactic, ATT&CK ids, template, prev/next, sections menu with Delete technique, close) and
+  the same sections, each with its own "…" menu and Move: Description (Update edits the title and
+  description in place) · Sigma rules (suggested from its ATT&CK ids, or searched; convert each) ·
+  Risks (priority and category, copied to each system the template is applied to) · MITRE ATT&CK
+  (Update edits its ATT&CK ids in place). Arrangement remembered per browser
+  (app.js, tide.templateWindowLayout).
+  Context: detail (from get_template_step_detail). Or, opened blank by Add technique or "+" beside
+  < > (which adds another to the same template): new (partials/technique_new_form.html) and a blank
+  detail -- the title is all it needs to be created.
+#}
+{% from "macros/icons.html" import icon, tactic_icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/mitre_ui.html" import technique_list %}
+{% from "components/window_ui.html" import collapse_ctl, layout_menu, section_menu %}
+
+{% set step = detail.step %}
+{% set rl = detail.risk_labels %}
+{% set step_url = '/api/baselines/tactics/' ~ step.id %}
+
+<div name="Dismiss Technique Window" class="modal-overlay" data-step-modal data-template-step-modal data-rm-overlay>
+  <div class="modal-content rule-modal sm-modal" data-layout-key="tide.templateWindowLayout" data-step-id="{{ step.id }}"
+       data-rule-dom-id="step-{{ step.id }}" role="dialog" aria-modal="true" aria-labelledby="sm-title">
+
+    <header class="rm-header">
+      <div class="rm-header__main">
+        <h2 class="rm-title" id="sm-title">{{ 'New technique' if new else step.title }}</h2>
+        {% if not new %}
+        <div class="rm-header__badges">
+          <span class="status-pill status-muted" title="A template has no coverage until it is applied to a system">{{ icon('layers', '12') }} Template</span>
+          {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ rl.priority[step.priority] }}</span>{% endif %}
+          <span class="status-pill" title="Tactic">{{ tactic_icon(detail.tactic, "12") }} {{ detail.tactic }}</span>
+          {% for tid in detail.technique_ids %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm', close_modal=true) }}{% endfor %}
+          <a class="rm-header__meta" href="/baselines?baseline_id={{ detail.baseline_id }}" title="Show this template's techniques">{{ icon('layers', '12') }} {{ detail.baseline_name }}</a>
+        </div>
+        {% endif %}
+      </div>
+      <div class="rm-header__tools">
+        <div class="rm-nav" role="group" aria-label="Browse techniques">
+          <button name="Previous Technique" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous technique (←)" aria-label="Previous technique" disabled>{{ icon('chevron-left', '16') }}</button>
+          <button name="Next Technique" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next technique (→)" aria-label="Next technique" disabled>{{ icon('chevron-right', '16') }}</button>
+          {% if not new %}
+          <button name="Add Another Technique" type="button" class="rm-iconbtn" title="Add another technique to {{ detail.baseline_name }}"
+                  aria-label="Add another technique" hx-get="/api/baselines/techniques-new?baseline_id={{ detail.baseline_id }}"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon('plus', '16') }}</button>
+          {% endif %}
+        </div>
+        {% if not new %}
+        {% call layout_menu(hint='menu') %}
+        <button name="Remove Technique" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                title="Delete this technique from the template"
+                hx-delete="{{ step_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                hx-confirm="Delete this technique from {{ detail.baseline_name }}? Systems the template was applied to keep their own copy.">
+          {{ icon('trash-2', '14') }}<span>Delete technique</span>
+        </button>
+        {% endcall %}
+        {% endif %}
+        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+      </div>
+    </header>
+
+    <div class="rm-body">
+      <section class="rm-col rm-col--history" data-col="left" aria-label="Left column"></section>
+
+      <section class="rm-col rm-col--technique" data-col="centre" aria-label="Centre column">
+        <p class="rm-note rm-note--info">{{ icon('info', '13') }} A template's technique. Coverage and history are tracked on each system it is applied to, in that system's own copy.</p>
+
+        <div class="rm-panel" data-fold="tw-description" data-section="description" data-section-label="Description"{% if new %} data-section-required{% endif %}>
+          <div class="rm-panel__head">
+            {{ collapse_ctl('description') }}
+            <h3 class="rm-panel__title">Description</h3>
+            {% if not new %}
+            {% call section_menu('Description') %}
+            <button name="Update Description" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="{{ step_url }}/edit?part=description" hx-target="#sm-technique-body" hx-swap="innerHTML" hx-include="unset"
+                    title="Edit this technique's title and description">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+            {% endif %}
+          </div>
+          <div class="rm-panel__body" id="sm-technique-body">
+            {% if new %}{% include "partials/technique_new_form.html" %}
+            {% elif step.description %}<div class="md-content">{{ step.description | md }}</div>
+            {% else %}<p class="text-muted sm-muted">No description yet. Add one from this section's menu, with Update.</p>{% endif %}
+          </div>
+        </div>
+
+        <div class="rm-panel" data-fold="tw-sigma" data-section="sigma" data-section-label="Sigma rules">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('Sigma rules') }}
+            <h3 class="rm-panel__title">Sigma rules</h3>
+            {% if not new %}{{ section_menu('Sigma rules') }}{% endif %}
+          </div>
+          {% if new %}
+          <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>
+          {% else %}
+          <input type="search" id="sm-sigma-search" class="form-input sm-sigma__search" name="q" placeholder="Search Sigma rules…"
+                 aria-label="Search Sigma rules" hx-get="{{ step_url }}/sigma" hx-trigger="input changed delay:300ms, search"
+                 hx-target="#sm-sigma-candidates" hx-swap="innerHTML">
+          <div id="sm-sigma-candidates" hx-get="{{ step_url }}/sigma" hx-trigger="load" hx-swap="innerHTML">
+            <p class="rm-empty">Looking for Sigma rules…</p>
+          </div>
+          {% endif %}
+        </div>
+
+        {# Risks: copied to each system the template is applied to, as its starting point. #}
+        <div class="rm-panel" data-fold="tw-risks" data-section="risks" data-section-label="Risks">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('risks') }}
+            <h3 class="rm-panel__title">Risks</h3>
+            {% if not new %}
+            {% call section_menu('Risks') %}
+            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" onclick="tideToggleRisks(true)"
+                    title="Edit priority and category">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+            {% endif %}
+          </div>
+          <div id="sm-risks-view">
+            <dl class="rm-facts">
+              <div><dt>Priority</dt><dd>{% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}">{{ rl.priority[step.priority] }}</span>{% else %}<span class="text-muted">Not set</span>{% endif %}</dd></div>
+              <div><dt>Category</dt><dd>{{ rl.category.get(step.category) or 'Not set' }}</dd></div>
+            </dl>
+            <p class="text-muted tf-form__note">{{ icon('info', '12') }} Copied to each system this template is applied to, where it can be changed.</p>
+          </div>
+          <form id="sm-risks-form" class="sm-gapform" hx-put="{{ step_url }}/risks" hx-target="#modal-container" hx-swap="innerHTML"
+                hx-include="unset" hidden>
+            <label class="rm-label" for="sm-risk-priority">Priority</label>
+            <select id="sm-risk-priority" name="priority" class="form-input form-select">
+              <option value="">Not set</option>
+              {% for k, v in rl.priority.items() %}<option value="{{ k }}"{% if step.priority == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+            <label class="rm-label" for="sm-risk-category">Category</label>
+            <select id="sm-risk-category" name="category" class="form-input form-select">
+              <option value="">Not set</option>
+              {% for k, v in rl.category.items() %}<option value="{{ k }}"{% if step.category == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
+            </select>
+            <div class="sm-risks__actions">
+              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" onclick="tideToggleRisks(false)">Cancel</button>
+              <button name="Save Risks" type="submit" class="btn btn-primary btn-sm">Save</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
+        <div class="rm-panel" data-fold="tw-mitre" data-section="mitre" data-section-label="MITRE ATT&amp;CK">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('MITRE ATT&amp;CK') }}
+            <h3 class="rm-panel__title">MITRE ATT&amp;CK <span class="rm-fold__count">{{ detail.techniques | length }}</span></h3>
+            {% if not new %}
+            {% call section_menu('MITRE ATT&amp;CK') %}
+            <button name="Update MITRE" type="button" role="menuitem" class="rh-more__item"
+                    hx-get="{{ step_url }}/edit?part=mitre" hx-target="#sm-mitre-body" hx-swap="innerHTML" hx-include="unset"
+                    title="Choose this technique's ATT&amp;CK techniques">{{ icon('pencil', '14') }}<span>Update</span></button>
+            {% endcall %}
+            {% endif %}
+          </div>
+          <div id="sm-mitre-body">
+            {% if detail.techniques %}
+            {{ technique_list(detail.techniques) }}
+            {% else %}
+            <p class="rm-empty">No MITRE techniques mapped to this technique.</p>
+            {% endif %}
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Risks: view <-> form (priority and category).
+  function tideToggleRisks(editing) {
+    document.getElementById('sm-risks-view').hidden = editing;
+    document.getElementById('sm-risks-form').hidden = !editing;
+    if (editing) document.getElementById('sm-risk-priority').focus();
+  }
+</script>

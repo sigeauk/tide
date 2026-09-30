@@ -4,7 +4,7 @@
 {% block title %}CTI Indicators | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+<div class="page-header">
     <div>
         <h1 class="page-title-hero">CTI Indicators</h1>
         <p class="page-subtitle">
@@ -27,7 +27,7 @@
 </div>
 
 {# ── Type-count summary cards (top 5 + total) ─────────────── #}
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value">{{ total_indicators }}</p>
         <p class="metric-label">Total indicators</p>
@@ -87,10 +87,7 @@
 
 {% if indicators %}
 <div class="card card-flush" style="margin-top:1rem;">
-    <div style="display:flex;align-items:center;gap:1rem;padding:0.5rem 1rem;
-                border-bottom:1px solid var(--color-border);
-                font-size:0.7rem;font-weight:700;letter-spacing:0.05em;
-                text-transform:uppercase;color:var(--color-text-muted);">
+    <div class="cve-list-header">
         <div style="min-width:240px;">TLP · Observable</div>
         <div style="flex:1;">Pattern · Confidence · TTPs</div>
         <div style="white-space:nowrap;">Source · Last seen</div>
@@ -115,12 +112,12 @@
         </div>
         <div  name="confidence TTP" class="cve-card-item__body" onclick="event.stopPropagation();">
             <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
-                <span class="badge badge-secondary" style="font-size:0.7rem;">{{ ind.pattern_type or '—' }}</span>
+                <span class="badge badge-secondary">{{ ind.pattern_type or '—' }}</span>
                 {% if ind.confidence is not none %}
-                <span style="margin-left:0.5rem;">confidence {{ ind.confidence }}</span>
+                <span class="cti-meta-sep">confidence {{ ind.confidence }}</span>
                 {% endif %}
                 {% if ind.mitre_techniques %}
-                <span style="margin-left:0.5rem;">{{ ind.mitre_techniques|length }} TTP{{ 's' if ind.mitre_techniques|length != 1 }}</span>
+                <span class="cti-meta-sep">{{ ind.mitre_techniques|length }} TTP{{ 's' if ind.mitre_techniques|length != 1 }}</span>
                 {% endif %}
             </div>
         </div>
@@ -137,7 +134,7 @@
 </div>
 {% else %}
 <div class="card card-padded-lg card-center" style="margin-top:1rem;">
-    <p style="color:var(--color-muted);margin:0;">
+    <p class="text-muted" style="margin:0;">
         No indicators match the current filters. Either nothing has been
         ingested for this tenant yet, or every indicator is above your
         TLP ceiling.

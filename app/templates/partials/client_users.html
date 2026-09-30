@@ -6,9 +6,9 @@
 
 <div  name="Assigned Users Edit" class="client-section-toggle" onclick="var b=document.getElementById('users-body');var c=document.getElementById('users-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('users', '14') }}</span>
-    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Assigned Users</h2>
-    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ client_users | length }}</span>
-    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+    <h2 class="client-section-toggle__title">Assigned Users</h2>
+    <span class="badge badge-neutral badge--xs">{{ client_users | length }}</span>
+    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
         <button  name="Open Edit Users Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-users-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
@@ -24,7 +24,7 @@
         <div class="client-list-item__body">
             <span class="client-list-item__title" style="cursor:default;">{{ u.username }}</span>
             {% if u.is_default %}
-            <span class="badge badge-info" style="font-size:0.68rem;">Default</span>
+            <span class="badge badge-info badge--xs">Default</span>
             {% endif %}
             {% if u.full_name %}
             <span class="client-list-item__meta">{{ u.full_name }}</span>
@@ -63,9 +63,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+<div class="client-section-empty">
     {{ icon('users', '36') }}
-    <p style="margin-top:0.75rem;">No users assigned to this client yet.</p>
+    <p>No users assigned to this client yet.</p>
 </div>
 {% endif %}
 </div>
@@ -76,7 +76,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Users — {{ client.name }}</h3>
-            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
+            <button   name="Close Modal" class="modal-x"
                     onclick="document.getElementById('edit-users-modal').style.display='none'">&#x2715;</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:1rem;">

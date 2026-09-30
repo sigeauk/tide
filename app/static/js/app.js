@@ -640,6 +640,12 @@ console.debug('TIDE app.js loading...');
         if (elt && elt.hasAttribute && elt.hasAttribute('data-rule-open')) {
             ruleModalOpener = elt;
             ruleModalListRoot = elt.closest('[data-rule-list]');
+            // Snapshot the browsable order now, once, from a real card click. Prev/Next below
+            // navigates this frozen snapshot by direct AJAX call rather than clicking cards, so
+            // it never re-enters this branch and never overwrites the snapshot mid-browse.
+            ruleModalNavSnapshot = ruleModalListRoot
+                ? snapshotFromItems(Array.prototype.slice.call(ruleModalListRoot.querySelectorAll('[data-rule-open]')))
+                : [];
         }
         if (!target || target.id !== 'modal-container') return;
         // A window is already open (prev/next, or a rule opened from inside it): swap the content in
@@ -688,48 +694,67 @@ console.debug('TIDE app.js loading...');
     });
 
     // ── prev / next through the list the modal was opened from ──
+    // Walks a snapshot of {id, url} taken when the modal opened, not the live grid: the grid
+    // behind the modal can fully reload or re-sort while it's open (recording a search time, a
+    // sync, a validation all change the rule's score and trigger refreshRules), which can drop
+    // the current rule off the loaded page entirely. Re-deriving "next" from a live query would
+    // then find nothing. The snapshot is what the operator was actually browsing; opening an
+    // entry from it is a direct AJAX call by URL, not a click on a card that may no longer exist.
+    var ruleModalNavSnapshot = [];
     function ruleNavItems() {
         var root = ruleModalListRoot && document.contains(ruleModalListRoot) ? ruleModalListRoot : null;
+        if (!root) root = document.querySelector('[data-rule-list]');
         return root ? Array.prototype.slice.call(root.querySelectorAll('[data-rule-open]')) : [];
     }
-    function ruleNavIndex(items) {
+    function snapshotFromItems(items) {
+        return items.map(function(el) { return { id: el.id, url: el.getAttribute('hx-get') }; });
+    }
+    function ruleNavIndex() {
         var modal = document.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return -1;
         // Match on the card's scoped id, not the rule id: the same rule id is on a card per
         // destination once it has been copied, and the first one is not necessarily this one.
         var id = modal.getAttribute('data-rule-dom-id') || ('rule-' + modal.getAttribute('data-rule-id'));
-        for (var i = 0; i < items.length; i++) if (items[i].id === id) return i;
+        for (var i = 0; i < ruleModalNavSnapshot.length; i++) if (ruleModalNavSnapshot[i].id === id) return i;
         return -1;
     }
     function ruleNavSentinel() {
-        return ruleModalListRoot ? ruleModalListRoot.querySelector('.infinite-scroll-sentinel') : null;
+        var root = ruleModalListRoot && document.contains(ruleModalListRoot) ? ruleModalListRoot : document.querySelector('[data-rule-list]');
+        return root ? root.querySelector('.infinite-scroll-sentinel') : null;
     }
     function updateRuleNavButtons() {
         var modal = document.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return;
-        var items = ruleNavItems(), idx = ruleNavIndex(items);
+        var idx = ruleNavIndex();
         var prev = modal.querySelector('[data-rm-nav="prev"]'), next = modal.querySelector('[data-rm-nav="next"]');
         if (prev) prev.disabled = idx <= 0;
-        if (next) next.disabled = idx === -1 || (idx >= items.length - 1 && !ruleNavSentinel());
+        if (next) next.disabled = idx === -1 || (idx >= ruleModalNavSnapshot.length - 1 && !ruleNavSentinel());
+    }
+    function openSnapshotEntry(entry) {
+        if (!entry || !entry.url) return;
+        var live = entry.id ? document.getElementById(entry.id) : null;
+        if (live) live.scrollIntoView({ block: 'nearest' });
+        htmx.ajax('GET', entry.url, { target: '#modal-container', swap: 'innerHTML' });
     }
     function openAdjacentRule(dir) {
-        var items = ruleNavItems(), idx = ruleNavIndex(items);
+        var idx = ruleNavIndex();
         if (idx === -1) return;
         var nextIdx = idx + (dir === 'next' ? 1 : -1);
-        if (nextIdx >= 0 && nextIdx < items.length) {
-            items[nextIdx].scrollIntoView({ block: 'nearest' });
-            htmx.trigger(items[nextIdx], 'click');
+        if (nextIdx >= 0 && nextIdx < ruleModalNavSnapshot.length) {
+            openSnapshotEntry(ruleModalNavSnapshot[nextIdx]);
             return;
         }
-        // At the end of what is loaded: pull the next page (infinite scroll), then continue.
+        // At the end of what was snapshotted: pull the next page (infinite scroll) from the
+        // live grid, append any newly-loaded entries to the snapshot, then continue.
         var sentinel = dir === 'next' ? ruleNavSentinel() : null;
         if (!sentinel) return;
         var root = ruleModalListRoot;
         var once = function(ev) {
-            if (!root || !root.contains(ev.detail.target) && ev.detail.target !== root && !ev.detail.target.contains(root)) return;
+            if (!root || (!root.contains(ev.detail.target) && ev.detail.target !== root && !ev.detail.target.contains(root))) return;
             document.removeEventListener('htmx:afterSettle', once);
-            var again = ruleNavItems();
-            if (idx + 1 < again.length) htmx.trigger(again[idx + 1], 'click');
+            var fresh = snapshotFromItems(ruleNavItems());
+            for (var i = ruleModalNavSnapshot.length; i < fresh.length; i++) ruleModalNavSnapshot.push(fresh[i]);
+            if (idx + 1 < ruleModalNavSnapshot.length) openSnapshotEntry(ruleModalNavSnapshot[idx + 1]);
         };
         document.addEventListener('htmx:afterSettle', once);
         htmx.trigger(sentinel, 'tideLoadMore');
@@ -788,7 +813,10 @@ console.debug('TIDE app.js loading...');
             });
         });
         var hidden = layout.hidden || [];
-        modal.querySelectorAll('.rm-col > [data-section]').forEach(function(s) { s.hidden = hidden.indexOf(s.getAttribute('data-section')) !== -1; });
+        modal.querySelectorAll('.rm-col > [data-section]').forEach(function(s) {
+            // A required section (a new technique's title form) is never hidden.
+            s.hidden = hidden.indexOf(s.getAttribute('data-section')) !== -1 && !s.hasAttribute('data-section-required');
+        });
         fitWindowColumns(modal);
     }
     function fitWindowColumns(modal) {
@@ -804,9 +832,26 @@ console.debug('TIDE app.js loading...');
         });
         body.style.setProperty('--rm-cols', widths.join(' ') || '1fr');
     }
+    // Sections this window does not have (a new technique has no History; not every ATT&CK
+    // technique has sub-techniques) keep their saved place and visibility, so arranging one window
+    // never forgets how the fuller ones were arranged.
     function saveWindowLayout(modal) {
         var key = modal.getAttribute('data-layout-key');
-        if (key) writePref(key, currentWindowLayout(modal));
+        if (!key) return;
+        var now = currentWindowLayout(modal), saved = readPref(key, null), present = {};
+        Object.keys(now.cols).forEach(function(c) { now.cols[c].forEach(function(k) { present[k] = true; }); });
+        if (saved && saved.cols) {
+            Object.keys(saved.cols).forEach(function(c) {
+                var list = now.cols[c] || (now.cols[c] = []);
+                (saved.cols[c] || []).forEach(function(k, i) {
+                    if (present[k] || list.indexOf(k) !== -1) return;
+                    var after = i > 0 ? list.indexOf(saved.cols[c][i - 1]) : -1;
+                    list.splice(after !== -1 ? after + 1 : Math.min(i, list.length), 0, k);
+                });
+            });
+            (saved.hidden || []).forEach(function(k) { if (!present[k] && now.hidden.indexOf(k) === -1) now.hidden.push(k); });
+        }
+        writePref(key, now);
     }
     function applyWindowLayout(modal) {
         modal._tideDefaultLayout = currentWindowLayout(modal);     // as the page drew it, for Reset
@@ -829,6 +874,7 @@ console.debug('TIDE app.js loading...');
                 label.className = 'rh-more__item rm-layout__item';
                 box.type = 'checkbox';
                 box.checked = !s.hidden;
+                box.disabled = s.hasAttribute('data-section-required');
                 box.setAttribute('data-rm-show', s.getAttribute('data-section'));
                 label.appendChild(box);
                 label.appendChild(document.createTextNode(sectionLabel(s)));
@@ -1033,10 +1079,19 @@ console.debug('TIDE app.js loading...');
         var btn = panel.querySelector('[data-rm-collapse]');
         if (btn) btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     }
+    // The whole head row folds a window panel, as a <summary> does, except its own controls.
     document.addEventListener('click', function(e) {
-        var btn = e.target.closest && e.target.closest('[data-rm-collapse]');
-        if (!btn) return;
-        var panel = btn.closest('.rm-panel[data-fold], .sys-section[data-fold]');
+        if (!e.target.closest) return;
+        var btn = e.target.closest('[data-rm-collapse]');
+        var panel;
+        if (btn) {
+            panel = btn.closest('.rm-panel[data-fold], .sys-section[data-fold]');
+        } else {
+            var head = e.target.closest('.rm-panel[data-fold] > .rm-panel__head');
+            if (!head || e.target.closest('a, button, input, select, textarea, label, [data-more], [data-rm-movebar]')) return;
+            if (window.getSelection && String(window.getSelection())) return;
+            panel = head.parentElement;
+        }
         if (!panel) return;
         var collapsed = !panel.classList.contains('is-collapsed');
         setPanelCollapsed(panel, collapsed);
@@ -1182,6 +1237,23 @@ console.debug('TIDE app.js loading...');
         closeMoreMenus(null);
     }, true);
 
+    // The rule modal can stay open while the grid behind it fully reloads (recording a search
+    // time, a sync, a validation all trigger refreshRules) — re-sync the prev/next buttons'
+    // disabled state once the new list is in the DOM, or a stale "disabled" from before the
+    // reload blocks the click handler even after ruleNavItems() can find the new list.
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var target = e.detail && e.detail.target;
+        if (target && target.id === 'rules-grid' && ruleModalOverlay()) updateRuleNavButtons();
+    });
+
+    // An edit swapped into a collapsed section (Update from its "…" menu) opens it, without changing
+    // the remembered fold, so the form is never loaded out of sight.
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var target = e.detail && e.detail.target;
+        var panel = target && target.closest && target.closest('.rule-modal .rm-panel.is-collapsed[data-fold]');
+        if (panel) setPanelCollapsed(panel, false);
+    });
+
     // Restore everything when a modal is swapped in
     document.addEventListener('htmx:afterSwap', function(e) {
         var target = e.detail && e.detail.target;
@@ -1193,7 +1265,7 @@ console.debug('TIDE app.js loading...');
             if (folds[fold.getAttribute('data-fold')] === false) fold.open = false;
         });
         modal.querySelectorAll('.rm-panel[data-fold]').forEach(function(panel) {
-            if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
+            if (folds[panel.getAttribute('data-fold')] === false && !panel.hasAttribute('data-section-required')) setPanelCollapsed(panel, true);
         });
         applyWindowLayout(modal);
         updateRuleNavButtons();

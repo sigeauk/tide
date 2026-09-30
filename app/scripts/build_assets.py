@@ -57,6 +57,7 @@ BUNDLES: dict = {
         "kind": "js",
         "sources": [
             JS_DIR / "app.js",
+            JS_DIR / "catalog-grid.js",
         ],
     },
 }

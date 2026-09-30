@@ -2733,9 +2733,10 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
     connection. Returns (new baseline id, number of techniques).
 
     With ``system_id`` the copy is that system's own and keeps nothing of the template but each
-    technique's title, ATT&CK techniques (its tactic follows the first) and description -- no
-    link back to the template, no Sigma suggestions (the technique window suggests those from
-    its ATT&CK ids), no required rule. A template copied to another client keeps everything."""
+    technique's title, ATT&CK techniques (its tactic follows the first), description and risks
+    (priority and category, the system's to change) -- no link back to the template, no Sigma
+    suggestions (the technique window suggests those from its ATT&CK ids), no required rule. A
+    template copied to another client keeps everything."""
     import uuid
     new_id = str(uuid.uuid4())
     desc = src.execute("SELECT description FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
@@ -2744,17 +2745,18 @@ def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
         [new_id, name, (desc[0] if desc else "") or "", client_id, system_id],
     )
     steps = src.execute(
-        "SELECT id, step_number, title, technique_id, required_rule, description, tactic "
+        "SELECT id, step_number, title, technique_id, required_rule, description, tactic, priority, category "
         "FROM playbook_steps WHERE playbook_id = ?",
         [playbook_id],
     ).fetchall()
     for step in steps:
         new_step = str(uuid.uuid4())
-        _sid, number, title, technique_id, required_rule, step_desc, tactic = step
+        _sid, number, title, technique_id, required_rule, step_desc, tactic, priority, category = step
         tgt.execute(
             "INSERT INTO playbook_steps (id, playbook_id, step_number, title, technique_id, required_rule, "
-            "description, tactic) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [new_step, new_id, number, title, technique_id, "" if system_id else required_rule, step_desc, tactic],
+            "description, tactic, priority, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [new_step, new_id, number, title, technique_id, "" if system_id else required_rule, step_desc, tactic,
+             priority or "", category or ""],
         )
         for (tech,) in src.execute("SELECT technique_id FROM step_techniques WHERE step_id = ?", [step[0]]).fetchall():
             tgt.execute("INSERT INTO step_techniques (step_id, technique_id) VALUES (?, ?)", [new_step, tech])
@@ -3036,19 +3038,11 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
             "source": source,
             "rule_ref": d.rule_ref,
             "note": d.note,
+            **rule_card(rule, dest),
             "rule_id": d.rule_ref if rule else None,
             "name": (rule.name if rule else None) or d.note or d.rule_ref,
-            "enabled": rule.enabled if rule else None,
-            "score": rule.score if rule else None,
-            "deprecated": bool(rule and rule.deprecated),
-            "validation_status": rule.validation_status if rule else None,
-            "validation_date": rule.validation_date if rule else None,
-            "validated_by": rule.validated_by if rule else None,
-            "telemetry": _rule_telemetry(rule) if rule else None,
             "siem_id": d.siem_id,
             "space": d.space,
-            "destination": (dest or {}).get("name"),
-            "destination_color": (dest or {}).get("color"),
             # Mapped but pointing at a rule TIDE can't find, or at a destination this system
             # isn't measured on: both are worth saying out loud rather than hiding.
             "unresolved": source == "siem" and not rule,
@@ -3137,6 +3131,18 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     }
 
 
+def _canonical_actors(history: List[Dict]) -> None:
+    """Show each history row under its user's username, whether it stored their username, email
+    or full name."""
+    if not any(h["actor"] for h in history):
+        return
+    from app.services.database import get_database_service
+    aliases = get_database_service().get_actor_aliases()
+    for h in history:
+        if h["actor"]:
+            h["actor"] = aliases.get(" ".join(h["actor"].lower().split()), h["actor"])
+
+
 def _rule_telemetry(rule) -> Dict:
     """Where a rule reads from and whether its fields exist there (the rule's own index patterns
     and the field-mapping check sync stored with it). A '?' is unknown, never missing (§9)."""
@@ -3159,6 +3165,42 @@ def _rule_telemetry(rule) -> Dict:
             "missing_fields": missing_fields}
 
 
+def rule_card(rule, dest: Optional[Dict]) -> Dict:
+    """What a rule card (components/window_ui.html: rule_card) shows about a rule as it is now --
+    state, score, validation, field check -- and its destination's name and colour. Shared by a
+    baseline technique's Coverage and the MITRE technique window's Your rules."""
+    return {
+        "enabled": rule.enabled if rule else None,
+        "score": rule.score if rule else None,
+        "deprecated": bool(rule and rule.deprecated),
+        "validation_status": rule.validation_status if rule else None,
+        "validation_date": rule.validation_date if rule else None,
+        "validated_by": rule.validated_by if rule else None,
+        "telemetry": _rule_telemetry(rule) if rule else None,
+        "destination": (dest or {}).get("name"),
+        "destination_color": (dest or {}).get("color"),
+    }
+
+
+def _score_tone(pct: int) -> str:
+    return "success" if pct >= 80 else "warning" if pct >= 50 else "danger"
+
+
+def _validation_note(status: Optional[str]) -> str:
+    return {"expired": " Its validation has expired.", "never": " It has never been validated."}.get(status or "", "")
+
+
+def own_score_evidence(x: Dict) -> Dict:
+    """The score ring of a rule card with no system to judge it against (the MITRE technique
+    window): the rule's own score (app/scoring.py)."""
+    if x["score"] is None:
+        return {"pct": 0, "tone": "muted", "applicable": False, "how": "This rule has no score yet."}
+    pct = max(0, min(100, int(x["score"])))
+    where = f" at {x['destination']}" if x["destination"] else ""
+    how = f"Rule score {pct}%{where}." + _validation_note(x["validation_status"])
+    return {"pct": pct, "tone": _score_tone(pct), "applicable": True, "how": how}
+
+
 def _evidence(x: Dict) -> Dict:
     """How far one mapped rule is evidence for this technique on this system, for the score ring
     on its card: the rule's own score (app/scoring.py) when it counts and is applied here, else
@@ -3178,12 +3220,8 @@ def _evidence(x: Dict) -> Dict:
         why = f"Applied to this system{where}. Its rule score is {x['score']}%."
     scored = x["score"] is not None and x["counts"] and x["applied"] and not x["unresolved"]
     pct = max(0, min(100, int(x["score"] or 0))) if scored else 0
-    tone = "muted" if not scored else "success" if pct >= 80 else "warning" if pct >= 50 else "danger"
-    if x["validation_status"] == "expired":
-        why += " Its validation has expired."
-    elif x["validation_status"] == "never":
-        why += " It has never been validated."
-    return {"pct": pct, "tone": tone, "applicable": scored, "how": why}
+    tone = _score_tone(pct) if scored else "muted"
+    return {"pct": pct, "tone": tone, "applicable": scored, "how": why + _validation_note(x["validation_status"])}
 
 
 STEP_PRIORITIES = [("critical", "Critical"), ("high", "High"), ("medium", "Medium"), ("low", "Low")]
@@ -3474,8 +3512,8 @@ def group_system_steps(steps: List[Dict], group_by: List[str], tactic_sort: str 
     """Nest already-sorted steps into collapsible groups: by baseline, by tactic, or tactics
     within each baseline. Each group carries its own covered/scored counts. Step order inside a
     group is preserved, so the chosen sort still applies within it."""
-    def counts(rows):
-        scored = [r for r in rows if r["status"] != "grey"]
+    def counts(rows):   # a template's rows have no status: none are scored
+        scored = [r for r in rows if r.get("status") not in (None, "grey")]
         covered = sum(1 for r in scored if r["status"] == "green")
         return {"total": len(rows), "scored": len(scored), "covered": covered,
                 "pct": round(covered / len(scored) * 100) if scored else None}
@@ -3539,6 +3577,40 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
         "uncounted": sum(1 for s in steps if s.get("uncounted_count")),
     }
 
+    if status:
+        steps = [s for s in steps if s["status"] == status]
+    if mapping == "unmapped":
+        steps = [s for s in steps if not s.get("mapped_count")]
+    elif mapping == "mapped":
+        steps = [s for s in steps if s.get("mapped_count")]
+    elif mapping == "uncounted":
+        steps = [s for s in steps if s.get("uncounted_count")]
+    steps = filter_steps(steps, search, tactic, baseline_id, tactic_sort, sort_name)
+    tactics.sort(key=lambda t: tactic_sort_key(t, "attack"))
+    return {
+        "steps": steps, "totals": totals, "tactics": tactics,
+        "baselines": [{"id": b["playbook_id"], "name": b["playbook_name"]} for b in baselines],
+        "coverage_undefined": all(b.get("coverage_undefined") for b in baselines) if baselines else False,
+    }
+
+
+def _step_row(step, baseline_id: str, baseline_name: str) -> Dict:
+    """A template technique as the technique grid's row (a system's rows add coverage to this)."""
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    return {
+        "step_id": step.id, "title": step.title, "description": step.description,
+        "tactic": canonical_tactic(step.tactic), "display_technique_ids": ids,
+        "step_number": step.step_number, "priority": step.priority, "category": step.category,
+        "category_label": dict(STEP_CATEGORIES).get(step.category, ""),
+        "baseline_id": baseline_id, "baseline_name": baseline_name,
+    }
+
+
+def filter_steps(steps: List[Dict], search: str = "", tactic=None, baseline_id: str = "",
+                 tactic_sort: str = "attack", sort_name: str = "") -> List[Dict]:
+    """The technique grid's search, tactic and baseline filters and its sorts, shared by a system's
+    techniques and the templates'. Tactic first (kill-chain order by default -- an attack tree
+    reads in sequence), then name if asked, else the baseline's own order."""
     q = (search or "").strip().lower()
     if q:
         steps = [
@@ -3551,29 +3623,49 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
     wanted.discard("")
     if wanted:
         steps = [s for s in steps if s["tactic"] in wanted]
-    if status:
-        steps = [s for s in steps if s["status"] == status]
     if baseline_id:
         steps = [s for s in steps if s["baseline_id"] == baseline_id]
-    if mapping == "unmapped":
-        steps = [s for s in steps if not s.get("mapped_count")]
-    elif mapping == "mapped":
-        steps = [s for s in steps if s.get("mapped_count")]
-    elif mapping == "uncounted":
-        steps = [s for s in steps if s.get("uncounted_count")]
-
-    # Tactic first (kill-chain order by default -- an attack tree reads in sequence), then name
-    # if asked, else the baseline's own step order. Stable sorts, applied innermost first.
+    # Stable sorts, applied innermost first.
     steps.sort(key=lambda s: ((s.get("baseline_name") or "").lower(), s.get("step_number") or 0))
     if sort_name in ("asc", "desc"):
         steps.sort(key=lambda s: (s.get("title") or "").lower(), reverse=sort_name == "desc")
     if tactic_sort in ("attack", "alpha"):
         steps.sort(key=lambda s: tactic_sort_key(s["tactic"], tactic_sort))
-    tactics.sort(key=lambda t: tactic_sort_key(t, "attack"))
+    return steps
+
+
+def get_template_steps(client_id: str = None, search: str = "", tactic=None, baseline_id: str = "",
+                       tactic_sort: str = "attack", sort_name: str = "") -> Dict:
+    """Every template's techniques, flattened, filtered and sorted like a system's (the Baselines
+    page shows them the same way), with the whole set's totals. Templates carry no coverage."""
+    templates = [get_template(b["id"], client_id=client_id) for b in get_baselines_overview(client_id=client_id)]
+    templates = [t for t in templates if t]
+    steps = [_step_row(st, t.id, t.name) for t in templates for st in t.tactics]
+    tactics = sorted({s["tactic"] for s in steps}, key=lambda t: tactic_sort_key(t, "attack"))
+    totals = {"templates": len(templates), "total": len(steps), "tactics": len(tactics),
+              "unmapped": sum(1 for s in steps if not s["display_technique_ids"])}
     return {
-        "steps": steps, "totals": totals, "tactics": tactics,
-        "baselines": [{"id": b["playbook_id"], "name": b["playbook_name"]} for b in baselines],
-        "coverage_undefined": all(b.get("coverage_undefined") for b in baselines) if baselines else False,
+        "steps": filter_steps(steps, search, tactic, baseline_id, tactic_sort, sort_name),
+        "totals": totals, "tactics": tactics,
+        "baselines": [{"id": t.id, "name": t.name, "description": t.description, "count": len(t.tactics)}
+                      for t in templates],
+    }
+
+
+def get_template_step_detail(step_id: str, client_id: str = None) -> Optional[Dict]:
+    """One template technique, for its window: no coverage and no history, as a template has
+    neither until it is applied to a system."""
+    owner = get_step_owner(step_id)
+    if not owner or owner["system_id"] or (client_id and owner["client_id"] != client_id):
+        return None
+    step = get_playbook_step(step_id)
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    tactic = canonical_tactic(step.tactic)
+    return {
+        "step": step, "tactic": tactic, "technique_ids": ids,
+        "techniques": _technique_names(ids, tactic if step.tactic else ""),
+        "baseline_id": owner["playbook_id"], "baseline_name": _playbook_name(owner["playbook_id"]),
+        "risk_labels": {"priority": dict(STEP_PRIORITIES), "category": dict(STEP_CATEGORIES)},
     }
 
 
@@ -4052,6 +4144,7 @@ def get_technique_history(step_id: str, system_id: str, client_id: str = None) -
         e["system_scoped"] = e["system_id"] is not None
         e["reconstructed"] = e["source_ref"] is not None
         out.append(e)
+    _canonical_actors(out)
     return out
 
 

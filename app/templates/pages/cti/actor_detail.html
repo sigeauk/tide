@@ -4,24 +4,24 @@
 {% block title %}{{ actor.name }} | CTI Actor | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-    <div>
-        <p style="margin:0 0 0.25rem 0;"><a name="Back to Actors" href="/cti/actors" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Actors</span></a></p>
+<div class="page-header">
+    <div class="page-header__text">
+        <p class="cti-back-link"><a name="Back to Actors" href="/cti/actors">{{ icon('arrow-right','12') }} <span>Back to Actors</span></a></p>
         <h1 class="page-title-hero">{{ icon('users','24') }} {{ actor.name }}</h1>
         <p class="page-subtitle">
-            <span class="badge badge-secondary" style="font-size:0.7rem;">{{ actor.stix_type }}</span>
+            <span class="badge badge-secondary">{{ actor.stix_type }}</span>
             {% if actor.origin %}
-                <span style="margin-left:0.5rem;">{{ icon('globe','12') }} {{ actor.origin }}</span>
+                <span class="cti-meta-sep">{{ icon('globe','12') }} {{ actor.origin }}</span>
             {% endif %}
             {% if actor.source_id %}
-                <span style="margin-left:0.5rem;">{{ icon('database','12') }} {{ source_labels.get(actor.source_id, 'External CTI') }}</span>
+                <span class="cti-meta-sep">{{ icon('database','12') }} {{ source_labels.get(actor.source_id, 'External CTI') }}</span>
             {% endif %}
         </p>
     </div>
 </div>
 
 {# ── Quick stats strip (no UUID, no raw STIX ids) ────────── #}
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value">{{ (actor.aliases or [])|length }}</p>
         <p class="metric-label">Aliases</p>
@@ -55,7 +55,7 @@
 </div>
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">{{ icon('info','16') }} Details</h2>
+    <h2 class="section-title">{{ icon('info','16') }} Details</h2>
     <dl class="kv">
         <dt>Aliases</dt><dd>{{ (actor.aliases or [])|join(', ') or '—' }}</dd>
         <dt>Type</dt><dd>{{ actor.stix_type }}</dd>
@@ -70,11 +70,11 @@
 </section>
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('crosshair','16') }} Indicators attributed to this actor
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ actor.related_indicators|length }}</span>
+        <span class="badge badge-secondary">{{ actor.related_indicators|length }}</span>
     </h2>
-    <p style="color:var(--color-muted);font-size:0.85rem;margin-top:0;">
+    <p class="cti-hint">
         Filtered by your TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
     </p>
     {% if actor.related_indicators %}
@@ -86,7 +86,7 @@
         {% for i in actor.related_indicators %}
             <tr>
                 <td><a  name="Indicators" href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
-                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
+                <td><span class="badge badge-secondary">{{ i.pattern_type }}</span></td>
                 <td>{{ (i.tlp or '—')|upper }}</td>
                 <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
                 <td>{{ i.last_seen or '—' }}</td>
@@ -100,9 +100,9 @@
 </section>
 
 <section class="card card-padded">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('file-text','16') }} Mentioned in reports
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ actor.related_reports|length }}</span>
+        <span class="badge badge-secondary">{{ actor.related_reports|length }}</span>
     </h2>
     {% if actor.related_reports %}
     <table class="data-table">

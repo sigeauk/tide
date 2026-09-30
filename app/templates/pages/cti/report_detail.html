@@ -4,20 +4,20 @@
 {% block title %}{{ report.name or 'Untitled report' }} | CTI Report | TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-    <div style="min-width:0;">
-        <p style="margin:0 0 0.25rem 0;"><a name="Back to Reports" href="/cti/reports" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Reports</span></a></p>
+<div class="page-header">
+    <div class="page-header__text">
+        <p class="cti-back-link"><a name="Back to Reports" href="/cti/reports">{{ icon('arrow-right','12') }} <span>Back to Reports</span></a></p>
         <h1 class="page-title-hero">{{ icon('file-text','24') }} {{ report.name or 'Untitled report' }}</h1>
         <p class="page-subtitle">
             {% if report.published %}<span>{{ icon('calendar','12') }} {{ report.published }}</span>{% endif %}
             {% if report.source_id %}
-                <span style="margin-left:0.5rem;">{{ icon('database','12') }} {{ source_labels.get(report.source_id, 'External CTI') }}</span>
+                <span class="cti-meta-sep">{{ icon('database','12') }} {{ source_labels.get(report.source_id, 'External CTI') }}</span>
             {% endif %}
         </p>
     </div>
 </div>
 
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value">{{ report.related_indicators|length }}</p>
         <p class="metric-label">Indicators</p>
@@ -51,13 +51,13 @@
 </div>
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">{{ icon('info','16') }} Details</h2>
+    <h2 class="section-title">{{ icon('info','16') }} Details</h2>
     <dl class="kv">
         <dt>Title</dt><dd>{{ report.name or '—' }}</dd>
         <dt>Labels</dt><dd>
             {% if report.labels %}
                 {% for l in report.labels %}
-                <span class="badge badge-secondary" style="font-size:0.7rem;margin-right:0.25rem;">{{ l }}</span>
+                <span class="badge badge-secondary" style="margin-right:0.25rem;">{{ l }}</span>
                 {% endfor %}
             {% else %}—{% endif %}
         </dd>
@@ -74,9 +74,9 @@
    authenticated + tenant-scoped (see /cti/reports/{id}/attachments/{idx}). #}
 {% if report.attachments %}
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('paperclip','16') }} Attachments
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.attachments|length }}</span>
+        <span class="badge badge-secondary">{{ report.attachments|length }}</span>
     </h2>
     {% for att in report.attachments %}
         <div style="margin-bottom:1rem;">
@@ -97,7 +97,7 @@
                      alt="{{ att.name }}"
                      style="max-width:100%;border:1px solid var(--color-border,#444);border-radius:4px;" />
             {% else %}
-                <p style="color:var(--color-muted);font-size:0.85rem;margin:0;">
+                <p class="cti-hint" style="margin:0;">
                     Preview not available for this file type — use <em>Open in new tab</em> to download.
                 </p>
             {% endif %}
@@ -108,9 +108,9 @@
 
 {% if report.external_references %}
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('link','16') }} External references
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.external_references|length }}</span>
+        <span class="badge badge-secondary">{{ report.external_references|length }}</span>
     </h2>
     <ul style="margin:0;padding-left:1.25rem;">
         {% for ref in report.external_references %}
@@ -121,10 +121,10 @@
                     <strong>{{ ref.source_name or '—' }}</strong>
                 {% endif %}
                 {% if ref.external_id %}
-                    <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.25rem;">{{ ref.external_id }}</span>
+                    <span class="badge badge-secondary cti-meta-sep">{{ ref.external_id }}</span>
                 {% endif %}
                 {% if ref.description %}
-                    <div style="color:var(--color-muted);font-size:0.85rem;margin-top:0.15rem;">{{ ref.description }}</div>
+                    <div class="cti-hint" style="margin-top:0.15rem;">{{ ref.description }}</div>
                 {% endif %}
             </li>
         {% endfor %}
@@ -133,11 +133,11 @@
 {% endif %}
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('crosshair','16') }} Referenced indicators
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.related_indicators|length }}</span>
+        <span class="badge badge-secondary">{{ report.related_indicators|length }}</span>
     </h2>
-    <p style="color:var(--color-muted);font-size:0.85rem;margin-top:0;">
+    <p class="cti-hint">
         Filtered by your TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
     </p>
     {% if report.related_indicators %}
@@ -149,7 +149,7 @@
         {% for i in report.related_indicators %}
             <tr>
                 <td><a  name="Indicators" href="/cti/indicators/{{ i.id }}">{{ i.observable_value }}</a></td>
-                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ i.pattern_type }}</span></td>
+                <td><span class="badge badge-secondary">{{ i.pattern_type }}</span></td>
                 <td>{{ (i.tlp or '—')|upper }}</td>
                 <td>{{ i.confidence if i.confidence is not none else '—' }}</td>
                 <td>{{ i.last_seen or '—' }}</td>
@@ -163,9 +163,9 @@
 </section>
 
 <section class="card card-padded">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('users','16') }} Named actors
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ report.related_actors|length }}</span>
+        <span class="badge badge-secondary">{{ report.related_actors|length }}</span>
     </h2>
     {% if report.related_actors %}
     <table class="data-table">

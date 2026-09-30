@@ -71,7 +71,7 @@ from app.inventory_engine import (
     create_baseline_snapshot, create_all_baseline_snapshots,
     get_baseline_snapshots, delete_baseline_snapshot,
 )
-from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS
+from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS, PlaybookStep
 from app.services.database import get_database_service
 
 logger = logging.getLogger(__name__)
@@ -853,40 +853,69 @@ async def api_upload_mitre_mapping(
 
 @router.get("/baselines", response_class=HTMLResponse)
 def page_baselines(request: Request, user: CurrentUser, client_id: ActiveClient):
-    baselines = get_baselines_overview(client_id=client_id)
+    """The templates, shown the way a system's page shows its baselines: every template's
+    techniques in one grid, with the same search, filters, grouping and technique window --
+    without coverage, which a template only has once applied to a system."""
+    from app.inventory_engine import get_template_steps
     return _render("pages/inventory/baselines.html", request, {
-        "active_page": "baselines", "baselines": baselines, "user": user,
+        "active_page": "baselines", "user": user, "filters": _step_grid_filters(request),
         "system_baselines": count_system_baselines(client_id=client_id),
+        **get_template_steps(client_id=client_id),
     })
 
 
-@router.get("/baselines/{baseline_id}", response_class=HTMLResponse)
-def page_baseline_detail(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
-    """A template: its techniques. It has no link to the systems it was applied to -- each got
-    its own copy -- so it can be applied to any system, again if need be."""
+@router.get("/baselines/{baseline_id}")
+def page_baseline_detail(baseline_id: str, user: CurrentUser):
+    """Old address of a template's page: templates are on the Baselines page. Kept so bookmarks
+    land there, filtered to that template. Temporary (307), like the MITRE pages' old addresses,
+    so a browser never caches where it goes."""
+    return RedirectResponse(url=f"/baselines?baseline_id={quote(baseline_id)}&group=baseline", status_code=307)
+
+
+@router.get("/api/baselines/steps", response_class=HTMLResponse)
+def api_template_steps_grid(request: Request, user: CurrentUser, client_id: ActiveClient):
+    """The templates' filtered, sorted and optionally grouped technique grid (or table). Grouped
+    by baseline, a template with no techniques yet still shows, so it can be managed."""
+    from app.inventory_engine import get_template_steps, group_system_steps
+    f = _step_grid_filters(request)
+    tactic_sort = f["tactic_sort"] or "attack"
+    data = get_template_steps(client_id=client_id, search=f["search"], tactic=f["tactic"],
+                              baseline_id=f["baseline_id"], tactic_sort=tactic_sort, sort_name=f["sort_name"])
+    groups = group_system_steps(data["steps"], f["group"], tactic_sort)
+    narrowed = f["search"] or f["tactic"]
+    if "baseline" in f["group"] and not narrowed:
+        shown = {g["key"] for g in groups}
+        groups += [{"key": b["id"], "kind": "baseline", "label": b["name"], "steps": [], "groups": [], "total": 0}
+                   for b in data["baselines"]
+                   if b["id"] not in shown and (not f["baseline_id"] or b["id"] == f["baseline_id"])]
+        groups.sort(key=lambda g: (g["label"] or "").lower())
+    return _render("partials/system_steps_grid.html", request, {
+        **data, "template": True, "groups": groups, "view": f["view"] or "cards",
+        "tactic_sort": tactic_sort, "sort_name": f["sort_name"],
+    })
+
+
+@router.get("/api/baselines/steps-metrics", response_class=HTMLResponse)
+def api_template_steps_metrics(request: Request, user: CurrentUser, client_id: ActiveClient):
+    """The Baselines page's metric strip: whole-set totals, never the filtered grid's."""
+    from app.inventory_engine import get_template_steps
+    return _render("partials/template_steps_metrics.html", request, {
+        **get_template_steps(client_id=client_id), "system_baselines": count_system_baselines(client_id=client_id),
+    })
+
+
+@router.get("/api/baselines/{baseline_id}/manage", response_class=HTMLResponse)
+def api_template_manage(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
+    """One template's window: rename it, apply it to a system, import techniques into it,
+    export it, or delete it."""
     pb = get_template(baseline_id, client_id=client_id)
     if not pb:
-        return _gone_redirect(request, "/baselines")
-    return _render("pages/inventory/baseline_detail.html", request, {
-        "active_page": "baselines", "baseline": pb, "user": user,
-        "mitre_tactics": MITRE_TACTICS,
-        "all_systems": list_systems(client_id=client_id),
+        raise HTTPException(status_code=404, detail="Baseline not found")
+    # Applying changes a system, so it is offered only to those who may edit systems.
+    can_apply = user is None or user.can_write("page:systems")
+    return _render("partials/template_manage_dialog.html", request, {
+        "baseline": pb, "systems": list_systems(client_id=client_id) if can_apply else [],
     })
-
-
-def _template_techniques(request: Request, baseline_id: str, client_id: str):
-    return _render("partials/baseline_tactics.html", request, {
-        "baseline": get_template(baseline_id, client_id=client_id), "editable": True,
-    })
-
-
-@router.get("/api/baselines/{baseline_id}/preview", response_class=HTMLResponse)
-def api_baseline_list_preview(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
-    """Expanded techniques preview used by /baselines list cards."""
-    pb = get_template(baseline_id, client_id=client_id)
-    if not pb:
-        return HTMLResponse("")
-    return _render("partials/baseline_tactics.html", request, {"baseline": pb})
 
 
 # ---------------------------------------------------------------------------
@@ -1218,9 +1247,11 @@ def api_create_baseline(
     request: Request, user: RequireUser, client_id: ActiveClient,
     name: str = Form(...), description: str = Form(""),
 ):
-    create_playbook(name, description, client_id=client_id)
-    baselines = get_baselines_overview(client_id=client_id)
-    return _render("partials/baselines_list.html", request, {"baselines": baselines})
+    """A new, empty template: the Baselines page reloads showing it, ready for its techniques."""
+    pb = create_playbook(name, description, client_id=client_id)
+    resp = HTMLResponse("")
+    resp.headers["HX-Redirect"] = f"/baselines?baseline_id={quote(pb.id)}&group=baseline"
+    return resp
 
 
 def _decode_rule_raw_data(raw_data):
@@ -1901,15 +1932,9 @@ async def api_import_baseline(
             delete_playbook(pb.id, client_id=client_id)
         raise HTTPException(status_code=422, detail="No valid rows found in file")
 
-    # If imported into an existing baseline, redirect back to its detail page
-    if baseline_id.strip():
-        resp = HTMLResponse("")
-        resp.headers["HX-Redirect"] = f"/baselines/{pb.id}"
-        return resp
-
-    baselines = get_baselines_overview(client_id=client_id)
-    resp = _render("partials/baselines_list.html", request, {"baselines": baselines})
-    resp.headers["HX-Trigger"] = "showToast"
+    # The Baselines page, showing the template the techniques went into.
+    resp = HTMLResponse("")
+    resp.headers["HX-Redirect"] = f"/baselines?baseline_id={quote(pb.id)}&group=baseline"
     return resp
 
 
@@ -1919,13 +1944,9 @@ def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser, c
     if not get_template(baseline_id, client_id=client_id):
         raise HTTPException(status_code=404, detail="Baseline not found")
     delete_playbook(baseline_id, client_id=client_id)
-    hx_target = request.headers.get("HX-Target", "")
-    if not hx_target or hx_target == "body":
-        resp = HTMLResponse("")
-        resp.headers["HX-Redirect"] = "/baselines"
-        return resp
-    baselines = get_baselines_overview(client_id=client_id)
-    return _render("partials/baselines_list.html", request, {"baselines": baselines})
+    resp = HTMLResponse("")
+    resp.headers["HX-Redirect"] = "/baselines"
+    return resp
 
 
 @router.put("/api/baselines/{baseline_id}", response_class=HTMLResponse)
@@ -1936,8 +1957,10 @@ def api_update_baseline(
     if not get_template(baseline_id, client_id=client_id):
         raise HTTPException(status_code=404, detail="Baseline not found")
     update_playbook(baseline_id, name=name, description=description, client_id=client_id)
+    # Reload the Baselines page as it was (its filters are in the address bar), so the new name
+    # shows in the grid and the filter bar alike.
     resp = HTMLResponse("")
-    resp.headers["HX-Redirect"] = f"/baselines/{baseline_id}"
+    resp.headers["HX-Refresh"] = "true"
     return resp
 
 
@@ -1975,46 +1998,69 @@ def _technique_picker_context(step=None) -> Dict[str, Any]:
 
 
 def _actor(user) -> Optional[str]:
-    return (user.name or user.username) if user else None
+    return user.username if user else None
 
 
-@router.post("/api/baselines/{baseline_id}/tactics", response_class=HTMLResponse)
-def api_add_tactic(
-    request: Request, baseline_id: str, user: RequireUser, client_id: ActiveClient,
-    title: str = Form(...), technique_ids: str = Form(""),
-    description: str = Form(""), tactic: str = Form(""),
-):
-    if not get_template(baseline_id, client_id=client_id):
-        raise HTTPException(status_code=404, detail="Baseline not found")
-    add_technique(baseline_id, **_technique_fields(title, tactic, description, technique_ids),
-                  actor=_actor(user), client_id=client_id)
-    resp = _template_techniques(request, baseline_id, client_id)
-    resp.headers["HX-Trigger-After-Swap"] = "tideCloseModal"
+# ── A template's techniques, on the Baselines page: the same window as a system's technique,
+# without Coverage or History (a template has neither until it is applied to a system). ──
+
+def _template_window(request: Request, step_id: str, client_id: str, changed: bool = False):
+    """The template technique window; ``changed`` tells the page to refresh its grid."""
+    from app.inventory_engine import get_template_step_detail
+    detail = get_template_step_detail(step_id, client_id=client_id)
+    if not detail:
+        return HTMLResponse('<div class="empty-state-text">This technique no longer exists.</div>', status_code=404)
+    resp = _render("components/template_step_modal.html", request, {"detail": detail})
+    if changed:
+        resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
 
 
-@router.get("/api/baselines/{baseline_id}/tactics-new", response_class=HTMLResponse)
-def api_new_tactic_form(request: Request, baseline_id: str, user: CurrentUser, client_id: ActiveClient):
-    """Add a technique to a template, in a window over the template page."""
-    if not get_template(baseline_id, client_id=client_id):
+@router.get("/api/baselines/techniques-new", response_class=HTMLResponse)
+def api_new_template_technique_form(request: Request, user: CurrentUser, client_id: ActiveClient,
+                                    baseline_id: str = Query("")):
+    """The template technique window, blank, for a new technique in one of the templates."""
+    templates = [{"id": b["id"], "name": b["name"]} for b in get_baselines_overview(client_id=client_id)]
+    if not templates:
+        raise HTTPException(status_code=404, detail="Create a template first")
+    return _blank_technique_window(
+        request, "components/template_step_modal.html", "/api/baselines/techniques", templates, baseline_id,
+        "Added to this template only. Systems that already use it keep their own copy.")
+
+
+@router.post("/api/baselines/techniques", response_class=HTMLResponse)
+def api_add_template_technique(
+    request: Request, user: RequireUser, client_id: ActiveClient,
+    playbook_id: str = Form(...), title: str = Form(...), technique_ids: str = Form(""),
+    description: str = Form(""), tactic: str = Form(""),
+):
+    """Add a technique to a template, then open it."""
+    if not get_template(playbook_id, client_id=client_id):
         raise HTTPException(status_code=404, detail="Baseline not found")
-    return _render("components/technique_form.html", request, {
-        **_technique_picker_context(),
-        "action": f"/api/baselines/{baseline_id}/tactics", "method": "post",
-        "target": "#baseline-tactics", "heading": "Add technique",
-        "note": "Added to this template only. Systems that already use it keep their own copy.",
-    })
+    step = add_technique(playbook_id, **_technique_fields(title, tactic, description, technique_ids),
+                         actor=_actor(user), client_id=client_id)
+    return _template_window(request, step.id, client_id, changed=True)
+
+
+@router.get("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
+def api_template_technique_window(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
+    """One template technique, in its window."""
+    _template_step_or_404(tactic_id, client_id)
+    return _template_window(request, tactic_id, client_id)
 
 
 @router.get("/api/baselines/tactics/{tactic_id}/edit", response_class=HTMLResponse)
-def api_edit_tactic_form(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient):
-    """Edit a template's technique, in a window over the template page."""
+def api_edit_tactic_form(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+                         part: str = Query("")):
+    """Edit a template technique in place, in its window: ``part`` 'description' (title and
+    description) or 'mitre' (ATT&CK techniques). Save or Cancel returns the window."""
     _template_step_or_404(tactic_id, client_id)
     step = get_playbook_step(tactic_id)
     return _render("components/technique_form.html", request, {
         "step": step, **_technique_picker_context(step),
-        "action": f"/api/baselines/tactics/{tactic_id}", "method": "put",
-        "target": "#baseline-tactics", "heading": "Edit technique",
+        "part": part if part in ("description", "mitre") else "",
+        "action": f"/api/baselines/tactics/{tactic_id}", "method": "put", "target": "#modal-container",
+        "cancel": f"/api/baselines/tactics/{tactic_id}",
         "note": "Changes this template only. Systems that already use it keep their own copy.",
     })
 
@@ -2025,20 +2071,55 @@ def api_update_tactic(
     title: str = Form(...), tactic: str = Form(""), description: str = Form(""),
     technique_ids: str = Form(""),
 ):
-    owner = _template_step_or_404(tactic_id, client_id)
+    _template_step_or_404(tactic_id, client_id)
     current = get_playbook_step(tactic_id)
     update_technique(tactic_id, **_technique_fields(title, tactic, description, technique_ids, current.tactic),
                      actor=_actor(user), client_id=client_id)
-    resp = _template_techniques(request, owner["playbook_id"], client_id)
-    resp.headers["HX-Trigger-After-Swap"] = "tideCloseModal"
-    return resp
+    return _template_window(request, tactic_id, client_id, changed=True)
+
+
+@router.put("/api/baselines/tactics/{tactic_id}/risks", response_class=HTMLResponse)
+def api_template_technique_risks(
+    request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
+    priority: str = Form(""), category: str = Form(""),
+):
+    """A template technique's priority and category: copied to each system it is applied to."""
+    from app.inventory_engine import update_step_risks
+    _template_step_or_404(tactic_id, client_id)
+    update_step_risks(tactic_id, None, priority=priority, category=category, actor=_actor(user), client_id=client_id)
+    return _template_window(request, tactic_id, client_id, changed=True)
 
 
 @router.delete("/api/baselines/tactics/{tactic_id}", response_class=HTMLResponse)
 def api_delete_tactic(request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient):
-    owner = _template_step_or_404(tactic_id, client_id)
+    """Delete a technique from a template. Systems keep their own copies of it."""
+    _template_step_or_404(tactic_id, client_id)
     delete_playbook_step(tactic_id, client_id=client_id)
-    return _template_techniques(request, owner["playbook_id"], client_id)
+    resp = HTMLResponse("")
+    resp.headers["HX-Trigger"] = "stepsChanged"
+    return resp
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/sigma", response_class=HTMLResponse)
+def api_template_technique_sigma(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+                                 q: str = Query("")):
+    _template_step_or_404(tactic_id, client_id)
+    return _sigma_suggestions(request, tactic_id, q, f"/api/baselines/tactics/{tactic_id}")
+
+
+@router.get("/api/baselines/tactics/{tactic_id}/sigma/convert", response_class=HTMLResponse)
+def api_template_sigma_convert_form(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+                                    sigma_id: str = Query(...)):
+    _template_step_or_404(tactic_id, client_id)
+    return _sigma_convert_form(request, client_id, sigma_id, f"/api/baselines/tactics/{tactic_id}", template=True)
+
+
+@router.post("/api/baselines/tactics/{tactic_id}/sigma/convert", response_class=HTMLResponse)
+def api_template_sigma_convert(request: Request, tactic_id: str, user: RequireUser, client_id: ActiveClient,
+                               sigma_id: str = Form(...), pipeline: str = Form("none")):
+    _template_step_or_404(tactic_id, client_id)
+    return _sigma_convert(request, user, client_id, sigma_id, pipeline, f"/api/baselines/tactics/{tactic_id}",
+                          template=True)
 
 
 @router.post("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
@@ -2226,14 +2307,19 @@ def api_search_siem_rules_for_step(
         all_rules = [r for r in all_rules if q_lower in r["name"].lower()]
     mapped.sort(key=lambda r: (r.name or "", scope_of(r)))
     all_rules.sort(key=lambda r: (r["name"] or "", r.get("destination") or ""))
+    # "All" leaves out only the copies listed above it: a tagged rule past the first 50 must still
+    # be offered somewhere, or it cannot be picked at all.
+    mapped = mapped[:50]
+    shown = {f"{r.rule_id}|{scope_of(r)}" for r in mapped}
+    all_rules = [r for r in all_rules
+                 if f"{r['rule_id']}|{r.get('siem_id') or ''}|{r.get('space') or 'default'}" not in shown]
 
     destinations = db.get_client_siems(client_id) or []
     dest_key = lambda d: f"{d.get('id')}|{d.get('space') or 'default'}"  # noqa: E731
     return _render("partials/siem_rule_options.html", request, {
-        "mapped_rules": mapped[:50],
+        "mapped_rules": mapped,
         "all_rules": all_rules[:100],
         "query": q,
-        "mapped_scopes": {f"{rid}|{sc}" for rid, sc in mapped_scopes},
         "dest_names": {dest_key(d): (d.get("name") or d.get("label") or d.get("space")) for d in destinations},
         "dest_colors": {dest_key(d): d.get("color") for d in destinations},
     })
@@ -2303,32 +2389,53 @@ def api_system_step_modal(
     return _step_modal_response(request, system_id, step_id, client_id)
 
 
-def _technique_form(request: Request, system_id: str, client_id: str, step=None, selected_baseline: str = "",
-                    part: str = ""):
-    """Add a technique to one of this system's baselines (a window), or edit one in place: the
-    form replaces its window's Description (``part='description'``: title and description) or
-    MITRE ATT&CK (``part='mitre'``) body; Save or Cancel returns the window."""
-    ctx = {"step": step, "target": "#modal-container", "selected_baseline": selected_baseline,
-           **_technique_picker_context(step)}
-    if step:
-        ctx.update(action=f"/api/systems/{system_id}/steps/{step.id}", method="put", inline=True,
-                   part=part if part in ("description", "mitre") else "",
-                   cancel=f"/api/systems/{system_id}/steps/{step.id}",
-                   note="Changes this system only. The template and other systems are not affected.")
-    else:
-        ctx.update(action=f"/api/systems/{system_id}/steps", method="post", heading="Add technique",
-                   baselines=get_system_baselines(system_id, include_detection_details=False, client_id=client_id),
-                   note="Added to this system's baseline only. The template it came from is not changed.")
-    return _render("components/technique_form.html", request, ctx)
+def _technique_form(request: Request, system_id: str, step, part: str = ""):
+    """Edit a system's technique in place: the form replaces its window's Description
+    (``part='description'``: title and description) or MITRE ATT&CK (``part='mitre'``) body;
+    Save or Cancel returns the window."""
+    return _render("components/technique_form.html", request, {
+        "step": step, "target": "#modal-container", **_technique_picker_context(step),
+        "action": f"/api/systems/{system_id}/steps/{step.id}", "method": "put",
+        "part": part if part in ("description", "mitre") else "",
+        "cancel": f"/api/systems/{system_id}/steps/{step.id}",
+        "note": "Changes this system only. The template and other systems are not affected.",
+    })
+
+
+def _blank_technique_window(request: Request, template_name: str, create_url: str,
+                            baselines: List[Dict[str, str]], selected: str, note: str, **context):
+    """The technique window, blank (Add technique, or "+" beside its < >): every section shows,
+    empty, and the only thing asked for is the title, in Description. Create makes the technique
+    and the window becomes its own. ``selected`` preselects the baseline ("+" adds another to
+    the same one)."""
+    from app.inventory_engine import COVERAGE_KINDS, STEP_CATEGORIES, STEP_PRIORITIES
+    blank = {
+        "step": PlaybookStep(id="", playbook_id=selected), "status": None, "tactic": "",
+        "risk_labels": {"priority": dict(STEP_PRIORITIES), "category": dict(STEP_CATEGORIES),
+                        "coverage_kind": dict(COVERAGE_KINDS)},
+        "blind_spots": [], "detections": [], "watched": [], "mapped_count": 0, "evidence_score": None,
+        "technique_ids": [], "techniques": [], "history": [], "history_users": [],
+        "baseline_id": selected, "baseline_name": "",
+    }
+    return _render(template_name, request, {
+        **context, "detail": blank,
+        "new": {"create_url": create_url, "baselines": baselines, "selected": selected, "note": note},
+    })
 
 
 @router.get("/api/systems/{system_id}/steps/{step_id}/sigma", response_class=HTMLResponse)
 def api_system_technique_sigma(request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
                                q: str = Query("")):
-    """Sigma rules suggested for a technique from its ATT&CK techniques (or, with none, its
-    tactic), or, with ``q``, any SigmaHQ rule matching it. Potential rules -- never coverage."""
-    from app import sigma_helper as sigma_mod
+    """Sigma rules for a system's technique (see _sigma_suggestions)."""
     _system_step_or_404(system_id, step_id, client_id)
+    return _sigma_suggestions(request, step_id, q, f"/api/systems/{system_id}/steps/{step_id}")
+
+
+def _sigma_suggestions(request: Request, step_id: str, q: str, technique_url: str):
+    """Sigma rules suggested for a technique from its ATT&CK techniques (or, with none, its
+    tactic), or, with ``q``, any SigmaHQ rule matching it. Potential rules -- never coverage.
+    ``technique_url`` is the technique window's own address (a system's or a template's)."""
+    from app import sigma_helper as sigma_mod
     step = get_playbook_step(step_id)
     ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
     q = q.strip()
@@ -2349,7 +2456,7 @@ def api_system_technique_sigma(request: Request, system_id: str, step_id: str, u
     return _render("partials/technique_sigma.html", request, {
         "rules": rules[:50 if q else 25], "query": q, "technique_ids": ids,
         "tactic": canonical_tactic(step.tactic) if step.tactic else "",
-        "system_id": system_id, "step_id": step_id,
+        "technique_url": technique_url,
     })
 
 
@@ -2448,13 +2555,17 @@ def api_technique_sigma_convert_form(
     sigma_id: str = Query(...),
 ):
     """Convert a suggested Sigma rule: choose the pipeline, then the Create Rule form opens."""
-    from app import sigma_helper as sigma_mod
     _system_step_or_404(system_id, step_id, client_id)
+    return _sigma_convert_form(request, client_id, sigma_id, f"/api/systems/{system_id}/steps/{step_id}")
+
+
+def _sigma_convert_form(request: Request, client_id: str, sigma_id: str, technique_url: str, template: bool = False):
+    from app import sigma_helper as sigma_mod
     rule = sigma_mod.get_rule_by_id(sigma_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Sigma rule not found")
     return _render("partials/technique_sigma_convert.html", request, {
-        "rule": rule, "system_id": system_id, "step_id": step_id, "pipelines": _client_pipelines(client_id),
+        "rule": rule, "technique_url": technique_url, "template": template, "pipelines": _client_pipelines(client_id),
     })
 
 
@@ -2463,14 +2574,20 @@ def api_technique_sigma_convert(
     request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient,
     sigma_id: str = Form(...), pipeline: str = Form("none"),
 ):
+    """Convert a system technique's Sigma rule (see _sigma_convert)."""
+    _system_step_or_404(system_id, step_id, client_id)
+    return _sigma_convert(request, user, client_id, sigma_id, pipeline, f"/api/systems/{system_id}/steps/{step_id}")
+
+
+def _sigma_convert(request: Request, user, client_id: str, sigma_id: str, pipeline: str, technique_url: str,
+                   template: bool = False):
     """Convert the Sigma rule (Elastic, Lucene) and open the Create Rule form filled in with it.
-    Creating the rule does not map it here: mapping it to this technique is a separate step."""
+    Creating the rule does not map it anywhere: mapping it to a technique is a separate step."""
     import yaml
     from app import sigma_helper as sigma_mod
     from app.api.rules import _build_rule_form_context
     from app.api.sigma import rule_form_prefill
     from app.services.database import get_database_service
-    _system_step_or_404(system_id, step_id, client_id)
     rule = sigma_mod.get_rule_by_id(sigma_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Sigma rule not found")
@@ -2484,7 +2601,7 @@ def api_technique_sigma_convert(
     )
     if not ok:
         return _render("partials/technique_sigma_convert.html", request, {
-            "rule": rule, "system_id": system_id, "step_id": step_id,
+            "rule": rule, "technique_url": technique_url, "template": template,
             "pipelines": _client_pipelines(client_id), "selected": pipeline, "error": query,
         })
     prefill = rule_form_prefill(yaml.safe_load(raw_yaml) or {}, query, "elasticsearch", "", user.username or "")
@@ -2496,10 +2613,19 @@ def api_technique_sigma_convert(
 
 
 @router.get("/api/systems/{system_id}/steps-new", response_class=HTMLResponse)
-def api_system_technique_new(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
+def api_system_technique_new(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
+                             baseline_id: str = Query("")):
+    """The technique window, blank, for a new technique in one of this system's baselines."""
     missing = _system_not_found(system_id, client_id)
-    return missing or _technique_form(request, system_id, client_id,
-                                      selected_baseline=request.query_params.get("baseline_id", ""))
+    if missing:
+        return missing
+    baselines = [{"id": b["playbook_id"], "name": b["playbook_name"]}
+                 for b in get_system_baselines(system_id, include_detection_details=False, client_id=client_id)]
+    if not baselines:
+        raise HTTPException(status_code=404, detail="Apply or add a baseline to this system first")
+    return _blank_technique_window(
+        request, "components/step_modal.html", f"/api/systems/{system_id}/steps", baselines, baseline_id,
+        "Added to this system's baseline only. The template it came from is not changed.", system_id=system_id)
 
 
 @router.post("/api/systems/{system_id}/steps", response_class=HTMLResponse)
@@ -2525,7 +2651,7 @@ def api_system_technique_add(
 def api_system_technique_edit(request: Request, system_id: str, step_id: str, user: CurrentUser, client_id: ActiveClient,
                               part: str = Query("")):
     _system_step_or_404(system_id, step_id, client_id)
-    return _technique_form(request, system_id, client_id, get_playbook_step(step_id), part=part)
+    return _technique_form(request, system_id, get_playbook_step(step_id), part=part)
 
 
 @router.put("/api/systems/{system_id}/steps/{step_id}", response_class=HTMLResponse)
@@ -2621,7 +2747,7 @@ async def api_set_coverage_destinations(
             scopes.append(pair)
     set_system_coverage_destinations(
         system_id, scopes, client_id=client_id,
-        actor=(user.name or user.username) if user else None,
+        actor=_actor(user),
     )
     resp = _render("partials/system_siem_coverage_dialog.html", request, {
         "system_id": system_id, "saved": True, **_coverage_destination_context(system_id, client_id),
@@ -2778,7 +2904,7 @@ def api_edit_blind_spot(
     if blind_spot_id not in owned:
         raise HTTPException(status_code=404, detail="Mark not found on this technique")
     update_blind_spot(blind_spot_id, reason.strip(), override_type, review_by=_review_date(review_by),
-                      actor=user.username if user else None, client_id=client_id)
+                      actor=_actor(user), client_id=client_id)
     resp = _step_modal_response(request, system_id, entity_id, client_id)
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
@@ -2793,7 +2919,7 @@ def api_remove_blind_spot(
     if entity_type == "tactic":
         _system_step_or_404(system_id, entity_id, client_id)
     remove_blind_spot(blind_spot_id, client_id=client_id,
-                      actor=(user.name or user.username) if user else None)
+                      actor=_actor(user))
     if entity_type == "tactic":
         resp = _step_modal_response(request, system_id, entity_id, client_id)
         resp.headers["HX-Trigger"] = "stepsChanged"

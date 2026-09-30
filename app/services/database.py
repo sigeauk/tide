@@ -100,7 +100,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 77
+SCHEMA_VERSION = 78
 
 # Default colours offered (and auto-assigned) for a linked SIEM+space destination -- distinct
 # from each other at a glance, and legible as small dots/pills in both light and dark themes.
@@ -3599,6 +3599,23 @@ class DatabaseService:
             self._set_schema_version(conn, 77)
             logger.info("Migration 77: relinked %d rule mapping(s) recorded by Kibana object id.", relinked)
 
+        # ── Migration 78: per-integration "skip TLS verification" ──────
+        # Every outbound HTTPS integration (SIEM links, OpenCTI, GitLab,
+        # Keycloak, CTI connectors) used to either hardcode verify=False
+        # unconditionally or have no way to trust a self-signed cert at
+        # all. TIDE is built to run standalone against self-signed
+        # certs, so each integration now carries its own opt-out,
+        # defaulting to verification ON.
+        if current_version < 78:
+            existing_tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
+            for tbl in ("siem_inventory", "opencti_inventory", "gitlab_inventory",
+                        "keycloak_inventory", "cti_connectors"):
+                if tbl in existing_tables:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS tls_insecure BOOLEAN DEFAULT false")
+            self._set_schema_version(conn, 78)
+            logger.info("Migration 78: added tls_insecure to siem_inventory, opencti_inventory, "
+                        "gitlab_inventory, keycloak_inventory, cti_connectors (defaults to verification on).")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -4063,6 +4080,18 @@ class DatabaseService:
             cols = ["id", "username", "email", "full_name", "keycloak_id",
                     "auth_provider", "is_active", "is_superadmin", "created_at", "last_login"]
             return [dict(zip(cols, r)) for r in rows]
+
+    def get_actor_aliases(self) -> Dict[str, str]:
+        """Every name a user has been recorded under in a history (username, email, full name),
+        lower-cased, to their username, so one person reads as one person whichever was stored."""
+        with self.get_shared_connection() as conn:
+            rows = conn.execute("SELECT username, email, full_name FROM users").fetchall()
+        aliases: Dict[str, str] = {}
+        for username, email, full_name in rows:
+            for alias in (full_name, email, username):   # a username wins over another's full name
+                if alias and alias.strip():
+                    aliases[" ".join(alias.lower().split())] = username
+        return aliases
 
     def create_user(self, username: str, email: str = None, full_name: str = None,
                     password_hash: str = None, keycloak_id: str = None,
@@ -6244,17 +6273,33 @@ class DatabaseService:
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """Get audit trail for a specific rule (scoped by siem_id + space).
-        
+
+        "synced" is a side effect of many other actions (promote, demote,
+        restore, bulk edit and the Sync-this-rule button all call the same
+        refresh-and-record path), so it collapses to one entry per day —
+        that day's latest — instead of listing every refresh. Every other
+        action (created, edited, validated, promoted, ...) is a deliberate
+        operator event and is never collapsed.
+
         Returns a list of history records sorted by creation time (newest first).
         """
         import json as _json
         with self.get_connection() as conn:
             self._ensure_rule_lifecycle_history_table(conn)
             rows = conn.execute(
-                "SELECT id, action, actor_user_id, actor_name, detail, created_at "
-                "FROM rule_lifecycle_history "
-                "WHERE rule_id = ? AND siem_id = ? AND space = ? "
-                "ORDER BY created_at DESC LIMIT ?",
+                """
+                SELECT id, action, actor_user_id, actor_name, detail, created_at
+                FROM (
+                    SELECT *, CASE WHEN action = 'synced' THEN ROW_NUMBER() OVER (
+                        PARTITION BY action, CAST(created_at AS DATE) ORDER BY created_at DESC
+                    ) ELSE 1 END AS rn
+                    FROM rule_lifecycle_history
+                    WHERE rule_id = ? AND siem_id = ? AND space = ?
+                )
+                WHERE rn = 1
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
                 [rule_id, siem_id, space, limit],
             ).fetchall()
         
@@ -6494,12 +6539,28 @@ class DatabaseService:
         space: str,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Return score snapshots for one rule, newest first."""
+        """Return one score snapshot per calendar day (the day's latest), newest first.
+
+        A rule can be rescored many times a day (every sync); without this, the
+        history table and score-over-time chart fill up with same-day noise
+        instead of showing how the score moved day to day.
+        """
         with self.get_connection() as conn:
             self._ensure_rule_score_history_table(conn)
             rows = conn.execute(
-                "SELECT score, quality_score, meta_score, score_mapping, score_field_type, score_search_time, score_language, score_note, score_override, score_tactics, score_techniques, score_author, score_highlights, created_at, scoring_version "
-                "FROM rule_score_history WHERE rule_id = ? AND siem_id = ? AND space = ? ORDER BY created_at DESC LIMIT ?",
+                """
+                SELECT score, quality_score, meta_score, score_mapping, score_field_type, score_search_time, score_language, score_note, score_override, score_tactics, score_techniques, score_author, score_highlights, created_at, scoring_version
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY CAST(created_at AS DATE) ORDER BY created_at DESC
+                    ) AS rn
+                    FROM rule_score_history
+                    WHERE rule_id = ? AND siem_id = ? AND space = ?
+                )
+                WHERE rn = 1
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
                 [rule_id, siem_id, space, limit],
             ).fetchall()
         return [
@@ -8860,6 +8921,63 @@ class DatabaseService:
             if r[0]
         ]
 
+    # kind -> (object table, its ATT&CK id column, object->technique edge table, edge's object column)
+    _MITRE_TECHNIQUE_EDGES = {
+        "group": ("mitre_groups", "group_id", "mitre_group_techniques", "group_stix_id"),
+        "software": ("mitre_software", "software_id", "mitre_software_techniques", "software_stix_id"),
+        "campaign": ("mitre_campaigns", "campaign_id", "mitre_campaign_techniques", "campaign_stix_id"),
+        "mitigation": ("mitre_mitigations", "mitigation_id", "mitre_technique_mitigations", "mitigation_stix_id"),
+        "tactic": ("mitre_tactics", "tactic_id", "mitre_technique_tactics", "tactic_stix_id"),
+    }
+
+    def get_mitre_technique_ids_by(self, kind: str, domain: str = "enterprise") -> Dict[str, Set[str]]:
+        """Every group's (software's, campaign's, mitigation's, tactic's) ATT&CK technique ids, upper-case and
+        sub-techniques included, in one query, so a list of them can be scored against the client's
+        covered techniques."""
+        table, id_col, edges, edge_col = self._MITRE_TECHNIQUE_EDGES[kind]
+        include_all = (domain or "").strip().lower() == "all"
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT UPPER(o.{id_col}), UPPER(mt.id)
+                FROM {table} o
+                JOIN {edges} e
+                  ON e.{edge_col} = o.stix_id AND LOWER(e.domain) = LOWER(o.domain)
+                JOIN mitre_techniques mt
+                  ON mt.stix_id = e.technique_stix_id AND LOWER(mt.domain) = LOWER(e.domain)
+                {"" if include_all else "WHERE LOWER(o.domain) = LOWER(?)"}
+                """,
+                [] if include_all else [domain],
+            ).fetchall()
+        out: Dict[str, Set[str]] = {}
+        for oid, tid in rows:
+            if oid and tid:
+                out.setdefault(oid, set()).add(tid)
+        return out
+
+    def get_mitre_campaign_groups(self, domain: str = "enterprise") -> Dict[str, List[Tuple[str, str]]]:
+        """Every campaign's attributed groups, {campaign id: [(group id, name), ...]}, in one query."""
+        include_all = (domain or "").strip().lower() == "all"
+        with self.get_shared_connection() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT UPPER(mc.campaign_id), mg.group_id, mg.name
+                FROM mitre_campaigns mc
+                JOIN mitre_campaign_groups mcg
+                  ON mcg.campaign_stix_id = mc.stix_id AND LOWER(mcg.domain) = LOWER(mc.domain)
+                JOIN mitre_groups mg
+                  ON mg.stix_id = mcg.group_stix_id AND LOWER(mg.domain) = LOWER(mcg.domain)
+                {"" if include_all else "WHERE LOWER(mc.domain) = LOWER(?)"}
+                ORDER BY mg.name
+                """,
+                [] if include_all else [domain],
+            ).fetchall()
+        out: Dict[str, List[Tuple[str, str]]] = {}
+        for cid, gid, name in rows:
+            if cid and gid and all(g != gid for g, _ in out.get(cid, [])):
+                out.setdefault(cid, []).append((gid, name or gid))
+        return out
+
     def get_mitre_group_detail(self, group_id: str, domain: str = "enterprise") -> Dict[str, Any]:
         """Return one group plus ATT&CK techniques it uses."""
         gid = (group_id or "").strip().upper()
@@ -9204,6 +9322,23 @@ class DatabaseService:
                 params,
             ).fetchall()
 
+            campaigns = conn.execute(
+                f"""
+                SELECT mc.campaign_id, mc.name, COALESCE(MAX(NULLIF(mcs.use_description, '')), '')
+                FROM mitre_campaign_software mcs
+                                JOIN mitre_software ms
+                                    ON ms.stix_id = mcs.software_stix_id
+                                 AND LOWER(ms.domain) = LOWER(mcs.domain)
+                                JOIN mitre_campaigns mc
+                                    ON mc.stix_id = mcs.campaign_stix_id
+                                 AND LOWER(mc.domain) = LOWER(mcs.domain)
+                WHERE UPPER(ms.software_id) = ?{where_domain}
+                GROUP BY mc.campaign_id, mc.name
+                ORDER BY mc.name
+                """,
+                params,
+            ).fetchall()
+
             software_sources = self._mitre_sources_for_id(conn, "mitre_software", "software_id", sid)
             tech_source_map = self._mitre_sources_map(conn, "mitre_techniques", "id", [r[0] for r in techniques if r[0]])
             group_source_map = self._mitre_sources_map(conn, "mitre_groups", "group_id", [r[0] for r in groups if r[0]])
@@ -9236,6 +9371,10 @@ class DatabaseService:
                     "sources": group_source_map.get((r[0] or "").upper(), []),
                 }
                 for r in groups
+            ],
+            "campaigns": [
+                {"id": r[0], "name": r[1], "use": r[2], "url": f"/mitre/campaigns/{r[0]}"}
+                for r in campaigns
             ],
         }
 

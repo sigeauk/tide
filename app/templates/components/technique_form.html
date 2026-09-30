@@ -1,28 +1,16 @@
 {#
-  Add or edit one technique: title, ATT&CK techniques (tactic -> technique, as the rule form picks
-  them) and description.
-    - Adding (to a template, or to one of a system's baselines) opens as a window.
-    - Editing a template's technique opens as a window over the Baselines page.
-    - Editing a system's technique (inline) replaces one section of its window: part 'description'
-      (title and description) or 'mitre' (ATT&CK techniques); the other fields go along unchanged.
-      Save and Cancel both return the whole window.
-  Context: action, method (post | put), target, note, technique_groups, selected_ids,
-           step (when editing), heading (windows), baselines (adding to a system: its own baselines),
-           inline + cancel + part (a system's technique, edited in place).
+  Edit a technique in place, in its window (a system's or a template's): part 'description'
+  (title and description) or 'mitre' (ATT&CK techniques, tactic -> technique, as the rule form
+  picks them) replaces that section; the other fields go along unchanged. Save and Cancel both
+  return the whole window. (A new technique starts in its window, blank:
+  partials/technique_new_form.html.)
+  Context: action, method (put), target, note, technique_groups, selected_ids, step, cancel, part.
 #}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon %}
 {% from "components/mitre_picker.html" import mitre_picker %}
 
-{% macro fields() -%}
+<div class="tf-inline">
 <form class="tf-form" hx-{{ method }}="{{ action }}" hx-target="{{ target }}" hx-swap="innerHTML" hx-include="unset">
-  {% if baselines %}
-  <div>
-    <label class="form-label" for="tf-baseline">Baseline</label>
-    <select id="tf-baseline" name="playbook_id" class="form-input form-select" required>
-      {% for b in baselines %}<option value="{{ b.playbook_id }}"{% if b.playbook_id == selected_baseline %} selected{% endif %}>{{ b.playbook_name }}</option>{% endfor %}
-    </select>
-  </div>
-  {% endif %}
   {% if part == 'mitre' %}
   <input type="hidden" name="title" value="{{ step.title }}">
   <input type="hidden" name="description" value="{{ step.description or '' }}">
@@ -50,27 +38,9 @@
   {% endif %}
   {% if note %}<p class="text-muted tf-form__note">{{ icon('info', '12') }} {{ note }}</p>{% endif %}
   <div class="modal-actions">
-    {% if cancel %}
     <button name="Cancel" type="button" class="btn btn-secondary"
             hx-get="{{ cancel }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">Cancel</button>
-    {% else %}
-    <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
-    {% endif %}
-    <button name="Save Technique" type="submit" class="btn btn-primary">{{ 'Save' if step else 'Add technique' }}</button>
+    <button name="Save Technique" type="submit" class="btn btn-primary">Save</button>
   </div>
 </form>
-{%- endmacro %}
-
-{% if inline %}
-<div class="tf-inline">{{ fields() }}</div>
-{% else %}
-<div name="Technique Form" class="modal-overlay" data-rm-overlay>
-  <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="tf-title">
-    <div class="modal-header">
-      <h3 class="modal-title" id="tf-title">{{ icon('edit-2' if step else 'plus', '16') }} {{ heading }}</h3>
-      <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
-    </div>
-    {{ fields() }}
-  </div>
 </div>
-{% endif %}

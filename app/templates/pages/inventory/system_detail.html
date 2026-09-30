@@ -202,7 +202,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Add Device</h3>
-            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
+            <button   name="Close Modal" class="modal-x"
                     onclick="document.getElementById('add-host-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Submit Hosts" hx-post="/api/inventory/systems/{{ system.id }}/hosts"
@@ -239,7 +239,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Edit System</h3>
-            <button   name="Close Modal" class="u-bg-none" style="border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1"
+            <button   name="Close Modal" class="modal-x"
                     onclick="document.getElementById('edit-env-modal').style.display='none'">&#x2715;</button>
         </div>
         <form name="Update Systems" hx-put="/api/inventory/systems/{{ system.id }}"

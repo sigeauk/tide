@@ -1,0 +1,105 @@
+{#
+  Manage one template, from its group on the Baselines page: rename it or change its description,
+  add a technique, apply it to a system (which gets its own copy), import techniques into it,
+  export it, or delete it (systems keep their own copies).
+  Context: baseline (the template, with its techniques), systems (this client's systems; empty
+  when the user may not edit systems, as applying changes one).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+<div name="Manage Template Dialog" class="modal-overlay" data-rm-overlay data-template-dialog>
+    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="tpl-manage-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="tpl-manage-title">{{ icon('layers', '16') }} {{ baseline.name }}</h3>
+            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+        </div>
+
+        <form class="sys-dialog__form" hx-put="/api/baselines/{{ baseline.id }}" hx-swap="none" hx-include="unset">
+            <label class="form-label" for="tpl-name">Name</label>
+            <input id="tpl-name" name="name" class="form-input" required value="{{ baseline.name }}">
+            <label class="form-label" for="tpl-desc">Description</label>
+            <textarea id="tpl-desc" name="description" class="form-input" rows="3">{{ baseline.description or '' }}</textarea>
+            <p class="text-muted sys-dialog__hint">{{ icon('info', '12') }} Changes this template only. Systems it was applied to keep their own copy, with its own name.</p>
+            <div class="modal-actions">
+                <button name="Add Technique" type="button" class="btn btn-secondary"
+                        hx-get="/api/baselines/techniques-new?baseline_id={{ baseline.id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon_text('plus', 'Add technique', '13') }}
+                </button>
+                <button name="Save Baseline" type="submit" class="btn btn-primary">{{ icon_text('save', 'Save', '13') }}</button>
+            </div>
+        </form>
+
+        {% if systems %}
+        <div class="sys-dialog__apply">
+            <label class="form-label" for="tpl-apply">Apply to a system</label>
+            <div class="sys-dialog__apply-row">
+                <select id="tpl-apply" class="form-input form-select">
+                    {% for s in systems %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                </select>
+                <button name="Apply Baseline" type="button" class="btn btn-primary"
+                        onclick="htmx.ajax('POST', '/api/baselines/{{ baseline.id }}/apply/' + encodeURIComponent(document.getElementById('tpl-apply').value), {swap: 'none'})">
+                    {{ icon_text('plus', 'Apply', '13') }}
+                </button>
+            </div>
+            <p class="text-muted sys-dialog__hint">The system gets its own copy, with each technique's risks as a starting point, and opens showing it. Changes made there never touch this template.</p>
+        </div>
+        {% endif %}
+
+        <details class="sys-dialog__new">
+            <summary class="btn btn-secondary btn-sm">{{ icon_text('upload', 'Import techniques', '13') }}</summary>
+            <form class="sys-dialog__form" hx-post="/api/baselines/import" hx-encoding="multipart/form-data" hx-swap="none"
+                  hx-include="unset" hx-disabled-elt="find button[type='submit']">
+                <input type="hidden" name="baseline_id" value="{{ baseline.id }}">
+                <p class="text-muted sys-dialog__hint">A CSV or Excel file with columns <strong>Title</strong>, <strong>Tactic</strong>, <strong>Technique</strong> (ATT&amp;CK id) and <strong>Description</strong>. Its rows are added to this template.</p>
+                <input type="file" name="file" class="form-input" required accept=".csv,.xlsx,.xls">
+                <div><button name="Import Techniques" type="submit" class="btn btn-primary btn-sm">{{ icon_text('upload', 'Import', '13') }}</button></div>
+            </form>
+        </details>
+
+        <details class="sys-dialog__new">
+            <summary class="btn btn-secondary btn-sm">{{ icon_text('download', 'Export', '13') }}</summary>
+            <div class="sys-dialog__form" data-tpl-export data-baseline-id="{{ baseline.id }}">
+                <label class="form-label" for="tpl-export-format">Format</label>
+                <select id="tpl-export-format" class="form-input form-select">
+                    <option value="pdf">PDF report</option>
+                    <option value="markdown">Markdown report</option>
+                    <option value="json">TIDE JSON (to import elsewhere)</option>
+                </select>
+                <label class="form-label" for="tpl-export-classification">Classification</label>
+                <select id="tpl-export-classification" class="form-input form-select">
+                    {% for c in ['Official', 'Confidential', 'Secret', 'Top Secret'] %}<option value="{{ c }}">{{ c }}</option>{% endfor %}
+                </select>
+                <label class="form-label" for="tpl-export-audience">Audience</label>
+                <select id="tpl-export-audience" class="form-input form-select">
+                    <option value="executive">Executive / CISO</option>
+                    <option value="technical">Technical / Engineer</option>
+                </select>
+                <div><button name="Download Export" type="button" class="btn btn-primary btn-sm" onclick="tideExportTemplate(this)">{{ icon_text('download', 'Download', '13') }}</button></div>
+            </div>
+        </details>
+
+        <div class="modal-actions">
+            <button name="Delete Baseline" type="button" class="btn btn-danger tpl-delete"
+                    hx-delete="/api/baselines/{{ baseline.id }}" hx-swap="none" hx-include="unset"
+                    hx-confirm="Delete the template {{ baseline.name }} and its techniques? Systems it was applied to keep their own copy.">
+                {{ icon_text('trash-2', 'Delete template', '13') }}
+            </button>
+            <button name="Close" type="button" class="btn btn-secondary" data-rm-close>Close</button>
+        </div>
+    </div>
+</div>
+<script>
+  // Export: a report (PDF or Markdown, for an audience and classification) or the template as TIDE JSON.
+  function tideExportTemplate(btn) {
+    var box = btn.closest('[data-tpl-export]'), id = box.getAttribute('data-baseline-id');
+    var format = document.getElementById('tpl-export-format').value;
+    if (format === 'json') {
+      window.location.href = '/api/baselines/' + encodeURIComponent(id) + '/export.json?include_rules=false';
+      return;
+    }
+    var params = new URLSearchParams({
+      mode: document.getElementById('tpl-export-audience').value, format: format,
+      classification: document.getElementById('tpl-export-classification').value,
+    });
+    window.location.href = '/api/baselines/' + encodeURIComponent(id) + '/report?' + params.toString();
+  }
+</script>

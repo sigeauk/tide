@@ -1421,6 +1421,21 @@ a:hover { color: var(--color-primary); }
   gap: 0.5rem;
 }
 
+/* Column header row above a .cve-list (CTI/CVE list pages) — was
+   duplicated inline, byte-for-byte, on every list page. */
+.cve-list-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
 .cve-card-item {
   background: var(--color-bg-surface);
   border: var(--border-card);
@@ -1744,6 +1759,16 @@ a:hover { color: var(--color-primary); }
   display: flex;
   flex-shrink: 0;
 }
+.client-section-toggle__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  flex: 1;
+}
+.client-section-toggle__actions { display: flex; gap: 0.5rem; align-items: center; }
+.client-section-empty { text-align: center; padding: 2rem; color: var(--color-text-muted); }
+.client-section-empty p:first-of-type { margin-top: 0.75rem; }
 
 
 /* ================================================================
@@ -3272,6 +3297,25 @@ body.light {
 .text-primary { color: var(--color-primary); }
 .text-secondary { color: var(--color-text-secondary); }
 
+/* CTI detail pages (actor/indicator/report) — was duplicated inline on
+   every page: the "Back to X" link above the title, small separators
+   between inline subtitle badges, and muted hint text under a heading. */
+.cti-back-link {
+  margin: 0 0 0.25rem 0;
+}
+.cti-back-link a {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  text-decoration: none;
+}
+.cti-back-link a span { vertical-align: middle; }
+.cti-meta-sep { margin-left: 0.5rem; }
+.cti-hint {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  margin-top: 0;
+}
+
 
 /* ================================================================
  * USER MENU DROPDOWN  (Layer 4)
@@ -3350,6 +3394,7 @@ body.light {
   margin-bottom: 0.75rem;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
 }
 
@@ -4022,6 +4067,24 @@ body.light {
   font-size: 1.25rem;
   font-weight: 600;
   color: var(--color-text);
+}
+.modal-title--accent { color: var(--color-primary); }
+
+/* The bare "✕" that closes a dialog (was the same inline style on ~20 dialogs). */
+.modal-x {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+/* One-paragraph explanation under a dialog's header. */
+.modal-intro {
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  margin: 0 0 1rem;
 }
 
 .modal-section {
@@ -5907,6 +5970,7 @@ body.is-resizing-slide-panel {
   line-height: 1.4;
   white-space: nowrap;
 }
+.badge.badge--xs { font-size: 0.68rem; }
 .badge-success {
   background: var(--color-success-bg);
   color: var(--color-success-text);
@@ -6240,7 +6304,74 @@ body.is-resizing-slide-panel {
   color: var(--color-primary);
 }
 
+.gen-tech-row input[type="checkbox"] {
+  accent-color: var(--color-primary);
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* No Sigma index yet: a compact empty state inside the dialog. */
+.gen-empty { padding: 1.25rem 0.9rem; margin: 0.35rem 0; }
+.gen-empty p { margin: 0; }
+.gen-empty p:first-of-type { margin: 0.45rem 0 0.25rem; }
+
+/* Button row + "working…" indicator, shared by the dialog and its preview. */
+.gen-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  align-items: center;
+  margin-top: 1rem;
+}
+.gen-actions--tight { margin-top: 0.75rem; }
+.gen-indicator { font-size: 0.82rem; color: var(--color-text-muted); }
+.gen-indicator svg { animation: spin 1s linear infinite; }
+
+/* Generation preview (rendered into #gen-preview-area) */
+.gen-preview {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 1rem;
+  margin-top: 0.75rem;
+}
+.gen-preview__title { font-size: 0.9rem; margin: 0 0 0.5rem; color: var(--color-primary); }
+.gen-preview__summary { font-size: 0.82rem; color: var(--color-text-muted); margin: 0 0 0.5rem; }
+.gen-preview__empty { font-size: 0.85rem; color: var(--color-warning); margin: 0; }
+.gen-preview__list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 /* Preview baseline rows */
+.gen-preview-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.gen-preview-row input[type="checkbox"] {
+  accent-color: var(--color-primary);
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+.gen-preview-row__name { flex: 1; color: var(--color-text); }
+.gen-preview-exists .gen-preview-row__name { opacity: 0.6; }
+.gen-preview-row__flag { font-size: 0.72rem; color: var(--color-warning); margin-left: 0.3rem; }
+.gen-preview-row__count {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  min-width: 2rem;
+  text-align: right;
+}
 .gen-preview-row:hover {
   background: var(--color-bg-layer-4-hover);
 }
@@ -7556,6 +7687,7 @@ body.is-resizing-slide-panel {
 .rm-fold > summary .rm-fold__count { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .rm-panel { padding: 0.85rem; }
 .rm-panel__head { gap: 0.5rem; }
+.rm-panel[data-fold] > .rm-panel__head { cursor: pointer; }
 .rm-panel__title { line-height: 1.2; }
 .rm-panel.is-collapsed .rm-panel__head { flex-wrap: nowrap; margin-bottom: 0; min-height: 1.5rem; }
 
@@ -7710,6 +7842,29 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rh-more__sep { height: 1px; margin: 0.25rem 0.2rem; background: var(--color-border); }
 .rh-more__item.htmx-request .htmx-indicator { display: inline-flex; align-items: center; gap: 0.6rem; }
 .rh-more__item.htmx-request .sync-default { display: none; }
+
+/* Sync/Sync-with-mappings: hover reveals a submenu to sync one linked
+   destination only, instead of every one. Flies out left since the
+   parent menu is already right-aligned near the page edge. */
+.rh-more__item-wrap { position: relative; }
+.rh-more__submenu {
+  display: none;
+  position: absolute;
+  right: 100%;
+  top: 0;
+  margin-right: 0.25rem;
+  min-width: 14rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: var(--color-bg-action);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: 61;
+}
+.rh-more__item-wrap:hover > .rh-more__submenu,
+.rh-more__item-wrap:focus-within > .rh-more__submenu { display: block; }
 
 /* ── Rule Health: keep the cards exactly as wide as the metrics and filters above them ──
  * The scroll region keeps a scrollbar gutter plus padding on its right; JS measures that gutter
@@ -7914,7 +8069,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-group__head::-webkit-details-marker { display: none; }
 .sys-group__chev svg { transition: transform var(--transition-fast); }
 .sys-group:not([open]) > .sys-group__head .sys-group__chev svg { transform: rotate(-90deg); }
-.sys-group__label { font-weight: 600; }
+.sys-group__label { font-weight: 600; display: inline-flex; align-items: center; gap: 0.4rem; }
+.sys-tactic { display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
 .sys-group--inner .sys-group__label { font-size: 0.85rem; }
 .sys-group__meta { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
 .sys-group__body { padding: 0 0.8rem 0.8rem; }
@@ -7928,6 +8084,68 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-table th:nth-child(5) { width: 8.5rem; }
 .sys-table th:nth-child(6) { width: 9rem; }
 
+/* ── MITRE catalogue pages (pages/mitre/catalog.html) ──
+   The baseline card and table, one ATT&CK object each. Left edge = how much of the object's
+   tradecraft the active client's enabled rules cover. */
+.cat-filters { margin-bottom: 0.85rem; }
+.cat-card, .cat-card:hover { border-left: 3px solid var(--color-border-strong); }
+.cat-card { min-height: 9.5rem; }
+.cat-card--full, .cat-card--full:hover { border-left-color: var(--color-success); }
+.cat-card--partial, .cat-card--partial:hover { border-left-color: var(--color-warning); }
+.cat-card--none, .cat-card--none:hover { border-left-color: var(--color-danger); }
+.cat-card__sub { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cat-card__id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.72rem; font-weight: 700; color: var(--color-text-secondary); }
+.cat-card__summary {
+  margin: 0; font-size: 0.76rem; line-height: 1.45; color: var(--color-text-muted);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.cat-table { min-width: 48rem; }
+.cat-table .cat-cell-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; white-space: nowrap; }
+.cat-table--groups th:nth-child(1) { width: 6rem; }
+.cat-table--groups th:nth-child(4) { width: 7.5rem; }
+.cat-table--groups th:nth-child(5) { width: 9.5rem; }
+.cat-table--groups th:nth-child(6) { width: 9rem; }
+.cat-table--technique th:nth-child(1) { width: 7rem; }
+.cat-table--technique th:nth-child(4) { width: 6rem; }
+.cat-table--technique th:nth-child(5) { width: 11.5rem; }
+.cat-table--technique th:nth-child(6) { width: 9rem; }
+.cat-table--software th:nth-child(1), .cat-table--campaigns th:nth-child(1), .cat-table--mitigations th:nth-child(1) { width: 6rem; }
+.cat-table--software th:nth-child(3) { width: 6rem; }
+.cat-table--campaigns th:nth-child(4) { width: 11rem; }
+.cat-table--tactic th:nth-child(1) { width: 6rem; }
+.cat-table--tactic th:nth-child(3) { width: 7.5rem; }
+.cat-table--tactic th:nth-child(4) { width: 6rem; }
+.cat-table--tactic th:nth-child(5) { width: 9.5rem; }
+.cat-table--tactic th:nth-child(6) { width: 9rem; }
+.cat-table--software th:nth-child(5), .cat-table--campaigns th:nth-child(5), .cat-table--mitigations th:nth-child(4) { width: 7.5rem; }
+.cat-table--software th:nth-child(6), .cat-table--campaigns th:nth-child(6), .cat-table--mitigations th:nth-child(5) { width: 9.5rem; }
+.cat-table--software th:nth-child(7), .cat-table--campaigns th:nth-child(7), .cat-table--mitigations th:nth-child(6) { width: 9rem; }
+.cat-table .source-pill-row { display: inline-flex; flex-wrap: wrap; gap: 0.25rem; }
+.cat-row--full { box-shadow: inset 3px 0 0 var(--color-success); }
+.cat-row--partial { box-shadow: inset 3px 0 0 var(--color-warning); }
+.cat-row--none { box-shadow: inset 3px 0 0 var(--color-danger); }
+
+/* The ATT&CK object window (components/mitre_window.html) */
+.mw-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.85em; color: var(--color-text-secondary); margin-right: 0.35rem; }
+.mw-related { max-height: 22rem; overflow-y: auto; }
+.mw-note { margin-top: 0.6rem; }
+.mw-more { align-self: center; margin-top: 0.4rem; }
+.mw-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.6rem; margin-top: 0.75rem; font-size: 0.78rem; }
+.mw-actions__link { display: inline-flex; align-items: center; gap: 0.25rem; margin-left: auto; color: var(--color-primary); }
+.mw-sigma { text-transform: uppercase; min-width: 5.5rem; justify-content: center; }
+.mw-sigma--stable { color: var(--color-success); }
+.mw-sigma--test { color: var(--color-primary); }
+.mw-sigma--experimental { color: var(--color-warning); }
+.mw-sigma--deprecated, .mw-sigma--unsupported { color: var(--color-danger); }
+/* A coverage bar; --pct (0-100) set on the element. */
+.cov-bar { height: 0.45rem; border-radius: 999px; background: var(--bg-level-3-inner); border: 1px solid var(--color-border-muted); overflow: hidden; }
+.cov-bar > span { display: block; height: 100%; width: calc(var(--pct, 0) * 1%); background: var(--color-danger); }
+.cov-bar--partial > span { background: var(--color-warning); }
+.cov-bar--full > span { background: var(--color-success); }
+/* Coverage per tactic (mitigation window) */
+.mw-tactics { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.6rem; }
+.mw-tactics__head { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.25rem; font-size: 0.8rem; }
+
 /* Heatmap section */
 .sys-heatmap__filters, .sys-heatmap__legend { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; font-size: 0.8rem; }
 .sys-heatmap__filters label, .sys-heatmap__legend > span { display: inline-flex; align-items: center; gap: 0.35rem; }
@@ -7937,6 +8155,8 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Dialogs from the Baselines "…" menu */
 .sys-dialog__form { display: flex; flex-direction: column; gap: 0.45rem; }
+.sys-dialog__form[hidden] { display: none; }
+.tpl-delete { margin-right: auto; }
 .sys-dialog__row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.85rem; }
 .sys-dialog__saved { margin: 0.35rem 0 0; font-size: 0.8rem; color: var(--color-success); }
 .sys-dialog__list { list-style: none; margin: 0 0 1rem; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }

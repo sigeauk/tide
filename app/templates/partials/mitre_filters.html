@@ -1,0 +1,72 @@
+{#
+  The filter bar of a MITRE catalogue page. Controls carry no hx-* of their own: catalog-grid.js
+  turns any change into one request for #catalog-grid, which includes every input here. Sort,
+  direction, grouping and view are remembered per page in this browser (data-cat-pref), unless
+  the URL says otherwise (data-url-keys).
+  A filter whose options depend on the source (data-cat-by-source: a domain's tactics) reloads the
+  page when the source changes, so its options are that source's.
+  Context: spec (KindSpec), f (current values), filter_options, url_keys, source_options.
+#}
+{% from "macros/icons.html" import icon %}
+
+<div class="filters-bar cat-filters" id="catalog-filters" data-catalog-bar
+     data-kind="{{ spec.key }}" data-base-path="/mitre/{{ spec.key }}"
+     data-window-url="/api/mitre/window/{{ spec.key }}/{id}" data-pref-key="tide.mitre.{{ spec.key }}"
+     data-url-keys="{{ url_keys | join(',') }}">
+    <div class="filter-group grow">
+        <label class="form-label" for="cat-search">Search</label>
+        <input type="text" id="cat-search" name="q" value="{{ f.q }}" class="form-input"
+               placeholder="ID, name, alias or description…" autocomplete="off">
+    </div>
+
+    <div class="filter-group">
+        <label class="form-label" for="cat-src">Source</label>
+        <select id="cat-src" name="src" class="form-input form-select">
+            {% for value, label in source_options %}
+            <option value="{{ value }}" {% if f.src == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
+    {% for name, flt in spec.filters.items() %}
+    <div class="filter-group">
+        <label class="form-label" for="cat-f-{{ name }}">{{ flt.label }}</label>
+        <select id="cat-f-{{ name }}" name="{{ name }}" class="form-input form-select"{% if flt.by_source %} data-cat-by-source{% endif %}>
+            {% for value, label in filter_options[name] %}
+            <option value="{{ value }}" {% if f[name] == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endfor %}
+
+    <div class="filter-group">
+        <label class="form-label" for="cat-sort">Sort</label>
+        <select id="cat-sort" name="sort" class="form-input form-select" data-cat-pref>
+            {% for key, (label, default_dir, _key) in spec.sorts.items() %}
+            <option value="{{ key }}" data-default-dir="{{ default_dir }}" {% if (f.sort or spec.default_sort) == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+        <input type="hidden" id="cat-dir" name="dir" value="{{ f.dir }}" data-cat-pref>
+    </div>
+
+    {% if spec.groupings %}
+    <div class="filter-group">
+        <label class="form-label" for="cat-group">Group by</label>
+        <select id="cat-group" name="group" class="form-input form-select" data-cat-pref>
+            <option value="none">None</option>
+            {% for key, (label, _fn) in spec.groupings.items() %}
+            <option value="{{ key }}" {% if f.group == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+
+    <div class="filter-group">
+        <label class="form-label">View</label>
+        <div class="rh-viewtoggle" role="group" aria-label="{{ spec.title }} view">
+            <button type="button" name="Cards View" data-cat-view="cards" aria-pressed="{{ 'false' if f.view == 'table' else 'true' }}" title="Cards">{{ icon('layout-grid', '16') }}<span class="sr-only">Cards</span></button>
+            <button type="button" name="Table View" data-cat-view="table" aria-pressed="{{ 'true' if f.view == 'table' else 'false' }}" title="Table">{{ icon('table', '16') }}<span class="sr-only">Table</span></button>
+        </div>
+        <input type="hidden" id="cat-view" name="view" value="{{ f.view or 'cards' }}" data-cat-pref>
+    </div>
+</div>

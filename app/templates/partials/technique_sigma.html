@@ -4,7 +4,8 @@
   that matches. Potential rules, never coverage. Each rule's "…" menu converts it -- the Create
   Rule form opens filled in with it; creating the rule does not map it, that is the next step,
   from Coverage -- or opens it in the Sigma library.
-  Context: rules, query, technique_ids, tactic, system_id, step_id.
+  Context: rules, query, technique_ids, tactic, technique_url (the technique window's own URL: a
+  system's technique or a template's).
 #}
 {% from "macros/icons.html" import icon %}
 <p class="text-muted sm-sigma__note">Candidate rules to convert. They do not count as coverage until converted, created and mapped under Coverage.</p>
@@ -22,7 +23,7 @@
                 aria-haspopup="menu" aria-expanded="false" title="Rule actions" aria-label="Actions for {{ r.title or r.id }}">{{ icon('more-horizontal', '14') }}</button>
         <span class="rh-more__menu" role="menu" hidden>
           <button name="Convert Sigma Rule" type="button" role="menuitem" class="rh-more__item"
-                  hx-get="/api/systems/{{ system_id }}/steps/{{ step_id }}/sigma/convert?sigma_id={{ r.id | urlencode }}"
+                  hx-get="{{ technique_url }}/sigma/convert?sigma_id={{ r.id | urlencode }}"
                   hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
                   title="Convert it and open the Create Rule form, filled in">{{ icon('zap', '14') }}<span>Convert</span></button>
           <a name="Open in Sigma Library" role="menuitem" class="rh-more__item" href="/sigma?rule={{ r.id | urlencode }}"

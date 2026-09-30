@@ -367,7 +367,8 @@ class BaselineTactic(BaseModel):
     technique_id: str = ""          # legacy single field (kept for compat)
     required_rule: str = ""         # legacy single field (kept for compat)
     description: str = ""
-    # Risks: set per system on its own technique (never on a template). '' = not set.
+    # Risks. A template's are copied to each system as a starting point; the system's own copy
+    # then keeps its own. '' = not set.
     priority: str = ""              # critical / high / medium / low
     category: str = ""              # see STEP_CATEGORIES in app/inventory_engine.py
     techniques: List[TacticTechnique] = Field(default_factory=list)

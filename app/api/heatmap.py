@@ -11,6 +11,7 @@ import io
 import os
 import time
 import re
+from urllib.parse import quote
 
 from app.api.deps import ActiveClient, DbDep, CurrentUser
 from app.models.threats import HeatmapCell, HeatmapData, CoverageStatus
@@ -843,7 +844,7 @@ def generate_baseline_from_heatmap(
         client_id=client_id,
     )
 
-    return RedirectResponse(url=f"/baselines/{baseline.id}", status_code=303)
+    return RedirectResponse(url=f"/baselines?baseline_id={quote(baseline.id)}&group=baseline", status_code=303)
 
 
 # ─── SYSTEM BASELINE HEATMAP ─────────────────────────────────────────────────

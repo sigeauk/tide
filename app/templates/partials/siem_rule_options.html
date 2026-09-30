@@ -1,6 +1,5 @@
 {# Partial: siem_rule_options.html — SIEM rule search results for the Add SIEM Rule dropdown
    Context: mapped_rules (list[DetectionRule]), all_rules (list[dict]), query (str),
-            mapped_scopes (set of "<rule_id>|<siem_id>|<space>"),
             dest_names ({"<siem_id>|<space>": "<destination name>"}), dest_colors (same keys)
 
    Every option names its destination. The same rule can live at several destinations at once,
@@ -68,8 +67,7 @@
         All SIEM Rules
     </div>
     {% for rule in all_rules %}
-    {# Skip only the exact (rule, destination) already offered above -- not every copy of it. #}
-    {% if (rule.rule_id ~ '|' ~ (rule.siem_id | default('', true)) ~ '|' ~ (rule.space | default('default', true))) not in mapped_scopes %}
+    {# The route leaves out only the exact (rule, destination) copies offered above. #}
     <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option u-bg-none"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
@@ -105,7 +103,6 @@
             </div>
         </div>
     </button>
-    {% endif %}
     {% endfor %}
     {% endif %}
 </div>

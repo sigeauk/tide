@@ -1,0 +1,36 @@
+{#
+  Metric strip for the Baselines page: the templates as a whole, never the filtered grid's
+  counts. Templates carry no coverage, so there is none here; systems' copies are counted apart.
+  Context: totals (from get_template_steps), system_baselines.
+#}
+{% set t = totals %}
+
+<div class="metric-card">
+    <p class="metric-value">{{ t.templates }}</p>
+    <p class="metric-label">Templates</p>
+    <p class="metric-sub">baselines to apply to systems</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ t.total }}</p>
+    <p class="metric-label">Techniques</p>
+    <p class="metric-sub">across every template</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ t.tactics }}</p>
+    <p class="metric-label">Tactics</p>
+    <p class="metric-sub">kill-chain phases covered</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value {% if t.unmapped %}warning{% endif %}">{{ t.unmapped }}</p>
+    <p class="metric-label">No ATT&amp;CK</p>
+    <p class="metric-sub">techniques with no ATT&amp;CK id yet</p>
+</div>
+
+<div class="metric-card">
+    <p class="metric-value">{{ system_baselines }}</p>
+    <p class="metric-label">System baselines</p>
+    <p class="metric-sub">copies systems keep of their own</p>
+</div>

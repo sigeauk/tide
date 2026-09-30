@@ -5,7 +5,7 @@ FastAPI Application Entry Point.
 """
 
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Dict, Optional
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -14,7 +14,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import logging
 import os
+import re
 import time
+import uuid
+from collections import OrderedDict
 from urllib.parse import urlencode
 
 try:
@@ -112,36 +115,77 @@ def migration37_resync_required() -> bool:
     return needed
 
 
-# ── Sync status tracking ──
-_sync_status = {
-    "state": "idle",       # idle | running | complete | error
-    "message": "",
-    "started_at": None,
-    "finished_at": None,
-    "rule_count": 0,
-}
+# ── Sync status tracking (per-job, since 6.0.2) ──
+# Used to be one process-wide dict shared by every tenant's sync: two
+# tenants syncing close together could show each other's message, or an
+# earlier sync's completion could be overwritten by a later one that
+# started after it (#19). Each sync now gets its own job id — mirrors the
+# pattern app/services/cti_jobs.py already uses for CTI syncs — and the
+# HTMX poller is handed that id so it always watches its own job.
+_MAX_SYNC_JOBS = 50
+_sync_jobs: "OrderedDict[str, dict]" = OrderedDict()
 
 
-def _update_sync_status(state: str, message: str = "", rule_count: int = 0):
-    """Update the global sync status dict."""
-    _sync_status["state"] = state
-    _sync_status["message"] = message
-    if state == "running" and _sync_status["started_at"] is None:
-        _sync_status["started_at"] = time.time()
+def _start_sync_job(client_id: str, message: str = "Initialising sync...") -> str:
+    """Create a new sync job record and return its id."""
+    job_id = uuid.uuid4().hex
+    _sync_jobs[job_id] = {
+        "state": "running",
+        "message": message,
+        "started_at": time.time(),
+        "finished_at": None,
+        "rule_count": 0,
+        "client_id": client_id,
+    }
+    # Evict oldest finished jobs once past the cap; running jobs are kept.
+    if len(_sync_jobs) > _MAX_SYNC_JOBS:
+        for jid in list(_sync_jobs.keys()):
+            if len(_sync_jobs) <= _MAX_SYNC_JOBS:
+                break
+            if _sync_jobs[jid]["state"] in ("complete", "error"):
+                _sync_jobs.pop(jid, None)
+    return job_id
+
+
+def _update_sync_job(job_id: str, state: str, message: str = "", rule_count: int = 0):
+    """Update one sync job's status in place. No-ops if the job is unknown
+    (e.g. evicted, or the server restarted since the job was created)."""
+    job = _sync_jobs.get(job_id)
+    if job is None:
+        return
+    job["state"] = state
+    job["message"] = message
     if state in ("complete", "error"):
-        _sync_status["finished_at"] = time.time()
-        _sync_status["rule_count"] = rule_count
+        job["finished_at"] = time.time()
+        job["rule_count"] = rule_count
+
+
+def _sync_tracker_html(job_id: str) -> str:
+    """The initial HTMX polling fragment returned when a sync starts."""
+    return (
+        '<div id="sync-status"'
+        f'     hx-get="/api/sync/status?job_id={job_id}"'
+        '     hx-trigger="load, every 1s"'
+        '     hx-swap="outerHTML"'
+        '     class="sync-tracker sync-running">'
+        '    <span class="sync-spinner"></span>'
+        '    <span>Sync starting...</span>'
+        '</div>'
+    )
 
 
 def get_last_sync_time(rules=None) -> str:
     """Return human-readable last sync time, or 'Never' if no sync completed.
 
-    ``_sync_status`` lives in process memory, so it is empty after every
+    Sync jobs live in process memory, so this is empty after every
     restart/reload (and per worker). Fall back to the newest ``last_updated``
     on the given rules, which the sync writes to the database.
     """
     from datetime import datetime
-    ts = _sync_status.get("finished_at") if _sync_status.get("state") == "complete" else None
+    ts = max(
+        (j["finished_at"] for j in _sync_jobs.values() if j["state"] == "complete" and j["finished_at"]),
+        default=None,
+    )
     if ts is not None:
         return datetime.fromtimestamp(ts).strftime("%d %b %H:%M")
     stamps = [r.last_updated for r in (rules or []) if getattr(r, "last_updated", None)]
@@ -153,7 +197,8 @@ def get_last_sync_time(rules=None) -> str:
     return "Never"
 
 
-async def scheduled_sync(force_mapping=False, client_id: str | None = None):
+async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_id: str | None = None,
+                         only_siem_id: str | None = None, only_space: str | None = None):
     """Per-tenant Elastic sync, triggered by user actions only.
 
     Detection rules are per-tenant since 4.1.13 — there is no scheduled
@@ -161,6 +206,14 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None):
     ``None`` (the legacy "global sync" call shape) logs a warning and
     no-ops so any leftover startup/timer hook fails loud-but-safe rather
     than silently iterating every SIEM × every space.
+
+    ``job_id`` is the id returned by :func:`_start_sync_job` — this sync's
+    own status record, updated as it progresses. Omit it for a fire-and-forget
+    call with no UI tracker watching (status simply isn't published anywhere).
+
+    ``only_siem_id``/``only_space``: narrow the sync to one linked
+    destination instead of every (siem, space) pair — see
+    ``app.services.sync.run_elastic_sync``.
 
     Triggers: manual ``Sync`` button on /rules, the
     post-promote refresh in ``api/promotion.py:promote_rule``, and the
@@ -176,24 +229,29 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None):
     logger.info(
         f"Per-tenant sync triggered (client_id={client_id})"
     )
-    
-    _update_sync_status("running", "Connecting to Elastic...")
-    
+
+    if job_id:
+        _update_sync_job(job_id, "running", "Connecting to Elastic...")
+
     try:
         # Import here to avoid circular imports
         from app.services.sync import trigger_sync
-        
-        _update_sync_status("running", "Fetching detection rules...")
-        
+
+        if job_id:
+            _update_sync_job(job_id, "running", "Fetching detection rules...")
+
         # Run the actual sync
-        result = await trigger_sync(client_id=client_id, force_mapping=force_mapping)
-        
+        result = await trigger_sync(client_id=client_id, force_mapping=force_mapping,
+                                    only_siem_id=only_siem_id, only_space=only_space)
+
         count = result if isinstance(result, int) else 0
-        _update_sync_status("complete", f"Synced {count} rules from Elastic", rule_count=count)
+        if job_id:
+            _update_sync_job(job_id, "complete", f"Synced {count} rules from Elastic", rule_count=count)
     except Exception as e:
         logger.warning(f"Per-tenant sync failed (Elastic may be unreachable): {e}")
         logger.info("TIDE will continue running — sync will retry on next user action")
-        _update_sync_status("error", str(e))
+        if job_id:
+            _update_sync_job(job_id, "error", str(e))
 
 
 @asynccontextmanager
@@ -204,7 +262,20 @@ async def lifespan(app: FastAPI):
     
     # Startup
     logger.info(f"Starting TIDE v{settings.tide_version}")
-    
+
+    # A forged or replayed session cookie is possible if SESSION_SECRET is
+    # unset or still the shipped placeholder, so fail fast rather than boot
+    # into a weak signing state. AUTH_DISABLED is the documented dev/E2E
+    # bypass (CLAUDE.md) and doesn't rely on session-cookie integrity.
+    if not settings.auth_disabled:
+        _secret = settings.session_secret or ""
+        if not _secret or _secret.startswith("change-me"):
+            raise RuntimeError(
+                "SESSION_SECRET is unset or still the placeholder value. "
+                "Set a random SESSION_SECRET in the environment before starting TIDE "
+                "(or set AUTH_DISABLED=true for local/dev use only)."
+            )
+
     # Initialize database
     from app.services.database import get_database_service
     db = get_database_service()
@@ -627,11 +698,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/heatmap": "page:heatmap",
         "/mitre": "page:mitre",
         "/mitre/tactic": "page:mitre_tactic",
+        "/api/mitre/grid/tactic": "page:mitre_tactic",
+        "/api/mitre/window/tactic": "page:mitre_tactic",
         "/mitre/technique": "page:mitre_technique",
         "/mitre/groups": "page:mitre_groups",
+        "/api/mitre/grid/groups": "page:mitre_groups",
+        "/api/mitre/window/groups": "page:mitre_groups",
+        "/api/mitre/grid/technique": "page:mitre_technique",
+        "/api/mitre/window/technique": "page:mitre_technique",
         "/mitre/software": "page:mitre_software",
+        "/api/mitre/grid/software": "page:mitre_software",
+        "/api/mitre/window/software": "page:mitre_software",
         "/mitre/campaigns": "page:mitre_campaigns",
+        "/api/mitre/grid/campaigns": "page:mitre_campaigns",
+        "/api/mitre/window/campaigns": "page:mitre_campaigns",
         "/mitre/mitigations": "page:mitre_mitigations",
+        "/api/mitre/grid/mitigations": "page:mitre_mitigations",
+        "/api/mitre/window/mitigations": "page:mitre_mitigations",
         "/cti/indicators": "page:cti_indicators",
         "/cti/actors": "page:cti_actors",
         "/cti/reports": "page:cti_reports",
@@ -649,6 +732,23 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/management": "page:management",
     }
 
+    # Baseline templates are the Baselines page's; anything that reads or changes a system --
+    # applying a template to one (from either page) or removing it, generating a system's
+    # baselines, mapping rules to its techniques, its snapshots -- is the Systems page's. Once
+    # applied, a system's copy has no link to the template, so the two never overlap. "*" is one
+    # path segment; the most specific match wins.
+    _BASELINE_RESOURCES = {
+        "/api/baselines": "page:baselines",
+        "/api/baselines/*/apply/": "page:systems",
+        "/api/baselines/generate": "page:systems",
+        "/api/baselines/system/": "page:systems",
+        "/api/baselines/snapshots/": "page:systems",
+        "/api/baselines/tactics/*/detections": "page:systems",
+        "/api/baselines/tactics/detections/": "page:systems",
+        "/api/baselines/tactics/*/siem-rules": "page:systems",
+    }
+    PATH_RESOURCE_MAP.update(_BASELINE_RESOURCES)
+
     API_WRITE_RESOURCE_MAP = {
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
@@ -661,8 +761,24 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/settings": "page:settings",
         "/api/clients": "page:clients",
         "/api/management": "page:management",
+        **_BASELINE_RESOURCES,
     }
-    
+
+    @staticmethod
+    def resource_for(path: str, table: Dict[str, str]) -> Optional[str]:
+        """The resource guarding ``path``: an exact entry, else the most specific entry it starts
+        with ("*" matching one path segment). None if nothing guards it."""
+        if path in table:
+            return table[path]
+        best, best_len = None, -1
+        for prefix, res in table.items():
+            if prefix == "/":
+                continue
+            pattern = "^" + "[^/]+".join(re.escape(part) for part in prefix.split("*"))
+            if re.match(pattern, path) and len(prefix) > best_len:
+                best, best_len = res, len(prefix)
+        return best
+
     async def dispatch(self, request: Request, call_next):
         settings = get_settings()
         path = request.url.path
@@ -695,14 +811,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return None
             if user.active_client_id and user.is_admin(user.active_client_id):
                 return None
-            # Page-level read check
-            resource = self.PATH_RESOURCE_MAP.get(path)
-            if not resource:
-                # Check for sub-paths (e.g. /systems/123 → page:systems)
-                for prefix, res in sorted(self.PATH_RESOURCE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
-                    if prefix != "/" and path.startswith(prefix):
-                        resource = res
-                        break
+            # Page-level read check (sub-paths too: /systems/123 → page:systems)
+            resource = self.resource_for(path, self.PATH_RESOURCE_MAP)
             if resource and not user.can_read(resource):
                 if is_htmx:
                     from fastapi.responses import Response
@@ -718,11 +828,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
             # API write check (POST/PUT/DELETE)
             if is_api and request.method in ("POST", "PUT", "DELETE", "PATCH"):
-                for prefix, res in sorted(self.API_WRITE_RESOURCE_MAP.items(), key=lambda x: len(x[0]), reverse=True):
-                    if path.startswith(prefix):
-                        if not user.can_write(res):
-                            return JSONResponse({"detail": "Write access denied"}, status_code=403)
-                        break
+                res = self.resource_for(path, self.API_WRITE_RESOURCE_MAP)
+                if res and not user.can_write(res):
+                    return JSONResponse({"detail": "Write access denied"}, status_code=403)
             return None
         
         # Skip auth check if disabled (but still add cache headers)
@@ -1257,7 +1365,13 @@ def create_app() -> FastAPI:
             route = route_map.get(kind, kind)
             if kind == "techniques":
                 raw_id = raw_id.replace("/", ".")
-            return f'href="/mitre/{route}/{raw_id.upper()}"'
+            oid = raw_id.upper()
+            if not _re.fullmatch(r"[A-Z]{1,2}\d{3,4}(\.\d{3})?", oid):
+                return f'href="/mitre/{route}/{oid}"'
+            # A click opens the object's window over the page; the address still works on its own
+            # (new tab, copied link).
+            return (f'href="/mitre/{route}/{oid}" hx-get="/api/mitre/window/{route}/{oid}" '
+                    f'hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"')
 
         html = _re.sub(
             r'href=["\']https?://attack\.mitre\.org/(techniques|groups|tactics|software|campaigns|mitigations)/([^"\'#?]+)[^"\']*["\']',
@@ -1267,6 +1381,8 @@ def create_app() -> FastAPI:
         return Markup(html)
 
     templates.env.filters["md"] = md_filter
+    from app.services.mitre_catalog import plain_summary as _attack_plain
+    templates.env.filters["attack_plain"] = _attack_plain
 
     # --- Add global template variables so all templates have access ---
     templates.env.globals["env"] = settings
@@ -1819,6 +1935,7 @@ def create_app() -> FastAPI:
                 "scopes": scopes,
                 "space_labels": space_labels,
                 "scope_labels": scope_labels,
+                "client_siems": client_siems,
                 "last_sync_time": get_last_sync_time(_all_rules),
                 "search": search_q,
                 "space": space_q,
@@ -1959,7 +2076,13 @@ def create_app() -> FastAPI:
             cve_stats = None
             baselines_overview = []
             baselines_rollup = None
-        
+
+        # Elastic/Kibana connections come from the tenant's own siem_inventory
+        # links, not a global env var (those were removed in 4.0.10) — the
+        # Connected Services card used to check env.elastic_api_key, which no
+        # longer exists on Settings, so it always showed "No API Key".
+        client_siems = db.get_client_siems(_cid) if _cid else []
+
         return render_template(
             "pages/core/dashboard.html",
             request,
@@ -1977,6 +2100,7 @@ def create_app() -> FastAPI:
                 "cve_stats": cve_stats,
                 "baselines_overview": baselines_overview,
                 "baselines_rollup": baselines_rollup,
+                "client_siems": client_siems,
             }
         )
     
@@ -2053,200 +2177,70 @@ def create_app() -> FastAPI:
     def mitre_index_page(request: Request, user: CurrentUser):
         return RedirectResponse(url="/mitre/technique", status_code=302)
 
-    _MITRE_SOURCE_META = {
-        "all": {
-            "label": "All MITRE ATT&CK Sources",
-            "code": "ALL",
-            "pill_class": "src-opencti",
-        },
-        "enterprise": {
-            "label": "MITRE ATT&CK Enterprise",
-            "code": "ENT",
-            "pill_class": "src-enterprise",
-        },
-        "mobile": {
-            "label": "MITRE ATT&CK Mobile",
-            "code": "MOB",
-            "pill_class": "src-mobile",
-        },
-        "ics": {
-            "label": "MITRE ATT&CK ICS",
-            "code": "ICS",
-            "pill_class": "src-ics",
-        },
-        "pre": {
-            "label": "MITRE ATT&CK PRE",
-            "code": "PRE",
-            "pill_class": "src-pre",
-        },
-    }
+    from app.services.mitre_catalog import (
+        KINDS as _MITRE_KINDS,
+        resolve_source as _resolve_mitre_source,
+        source_context as _mitre_source_context,
+        active_client_for as _resolve_active_client_for_mitre,
+        coverage_for as _get_mitre_coverage,
+        resolve_detail as _resolve_mitre_detail,
+    )
 
-    _MITRE_SOURCE_ORDER = ["enterprise", "ics", "mobile", "pre"]
-
-    def _resolve_mitre_source(src: str) -> tuple[str, dict]:
-        key = (src or "all").strip().lower()
-        if key not in _MITRE_SOURCE_META:
-            key = "all"
-        return key, _MITRE_SOURCE_META[key]
-
-    def _mitre_source_context(src: str) -> dict:
-        key, meta = _resolve_mitre_source(src)
-        return {
-            "source_domain": key,
-            "source_label": meta["label"],
-            "source_code": meta["code"],
-            "source_pill_class": meta["pill_class"],
-            "source_meta": _MITRE_SOURCE_META,
-            "source_order": _MITRE_SOURCE_ORDER,
-            "source_options": [
-                ("all", "All"),
-                ("enterprise", "Enterprise"),
-                ("mobile", "Mobile"),
-                ("ics", "ICS"),
-                ("pre", "PRE"),
-            ],
-        }
-
-    def _resolve_active_client_for_mitre(request: Request, user: CurrentUser, db: DbDep) -> str:
-        cid = request.cookies.get("active_client_id")
-        if not cid and user:
-            with db.get_shared_connection() as conn:
-                row = conn.execute(
-                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
-                    [user.id],
-                ).fetchone()
-                if row:
-                    cid = row[0]
-        if not cid:
-            cid = db.get_default_client_id()
-        return cid
-
-    def _get_mitre_coverage(db: DbDep, cid: str) -> tuple[set, dict]:
-        try:
-            from app.services.tenant_manager import tenant_context_for
-            if cid:
-                with tenant_context_for(cid):
-                    return (
-                        db.get_all_covered_ttps(client_id=cid),
-                        db.get_ttp_rule_counts(client_id=cid),
-                    )
-            return (
-                db.get_all_covered_ttps(client_id=cid),
-                db.get_ttp_rule_counts(client_id=cid),
-            )
-        except Exception:
-            return set(), {}
-
-    def _resolve_mitre_detail(db: DbDep, kind: str, object_id: str, src: str) -> tuple[str, dict | None]:
-        getters = {
-            "tactic": db.get_mitre_tactic_detail,
-            "technique": db.get_mitre_technique_detail,
-            "group": db.get_mitre_group_detail,
-            "software": db.get_mitre_software_detail,
-            "campaign": db.get_mitre_campaign_detail,
-            "mitigation": db.get_mitre_mitigation_detail,
-        }
-        getter = getters.get(kind)
-        if getter is None:
-            return src, None
-
-        detail = getter(object_id, domain=src)
-        if detail:
-            return src, detail
-
-        for candidate in ("enterprise", "mobile", "ics", "pre"):
-            if candidate == src:
-                continue
-            candidate_detail = getter(object_id, domain=candidate)
-            if candidate_detail:
-                return candidate, candidate_detail
-
-        return src, None
-
-    @app.get("/mitre/tactic", response_class=HTMLResponse)
-    def mitre_tactics_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        tactics = db.list_mitre_tactics(domain=src)
-        if q:
-            needle = q.strip().lower()
-            tactics = [
-                t for t in tactics
-                if needle in str(t.get("id") or "").lower()
-                or needle in str(t.get("name") or "").lower()
-                or needle in str(t.get("shortname") or "").lower()
-                or needle in str(t.get("description") or "").lower()
-            ]
-        tactic_groups = []
-        if src == "all":
-            source_sequence = ["enterprise", "mobile", "ics", "pre"]
-            grouped: dict[str, dict] = {}
-            by_source = {s: db.list_mitre_tactics(domain=s) for s in source_sequence}
-            for source in source_sequence:
-                for tactic in by_source[source]:
-                    key = (tactic.get("name") or tactic.get("id") or "").strip().lower()
-                    if not key:
-                        continue
-                    if key not in grouped:
-                        grouped[key] = {
-                            "id": tactic.get("id"),
-                            "name": tactic.get("name") or tactic.get("id"),
-                            "shortname": tactic.get("shortname") or "",
-                            "description": tactic.get("description") or "",
-                            "url": tactic.get("url"),
-                            "technique_count": 0,
-                            "group_count": 0,
-                            "sources": [],
-                            "source_rows": [],
-                        }
-                    g = grouped[key]
-                    g["technique_count"] += int(tactic.get("technique_count") or 0)
-                    g["group_count"] += int(tactic.get("group_count") or 0)
-                    g["sources"].append(source)
-                    g["source_rows"].append({
-                        "source": source,
-                        "id": tactic.get("id"),
-                        "name": tactic.get("name") or tactic.get("id"),
-                        "shortname": tactic.get("shortname") or "",
-                        "description": tactic.get("description") or "",
-                        "technique_count": int(tactic.get("technique_count") or 0),
-                        "group_count": int(tactic.get("group_count") or 0),
-                        "url": tactic.get("url"),
-                    })
-
-            source_rank = {"enterprise": 0, "mobile": 1, "ics": 2, "pre": 3}
-            by_id = {str(t.get("id") or "").upper(): t for t in tactics}
-            for group in grouped.values():
-                group["sources"] = [
-                    s for s in source_sequence if s in set(group["sources"])
-                ]
-                group["source_rows"].sort(key=lambda r: source_rank.get(r["source"], 9))
-                first_id = str(group.get("id") or "").upper()
-                if first_id and first_id in by_id:
-                    group["sort_index"] = tactics.index(by_id[first_id])
-                else:
-                    group["sort_index"] = 999
-
-            tactic_groups = sorted(grouped.values(), key=lambda g: (g.get("sort_index", 999), g.get("name") or ""))
-        src_ctx = _mitre_source_context(src)
+    def _mitre_catalog_page(request: Request, user, kind: str, src: str):
+        """The shared MITRE catalogue page: header, metric strip, filter bar and a grid that loads
+        itself (partials/mitre_grid.html). ``?open=<id>`` opens that object's window on arrival."""
+        spec = _MITRE_KINDS[kind]
+        qp = request.query_params
+        src_key, _ = _resolve_mitre_source(src)
+        from app.services.database import get_database_service
+        db = get_database_service()
+        # Options can depend on the source (a domain's tactics); ?tactic=ta0006 still selects TA0006.
+        filter_options, filters = {}, {}
+        for name, flt in spec.filters.items():
+            filter_options[name] = flt.options_for(db, src_key)
+            valid, value = {v for v, _ in filter_options[name]}, qp.get(name, "")
+            filters[name] = value.upper() if value not in valid and value.upper() in valid else value
         return render_template(
-            "pages/mitre/tactic.html",
+            "pages/mitre/catalog.html",
             request,
             {
                 "user": user,
                 "active_page": "mitre",
-                "active_sub": "tactic",
-                "tactics": tactics,
-                "tactic_groups": tactic_groups,
-                "query": q,
-                **src_ctx,
+                "active_sub": spec.active_sub,
+                "spec": spec,
+                "f": {
+                    "q": qp.get("q", ""), "src": src_key, "sort": qp.get("sort", ""), "dir": qp.get("dir", ""),
+                    "group": qp.get("group", ""), "view": qp.get("view", ""), **filters,
+                },
+                "filter_options": filter_options,
+                "url_keys": [k for k in ("sort", "dir", "group", "view") if qp.get(k)],
+                **_mitre_source_context(src_key),
             },
         )
+
+    def _mitre_open_in_window(request: Request, user, db, kind: str, object_id: str, src: str):
+        """An object opens in its window on its catalogue page; its old address (bookmarks, links
+        from other pages and rewritten attack.mitre.org links) sends it there."""
+        spec = _MITRE_KINDS[kind]
+        src, _ = _resolve_mitre_source(src)
+        resolved_src, detail = _resolve_mitre_detail(db, spec.detail_kind, object_id, src)
+        if not detail:
+            return render_template(
+                "pages/core/placeholder.html",
+                request,
+                {
+                    "user": user,
+                    "active_page": "mitre",
+                    "page_title": f"{spec.singular} Not Found",
+                    "page_subtitle": f"No MITRE {spec.singular.lower()} found for {object_id}.",
+                },
+            )
+        query = urlencode({"open": detail["id"], "src": resolved_src})
+        return RedirectResponse(url=f"/mitre/{spec.key}?{query}", status_code=307)
+
+    @app.get("/mitre/tactic", response_class=HTMLResponse)
+    def mitre_tactics_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "tactic", src)
 
     @app.get("/mitre/tactic/{tactic_id}", response_class=HTMLResponse)
     def mitre_tactic_detail_page(
@@ -2273,354 +2267,44 @@ def create_app() -> FastAPI:
         return RedirectResponse(url=f"/mitre/technique?{query}", status_code=307)
 
     @app.get("/mitre/technique", response_class=HTMLResponse)
-    def mitre_techniques_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        tactic: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        techniques = db.list_mitre_techniques(
-            search=q or None,
-            tactic_id=tactic or None,
-            domain=src,
-        )
-        selected_tactic = None
-        if tactic:
-            selected_tactic = db.get_mitre_tactic_detail(tactic, domain=src)
-
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context(src)
-
-        return render_template(
-            "pages/mitre/techniques.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "technique",
-                "techniques": techniques,
-                "selected_tactic": selected_tactic,
-                "tactic_filter": tactic,
-                "query": q,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                **src_ctx,
-            },
-        )
+    def mitre_techniques_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "technique", src)
 
     @app.get("/mitre/technique/{technique_id}", response_class=HTMLResponse)
-    def mitre_technique_detail_page(
-        request: Request,
-        technique_id: str,
-        user: CurrentUser,
-        db: DbDep,
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        resolved_src, detail = _resolve_mitre_detail(db, "technique", technique_id, src)
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        if not detail:
-            return render_template(
-                "pages/core/placeholder.html",
-                request,
-                {
-                    "user": user,
-                    "active_page": "mitre",
-                    "page_title": "Technique Not Found",
-                    "page_subtitle": f"No MITRE technique found for {technique_id}.",
-                },
-            )
-
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        from app import sigma_helper as sigma_mod
-        try:
-            sigma_related_rules = sigma_mod.search_rules(
-                technique_filter=(technique_id or "").upper(),
-                limit=250,
-            )
-        except Exception:
-            sigma_related_rules = []
-        total_sigma_rule_count = len(sigma_related_rules)
-        nist_domain = resolved_src if resolved_src in ("enterprise", "mobile", "ics", "pre") else "all"
-        nist_capabilities = db.list_nist_capabilities_for_technique(technique_id, domain=nist_domain)
-        src_ctx = _mitre_source_context(resolved_src)
-
-        return render_template(
-            "pages/mitre/technique_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "technique",
-                "technique": detail,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                "total_sigma_rule_count": total_sigma_rule_count,
-                "sigma_related_rules": sigma_related_rules,
-                "nist_capabilities": nist_capabilities,
-                **src_ctx,
-            },
-        )
+    def mitre_technique_detail_page(request: Request, technique_id: str, user: CurrentUser, db: DbDep, src: str = "enterprise"):
+        return _mitre_open_in_window(request, user, db, "technique", technique_id, src)
 
     @app.get("/mitre/groups", response_class=HTMLResponse)
-    def mitre_groups_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        groups = db.list_mitre_groups(search=q or None, domain=src)
-        src_ctx = _mitre_source_context(src)
-        return render_template(
-            "pages/mitre/groups.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "groups",
-                "groups": groups,
-                "query": q,
-                **src_ctx,
-            },
-        )
+    def mitre_groups_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "groups", src)
 
     @app.get("/mitre/groups/{group_id}", response_class=HTMLResponse)
-    def mitre_group_detail_page(
-        request: Request,
-        group_id: str,
-        user: CurrentUser,
-        db: DbDep,
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        resolved_src, detail = _resolve_mitre_detail(db, "group", group_id, src)
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        if not detail:
-            return render_template(
-                "pages/core/placeholder.html",
-                request,
-                {
-                    "user": user,
-                    "active_page": "mitre",
-                    "page_title": "Group Not Found",
-                    "page_subtitle": f"No MITRE group found for {group_id}.",
-                },
-            )
-
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context(resolved_src)
-
-        return render_template(
-            "pages/mitre/group_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "groups",
-                "group": detail,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                **src_ctx,
-            },
-        )
+    def mitre_group_detail_page(request: Request, group_id: str, user: CurrentUser, db: DbDep, src: str = "enterprise"):
+        return _mitre_open_in_window(request, user, db, "groups", group_id, src)
 
     @app.get("/mitre/software", response_class=HTMLResponse)
-    def mitre_software_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        software = db.list_mitre_software(search=q or None, domain=src)
-        src_ctx = _mitre_source_context(src)
-        return render_template(
-            "pages/mitre/software.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "software",
-                "software": software,
-                "query": q,
-                **src_ctx,
-            },
-        )
+    def mitre_software_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "software", src)
 
     @app.get("/mitre/software/{software_id}", response_class=HTMLResponse)
-    def mitre_software_detail_page(
-        request: Request,
-        software_id: str,
-        user: CurrentUser,
-        db: DbDep,
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        resolved_src, detail = _resolve_mitre_detail(db, "software", software_id, src)
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        if not detail:
-            return render_template(
-                "pages/core/placeholder.html",
-                request,
-                {
-                    "user": user,
-                    "active_page": "mitre",
-                    "page_title": "Software Not Found",
-                    "page_subtitle": f"No MITRE software found for {software_id}.",
-                },
-            )
-
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context(resolved_src)
-
-        return render_template(
-            "pages/mitre/software_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "software",
-                "software": detail,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                **src_ctx,
-            },
-        )
+    def mitre_software_detail_page(request: Request, software_id: str, user: CurrentUser, db: DbDep, src: str = "enterprise"):
+        return _mitre_open_in_window(request, user, db, "software", software_id, src)
 
     @app.get("/mitre/campaigns", response_class=HTMLResponse)
-    def mitre_campaigns_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        campaigns = db.list_mitre_campaigns(search=q or None, domain=src)
-        src_ctx = _mitre_source_context(src)
-        return render_template(
-            "pages/mitre/campaigns.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "campaigns",
-                "campaigns": campaigns,
-                "query": q,
-                **src_ctx,
-            },
-        )
+    def mitre_campaigns_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "campaigns", src)
 
     @app.get("/mitre/campaigns/{campaign_id}", response_class=HTMLResponse)
-    def mitre_campaign_detail_page(
-        request: Request,
-        campaign_id: str,
-        user: CurrentUser,
-        db: DbDep,
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        resolved_src, detail = _resolve_mitre_detail(db, "campaign", campaign_id, src)
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        if not detail:
-            return render_template(
-                "pages/core/placeholder.html",
-                request,
-                {
-                    "user": user,
-                    "active_page": "mitre",
-                    "page_title": "Campaign Not Found",
-                    "page_subtitle": f"No MITRE campaign found for {campaign_id}.",
-                },
-            )
-
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context(resolved_src)
-
-        return render_template(
-            "pages/mitre/campaign_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "campaigns",
-                "campaign": detail,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                **src_ctx,
-            },
-        )
+    def mitre_campaign_detail_page(request: Request, campaign_id: str, user: CurrentUser, db: DbDep, src: str = "enterprise"):
+        return _mitre_open_in_window(request, user, db, "campaigns", campaign_id, src)
 
     @app.get("/mitre/mitigations", response_class=HTMLResponse)
-    def mitre_mitigations_page(
-        request: Request,
-        user: CurrentUser,
-        db: DbDep,
-        q: str = "",
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        mitigations = db.list_mitre_mitigations(search=q or None, domain=src)
-        src_ctx = _mitre_source_context(src)
-        return render_template(
-            "pages/mitre/mitigations.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "mitigations",
-                "mitigations": mitigations,
-                "query": q,
-                **src_ctx,
-            },
-        )
+    def mitre_mitigations_page(request: Request, user: CurrentUser, src: str = "enterprise"):
+        return _mitre_catalog_page(request, user, "mitigations", src)
 
     @app.get("/mitre/mitigations/{mitigation_id}", response_class=HTMLResponse)
-    def mitre_mitigation_detail_page(
-        request: Request,
-        mitigation_id: str,
-        user: CurrentUser,
-        db: DbDep,
-        src: str = "enterprise",
-    ):
-        src, _ = _resolve_mitre_source(src)
-        resolved_src, detail = _resolve_mitre_detail(db, "mitigation", mitigation_id, src)
-        _cid = _resolve_active_client_for_mitre(request, user, db)
-        if not detail:
-            return render_template(
-                "pages/core/placeholder.html",
-                request,
-                {
-                    "user": user,
-                    "active_page": "mitre",
-                    "page_title": "Mitigation Not Found",
-                    "page_subtitle": f"No MITRE mitigation found for {mitigation_id}.",
-                },
-            )
-
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, _cid)
-        src_ctx = _mitre_source_context(resolved_src)
-
-        return render_template(
-            "pages/mitre/mitigation_detail.html",
-            request,
-            {
-                "user": user,
-                "active_page": "mitre",
-                "active_sub": "mitigations",
-                "mitigation": detail,
-                "covered_ttps": covered_ttps,
-                "ttp_rule_counts": ttp_rule_counts,
-                **src_ctx,
-            },
-        )
+    def mitre_mitigation_detail_page(request: Request, mitigation_id: str, user: CurrentUser, db: DbDep, src: str = "enterprise"):
+        return _mitre_open_in_window(request, user, db, "mitigations", mitigation_id, src)
 
     @app.get("/mitre/nist", response_class=HTMLResponse)
     def mitre_nist_page(request: Request, user: CurrentUser, db: DbDep, q: str = ""):
@@ -3052,41 +2736,36 @@ def create_app() -> FastAPI:
         removed — detection rules are per-tenant.
         """
         import asyncio
-        
-        # Reset status and start sync
-        _sync_status["started_at"] = None
-        _sync_status["finished_at"] = None
-        _sync_status["rule_count"] = 0
-        _update_sync_status("running", "Initialising sync...")
-        
-        asyncio.create_task(scheduled_sync(client_id=client_id))
-        
+
+        job_id = _start_sync_job(client_id)
+        asyncio.create_task(scheduled_sync(client_id=client_id, job_id=job_id))
+
         # Return a live sync tracker that polls for status
-        return HTMLResponse("""
-        <div id="sync-status"
-             hx-get="/api/sync/status"
-             hx-trigger="load, every 1s"
-             hx-swap="outerHTML"
-             class="sync-tracker sync-running">
-            <span class="sync-spinner"></span>
-            <span>Sync starting...</span>
-        </div>
-        """)
-    
+        return HTMLResponse(_sync_tracker_html(job_id))
+
     @app.get("/api/sync/status", response_class=HTMLResponse)
-    def get_sync_status(request: Request, user: CurrentUser):
-        """Return current sync status as an HTMX partial."""
-        state = _sync_status["state"]
-        message = _sync_status["message"]
-        
+    def get_sync_status(request: Request, user: CurrentUser, job_id: Optional[str] = None):
+        """Return one sync job's status as an HTMX partial.
+
+        ``job_id`` identifies which sync to watch (from the tracker
+        ``/api/sync/elastic`` returned) — without it, or if the job is
+        unknown (evicted, or from before a restart), this reports idle
+        rather than guessing at someone else's sync.
+        """
+        job = _sync_jobs.get(job_id) if job_id else None
+        if job is None:
+            return HTMLResponse('<div id="sync-status"></div>')
+        state = job["state"]
+        message = job["message"]
+
         if state == "running":
             elapsed = ""
-            if _sync_status["started_at"]:
-                secs = int(time.time() - _sync_status["started_at"])
+            if job["started_at"]:
+                secs = int(time.time() - job["started_at"])
                 elapsed = f" ({secs}s)"
             return HTMLResponse(f"""
             <div id="sync-status"
-                 hx-get="/api/sync/status"
+                 hx-get="/api/sync/status?job_id={job_id}"
                  hx-trigger="every 1s"
                  hx-swap="outerHTML"
                  class="sync-tracker sync-running">

@@ -1,13 +1,14 @@
 <script>
-// ── A system's technique grid: one refresh event, remembered choices, URL, deep link ──
+// ── A technique grid (a system's page, or the templates on the Baselines page): one refresh
+// event, remembered choices, URL, deep link. The filter bar says which: its data-pref-key,
+// data-base-path (the page) and data-window-url (a technique's window, "{id}" for the technique).
 // Navigation in TIDE is hx-boost: arriving here swaps the body rather than loading a page, so
 // this script runs again on every visit and DOMContentLoaded does not fire. Hence: listeners on
 // page elements are attached per visit (they go away with the elements); listeners on document
 // are installed once and look the page up each time; start-up work runs now if the DOM is ready.
 (function () {
-    var PREF_KEY = 'tide.systemSteps';
     function bar() { return document.getElementById('sys-filters'); }
-    function systemId() { var b = bar(); return b ? b.getAttribute('data-system-id') : ''; }
+    function windowUrl(id) { var b = bar(); return b ? b.getAttribute('data-window-url').replace('{id}', encodeURIComponent(id)) : ''; }
 
     function savePrefs() {
         var b = bar();
@@ -17,7 +18,7 @@
             group: Array.prototype.map.call(b.querySelectorAll('input[name="group"][type="checkbox"]:checked'), function (c) { return c.value; }),
             view: document.getElementById('sys-view').value || 'cards',
         };
-        try { localStorage.setItem(PREF_KEY, JSON.stringify(p)); } catch (_) { /* storage blocked */ }
+        try { localStorage.setItem(b.getAttribute('data-pref-key'), JSON.stringify(p)); } catch (_) { /* storage blocked */ }
     }
 
     // Button labels follow their dropdowns.
@@ -30,10 +31,12 @@
         document.getElementById('sys-tactic-label').textContent =
             tLabel + (tSort.value === 'off' ? '' : ' · ' + tSort.options[tSort.selectedIndex].text);
         var status = document.getElementById('sys-status'), mapping = document.getElementById('sys-mapping');
-        var cParts = [];
-        if (status.value) cParts.push(status.options[status.selectedIndex].text);
-        if (mapping.value) cParts.push(mapping.options[mapping.selectedIndex].text);
-        document.getElementById('sys-coverage-label').textContent = cParts.length ? cParts.join(' · ') : 'Any';
+        if (status && mapping) {   // a system's grid only: templates have no coverage
+            var cParts = [];
+            if (status.value) cParts.push(status.options[status.selectedIndex].text);
+            if (mapping.value) cParts.push(mapping.options[mapping.selectedIndex].text);
+            document.getElementById('sys-coverage-label').textContent = cParts.length ? cParts.join(' · ') : 'Any';
+        }
         var groups = Array.prototype.map.call(b.querySelectorAll('input[name="group"][type="checkbox"]:checked'), function (c) {
             return c.nextElementSibling ? c.nextElementSibling.textContent : c.value;
         });
@@ -104,12 +107,12 @@
     window.__tideSystemStepsQuery = window.location.search.slice(1);   // until the grid answers
 
     function writeUrl() {
-        // The page's own path (the system).
+        // The page's own path (the system, or the Baselines page).
         var base = bar() ? bar().getAttribute('data-base-path') : '';
-        if (!systemId() || !base || window.location.pathname !== base) return;
+        if (!base || window.location.pathname !== base) return;
         var params = new URLSearchParams(window.__tideSystemStepsQuery || '');
         params.delete('technique');
-        // Only a technique of this system: a rule's Covers can open another system's technique here.
+        // Only a technique of this grid: a rule's Covers can open another system's technique here.
         var m = document.querySelector('#modal-container .rule-modal[data-step-id]');
         if (m && document.getElementById('step-' + m.getAttribute('data-step-id'))) params.set('technique', m.getAttribute('data-step-id'));
         var qs = params.toString();
@@ -120,10 +123,9 @@
     function start() {
         var host = document.getElementById('modal-container');
         if (host) new MutationObserver(writeUrl).observe(host, { childList: true });
-        // Deep link: /systems/<id>?technique=<step id> opens that technique's window.
+        // Deep link: ?technique=<step id> opens that technique's window.
         var t = new URLSearchParams(window.location.search).get('technique');
-        if (t) htmx.ajax('GET', '/api/systems/' + systemId() + '/steps/' + encodeURIComponent(t),
-                         { target: '#modal-container', swap: 'innerHTML' });
+        if (t) htmx.ajax('GET', windowUrl(t), { target: '#modal-container', swap: 'innerHTML' });
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
     else setTimeout(start, 0);

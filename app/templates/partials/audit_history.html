@@ -56,7 +56,7 @@
                         {{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}
                     </span>
                     {% if snap.label %}
-                    <span class="badge badge-primary" style="font-size:0.68rem;">{{ snap.label }}</span>
+                    <span class="badge badge-primary badge--xs">{{ snap.label }}</span>
                     {% endif %}
                     {% if snap.captured_by %}
                     <span style="font-size:0.72rem;color:var(--color-text-muted);">by {{ snap.captured_by }}</span>

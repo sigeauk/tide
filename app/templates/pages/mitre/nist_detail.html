@@ -42,7 +42,8 @@
                 <div class="cve-card-item__id cve-card-item__id--pill">{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}</div>
                 <div class="cve-card-item__body">
                     <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                        <a href="{{ technique.url }}">{{ technique.name }}</a>
+                        <button type="button" class="rm-item__open" title="Open {{ tid }} in MITRE ATT&amp;CK" onclick="event.preventDefault()"
+                                hx-get="/api/mitre/window/technique/{{ tid | urlencode }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ technique.name }}</button>
                         {% for src in technique.sources or [] %}
                         {% if src == 'enterprise' %}
                         <span class="source-pill src-enterprise" title="MITRE ATT&CK Enterprise">ENT</span>

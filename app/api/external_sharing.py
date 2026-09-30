@@ -10,6 +10,7 @@ Authorisation:  Only SELECT statements are permitted; queries run directly
                 The API key owner must have access to the requested tenant.
 """
 
+import json
 import re
 import logging
 
@@ -27,10 +28,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/external", tags=["external"])
 
-# Compiled once — matches any dangerous keyword at a word boundary
+# Compiled once — matches any dangerous keyword at a word boundary. Includes
+# DuckDB's built-in file/network table functions (no INSTALL/LOAD needed to
+# call these, so blocking the extension load alone isn't enough) so a SELECT
+# can't be used to read arbitrary host files or reach outside the tenant DB.
 _FORBIDDEN_RE = re.compile(
     r"\b(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE|REPLACE|TRUNCATE|ATTACH|DETACH|"
-    r"COPY|EXPORT|IMPORT|INSTALL|LOAD|CALL|PRAGMA|GRANT|REVOKE|SET)\b",
+    r"COPY|EXPORT|IMPORT|INSTALL|LOAD|CALL|PRAGMA|GRANT|REVOKE|SET|"
+    r"READ_CSV(?:_AUTO)?|READ_PARQUET|READ_JSON(?:_AUTO)?|READ_NDJSON(?:_AUTO)?|"
+    r"READ_TEXT|READ_BLOB|READ_XLSX|GLOB|SNIFF_CSV|"
+    r"SQLITE_SCAN|POSTGRES_SCAN|ICEBERG_SCAN|DELTA_SCAN)\b",
     re.IGNORECASE,
 )
 
@@ -81,6 +88,61 @@ def _validate_sql(sql: str) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Forbidden SQL keyword: {match.group(0).upper()}",
         )
+
+
+# Table functions a query may use: they only generate rows, they read nothing.
+_ROW_FUNCTIONS = {"range", "generate_series", "unnest"}
+_PLAIN_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _check_references(conn, sql: str) -> None:
+    """Parse the query with DuckDB itself and let it read only this tenant's own tables and views
+    (and its CTEs). The keyword list alone cannot stop a SELECT reading a file: a path used as a
+    table name ('/x.csv', read by DuckDB's replacement scan), an alias of a blocked reader
+    (parquet_scan) or query('...') built from pieces all get past it."""
+    def reject(detail: str):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
+
+    tree = json.loads(conn.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
+    if tree.get("error") or len(tree.get("statements") or []) != 1:
+        reject("Only a single SELECT statement is allowed.")
+
+    database = conn.execute("SELECT current_database()").fetchone()[0].lower()
+    own = {name.lower() for (name,) in conn.execute(
+        "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
+        "UNION SELECT view_name FROM duckdb_views() WHERE database_name = current_database() AND NOT internal"
+    ).fetchall()}
+
+    ctes, tables, functions = set(), [], []
+
+    def walk(node):
+        if isinstance(node, dict):
+            for entry in (node.get("cte_map") or {}).get("map") or []:
+                ctes.add(str(entry.get("key") or ""))
+            if node.get("type") == "BASE_TABLE":
+                tables.append((node.get("catalog_name") or "", node.get("schema_name") or "", node.get("table_name") or ""))
+            elif node.get("type") == "TABLE_FUNCTION":
+                functions.append(((node.get("function") or {}).get("function_name") or "").lower())
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(tree["statements"][0])
+    # A CTE name is a plain identifier: a path can't pass as one ('/x.csv' in one scope, read as a
+    # file in another), since a file DuckDB would scan always has an extension.
+    for name in ctes:
+        if not _PLAIN_NAME.match(name):
+            reject(f"CTE names must be plain identifiers: {name}")
+    cte_names = {n.lower() for n in ctes}
+    for catalog, schema, name in tables:
+        if catalog.lower() not in ("", database) or schema.lower() not in ("", "main") \
+                or name.lower() not in own | cte_names:
+            reject(f"Unknown table: {name}")
+    for name in functions:
+        if name not in _ROW_FUNCTIONS:
+            reject(f"Table function not allowed: {name}")
 
 
 @router.get("/clients", response_model=ClientsResponse)
@@ -174,6 +236,7 @@ def external_query(
         # read-only would trip DuckDB's "different configuration" error.
         conn = duckdb.connect(tenant_db_path, read_only=False)
         try:
+            _check_references(conn, body.sql.strip().rstrip(";").strip())
             result = conn.execute(body.sql)
             columns = [desc[0] for desc in result.description]
             raw_rows = result.fetchall()

@@ -8,6 +8,7 @@ from urllib.parse import unquote
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
+from starlette.concurrency import run_in_threadpool
 from typing import Optional, Any, List, Dict, Tuple
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
@@ -654,21 +655,18 @@ def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, 
 
 def _build_rule_history_entries(history: list[dict], score_history: list[dict]) -> list[dict]:
     """Build one unified history timeline for the modal accordion."""
-    def _normalize_history_actor(actor_name: Any, actor_user_id: Any = None) -> str:
+    from app.services.database import get_database_service
+    aliases = get_database_service().get_actor_aliases() if history else {}
+
+    def _normalize_history_actor(actor_name: Any) -> str:
+        # One person reads as one person: username, email or full name all show the username.
         raw_name = str(actor_name or "").strip()
         if not raw_name:
             return "system"
         normalized = " ".join(raw_name.lower().split())
-
-        # Keep sync actors deterministic and merge known local-user aliases.
         if normalized in {"elastic", "system"}:
             return normalized
-        if normalized in {"darral", "darral jukes"}:
-            return "darral"
-
-        if actor_user_id and normalized == "darral jukes":
-            return "darral"
-        return raw_name
+        return aliases.get(normalized, raw_name)
 
     entries: list[dict] = []
 
@@ -719,7 +717,7 @@ def _build_rule_history_entries(history: list[dict], score_history: list[dict]) 
                 "kind": category,
                 "action": action,
                 "badge": badge,
-                "actor": _normalize_history_actor(event.get("actor_name"), event.get("actor_user_id")),
+                "actor": _normalize_history_actor(event.get("actor_name")),
                 "created_at": event.get("created_at"),
                 "message": detail.get("message") or "",
                 "reason": detail.get("reason") or "",
@@ -1517,29 +1515,51 @@ async def sync_rules(
     background_tasks: BackgroundTasks,
     settings: SettingsDep,
     force_mapping: bool = Query(False),
+    siem_id: Optional[str] = Query(None),
+    space: Optional[str] = Query(None),
 ):
     """Trigger an immediate per-tenant sync of rules from Elastic.
 
     Always scoped to the active tenant. The cross-tenant ``scope=all``
     fallback was removed in 4.1.13 — detection rules are per-tenant, so a
     sync MUST be scoped to one client.
+
+    ``siem_id``/``space`` (both required together): narrow the sync to one
+    of the client's own linked destinations instead of every one — for a
+    slow or heavily-loaded Elastic, syncing one destination at a time keeps
+    the ask small. Only a destination actually linked to this client is
+    accepted, so a stray id can't be used to probe another tenant's SIEM.
     """
     import asyncio
-    from app.main import scheduled_sync, _sync_status, _update_sync_status
-    
-    # Reset status and start sync
-    _sync_status["started_at"] = None
-    _sync_status["finished_at"] = None
-    _sync_status["rule_count"] = 0
-    label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
-    _update_sync_status("running", label)
-    
-    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=client_id))
-    
+    from app.main import scheduled_sync, _start_sync_job
+
+    dest_name = None
+    only_siem_id, only_space = None, None
+    if siem_id and space:
+        for dest in db.get_client_siems(client_id):
+            if dest.get("id") == siem_id and str(dest.get("space") or "").lower() == space.lower():
+                only_siem_id, only_space = siem_id, dest.get("space")
+                dest_name = dest.get("name") or dest.get("label")
+                break
+        if only_siem_id is None:
+            return HTMLResponse(
+                '<div id="sync-status" class="sync-tracker sync-error">'
+                '<span>That destination isn\'t linked to this client.</span></div>'
+            )
+
+    if dest_name:
+        label = f"Initialising full mapping sync for {dest_name}..." if force_mapping else f"Initialising sync for {dest_name}..."
+    else:
+        label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
+    job_id = _start_sync_job(client_id, message=label)
+
+    asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=client_id, job_id=job_id,
+                                       only_siem_id=only_siem_id, only_space=only_space))
+
     # Return live sync tracker that polls for status and refreshes grid on completion
     return HTMLResponse(
         '<div id="sync-status"'
-        '     hx-get="/api/sync/status"'
+        f'     hx-get="/api/sync/status?job_id={job_id}"'
         '     hx-trigger="load, every 1s"'
         '     hx-swap="outerHTML"'
         '     class="sync-tracker sync-running">'
@@ -1641,7 +1661,7 @@ async def create_rule(
                 status_code=404,
             )
 
-        success, message, new_rule_id = elastic_helper.create_detection_rule(
+        success, message, new_rule_id = await run_in_threadpool(elastic_helper.create_detection_rule,
             rule_data,
             space=space,
             kibana_url=siem.get("kibana_url"),
@@ -2367,7 +2387,7 @@ async def edit_rule(
         # on both sides. This used to loop over every linked rule and update them all -- a
         # carry-over from the old staging/production auto-sync model that no longer applies.
         # Push a reviewed edit across on purpose with Merge, from the Compare view.
-        success, message = elastic_helper.update_detection_rule(
+        success, message = await run_in_threadpool(elastic_helper.update_detection_rule,
             rule_id=elastic_rule_id, rule_data=payload, space=space,
             kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
         )
@@ -2442,8 +2462,13 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
     # otherwise use rule_id as given — for a brand new row that IS the identity that was just used
     # to create it in Kibana.
     elastic_id = str((rule.raw_data or {}).get("id") if rule and rule.raw_data else rule_id)
+    # Search-time samples are stored under this SAME saved-object id (see
+    # ``_search_time_rule_id``) — filtering by the portable ``rule_id`` here
+    # instead silently lost every sample recorded from a manual Test run
+    # whenever the two ids differ, resetting "Search time" to n/a on the
+    # very next sync even right after recording one.
     history = {(rid, sp): samples for (rid, sid, sp), samples in db.get_search_time_history().items()
-               if sid == siem_id and rid == rule_id}
+               if sid == siem_id and rid == elastic_id}
     try:
         frame = elastic_helper.fetch_single_rule(
             kibana_url=full["kibana_url"], api_key=full["api_token_enc"], space=space, rule_id=elastic_id,
@@ -2465,19 +2490,17 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
     else:
         rec = frame.to_dict("records")[0]
         rec["siem_id"] = siem_id
-        before = rule.score if rule else None
         db.save_audit_results([rec], client_id=client_id, checkpoint=False)
         if isinstance(rec.get("search_sample"), dict):
             db.record_search_time_samples([{**rec["search_sample"], "siem_id": siem_id}])
         db.set_rule_deprecated(rule_id, siem_id, space, False)
-        action, after = "synced", rec.get("score")
-        if before is None:
-            score_note = f" Scored {after}." if after is not None else ""
-        elif after is not None and after != before:
-            score_note = f" Score {before} → {after}."
-        else:
-            score_note = f" Score unchanged at {before}."
-        message = "Rule refreshed from Elastic and its field mappings re-checked." + score_note
+        action = "synced"
+        # No score delta here: "before" is this rule's score as of the *start* of this call,
+        # which a just-prior action (recording a search time, say) may have already moved —
+        # comparing against it can claim "unchanged" for a rule whose score visibly moved this
+        # session. The score-over-time chart is the accurate record; this message just confirms
+        # the refresh happened.
+        message = "Rule refreshed from Elastic and its field mappings re-checked."
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
         action=action, actor_user_id=actor_user_id, actor_name=actor_name,
@@ -2546,7 +2569,7 @@ async def restore_rule(
 
     from app import elastic_helper
     full_target = db.get_siem_inventory_item(replacement_siem_id) or target
-    success, message, new_rule_id = elastic_helper.create_detection_rule(
+    success, message, new_rule_id = await run_in_threadpool(elastic_helper.create_detection_rule,
         rule.raw_data,
         space=replacement_space,
         kibana_url=full_target.get("kibana_url") or target.get("kibana_url"),
@@ -2663,7 +2686,7 @@ async def enable_rule(
     if not siem:
         return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
 
-    success, message = elastic_helper.enable_detection_rule(
+    success, message = await run_in_threadpool(elastic_helper.enable_detection_rule,
         rule_id,
         space=space,
         kibana_url=siem.get("kibana_url"),
@@ -2705,7 +2728,7 @@ async def disable_rule(
     if not siem:
         return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
 
-    success, message = elastic_helper.disable_detection_rule(
+    success, message = await run_in_threadpool(elastic_helper.disable_detection_rule,
         rule_id,
         space=space,
         kibana_url=siem.get("kibana_url"),

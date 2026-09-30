@@ -1,0 +1,38 @@
+{#
+  The Description section of a technique window opened blank (Add technique, or "+" beside its
+  < >): the title (required), a description, and which baseline it goes in. Create makes the
+  technique and the window becomes its own, with every section's menu available.
+  Context: new (create_url, baselines [{id, name}], selected, note).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% set chosen = new.selected if new.selected in new.baselines | map(attribute='id') | list else (new.baselines[0].id if new.baselines else '') %}
+<form class="tf-form" hx-post="{{ new.create_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+  {% if new.baselines | length > 1 %}
+  <div>
+    <label class="form-label" for="tf-baseline">Baseline</label>
+    <select id="tf-baseline" name="playbook_id" class="form-input form-select" required>
+      {% for b in new.baselines %}<option value="{{ b.id }}"{% if b.id == chosen %} selected{% endif %}>{{ b.name }}</option>{% endfor %}
+    </select>
+  </div>
+  {% else %}
+  <input type="hidden" id="tf-baseline" name="playbook_id" value="{{ chosen }}">
+  {% endif %}
+  <div>
+    <label class="form-label" for="tf-name">Title</label>
+    <input id="tf-name" name="title" class="form-input" required autocomplete="off" placeholder="e.g. Credential dumping from LSASS">
+  </div>
+  <div>
+    <label class="form-label" for="tf-desc">Description <span class="text-muted">(optional)</span></label>
+    <textarea id="tf-desc" name="description" class="form-input" rows="4"
+              placeholder="The scenario this technique is about, and what should catch it"></textarea>
+  </div>
+  {% if new.note %}<p class="text-muted tf-form__note">{{ icon('info', '12') }} {{ new.note }}</p>{% endif %}
+  <div class="modal-actions">
+    <button name="Cancel" type="button" class="btn btn-secondary" data-rm-close>Cancel</button>
+    <button name="Save Technique" type="submit" class="btn btn-primary">{{ icon_text('plus', 'Create technique', '13') }}</button>
+  </div>
+</form>
+<script>
+  // The title first, after the window's own focus handling (app.js focuses Close on open).
+  setTimeout(function () { var t = document.getElementById('tf-name'); if (t) t.focus(); }, 50);
+</script>

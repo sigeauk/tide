@@ -5,9 +5,9 @@
 
 <div  name="Systems Edit" class="client-section-toggle" onclick="var b=document.getElementById('systems-body');var c=document.getElementById('systems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
     <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
-    <h2 style="margin:0;font-size:1.05rem;font-weight:700;color:var(--color-primary);flex:1;">Systems</h2>
-    <span class="badge badge-neutral" style="font-size:0.68rem;">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
-    <div   name="Edit Item" style="display:flex;gap:0.5rem;align-items:center;" onclick="event.stopPropagation();">
+    <h2 class="client-section-toggle__title">Systems</h2>
+    <span class="badge badge-neutral badge--xs">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
+    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
         <button  name="Open Edit Systems Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-systems-modal').style.display='flex'">
             {{ icon('edit-2', '14') }} Edit
         </button>
@@ -28,11 +28,11 @@
             <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
             {% endif %}
             {% if summary.worst_status == 'red' %}
-            <span class="badge badge-danger" style="font-size:0.68rem;">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — At Risk</span>
+            <span class="badge badge-danger badge--xs">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — At Risk</span>
             {% elif summary.worst_status == 'amber' %}
-            <span class="badge badge-warning" style="font-size:0.68rem;">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — Monitored</span>
+            <span class="badge badge-warning badge--xs">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — Monitored</span>
             {% else %}
-            <span class="badge badge-success" style="font-size:0.68rem;">Clean</span>
+            <span class="badge badge-success badge--xs">Clean</span>
             {% endif %}
             <span class="client-list-item__meta">{{ icon('server', '12') }} {{ summary.host_count }} device{{ 's' if summary.host_count != 1 }}</span>
             <span class="client-list-item__meta">{{ icon('bug', '12') }} {{ summary.vuln_count }} vuln{{ 's' if summary.vuln_count != 1 }}</span>
@@ -57,9 +57,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-text-muted);">
+<div class="client-section-empty">
     {{ icon('monitor', '36') }}
-    <p style="margin-top:0.75rem;">No systems assigned to this client yet.</p>
+    <p>No systems assigned to this client yet.</p>
 </div>
 {% endif %}
 </div>

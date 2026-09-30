@@ -2,13 +2,16 @@
   Technique window — one baseline technique (a "step" in code), on one system.
 
   Context: detail (from get_step_detail_for_system), system_id, coverage_error (a refused dashboard,
-  report or log: its values and message, with its id when it was an update).
+  report or log: its values and message, with its id when it was an update). Or, opened blank by
+  Add technique or "+" beside < > (which adds another to the same baseline): new
+  (partials/technique_new_form.html) and a blank detail -- the title is all it needs to be created.
 
   The rule window's twin (components/rule_modal.html): same header (score ring, badges, prev/next,
   sections menu, close), same three columns, the same History, the same cards (a mapped rule here
   is the same card as a covered technique there), the same score bars and the same MITRE ATT&CK
   list. Every section collapses, moves anywhere and hides, remembered per browser (app.js,
-  tide.techniqueWindowLayout.v2). Each section's actions are in its own "…" menu, with Move;
+  tide.techniqueWindowLayout.v2); a new technique opens in the same arrangement, its Description
+  (the title form) never hidden or collapsed (data-section-required). Each section's actions are in its own "…" menu, with Move;
   deleting the technique is in the header's "…" menu. Default arrangement:
     left   : History -- rules mapped / removed, known gap or N/A added / edited / removed with the
              reason, the technique added or edited, coverage added / edited / removed, SIEM coverage changes.
@@ -24,9 +27,10 @@
   The technique is this system's own (its copy of the template), so everything here -- the
   technique itself included -- belongs to this system alone.
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
-{% from "components/window_ui.html" import collapse_ctl, layout_menu, remove_btn, section_menu, tag %}
+{% from "components/mitre_ui.html" import technique_list %}
+{% from "components/window_ui.html" import collapse_ctl, layout_menu, remove_btn, rule_card, section_menu, tag %}
 
 {% set step = detail.step %}
 {% set status = detail.status %}
@@ -41,8 +45,6 @@
     'sigma_dismissed': 'Sigma dismissed', 'sigma_restored': 'Sigma restored',
     'siem_coverage': 'SIEM coverage',
 } %}
-{% set val_labels = {'valid': 'Validated', 'amber': 'Validation due soon', 'expired': 'Validation expired', 'never': 'Never validated'} %}
-{% set val_classes = {'valid': 'success', 'amber': 'warning', 'expired': 'danger', 'never': 'muted'} %}
 {% set step_url = '/api/systems/' ~ system_id ~ '/steps/' ~ step.id %}
 {% set mark = detail.blind_spots[0] if detail.blind_spots else none %}
 {% set mark_label = ('Not applicable' if mark.override_type == 'na' else 'Known gap') if mark else '' %}
@@ -59,12 +61,15 @@
        data-rule-dom-id="step-{{ step.id }}" role="dialog" aria-modal="true" aria-labelledby="sm-title">
 
     <header class="rm-header">
+      {% if not new %}
       <div class="score-ring score-ring--sm score-ring--{{ ring_class }}" style="--score: {{ ev or 0 }}"
            title="{{ ring_title }}" role="img" aria-label="{{ ring_title }}">
         <span class="score-ring__value">{{ ev if ev is not none else '–' }}</span>
       </div>
+      {% endif %}
       <div class="rm-header__main">
-        <h2 class="rm-title" id="sm-title">{{ step.title }}</h2>
+        <h2 class="rm-title" id="sm-title">{{ 'New technique' if new else step.title }}</h2>
+        {% if not new %}
         <div class="rm-header__badges">
           <span class="status-pill status-{{ status_class }}" title="{{ status_label }} on this system">
             {{ icon('shield-check', '12') }} {{ status_label }}
@@ -78,16 +83,23 @@
             {{ icon('calendar', '12') }} Review due
           </span>
           {% endif %}
-          <span class="status-pill" title="Tactic">{{ detail.tactic }}</span>
+          <span class="status-pill" title="Tactic">{{ tactic_icon(detail.tactic, "12") }} {{ detail.tactic }}</span>
           {% for tid in detail.technique_ids %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm', close_modal=true) }}{% endfor %}
           {% if detail.baseline_name %}<a class="rm-header__meta" href="/systems/{{ system_id }}?baseline_id={{ step.playbook_id }}" title="Show this baseline's techniques on the system page">{{ icon('layers', '12') }} {{ detail.baseline_name }}</a>{% endif %}
         </div>
+        {% endif %}
       </div>
       <div class="rm-header__tools">
         <div class="rm-nav" role="group" aria-label="Browse techniques">
           <button name="Previous Technique" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous technique (←)" aria-label="Previous technique" disabled>{{ icon('chevron-left', '16') }}</button>
           <button name="Next Technique" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next technique (→)" aria-label="Next technique" disabled>{{ icon('chevron-right', '16') }}</button>
+          {% if not new %}
+          <button name="Add Another Technique" type="button" class="rm-iconbtn" title="Add another technique to {{ detail.baseline_name or 'this baseline' }}"
+                  aria-label="Add another technique" hx-get="/api/systems/{{ system_id }}/steps-new?baseline_id={{ step.playbook_id }}"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon('plus', '16') }}</button>
+          {% endif %}
         </div>
+        {% if not new %}
         {% call layout_menu(hint='menu') %}
         <button name="Remove Technique" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                 title="Delete this technique from this system's baseline"
@@ -96,6 +108,7 @@
           {{ icon('trash-2', '14') }}<span>Delete technique</span>
         </button>
         {% endcall %}
+        {% endif %}
         <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
       </div>
     </header>
@@ -108,7 +121,7 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('history') }}
             <h3 class="rm-panel__title">History</h3>
-            {{ section_menu('History') }}
+            {% if not new %}{{ section_menu('History') }}{% endif %}
           </div>
           {% if detail.history %}
           <div class="rm-filters rm-filters--row">
@@ -271,18 +284,21 @@
         {# The user's own description only: the tactic, baseline and ATT&CK ids are in the header
            and the MITRE ATT&CK section. Update replaces this body with the title and description
            form (the ATT&CK ids are updated from MITRE ATT&CK). #}
-        <div class="rm-panel" data-fold="tw-description" data-section="description" data-section-label="Description">
+        <div class="rm-panel" data-fold="tw-description" data-section="description" data-section-label="Description"{% if new %} data-section-required{% endif %}>
           <div class="rm-panel__head">
             {{ collapse_ctl('description') }}
             <h3 class="rm-panel__title">Description</h3>
+            {% if not new %}
             {% call section_menu('Description') %}
             <button name="Update Description" type="button" role="menuitem" class="rh-more__item"
                     hx-get="{{ step_url }}/edit?part=description" hx-target="#sm-technique-body" hx-swap="innerHTML" hx-include="unset"
                     title="Edit this technique's title and description on this system">{{ icon('pencil', '14') }}<span>Update</span></button>
             {% endcall %}
+            {% endif %}
           </div>
           <div class="rm-panel__body" id="sm-technique-body">
-            {% if step.description %}<div class="md-content">{{ step.description | md }}</div>
+            {% if new %}{% include "partials/technique_new_form.html" %}
+            {% elif step.description %}<div class="md-content">{{ step.description | md }}</div>
             {% else %}<p class="text-muted sm-muted">No description yet. Add one from this section's menu, with Update.</p>{% endif %}
           </div>
         </div>
@@ -297,10 +313,12 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('coverage') }}
             <h3 class="rm-panel__title">Coverage {% if detail.mapped_count + detail.watched | length %}<span class="rm-fold__count">{{ detail.mapped_count + detail.watched | length }}</span>{% endif %}</h3>
+            {% if not new %}
             {% call section_menu('Coverage') %}
             <button name="Add Coverage" type="button" role="menuitem" class="rh-more__item" onclick="tideAddCoverage()"
                     title="Add a rule, known gap, N/A, dashboard, report or log">{{ icon('plus', '14') }}<span>Add coverage</span></button>
             {% endcall %}
+            {% endif %}
           </div>
           {% if detail.blind_spots or detail.detections or detail.watched %}
           <div class="rm-items">
@@ -380,43 +398,10 @@
             {% set e = d.evidence %}
             {% set t = d.telemetry %}
             <div class="rm-item{% if d.unresolved or not d.counts or (t and t.missing) %} rm-item--warn{% endif %}">
-              <div class="score-ring score-ring--sm score-ring--{{ e.tone }}" style="--score: {{ e.pct }}"
-                   title="{{ e.how }}" role="img" aria-label="{{ 'Score ' ~ e.pct ~ ' percent' if e.applicable else 'Not scored on this system' }}">
-                <span class="score-ring__value">{{ e.pct if e.applicable else 'n/a' }}</span>
-              </div>
-              <div class="rm-item__main">
-                <div class="rm-item__name" title="{{ d.name }}">
-                  {% if d.rule_id and d.siem_id %}
-                  <button type="button" class="rm-item__open" data-rule-open
-                          hx-get="/api/rules/{{ d.rule_id }}/history-modal?space={{ d.space | urlencode }}&siem_id={{ d.siem_id | urlencode }}"
-                          hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-                          title="Open this rule">{{ d.name }}</button>
-                  {% else %}{{ d.name }}{% endif %}
-                </div>
-                <div class="rm-item__meta">
-                  {% if d.destination %}{{ tag(d.destination, d.destination_color, title='SIEM destination') }}
-                  {% elif d.source == 'manual' %}{{ tag('Manual', title='Recorded by hand, not a SIEM rule') }}{% endif %}
-                  {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('alert-triangle', '10') }} Needs relinking</span>{% endif %}
-                  {% if d.enabled is not none %}<span class="{{ 'text-success' if d.enabled else 'text-muted' }}">{{ '● Enabled' if d.enabled else '○ Disabled' }}</span>{% endif %}
-                  {% if d.score is not none and not e.applicable %}<span class="text-muted" title="The rule's own score; it does not count here">rule scores {{ d.score }}%</span>{% endif %}
-                  {% if d.deprecated %}{{ tag('Deprecated') }}{% endif %}
-                  {% if not d.counts %}<span class="text-warning" title="Its destination is not one this system counts toward coverage">Not counted</span>{% endif %}
-                </div>
-                {% if t or d.validation_status %}
-                <div class="rm-chips" title="Whether this rule's fields exist in the SIEM, and when it was last validated">
-                  {% if t %}
-                  {% if t.ok %}<span class="text-success" title="Fields found in the SIEM's index mappings">{{ icon('check', '10') }} {{ t.ok }} found</span>{% endif %}
-                  {% if t.missing %}<span class="text-danger" title="Missing: {{ t.missing_fields | join(', ') }}">{{ icon('x', '10') }} {{ t.missing }} missing</span>{% endif %}
-                  {% if t.unknown %}<span class="text-warning" title="The SIEM could not be asked about these fields; they are not counted as missing">? {{ t.unknown }} not checked</span>{% endif %}
-                  {% if not (t.ok or t.missing or t.unknown) %}<span class="text-muted" title="Sync the rule to check its fields">fields not checked</span>{% endif %}
-                  {% endif %}
-                  {% if d.validation_status %}
-                  <span class="text-{{ val_classes.get(d.validation_status, 'muted') }}"
-                        title="{% if d.validation_date %}Validated {{ d.validation_date.strftime('%Y-%m-%d') }}{% if d.validated_by %} by {{ d.validated_by }}{% endif %}{% else %}This rule has never been validated{% endif %}">{{ icon('circle-check', '10') }} {{ val_labels.get(d.validation_status, d.validation_status) }}</span>
-                  {% endif %}
-                </div>
-                {% endif %}
-              </div>
+              {% call rule_card(d, e) %}
+                {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('alert-triangle', '10') }} Needs relinking</span>{% endif %}
+                {% if not d.counts %}<span class="text-warning" title="Its destination is not one this system counts toward coverage">Not counted</span>{% endif %}
+              {% endcall %}
               {% set unmap_url = '/api/baselines/tactics/detections/' ~ d.id ~ '?step_id=' ~ step.id ~ '&system_id=' ~ system_id %}
               {% set unmap_confirm = 'Remove this rule from this technique on this system? The rule itself is not deleted.' %}
               {% if d.unresolved %}
@@ -451,14 +436,18 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('Sigma rules') }}
             <h3 class="rm-panel__title">Sigma rules</h3>
-            {{ section_menu('Sigma rules') }}
+            {% if not new %}{{ section_menu('Sigma rules') }}{% endif %}
           </div>
+          {% if new %}
+          <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>
+          {% else %}
           <input type="search" id="sm-sigma-search" class="form-input sm-sigma__search" name="q" placeholder="Search Sigma rules…"
                  aria-label="Search Sigma rules" hx-get="{{ step_url }}/sigma" hx-trigger="input changed delay:300ms, search"
                  hx-target="#sm-sigma-candidates" hx-swap="innerHTML">
           <div id="sm-sigma-candidates" hx-get="{{ step_url }}/sigma" hx-trigger="load" hx-swap="innerHTML">
             <p class="rm-empty">Looking for Sigma rules…</p>
           </div>
+          {% endif %}
         </div>
 
         {# Risks: this system's priority and category for the technique (one of each). What covers
@@ -467,10 +456,12 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('risks') }}
             <h3 class="rm-panel__title">Risks</h3>
+            {% if not new %}
             {% call section_menu('Risks') %}
             <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" onclick="tideToggleRisks(true)"
                     title="Edit priority and category">{{ icon('pencil', '14') }}<span>Update</span></button>
             {% endcall %}
+            {% endif %}
           </div>
           <div id="sm-risks-view">
             <dl class="rm-facts">
@@ -504,22 +495,17 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('MITRE ATT&amp;CK') }}
             <h3 class="rm-panel__title">MITRE ATT&amp;CK <span class="rm-fold__count">{{ detail.techniques | length }}</span></h3>
+            {% if not new %}
             {% call section_menu('MITRE ATT&amp;CK') %}
             <button name="Update MITRE" type="button" role="menuitem" class="rh-more__item"
                     hx-get="{{ step_url }}/edit?part=mitre" hx-target="#sm-mitre-body" hx-swap="innerHTML" hx-include="unset"
                     title="Choose this technique's ATT&amp;CK techniques on this system">{{ icon('pencil', '14') }}<span>Update</span></button>
             {% endcall %}
+            {% endif %}
           </div>
           <div id="sm-mitre-body">
             {% if detail.techniques %}
-            <ul class="rm-mitre">
-              {% for m in detail.techniques %}
-              <li>
-                {{ mitre_pill(m.id, neutral=true, clickable=true, size='sm', close_modal=true) }}
-                <span class="rm-mitre__name">{{ m.name or 'Unknown technique' }}{% if m.tactic %}<small>{{ m.tactic }}</small>{% endif %}</span>
-              </li>
-              {% endfor %}
-            </ul>
+            {{ technique_list(detail.techniques) }}
             {% else %}
             <p class="rm-empty">No MITRE techniques mapped to this technique.</p>
             {% endif %}
@@ -595,5 +581,6 @@
     if (editing) item.querySelector('[data-watch-form] input[name="title"]').focus();
   }
   // A refused dashboard / report / log comes back with its form open.
-  if (!document.getElementById('sm-add-coverage').hidden) tideCoverageKind(document.getElementById('sm-cov-kind').value);
+  var tideAddCov = document.getElementById('sm-add-coverage');
+  if (tideAddCov && !tideAddCov.hidden) tideCoverageKind(document.getElementById('sm-cov-kind').value);
 </script>

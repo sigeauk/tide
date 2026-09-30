@@ -5,21 +5,21 @@
 
 {% block content %}
 {% set tlp_v = (indicator.tlp or 'unlabelled')|lower %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
-    <div style="min-width:0;">
-        <p style="margin:0 0 0.25rem 0;"><a name="Back to Indicators" href="/cti/indicators" style="color:var(--color-muted);font-size:0.85rem;text-decoration:none;">{{ icon('arrow-right','12') }} <span style="vertical-align:middle;">Back to Indicators</span></a></p>
+<div class="page-header">
+    <div class="page-header__text">
+        <p class="cti-back-link"><a name="Back to Indicators" href="/cti/indicators">{{ icon('arrow-right','12') }} <span>Back to Indicators</span></a></p>
         <h1 class="page-title-hero" style="word-break:break-all;">{{ icon('crosshair','24') }} {{ indicator.observable_value }}</h1>
         <p class="page-subtitle">
-            <span class="badge badge-secondary" style="font-size:0.7rem;">{{ indicator.pattern_type or '—' }}</span>
-            <span style="margin-left:0.5rem;">TLP <strong>{{ tlp_v|upper }}</strong></span>
+            <span class="badge badge-secondary">{{ indicator.pattern_type or '—' }}</span>
+            <span class="cti-meta-sep">TLP <strong>{{ tlp_v|upper }}</strong></span>
             {% if indicator.source_id %}
-                <span style="margin-left:0.5rem;">{{ icon('database','12') }} {{ source_labels.get(indicator.source_id, 'External CTI') }}</span>
+                <span class="cti-meta-sep">{{ icon('database','12') }} {{ source_labels.get(indicator.source_id, 'External CTI') }}</span>
             {% endif %}
         </p>
     </div>
 </div>
 
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid">
     <div class="metric-card">
         <p class="metric-value" style="font-size:0.95rem;">{{ tlp_v|upper }}</p>
         <p class="metric-label">TLP marking</p>
@@ -53,7 +53,7 @@
 </div>
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">{{ icon('info','16') }} Details</h2>
+    <h2 class="section-title">{{ icon('info','16') }} Details</h2>
     <dl class="kv">
         <dt>Pattern</dt><dd style="word-break:break-all;">{{ indicator.pattern or '—' }}</dd>
         <dt>Pattern type</dt><dd>{{ indicator.pattern_type or '—' }}</dd>
@@ -65,7 +65,7 @@
         <dt>MITRE techniques</dt><dd>
             {% if indicator.mitre_techniques %}
                 {% for t in indicator.mitre_techniques %}
-                <span class="badge badge-secondary" style="font-size:0.7rem;margin-right:0.25rem;">{{ t }}</span>
+                <span class="badge badge-secondary" style="margin-right:0.25rem;">{{ t }}</span>
                 {% endfor %}
             {% else %}—{% endif %}
         </dd>
@@ -74,9 +74,9 @@
 </section>
 
 <section class="card card-padded" style="margin-bottom:1rem;">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('users','16') }} Related actors
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ indicator.related_actors|length }}</span>
+        <span class="badge badge-secondary">{{ indicator.related_actors|length }}</span>
     </h2>
     {% if indicator.related_actors %}
     <table class="data-table">
@@ -97,9 +97,9 @@
 </section>
 
 <section class="card card-padded">
-    <h2 style="margin-top:0;font-size:1rem;">
+    <h2 class="section-title">
         {{ icon('file-text','16') }} Referenced by reports
-        <span class="badge badge-secondary" style="font-size:0.7rem;margin-left:0.5rem;">{{ indicator.related_reports|length }}</span>
+        <span class="badge badge-secondary">{{ indicator.related_reports|length }}</span>
     </h2>
     {% if indicator.related_reports %}
     <table class="data-table">

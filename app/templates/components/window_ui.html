@@ -50,6 +50,54 @@
 <span class="rm-tag{% if kind %} rm-tag--{{ kind }}{% endif %}"{% if color %} style="--tag-color: {{ color }};"{% endif %}{% if title %} title="{{ title }}"{% endif %}>{{ text }}</span>
 {%- endmacro %}
 
+{# A rule as one card, inside an .rm-item: score ring (e: its evidence -- pct, tone, applicable,
+   how), the name opening the rule window, its destination, state and validation, and whether its
+   fields exist in the SIEM. d is inventory_engine.rule_card plus name, rule_id, siem_id, space
+   (and source). A call block adds the window's own notes after the destination (a baseline
+   technique's Needs relinking / Not counted). Used by a baseline technique's Coverage and the
+   MITRE technique window's Your rules. #}
+{% macro rule_card(d, e) -%}
+{% set val_labels = {'valid': 'Validated', 'amber': 'Validation due soon', 'expired': 'Validation expired', 'never': 'Never validated'} %}
+{% set val_classes = {'valid': 'success', 'amber': 'warning', 'expired': 'danger', 'never': 'muted'} %}
+{% set t = d.telemetry %}
+<div class="score-ring score-ring--sm score-ring--{{ e.tone }}" style="--score: {{ e.pct }}"
+     title="{{ e.how }}" role="img" aria-label="{{ 'Score ' ~ e.pct ~ ' percent' if e.applicable else 'Not scored here' }}">
+    <span class="score-ring__value">{{ e.pct if e.applicable else 'n/a' }}</span>
+</div>
+<div class="rm-item__main">
+    <div class="rm-item__name" title="{{ d.name }}">
+        {% if d.rule_id and d.siem_id %}
+        <button type="button" class="rm-item__open" data-rule-open
+                hx-get="/api/rules/{{ d.rule_id }}/history-modal?space={{ d.space | urlencode }}&siem_id={{ d.siem_id | urlencode }}"
+                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                title="Open this rule">{{ d.name }}</button>
+        {% else %}{{ d.name }}{% endif %}
+    </div>
+    <div class="rm-item__meta">
+        {% if d.destination %}{{ tag(d.destination, d.destination_color, title='SIEM destination') }}
+        {% elif d.source == 'manual' %}{{ tag('Manual', title='Recorded by hand, not a SIEM rule') }}{% endif %}
+        {% if caller is defined %}{{ caller() }}{% endif %}
+        {% if d.enabled is not none %}<span class="{{ 'text-success' if d.enabled else 'text-muted' }}">{{ '● Enabled' if d.enabled else '○ Disabled' }}</span>{% endif %}
+        {% if d.score is not none and not e.applicable %}<span class="text-muted" title="The rule's own score; it does not count here">rule scores {{ d.score }}%</span>{% endif %}
+        {% if d.deprecated %}{{ tag('Deprecated') }}{% endif %}
+    </div>
+    {% if t or d.validation_status %}
+    <div class="rm-chips" title="Whether this rule's fields exist in the SIEM, and when it was last validated">
+        {% if t %}
+        {% if t.ok %}<span class="text-success" title="Fields found in the SIEM's index mappings">{{ icon('check', '10') }} {{ t.ok }} found</span>{% endif %}
+        {% if t.missing %}<span class="text-danger" title="Missing: {{ t.missing_fields | join(', ') }}">{{ icon('x', '10') }} {{ t.missing }} missing</span>{% endif %}
+        {% if t.unknown %}<span class="text-warning" title="The SIEM could not be asked about these fields; they are not counted as missing">? {{ t.unknown }} not checked</span>{% endif %}
+        {% if not (t.ok or t.missing or t.unknown) %}<span class="text-muted" title="Sync the rule to check its fields">fields not checked</span>{% endif %}
+        {% endif %}
+        {% if d.validation_status %}
+        <span class="text-{{ val_classes.get(d.validation_status, 'muted') }}"
+              title="{% if d.validation_date %}Validated {{ d.validation_date.strftime('%Y-%m-%d') }}{% if d.validated_by %} by {{ d.validated_by }}{% endif %}{% else %}This rule has never been validated{% endif %}">{{ icon('circle-check', '10') }} {{ val_labels.get(d.validation_status, d.validation_status) }}</span>
+        {% endif %}
+    </div>
+    {% endif %}
+</div>
+{%- endmacro %}
+
 {# The header's "…" menu: which sections show, and Reset layout. A call block adds the window's own
    actions under them (the technique window's Delete technique). #}
 {% macro layout_menu(hint='drag') -%}
