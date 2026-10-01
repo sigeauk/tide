@@ -8,8 +8,9 @@
   The coverage pill = this step's coverage status ON THIS SYSTEM. The MITRE pills are neutral labels,
   never a verdict: the same technique sits on many steps, so "some rule carries this tag" says
   nothing about whether this scenario is covered. The only number that does is the step's own
-  mapped-rule count, which is always shown, including at zero. The pills are plain labels here, as
-  on rule cards: the whole card is one control, and a clickable pill inside it swallowed the click.
+  mapped-rule count, which is always shown, including at zero. As on rule cards, a pill opens the
+  technique's side panel and stops its own click, so the card never sees it; anywhere else on the
+  card opens the technique's window.
 #}
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
@@ -41,7 +42,7 @@
             {% if step.priority %}<span class="status-pill sm-priority sm-priority--{{ step.priority }}" title="Priority">{{ step.priority | capitalize }}</span>{% endif %}
             <div class="mitre-pills-wrap">
                 {% for tid in (step.display_technique_ids | default([]))[:3] %}
-                {{ mitre_pill(tid, neutral=true, clickable=false, size='sm') }}
+                {{ mitre_pill(tid, neutral=true, clickable=true, size='sm') }}
                 {% endfor %}
                 {% if (step.display_technique_ids | default([])) | length > 3 %}
                 <span class="mitre-pill mitre-more mitre-sm">+{{ (step.display_technique_ids | length) - 3 }}</span>

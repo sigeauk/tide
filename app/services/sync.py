@@ -7,6 +7,8 @@ import logging
 import os
 import sys
 
+from app.services import tls
+
 logger = logging.getLogger(__name__)
 
 
@@ -487,7 +489,8 @@ def run_mitre_sync(client_id: str | None = None):
 
                         opencti_runs += 1
                         try:
-                            df_octi = cti_helper.get_threat_landscape(graphql_base, token)
+                            df_octi = cti_helper.get_threat_landscape(
+                                graphql_base, token, verify=tls.verify_arg(cfg.get("verify_tls")))
                             if df_octi is None or df_octi.empty:
                                 result["warnings"].append(
                                     f"OpenCTI connector '{connector.get('label') or connector.get('id')}' returned no intrusion sets."
@@ -1037,6 +1040,15 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         f"Orphan sweep failed for client_id={client_id}: "
                         f"{type(_orphan_exc).__name__}: {_orphan_exc}"
                     )
+
+                # Score history of rules that are gone (removed above, or deleted/re-created in
+                # Kibana) can never be shown again: drop it rather than let the file grow.
+                try:
+                    pruned = db.prune_orphan_score_history()
+                    if pruned:
+                        logger.info(f"Removed {pruned} score-history row(s) of deleted rules for client_id={client_id}")
+                except Exception as _prune_exc:  # noqa: BLE001
+                    logger.error(f"Score-history prune failed for client_id={client_id}: {_prune_exc}")
 
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count

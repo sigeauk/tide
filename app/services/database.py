@@ -100,7 +100,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 78
+SCHEMA_VERSION = 79
 
 # Default colours offered (and auto-assigned) for a linked SIEM+space destination -- distinct
 # from each other at a glance, and legible as small dots/pills in both light and dark themes.
@@ -3599,13 +3599,9 @@ class DatabaseService:
             self._set_schema_version(conn, 77)
             logger.info("Migration 77: relinked %d rule mapping(s) recorded by Kibana object id.", relinked)
 
-        # ── Migration 78: per-integration "skip TLS verification" ──────
-        # Every outbound HTTPS integration (SIEM links, OpenCTI, GitLab,
-        # Keycloak, CTI connectors) used to either hardcode verify=False
-        # unconditionally or have no way to trust a self-signed cert at
-        # all. TIDE is built to run standalone against self-signed
-        # certs, so each integration now carries its own opt-out,
-        # defaulting to verification ON.
+        # ── Migration 78: tls_insecure column (superseded by 79) ───────
+        # Added a per-integration column that nothing ever read or wrote;
+        # migration 79 replaces it with tls_verify.
         if current_version < 78:
             existing_tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
             for tbl in ("siem_inventory", "opencti_inventory", "gitlab_inventory",
@@ -3614,7 +3610,26 @@ class DatabaseService:
                     conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS tls_insecure BOOLEAN DEFAULT false")
             self._set_schema_version(conn, 78)
             logger.info("Migration 78: added tls_insecure to siem_inventory, opencti_inventory, "
-                        "gitlab_inventory, keycloak_inventory, cti_connectors (defaults to verification on).")
+                        "gitlab_inventory, keycloak_inventory, cti_connectors.")
+
+        # ── Migration 79: per-integration "Verify TLS certificate" ──────
+        # Each SIEM, GitLab and Keycloak entry gets its own tls_verify
+        # setting, off by default: TIDE is built to run standalone against
+        # self-signed certificates (app.services.tls). CTI connectors keep
+        # theirs in their config (verify_tls). The unused tls_insecure
+        # column from migration 78 is dropped; it was never set.
+        if current_version < 79:
+            existing_tables = {r[0] for r in conn.execute("SHOW TABLES").fetchall()}
+            for tbl in ("siem_inventory", "gitlab_inventory", "keycloak_inventory"):
+                if tbl in existing_tables:
+                    conn.execute(f"ALTER TABLE {tbl} ADD COLUMN IF NOT EXISTS tls_verify BOOLEAN DEFAULT false")
+            for tbl in ("siem_inventory", "opencti_inventory", "gitlab_inventory",
+                        "keycloak_inventory", "cti_connectors"):
+                if tbl in existing_tables:
+                    conn.execute(f"ALTER TABLE {tbl} DROP COLUMN IF EXISTS tls_insecure")
+            self._set_schema_version(conn, 79)
+            logger.info("Migration 79: added tls_verify (off) to siem_inventory, gitlab_inventory, "
+                        "keycloak_inventory; dropped the unused tls_insecure column.")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
@@ -5445,6 +5460,22 @@ class DatabaseService:
             ).fetchall()
         return [{"rule_id": r[0], "name": r[1]} for r in rows]
 
+    def rule_ids_named(self, siem_id: str, space: str, name: str) -> List[str]:
+        """The rules in one destination called ``name``, for Add-link when a name was typed rather
+        than picked: the exact name if any rule has it, else the same name ignoring case and
+        surrounding spaces (as the search matched it). Deprecated rules are left out, as the search
+        leaves them out. Names are not unique, so this can return several."""
+        with self.get_connection() as conn:
+            for clause in ("name = ?", "lower(trim(name)) = lower(trim(?))"):
+                rows = conn.execute(
+                    f"SELECT rule_id FROM detection_rules WHERE siem_id = ? AND space = ? AND {clause} "
+                    "AND NOT deprecated",
+                    [siem_id, space, name],
+                ).fetchall()
+                if rows:
+                    return [r[0] for r in rows]
+        return []
+
     def record_siem_space_status(self, siem_id: str, space: str, reachable: bool, reason: str = "") -> None:
         """Store the result of the pre-sync reachability check for one (siem_id, space)."""
         with self.get_connection() as conn:
@@ -5573,8 +5604,7 @@ class DatabaseService:
 
         Returns ``(migration_by_rule_id, logical_by_key)`` where
         ``migration_by_rule_id`` maps a source OR target rule id to its
-        latest ``rule_migrations`` row (same winner as
-        :meth:`get_rule_migration_for_rule`) and ``logical_by_key`` maps
+        latest ``rule_migrations`` row and ``logical_by_key`` maps
         ``(rule_id, siem_id, space)`` to its latest logical identity (same
         winner as :meth:`get_logical_rule_identity_for_rule` with both
         scope arguments set). Two queries in total instead of two per rule.
@@ -6532,6 +6562,24 @@ class DatabaseService:
             if owns_conn:
                 local_conn_cm.__exit__(None, None, None)
 
+    def prune_orphan_score_history(self) -> int:
+        """Delete the score history of rules that no longer exist in this tenant (deleted, moved
+        or re-created under a new id). A rule is its (rule_id, siem_id, space); deprecated rules
+        are still rules, so their history stays. Returns the number of rows removed."""
+        with self.get_connection() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
+                "AND table_name = 'rule_score_history'"
+            ).fetchone():
+                return 0
+            removed = conn.execute(
+                "DELETE FROM rule_score_history h WHERE NOT EXISTS (SELECT 1 FROM detection_rules r "
+                "WHERE r.rule_id = h.rule_id AND r.siem_id = h.siem_id AND r.space = h.space)"
+            ).fetchone()[0]
+            if removed:
+                conn.execute("CHECKPOINT")
+            return removed
+
     def get_rule_score_history(
         self,
         rule_id: str,
@@ -6784,6 +6832,35 @@ class DatabaseService:
         """Bootstrap lifecycle history for one rule (see the bulk form)."""
         self.bootstrap_rule_history_bulk([rule_data], client_id)
 
+    @staticmethod
+    def _relink_history_by_object_id(conn) -> int:
+        """Move history recorded under a rule's Kibana saved-object id to the rule's own key.
+
+        Until 6.0.2 the sync's Elastic 'created'/'edited' events were keyed by the saved-object
+        id, which no rule row carries since rules are keyed by their portable rule_id, so those
+        events never showed. A history row is moved only when its id is exactly the saved-object
+        id of a rule at the same SIEM and space. An Elastic 'created' or 'edited' event the move
+        duplicates (the same event under both keys) is dropped, keeping the earliest.
+        Idempotent: once done it matches nothing.
+        """
+        moved = conn.execute(
+            "UPDATE rule_lifecycle_history h SET rule_id = r.rule_id FROM detection_rules r "
+            "WHERE h.siem_id = r.siem_id AND h.space = r.space "
+            "AND h.rule_id = json_extract_string(r.raw_data, '$.id') AND h.rule_id <> r.rule_id"
+        ).fetchone()[0]
+        if moved:
+            conn.execute(
+                "DELETE FROM rule_lifecycle_history WHERE id IN ("
+                " SELECT id FROM (SELECT id, row_number() OVER ("
+                "  PARTITION BY rule_id, siem_id, space, action,"
+                "   CASE WHEN action = 'edited' THEN json_extract_string(detail, '$.elastic_timestamp') END"
+                "  ORDER BY created_at, id) AS n"
+                "  FROM rule_lifecycle_history WHERE action IN ('created', 'edited') AND actor_name = 'elastic'"
+                "  AND json_extract_string(detail, '$.source') = 'elastic_sync') WHERE n > 1)"
+            )
+            logger.info("Rule history: attached %d event(s) recorded under a saved-object id.", moved)
+        return moved
+
     def bootstrap_rule_history_bulk(
         self,
         records: List[Dict[str, Any]],
@@ -6814,6 +6891,7 @@ class DatabaseService:
         state: Dict[Tuple[Any, Any, Any], List[Any]] = {}
         with self.get_connection() as conn:
             self._ensure_rule_lifecycle_history_table(conn)
+            self._relink_history_by_object_id(conn)
             for rule_id, siem_id, space, action, detail_json in conn.execute(
                 "SELECT rule_id, siem_id, space, action, detail FROM rule_lifecycle_history "
                 "WHERE action = 'created' OR action = 'edited'"
@@ -6834,11 +6912,11 @@ class DatabaseService:
                 siem_id = rule_data.get("siem_id")
                 space = rule_data.get("space") or rule_data.get("space_id") or "default"
                 raw_data = rule_data.get("raw_data") or {}
-                # Key by the identity ``save_audit_results`` persists (Elastic's
-                # saved-object ``id``), not Kibana's stable ``rule_id``. Rule
-                # cards look history up by the stored id, so keying by the
-                # other one left Elastic-created/edited events unattached.
-                rule_id = raw_data.get("id") or rule_data.get("rule_id")
+                # Key by the identity ``save_audit_results`` persists: Elastic's portable
+                # ``rule_id`` (see normalize_rule_id there), not the saved-object ``id``. Rule
+                # cards look history up by the stored id, so any other key leaves the event
+                # unattached.
+                rule_id = raw_data.get("rule_id") or rule_data.get("rule_id")
                 if not all([rule_id, siem_id, space]):
                     continue
 
@@ -11101,7 +11179,7 @@ class DatabaseService:
                 "extra_config, is_active, "
                 "last_test_status, last_test_at, last_test_message, "
                 "log_enabled, log_target_space, log_schedule, log_retention_days, "
-                "log_destination_path, "
+                "log_destination_path, tls_verify, "
                 "created_at, updated_at "
                 "FROM siem_inventory ORDER BY label"
             ).fetchall()
@@ -11109,7 +11187,7 @@ class DatabaseService:
                     "extra_config", "is_active",
                     "last_test_status", "last_test_at", "last_test_message",
                     "log_enabled", "log_target_space", "log_schedule", "log_retention_days",
-                    "log_destination_path",
+                    "log_destination_path", "tls_verify",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
@@ -11119,7 +11197,7 @@ class DatabaseService:
             row = conn.execute(
                 "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
                 "api_token_enc, "
-                "extra_config, is_active, created_at, updated_at "
+                "extra_config, is_active, tls_verify, created_at, updated_at "
                 "FROM siem_inventory WHERE id = ?", [siem_id]
             ).fetchone()
             if not row:
@@ -11127,13 +11205,13 @@ class DatabaseService:
             return dict(zip(
                 ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
                  "api_token_enc",
-                 "extra_config", "is_active", "created_at", "updated_at"], row
+                 "extra_config", "is_active", "tls_verify", "created_at", "updated_at"], row
             ))
 
     def create_siem_inventory_item(self, siem_type: str, label: str,
                                    elasticsearch_url: str = None, kibana_url: str = None,
                                    api_token_enc: str = None,
-                                   extra_config: dict = None) -> Dict:
+                                   extra_config: dict = None, tls_verify: bool = False) -> Dict:
         """Create a SIEM in the centralized inventory. Returns the full dict."""
         import json as _json
         extra_json = _json.dumps(extra_config) if extra_config else None
@@ -11141,10 +11219,10 @@ class DatabaseService:
             conn.execute(
                 "INSERT INTO siem_inventory "
                  "(siem_type, label, elasticsearch_url, kibana_url, base_url, "
-                 "api_token_enc, extra_config) "
-                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                 "api_token_enc, extra_config, tls_verify) "
+                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                 [siem_type, label, elasticsearch_url, kibana_url, kibana_url,
-                                 api_token_enc, extra_json],
+                                 api_token_enc, extra_json, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
@@ -11160,7 +11238,7 @@ class DatabaseService:
     def update_siem_inventory_item(self, siem_id: str, **fields) -> bool:
         """Update a SIEM in the inventory."""
         allowed = {"label", "elasticsearch_url", "kibana_url", "api_token_enc",
-                   "extra_config", "is_active"}
+                   "extra_config", "is_active", "tls_verify"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
@@ -11649,25 +11727,25 @@ class DatabaseService:
         """List all GitLab instances in the centralized inventory."""
         with self.get_shared_connection() as conn:
             rows = conn.execute(
-                "SELECT id, label, url, default_group, is_active, "
+                "SELECT id, label, url, default_group, is_active, tls_verify, "
                 "last_test_status, last_test_at, last_test_message, "
                 "created_at, updated_at "
                 "FROM gitlab_inventory ORDER BY label"
             ).fetchall()
-            cols = ["id", "label", "url", "default_group", "is_active",
+            cols = ["id", "label", "url", "default_group", "is_active", "tls_verify",
                     "last_test_status", "last_test_at", "last_test_message",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
     def create_gitlab_inventory_item(self, label: str, url: str,
                                      token_enc: str = None,
-                                     default_group: str = None) -> Dict:
+                                     default_group: str = None, tls_verify: bool = False) -> Dict:
         """Create a GitLab instance in the inventory."""
         with self.get_shared_connection() as conn:
             conn.execute(
-                "INSERT INTO gitlab_inventory (label, url, token_enc, default_group) "
-                "VALUES (?, ?, ?, ?)",
-                [label, url, token_enc, default_group],
+                "INSERT INTO gitlab_inventory (label, url, token_enc, default_group, tls_verify) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [label, url, token_enc, default_group, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, url, default_group, is_active, created_at, updated_at "
@@ -11679,7 +11757,7 @@ class DatabaseService:
 
     def update_gitlab_inventory_item(self, gitlab_id: str, **fields) -> bool:
         """Update a GitLab instance in the inventory."""
-        allowed = {"label", "url", "token_enc", "default_group", "is_active"}
+        allowed = {"label", "url", "token_enc", "default_group", "is_active", "tls_verify"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
@@ -11748,24 +11826,24 @@ class DatabaseService:
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT id, label, url, realm, client_id_enc, client_secret_enc, "
-                "is_active, last_test_status, last_test_at, last_test_message, "
+                "is_active, tls_verify, last_test_status, last_test_at, last_test_message, "
                 "created_at, updated_at "
                 "FROM keycloak_inventory ORDER BY label"
             ).fetchall()
             cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
-                    "is_active", "last_test_status", "last_test_at", "last_test_message",
+                    "is_active", "tls_verify", "last_test_status", "last_test_at", "last_test_message",
                     "created_at", "updated_at"]
             return [dict(zip(cols, r)) for r in rows]
 
     def create_keycloak_inventory_item(self, label: str, url: str, realm: str = "master",
                                        client_id_enc: str = None,
-                                       client_secret_enc: str = None) -> Dict:
+                                       client_secret_enc: str = None, tls_verify: bool = False) -> Dict:
         """Create a Keycloak instance in the inventory."""
         with self.get_shared_connection() as conn:
             conn.execute(
-                "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc) "
-                "VALUES (?, ?, ?, ?, ?)",
-                [label, url, realm, client_id_enc, client_secret_enc],
+                "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc, tls_verify) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [label, url, realm, client_id_enc, client_secret_enc, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, url, realm, client_id_enc, client_secret_enc, is_active, "
@@ -11779,7 +11857,7 @@ class DatabaseService:
 
     def update_keycloak_inventory_item(self, keycloak_id: str, **fields) -> bool:
         """Update a Keycloak instance in the inventory."""
-        allowed = {"label", "url", "realm", "client_id_enc", "client_secret_enc", "is_active"}
+        allowed = {"label", "url", "realm", "client_id_enc", "client_secret_enc", "is_active", "tls_verify"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False

@@ -21,7 +21,16 @@
     {% for bl in client_baselines %}
     <div class="client-list-item client-list-item--info">
         <div class="client-list-item__body">
-            <a  name="Baselines" href="/baselines?baseline_id={{ bl.id | urlencode }}&amp;group=baseline" class="client-list-item__title">{{ bl.name }}</a>
+            {% if can_switch %}
+            {# The Baselines page shows the active client's templates, so switch to this client first. #}
+            <a name="Open Baseline" role="link" tabindex="0" class="client-list-item__title" style="cursor:pointer;"
+               title="Switch to {{ client.name }} and open this baseline"
+               hx-post="/api/clients/switch" hx-vals='{{ {"client_id": client.id} | tojson }}' hx-swap="none"
+               hx-trigger="click, keyup[key=='Enter']"
+               hx-on::after-request="if (event.detail.successful) window.location.href = {{ ('/baselines?baseline_id=' ~ (bl.id | urlencode) ~ '&group=baseline') | tojson | forceescape }}">{{ bl.name }}</a>
+            {% else %}
+            <span class="client-list-item__title">{{ bl.name }}</span>
+            {% endif %}
             {% if bl.description %}
             <span class="client-list-item__meta">{{ bl.description[:80] }}{% if bl.description|length > 80 %}&hellip;{% endif %}</span>
             {% endif %}

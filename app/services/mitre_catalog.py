@@ -53,21 +53,6 @@ def source_context(src: str) -> Dict[str, Any]:
     }
 
 
-def active_client_for(request, user, db) -> str:
-    """The client whose rules decide coverage: the active-client cookie, else the user's default
-    client, else the default client."""
-    cid = request.cookies.get("active_client_id")
-    if not cid and user:
-        with db.get_shared_connection() as conn:
-            row = conn.execute(
-                "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
-                [user.id],
-            ).fetchone()
-            if row:
-                cid = row[0]
-    return cid or db.get_default_client_id()
-
-
 def coverage_for(db, cid: Optional[str]) -> Tuple[set, dict]:
     """(technique ids the client's enabled rules cover, rules per technique id). Empty when the
     client's rules cannot be read, so a page still renders."""

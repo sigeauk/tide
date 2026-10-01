@@ -66,7 +66,7 @@ class TaxiiVendorProfile:
     auth_password: Optional[str] = None
     auth_header_name: Optional[str] = None   # for "apikey_header"
     page_size: int = 1000
-    verify_tls: bool = True
+    verify_tls: bool = False
     request_timeout: float = 60.0
     # If False, the engine ignores any stored cursor and always pulls
     # the full collection (used by MITRE ATT&CK).

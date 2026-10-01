@@ -325,7 +325,7 @@
             <label style="display:block; font-size:0.75rem; font-weight:600;
                           color:var(--text-secondary,#8b949e); text-transform:uppercase;
                           letter-spacing:0.05em; margin-bottom:0.4rem;">Audience</label>
-            <select name="Executive / CISO Technical / Engineer" id="modal-audience"
+            <select name="Executive / CISO Technical / Engineer" id="modal-audience" onchange="tideExportAudience()"
                     class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
                            border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
                            cursor:pointer">
@@ -340,9 +340,37 @@
             <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--text-primary,#e6edf3);margin-bottom:0.4rem;cursor:pointer;">
                 <input name="Modal Include Devices" type="checkbox" id="modal-include-devices" style="accent-color:var(--color-primary,#3b82f6);"> Include Devices
             </label>
-            <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--text-primary,#e6edf3);cursor:pointer;">
-                <input name="Modal Include Baselines" type="checkbox" id="modal-include-baselines" checked style="accent-color:var(--color-primary,#3b82f6);"> Include Baselines
-            </label>
+        </div>
+        <div style="margin-bottom:1rem;">
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.5rem;">Baselines</label>
+            {% if baselines %}
+            <div style="max-height:9rem;overflow-y:auto;">
+                {% for b in baselines %}
+                <label style="display:flex;align-items:center;gap:0.5rem;font-size:0.85rem;color:var(--text-primary,#e6edf3);margin-bottom:0.4rem;cursor:pointer;">
+                    <input name="Modal Baseline" type="checkbox" class="modal-baseline" value="{{ b.id }}" checked style="accent-color:var(--color-primary,#3b82f6);"> {{ b.name }}
+                </label>
+                {% endfor %}
+            </div>
+            <p style="font-size:0.75rem;color:var(--text-secondary,#8b949e);margin:0.25rem 0 0;">The report's figures cover the baselines ticked here.</p>
+            {% else %}
+            <p style="font-size:0.8rem;color:var(--text-secondary,#8b949e);margin:0;">This system has no baselines yet.</p>
+            {% endif %}
+        </div>
+        <div id="modal-techniques-field" style="margin-bottom:1.5rem;" hidden>
+            <label style="display:block; font-size:0.75rem; font-weight:600;
+                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
+                          letter-spacing:0.05em; margin-bottom:0.4rem;" for="modal-techniques">Technique detail pages</label>
+            <select name="Technique Detail" id="modal-techniques"
+                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
+                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
+                           cursor:pointer">
+                <option value="gaps">Only techniques with no coverage or a known gap</option>
+                <option value="all">Every technique</option>
+                <option value="none">None</option>
+            </select>
+            <p style="font-size:0.75rem;color:var(--text-secondary,#8b949e);margin:0.25rem 0 0;">After the coverage matrix, the report gives each chosen technique its own entry: what covers it and when it was added, its risks and its ATT&amp;CK techniques.</p>
         </div>
         <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
             <button name="Cancel" onclick="closeExportModal()" class="btn btn-secondary"
@@ -369,13 +397,21 @@ function openExportModal() {
 function closeExportModal() {
     document.getElementById('export-modal-overlay').style.display = 'none';
 }
+// Technique detail only applies to the technical report.
+function tideExportAudience() {
+    document.getElementById('modal-techniques-field').hidden = document.getElementById('modal-audience').value !== 'technical';
+}
 function confirmExport() {
     var params = new URLSearchParams();
-    params.set('mode', document.getElementById('modal-audience').value);
+    var mode = document.getElementById('modal-audience').value;
+    params.set('mode', mode);
     params.set('format', document.getElementById('modal-format').value);
     params.set('classification', document.getElementById('modal-classification').value);
     params.set('include_devices', document.getElementById('modal-include-devices').checked ? '1' : '0');
-    params.set('include_baselines', document.getElementById('modal-include-baselines').checked ? '1' : '0');
+    var chosen = Array.prototype.filter.call(document.querySelectorAll('.modal-baseline'), function (cb) { return cb.checked; });
+    params.set('include_baselines', chosen.length ? '1' : '0');
+    chosen.forEach(function (cb) { params.append('baseline_id', cb.value); });
+    if (mode === 'technical') params.set('techniques', document.getElementById('modal-techniques').value);
     closeExportModal();
     window.location.href = '/api/inventory/systems/{{ system.id }}/report?' + params.toString();
 }

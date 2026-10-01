@@ -26,6 +26,8 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.services import tls
+
 from ._base import ConnectorVendor, FieldSpec, SyncResult
 
 logger = logging.getLogger(__name__)
@@ -71,14 +73,15 @@ FIELDS: List[FieldSpec] = [
              "fetched regardless.",
     ),
     FieldSpec(
-        key="verify_tls", label="Verify TLS",
-        type="bool", default=True,
+        key="verify_tls", label="Verify TLS certificate",
+        type="bool", default=False,
+        help="Leave off for a self-signed certificate.",
     ),
 ]
 
 
 def _get_falcon_token(api_base: str, client_id: str,
-                      client_secret: str) -> str:
+                      client_secret: str, verify=False) -> str:
     """OAuth2 client-credentials \u2192 bearer token.
 
     Falcon requires ``grant_type=client_credentials`` in the form body
@@ -100,6 +103,7 @@ def _get_falcon_token(api_base: str, client_id: str,
             "Content-Type": "application/x-www-form-urlencoded",
         },
         timeout=30,
+        verify=verify,
     )
     if resp.status_code >= 400:
         body = ""
@@ -134,7 +138,8 @@ def download_report_pdf(cfg: Dict[str, Any],
     client_secret = (cfg.get("client_secret") or "").strip()
     if not (api_base and client_id and client_secret and report_id):
         return None
-    token = _get_falcon_token(api_base, client_id, client_secret)
+    token = _get_falcon_token(api_base, client_id, client_secret,
+                              verify=tls.verify_arg(cfg.get("verify_tls")))
     url = f"{api_base.rstrip('/')}/intel/entities/report-files/v1"
     resp = requests.get(
         url,
@@ -144,7 +149,7 @@ def download_report_pdf(cfg: Dict[str, Any],
             "Accept": "application/pdf",
         },
         timeout=60,
-        verify=bool(cfg.get("verify_tls", True)),
+        verify=tls.verify_arg(cfg.get("verify_tls")),
     )
     if resp.status_code >= 400:
         body = ""
@@ -224,14 +229,15 @@ def _falcon_session(cfg: Dict[str, Any]) -> Tuple[Any, str]:
         api_base,
         (cfg.get("client_id") or "").strip(),
         (cfg.get("client_secret") or "").strip(),
+        verify=tls.verify_arg(cfg.get("verify_tls")),
     )
-    s = requests.Session()
+    s = tls.Session()
     s.headers.update({
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "User-Agent": "TIDE-Falcon-Intel-Connector",
     })
-    s.verify = bool(cfg.get("verify_tls", True))
+    s.verify = tls.verify_arg(cfg.get("verify_tls"))
     return s, api_base
 
 
@@ -725,6 +731,7 @@ def test_connection(connector: Dict[str, Any]) -> Dict[str, Any]:
             api_base,
             (cfg.get("client_id") or "").strip(),
             (cfg.get("client_secret") or "").strip(),
+            verify=tls.verify_arg(cfg.get("verify_tls")),
         )
     except Exception as exc:
         return {"ok": False, "error": f"token exchange failed: {exc}",
@@ -741,7 +748,7 @@ def test_connection(connector: Dict[str, Any]) -> Dict[str, Any]:
             r = requests.get(
                 f"{api_base}{path}", params={"limit": 1},
                 headers=headers, timeout=30,
-                verify=bool(cfg.get("verify_tls", True)),
+                verify=tls.verify_arg(cfg.get("verify_tls")),
             )
         except Exception as exc:
             unreadable.append(f"{kind}: {exc}")

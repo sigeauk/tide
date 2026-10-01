@@ -1937,126 +1937,209 @@ def ingest_cisa_feed(json_bytes):
 # Report Data Builders
 # ---------------------------------------------------------------------------
 
-def _build_baseline_heatmap(baselines: List[Dict], client_id: str = None) -> Dict:
-    """Build MITRE ATT&CK heatmap matrix from baseline coverage data.
-
-    Returns dict with: matrix, active_tactics, metrics, narrative.
-    """
-    try:
-        from app.services.report_generator import TACTIC_ORDER
-    except Exception:
-        TACTIC_ORDER = [
-            "Initial Access", "Execution", "Persistence", "Privilege Escalation",
-            "Defense Evasion", "Credential Access", "Discovery", "Lateral Movement",
-            "Collection", "Command and Control", "Exfiltration", "Impact",
-            "Reconnaissance", "Resource Dev", "Other",
-        ]
-
-    try:
-        from app.services.database import get_database_service
-        _db = get_database_service()
-        ttp_names = _db.get_technique_names()
-        ttp_rule_counts = _db.get_ttp_rule_counts(client_id=client_id)
-    except Exception:
-        ttp_names = {}
-        ttp_rule_counts = {}
-
-    _STATUS_PRIORITY = {"green": 0, "grey": 1, "amber": 2, "red": 3}
-    _STATUS_MAP = {"green": "covered", "grey": "na", "amber": "known-gap", "red": "gap"}
-
-    # Aggregate: (tactic, technique_id) → best status + metadata
-    cells: Dict[tuple, Dict] = {}
-
-    for bl in baselines:
-        for step in bl.get("tactics", []):
-            tid = (step.get("technique_id") or "").strip().upper()
-            tactic = step.get("tactic") or ""
-            if not tid or not tactic:
-                continue
-
-            key = (tactic, tid)
-            curr_status = step.get("status", "red")
-            rule_names = [
-                d.get("rule_ref") or d.get("note", "")
-                for d in step.get("applied_dets", [])
-                if d.get("rule_ref") or d.get("note")
-            ]
-
-            existing = cells.get(key)
-            if existing is None or _STATUS_PRIORITY.get(curr_status, 3) < _STATUS_PRIORITY.get(existing["baseline_status"], 3):
-                cells[key] = {
-                    "id": tid,
-                    "name": ttp_names.get(tid, tid),
-                    "tactic": tactic,
-                    "status": _STATUS_MAP.get(curr_status, "gap"),
-                    "baseline_status": curr_status,
-                    "rule_count": ttp_rule_counts.get(tid, 0),
-                    "rule_names": rule_names,
-                }
-
-    # Organize into matrix by tactic
-    matrix: Dict[str, list] = {t: [] for t in TACTIC_ORDER}
-    for (_tactic, _tid), cell_data in cells.items():
-        target = _tactic if _tactic in matrix else "Other"
-        matrix[target].append(cell_data)
-
-    for t in matrix:
-        matrix[t].sort(key=lambda c: c["id"])
-
-    active_tactics = [t for t in TACTIC_ORDER if matrix.get(t)]
-
-    # Metrics
-    total_techniques = len(cells)
-    covered_count = sum(1 for c in cells.values() if c["baseline_status"] == "green")
-    na_count = sum(1 for c in cells.values() if c["baseline_status"] == "grey")
-    gap_count = total_techniques - covered_count - na_count
-    effective_total = total_techniques - na_count
-    coverage_pct = round(covered_count / effective_total * 100) if effective_total else (100 if total_techniques else 0)
-
-    # Count tactics with at least one covered technique
-    monitored_tactics = len([t for t in active_tactics if any(c["baseline_status"] == "green" for c in matrix[t])])
-
-    if coverage_pct >= 75:
-        narrative = (
-            f"Detection coverage is robust. "
-            f"{monitored_tactics} tactics and {covered_count} techniques are actively monitored, "
-            f"covering {coverage_pct}% of defined threat profiles."
-        )
-    elif coverage_pct >= 40:
-        narrative = (
-            f"Coverage is moderate at {coverage_pct}%. "
-            f"Priority visibility gaps exist in specific tactics that require mitigation."
-        )
-    else:
-        narrative = (
-            f"Critical visibility gaps detected. "
-            f"Environment lacks sufficient telemetry for the majority of applied threat baselines "
-            f"({coverage_pct}% coverage)."
-        )
-
-    return {
-        "matrix": matrix,
-        "active_tactics": active_tactics,
-        "total_techniques": total_techniques,
-        "covered_techniques": covered_count,
-        "gap_techniques": gap_count,
-        "na_techniques": na_count,
-        "coverage_pct": coverage_pct,
-        "narrative": narrative,
-    }
+STATUS_LABELS = {"green": "Covered", "amber": "Known gap", "grey": "Not applicable", "red": "No coverage"}
+_PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+REPORT_TECHNIQUE_SCOPES = ("gaps", "all", "none")
 
 
-def build_system_report_data(system_id: str, include_devices: bool = True, client_id: str = None) -> Optional[Dict]:
-    """Build all data needed for System detail reports (CISO + Technical).
-    
-    Args:
-        system_id: System ID to build report for
-        include_devices: If False, excludes all device/host-specific tables and metrics
+def build_system_report_data(system_id: str, include_devices: bool = True, client_id: str = None,
+                             baseline_ids: Optional[List[str]] = None, techniques: str = "gaps") -> Optional[Dict]:
+    """Everything a system's report shows, for the chosen baselines (all of them when none are named).
+
+    The figures are the system page's own: the same techniques and statuses, the metric strip's
+    totals (``step_totals``) over the chosen baselines, and each technique as its window shows it
+    (``get_system_step_details``). ``techniques`` picks which get a detail entry: 'gaps' (no
+    coverage or a known gap), 'all' or 'none'.
     """
     system = get_system(system_id, client_id=client_id)
     if not system:
         return None
 
+    view = get_system_steps(system_id, client_id=client_id)
+    chosen = [b for b in view["baselines"] if not baseline_ids or b["id"] in baseline_ids]
+    order = {b["id"]: i for i, b in enumerate(chosen)}
+    rows = sorted(
+        (s for s in view["steps"] if s["baseline_id"] in order),
+        key=lambda s: (order[s["baseline_id"]], tactic_sort_key(s["tactic"], "attack"), s.get("step_number") or 0),
+    )
+    details = get_system_step_details(system_id, list(order), client_id=client_id)
+    techs = [_report_technique(r, details[r["step_id"]]) for r in rows if r["step_id"] in details]
+
+    totals = step_totals(rows)
+    scored = totals["total"] - totals["na"]
+    undefined = view["coverage_undefined"]
+    coverage_pct = None if undefined else (round(totals["covered"] / scored * 100) if scored else 0)
+
+    baselines = []
+    for b in chosen:
+        bt = step_totals([r for r in rows if r["baseline_id"] == b["id"]])
+        b_scored = bt["total"] - bt["na"]
+        baselines.append({**b, "totals": bt,
+                          "coverage_pct": round(bt["covered"] / b_scored * 100) if b_scored else 0})
+
+    scope = techniques if techniques in REPORT_TECHNIQUE_SCOPES else "gaps"
+    detailed = [t for t in techs if scope == "all" or (scope == "gaps" and t["status"] in ("red", "amber"))]
+    for t in detailed:
+        t["detailed"] = True
+    gaps = sorted(
+        (t for t in techs if t["status"] in ("red", "amber")),
+        key=lambda t: (_PRIORITY_RANK.get(t["priority"], 4), tactic_sort_key(t["tactic"], "attack"), t["title"].lower()),
+    )
+
+    counted = set(get_system_coverage_destinations(system_id, client_id=client_id))
+    try:
+        dest_names = _destination_names(client_id)
+    except Exception:
+        logger.warning("Destination names unavailable for the system report", exc_info=True)
+        dest_names = {}
+    data = {
+        "system": {
+            "name": system.name, "description": system.description or "",
+            "classification": system.classification or "",
+            "classification_color": _css_color(get_classification_color(system.classification, client_id=client_id))
+                                    if system.classification else None,
+        },
+        "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "baselines": baselines,
+        "all_baselines": len(chosen) == len(view["baselines"]),
+        "totals": totals,
+        "coverage_pct": coverage_pct,
+        "coverage_undefined": undefined,
+        "narrative": _coverage_narrative(totals, coverage_pct, len(chosen)),
+        "techniques": techs,
+        "technique_scope": scope,
+        "detailed_techniques": detailed,
+        "priority_gaps": gaps,
+        **_siem_coverage(techs, details, counted, undefined, dest_names),
+        "snapshots": [s for s in get_baseline_snapshots(system_id, client_id=client_id) if s["baseline_id"] in order],
+    }
+    data.update(_system_device_report(system_id, client_id=client_id) if include_devices else _NO_DEVICES)
+    return data
+
+
+def _report_technique(row: Dict, detail: Dict) -> Dict:
+    """One technique as the report shows it: its card's facts and, from its window, what covers
+    it -- each with the date it was added -- and its ATT&CK techniques."""
+    coverage = []
+    for b in detail["blind_spots"]:
+        na = b["override_type"] == "na"
+        review = ""
+        if b["review_by"]:
+            review = f"Review {'was due' if b['review_due'] else 'by'} {b['review_by'].isoformat()}"
+        coverage.append({
+            "label": "Not applicable" if na else "Known gap", "name": b["reason"], "url": "",
+            "added": b["created_at"], "by": b["created_by"], "note": review,
+            "flag": "Review due" if b["review_due"] else "", "tone": "muted" if na else "warning",
+        })
+    for w in detail["watched"]:
+        coverage.append({
+            "label": w["kind_label"], "name": w["title"], "url": w["url"], "added": w["created_at"],
+            "by": w["created_by"], "note": w["rationale"], "flag": "Non-alerting", "tone": "info",
+        })
+    for d in detail["detections"]:
+        if d["source"] == "manual":
+            flag, tone = "Recorded by hand", "success"
+        elif d["unresolved"]:
+            flag, tone = "Needs relinking", "warning"
+        elif not d["counts"]:
+            flag, tone = "Not in SIEM coverage", "danger"
+        elif not d["applied"]:
+            flag, tone = "Not applied", "warning"
+        else:
+            flag, tone = "Counts", "success"
+        coverage.append({
+            "label": "Rule", "name": d["name"], "url": "", "added": d["created_at"], "by": d["created_by"],
+            "destination": d["destination"] or (d["space"] if d["siem_id"] else ""),
+            "note": d["unresolved_reason"] if d["unresolved"] else d["evidence"]["how"],
+            "score": d["score"] if d["evidence"]["applicable"] else None,
+            "enabled": d["enabled"], "validation_status": d["validation_status"],
+            "flag": flag, "tone": tone,
+        })
+    step = detail["step"]
+    return {
+        "step_id": row["step_id"], "number": row.get("step_number"), "title": row["title"],
+        "description": row.get("description") or "",
+        "baseline_id": row["baseline_id"], "baseline_name": row["baseline_name"], "tactic": row["tactic"],
+        "status": detail["status"], "status_label": STATUS_LABELS.get(detail["status"], "No coverage"),
+        "non_alerting": detail["non_alerting"], "review_due": detail["review_due"],
+        "priority": step.priority, "priority_label": dict(STEP_PRIORITIES).get(step.priority, ""),
+        "category_label": dict(STEP_CATEGORIES).get(step.category, ""),
+        "attack": detail["techniques"],
+        "evidence_score": detail["evidence_score"], "evidence_rule": detail["evidence_rule"],
+        "mapped_count": detail["mapped_count"], "uncounted_count": detail["uncounted_count"],
+        "mark_reason": detail["blind_spot_reason"],
+        "coverage": coverage,
+        "rule_names": [d["name"] for d in detail["detections"] if d["counts"]],
+        "uncounted_rule_names": [d["name"] for d in detail["detections"] if not d["counts"]],
+        "detailed": False,
+    }
+
+
+def _siem_coverage(techs: List[Dict], details: Dict[str, Dict], counted: set, undefined: bool,
+                   dest_names: Dict[Tuple[str, str], Dict]) -> Dict:
+    """Coverage by SIEM destination: each destination this system counts, and every one its
+    techniques have rules mapped at. Rules at a destination it does not count are listed apart --
+    mapped, but not coverage."""
+    by_dest: Dict[Tuple[str, str], Dict] = {}
+
+    def dest(key):
+        if key not in by_dest:
+            by_dest[key] = {"name": (dest_names.get(key) or {}).get("name") or key[1],
+                            "color": _css_color((dest_names.get(key) or {}).get("color")),
+                            "counted": undefined or key in counted,
+                            "rules": set(), "mapped": set(), "covering": set()}
+        return by_dest[key]
+
+    for key in sorted(counted):
+        dest(key)
+    uncounted = []
+    for t in techs:
+        for d in details[t["step_id"]]["detections"]:
+            if d["source"] != "siem" or not d["siem_id"]:
+                continue
+            row = dest((d["siem_id"], d["space"] or "default"))
+            row["rules"].add(d["name"])
+            row["mapped"].add(t["step_id"])
+            if d["counts"] and d["applied"] and not d["unresolved"]:
+                row["covering"].add(t["step_id"])
+            if not d["counts"]:
+                uncounted.append({"rule": d["name"], "destination": row["name"], "technique": t["title"],
+                                  "baseline": t["baseline_name"], "added": d["created_at"]})
+    rows = [
+        {"name": r["name"], "color": r["color"], "counted": r["counted"], "rules": len(r["rules"]),
+         "mapped": len(r["mapped"]), "covering": len(r["covering"])}
+        for r in by_dest.values()
+    ]
+    rows.sort(key=lambda r: (not r["counted"], r["name"].lower()))
+    return {"siem_coverage": rows, "uncounted_mappings": uncounted}
+
+
+def _css_color(value: Optional[str]) -> Optional[str]:
+    """A user-set colour only if it is a plain hex colour: it is written into the report's CSS."""
+    return value if value and re.fullmatch(r"#[0-9a-fA-F]{3,8}", value) else None
+
+
+def _coverage_narrative(totals: Dict[str, int], coverage_pct: Optional[int], n_baselines: int) -> str:
+    """Two plain sentences on where the chosen baselines stand."""
+    if not totals["total"]:
+        return "No techniques are defined in the selected baselines yet."
+    scope = f"{totals['total']} technique{'s' if totals['total'] != 1 else ''} across {n_baselines} baseline{'s' if n_baselines != 1 else ''}"
+    if coverage_pct is None:
+        return (f"{scope}. No SIEM coverage destinations are set for this system, so coverage is not scored "
+                f"yet: {totals['covered']} are covered by rules wherever they are, {totals['none']} have no coverage.")
+    open_items = f"{totals['none']} ha{'ve' if totals['none'] != 1 else 's'} no coverage and {totals['gap']} {'are' if totals['gap'] != 1 else 'is a'} known gap{'s' if totals['gap'] != 1 else ''}"
+    return f"{scope}, {coverage_pct}% covered ({totals['covered']} of {totals['total'] - totals['na']} scored). {open_items}."
+
+
+_NO_DEVICES = {
+    "total_hosts": 0, "total_cves": 0, "red_hosts": 0, "amber_hosts": 0, "green_hosts": 0, "grey_hosts": 0,
+    "total_red_pairs": 0, "total_amber_pairs": 0, "total_grey_pairs": 0, "coverage_ratio": 100,
+    "top5_cves": [], "host_rows": [], "all_cves": [],
+}
+
+
+def _system_device_report(system_id: str, client_id: str = None) -> Dict:
+    """The device sections of a system's report: each host's KEV CVEs with their RAG status."""
     kev = _load_cisa_kev()
     kev_by_id = {k.get("cveID", ""): k for k in (kev or [])}
     detections = list_cve_detections(client_id=client_id)
@@ -2066,11 +2149,8 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
 
     all_software = _list_all_software_by_host(client_id=client_id)
     hosts = list_hosts(system_id, client_id=client_id)
-
-    # Load all CVE blind spots once
     all_blind_spots = _load_all_blind_spots("cve", client_id=client_id)
 
-    # Build per-host vulnerability data with full RAG status
     host_rows: List[Dict] = []
     all_cves: Dict[str, Dict] = {}  # cve_id -> {kev_entry, hosts: [...], detections, techniques}
 
@@ -2083,12 +2163,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
                 cve_dets = detections.get(cve_id, [])
                 cve_bs = all_blind_spots.get(cve_id, [])
                 status, rule_names = _compute_coverage_status(host.id, system_id, cve_dets, applied_map, cve_bs)
-                host_cves.append({
-                    "cve_id": cve_id,
-                    "status": status,
-                    "rule_names": rule_names,
-                    "sw_names": sw_names,
-                })
+                host_cves.append({"cve_id": cve_id, "status": status, "rule_names": rule_names, "sw_names": sw_names})
                 if cve_id not in all_cves:
                     kev_entry = kev_by_id.get(cve_id, {})
                     techniques = get_cve_techniques(cve_id)
@@ -2102,9 +2177,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
                         "date_added": kev_entry.get("dateAdded", ""),
                         "techniques": [{"id": t.technique_id, "name": t.name, "has_detection": t.has_detection} for t in techniques],
                         "detections": [{"rule_ref": d.rule_ref, "note": d.note, "source": d.source} for d in cve_dets],
-                        "hosts_red": [],
-                        "hosts_amber": [],
-                        "hosts_grey": [],
+                        "hosts_red": [], "hosts_amber": [], "hosts_grey": [],
                     }
                 if status == "red":
                     all_cves[cve_id]["hosts_red"].append({"name": host.name, "ip": host.ip_address or ""})
@@ -2129,105 +2202,30 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
             rag = "grey"
         else:
             rag = "red"
-
         host_rows.append({
-            "name": host.name,
-            "ip": host.ip_address or "",
-            "os": host.os or "",
-            "rag": rag,
-            "cve_count": len(host_cves),
-            "red_count": red_count,
-            "amber_count": amber_count,
-            "grey_count": grey_count,
-            "cves": host_cves,
+            "name": host.name, "ip": host.ip_address or "", "os": host.os or "", "rag": rag,
+            "cve_count": len(host_cves), "red_count": red_count, "amber_count": amber_count,
+            "grey_count": grey_count, "cves": host_cves,
         })
 
-    # Metrics
-    total_hosts = len(hosts)
-    total_cves = len(all_cves)
-    red_hosts = sum(1 for h in host_rows if h["rag"] == "red")
-    amber_hosts = sum(1 for h in host_rows if h["rag"] == "amber")
-    green_hosts = sum(1 for h in host_rows if h["rag"] == "green")
-    grey_hosts = sum(1 for h in host_rows if h["rag"] == "grey")
     total_red_pairs = sum(len(c["hosts_red"]) for c in all_cves.values())
     total_amber_pairs = sum(len(c["hosts_amber"]) for c in all_cves.values())
-    total_grey_pairs = sum(len(c["hosts_grey"]) for c in all_cves.values())
-
-    # Top 5 critical CVEs by number of at-risk hosts
     sorted_cves = sorted(all_cves.values(), key=lambda c: len(c["hosts_red"]), reverse=True)
-    top5 = sorted_cves[:5]
-
-    # When include_devices is False, exclude all device-specific data from the report
-    baselines = get_system_baselines(system_id)
-    snapshots = get_baseline_snapshots(system_id)
-    try:
-        heatmap = _build_baseline_heatmap(baselines, client_id=client_id)
-    except Exception as _e:
-        import logging as _log
-        _log.getLogger(__name__).warning(f"Baseline heatmap build failed: {_e}")
-        heatmap = {
-            "matrix": {}, "active_tactics": [],
-            "total_techniques": 0, "covered_techniques": 0,
-            "gap_techniques": 0, "na_techniques": 0,
-            "coverage_pct": 0, "narrative": "",
-        }
-
-    if not include_devices:
-        return {
-            "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
-            "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-            "total_hosts": 0,  # Hide device count
-            "total_cves": 0,   # Hide CVE count (it would show exposed systems without remediation)
-            "red_hosts": 0,
-            "amber_hosts": 0,
-            "green_hosts": 0,
-            "grey_hosts": 0,
-            "total_red_pairs": 0,
-            "total_amber_pairs": 0,
-            "total_grey_pairs": 0,
-            "coverage_ratio": 100,  # No device-specific coverage metrics
-            "top5_cves": [],       # Exclude device-specific CVE breakdown
-            "host_rows": [],       # Exclude all host-specific tables
-            "all_cves": [],        # Exclude device-specific CVE details
-            "baselines": baselines,
-            "snapshots": snapshots,
-            "baseline_matrix": heatmap["matrix"],
-            "baseline_active_tactics": heatmap["active_tactics"],
-            "baseline_narrative": heatmap["narrative"],
-            "bl_total_techniques": heatmap["total_techniques"],
-            "bl_covered_techniques": heatmap["covered_techniques"],
-            "bl_gap_techniques": heatmap["gap_techniques"],
-            "bl_na_techniques": heatmap["na_techniques"],
-            "bl_coverage_pct": heatmap["coverage_pct"],
-        }
-    
-    # Full report when include_devices is True
     return {
-        "system": {"name": system.name, "description": system.description or "", "classification": system.classification or ""},
-        "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        "total_hosts": total_hosts,
-        "total_cves": total_cves,
-        "red_hosts": red_hosts,
-        "amber_hosts": amber_hosts,
-        "green_hosts": green_hosts,
-        "grey_hosts": grey_hosts,
+        "total_hosts": len(hosts),
+        "total_cves": len(all_cves),
+        "red_hosts": sum(1 for h in host_rows if h["rag"] == "red"),
+        "amber_hosts": sum(1 for h in host_rows if h["rag"] == "amber"),
+        "green_hosts": sum(1 for h in host_rows if h["rag"] == "green"),
+        "grey_hosts": sum(1 for h in host_rows if h["rag"] == "grey"),
         "total_red_pairs": total_red_pairs,
         "total_amber_pairs": total_amber_pairs,
-        "total_grey_pairs": total_grey_pairs,
-        "coverage_ratio": round(total_amber_pairs / (total_amber_pairs + total_red_pairs) * 100) if (total_amber_pairs + total_red_pairs) else 100,
-        "top5_cves": top5,
+        "total_grey_pairs": sum(len(c["hosts_grey"]) for c in all_cves.values()),
+        "coverage_ratio": round(total_amber_pairs / (total_amber_pairs + total_red_pairs) * 100)
+                          if (total_amber_pairs + total_red_pairs) else 100,
+        "top5_cves": sorted_cves[:5],
         "host_rows": host_rows,
         "all_cves": sorted_cves,
-        "baselines": baselines,
-        "snapshots": snapshots,
-        "baseline_matrix": heatmap["matrix"],
-        "baseline_active_tactics": heatmap["active_tactics"],
-        "baseline_narrative": heatmap["narrative"],
-        "bl_total_techniques": heatmap["total_techniques"],
-        "bl_covered_techniques": heatmap["covered_techniques"],
-        "bl_gap_techniques": heatmap["gap_techniques"],
-        "bl_na_techniques": heatmap["na_techniques"],
-        "bl_coverage_pct": heatmap["coverage_pct"],
     }
 
 
@@ -2999,15 +2997,75 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     step = get_playbook_step(step_id, client_id=client_id)
     if not step:
         return None
+    return _step_detail(step, _step_detail_context(system_id, [step], client_id=client_id))
 
-    counts_toward_coverage, counted_scopes, coverage_undefined = _counted_scope_resolver(
-        system_id, step.detections, client_id=client_id,
-    )
-    applied_ids = _applied_detection_ids(system_id, client_id=client_id)
 
-    bs = [b for b in get_blind_spots("tactic", step_id, client_id=client_id) if b.system_id == system_id]
-    has_na = any(b.override_type == "na" for b in bs)
-    has_gap = any(b.override_type == "gap" for b in bs)
+def get_system_step_details(system_id: str, playbook_ids: List[str], client_id: str = None) -> Dict[str, Dict]:
+    """Every technique of these baselines of this system, as its window shows it (without the
+    history), keyed by step id. What the windows share is loaded once, not once per technique."""
+    steps = [st for pid in playbook_ids for st in _get_playbook_steps(pid)]
+    if not steps:
+        return {}
+    ctx = _step_detail_context(system_id, steps, client_id=client_id, with_history=False)
+    return {st.id: _step_detail(st, ctx) for st in steps}
+
+
+def _destination_names(client_id: str = None) -> Dict[Tuple[str, str], Dict]:
+    """``(siem_id, space)`` -> the name and colour this tenant gave that destination."""
+    if not client_id:
+        return {}
+    from app.services.database import get_database_service
+    return {
+        (d.get("id"), d.get("space") or "default"): {
+            "name": d.get("name") or d.get("label") or d.get("space"), "color": d.get("color"),
+        }
+        for d in get_database_service().get_client_siems(client_id) or []
+    }
+
+
+def _step_blind_spots(step_ids: List[str], system_id: str, client_id: str = None) -> Dict[str, List[BlindSpot]]:
+    """``step_id`` -> this system's known gap / N/A marks on it, oldest first."""
+    frag, params = _cf("", client_id)
+    ph = ",".join("?" for _ in step_ids)
+    with _get_conn() as conn:
+        rows = conn.execute(
+            f"SELECT {_bs_cols()} FROM blind_spots WHERE entity_type = 'tactic' AND entity_id IN ({ph})" + frag
+            + " ORDER BY created_at",
+            list(step_ids) + params,
+        ).fetchall()
+    out: Dict[str, List[BlindSpot]] = {}
+    for r in rows:
+        b = _bs_from_row(r)
+        if b.system_id == system_id:
+            out.setdefault(b.entity_id, []).append(b)
+    return out
+
+
+def _recorded_rule_names(step_ids: List[str]) -> Dict[Tuple[str, str], str]:
+    """``(step_id, rule_id)`` -> the rule's name when it was mapped or relinked, newest last. What a
+    mapping whose rule TIDE can no longer find is called, rather than its id."""
+    ph = ",".join("?" for _ in step_ids)
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute(
+                f"SELECT step_id, rule_id, rule_name FROM technique_events WHERE step_id IN ({ph}) "
+                "AND event IN ('rule_mapped', 'rule_relinked') AND rule_id IS NOT NULL AND rule_name IS NOT NULL "
+                "ORDER BY created_at",
+                list(step_ids),
+            ).fetchall()
+    except Exception:
+        return {}
+    return {(sid, rid): name for sid, rid, name in rows if name and name != rid}
+
+
+def _step_detail_context(system_id: str, steps: List[PlaybookStep], client_id: str = None,
+                         with_history: bool = True) -> Dict:
+    """What the windows of ``steps`` on one system share, loaded once: which destinations count,
+    what is applied here, each mapped rule as it is now, the marks, the dashboards, reports and
+    logs, and (for the window) the history."""
+    dets = [d for st in steps for d in st.detections]
+    step_ids = [st.id for st in steps]
+    counts, counted_scopes, undefined = _counted_scope_resolver(system_id, dets, client_id=client_id)
 
     # What a rule looks like right now, per destination -- the mapping names one, so look it up
     # by (rule_id, siem_id, space) and never by rule_id alone.
@@ -3016,17 +3074,48 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     try:
         from app.services.database import get_database_service
         _db = get_database_service()
-        for d in step.detections:
+        for d in dets:
             if d.siem_id and d.rule_ref and (d.source or "manual") != "sigma":
                 key = (d.rule_ref, d.siem_id, d.space or "default")
                 if key not in rules_now:
                     rules_now[key] = _db.get_rule_by_id(d.rule_ref, key[2], siem_id=d.siem_id, client_id=client_id)
-        for d in (_db.get_client_siems(client_id) or [] if client_id else []):
-            dest_names[(d.get("id"), d.get("space") or "default")] = {
-                "name": d.get("name") or d.get("label") or d.get("space"), "color": d.get("color"),
-            }
+        dest_names = _destination_names(client_id)
     except Exception:
         logger.warning("Rule/destination lookup failed for the step window", exc_info=True)
+
+    system = get_system(system_id, client_id=client_id)
+    return {
+        "system_id": system_id,
+        "system_name": system.name if system else "",
+        "counts": counts, "counted_scopes": counted_scopes, "undefined": undefined,
+        "applied_ids": _applied_detection_ids(system_id, client_id=client_id),
+        "blind_spots": _step_blind_spots(step_ids, system_id, client_id=client_id),
+        "watched": get_step_coverage(step_ids),
+        "rules_now": rules_now, "dest_names": dest_names,
+        "recorded_names": _recorded_rule_names(step_ids),
+        "baseline_names": {pid: _playbook_name(pid) for pid in {st.playbook_id for st in steps}},
+        "history": {sid: get_technique_history(sid, system_id, client_id=client_id) for sid in step_ids}
+                   if with_history else None,
+    }
+
+
+def _rule_display_name(rule, d, recorded: Dict[Tuple[str, str], str]) -> str:
+    """A mapped rule's name as people know it: the rule's own, else the name it was mapped under.
+    Never its id -- a mapping whose name was never recorded is called what it is."""
+    name = (rule.name if rule else None) or d.note or recorded.get((d.step_id, d.rule_ref))
+    if name:
+        return name
+    return "Unnamed rule" if _UUID_RE.match(d.rule_ref or "") else (d.rule_ref or "Unnamed rule")
+
+
+def _step_detail(step: PlaybookStep, ctx: Dict) -> Dict:
+    """One step's window on one system, from its own rows and the shared ``ctx``."""
+    system_id, step_id = ctx["system_id"], step.id
+    counts_toward_coverage, applied_ids = ctx["counts"], ctx["applied_ids"]
+    rules_now, dest_names = ctx["rules_now"], ctx["dest_names"]
+    bs = ctx["blind_spots"].get(step_id, [])
+    has_na = any(b.override_type == "na" for b in bs)
+    has_gap = any(b.override_type == "gap" for b in bs)
 
     detections = []
     for d in step.detections:
@@ -3040,7 +3129,8 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
             "note": d.note,
             **rule_card(rule, dest),
             "rule_id": d.rule_ref if rule else None,
-            "name": (rule.name if rule else None) or d.note or d.rule_ref,
+            "name": (_rule_display_name(rule, d, ctx["recorded_names"]) if source != "sigma"
+                     else d.note or d.rule_ref),
             "siem_id": d.siem_id,
             "space": d.space,
             # Mapped but pointing at a rule TIDE can't find, or at a destination this system
@@ -3068,7 +3158,7 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
         x["evidence"] = _evidence(x)
     sigma_refs = [x for x in detections if x["source"] == "sigma"]
     is_applied = any(x["applied"] and x["counts"] for x in live)
-    watched = get_step_coverage([step_id]).get(step_id, [])
+    watched = ctx["watched"].get(step_id, [])
     status = _technique_status(is_applied, has_gap, has_na, bool(watched))
 
     technique_ids = []
@@ -3080,7 +3170,7 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     if primary and primary not in technique_ids:
         technique_ids.append(primary)
 
-    history = get_technique_history(step_id, system_id, client_id=client_id)
+    history = (ctx["history"] or {}).get(step_id, [])
 
     # The header ring: the strongest rule actually protecting this system, from the scores
     # app/scoring.py already gave each rule. Only a covered technique has one -- a known gap or
@@ -3089,11 +3179,10 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
     best = max(protecting, key=lambda x: x["score"]) if status == "green" and protecting else None
 
     mark = bs[0] if bs else None
-    system = get_system(system_id, client_id=client_id)
     return {
         "step": step,
         "system_id": system_id,
-        "system_name": system.name if system else "",
+        "system_name": ctx["system_name"],
         "as_of": datetime.now(),
         "status": status,
         "blind_spot_reason": next((b.reason for b in bs), ""),
@@ -3110,10 +3199,10 @@ def get_step_detail_for_system(step_id: str, system_id: str, client_id: str = No
         "sigma_refs": sigma_refs,
         "mapped_count": len(live),
         "uncounted_count": sum(1 for x in live if not x["counts"]),
-        "coverage_undefined": coverage_undefined,
-        "counted_destinations": sorted(counted_scopes),
+        "coverage_undefined": ctx["undefined"],
+        "counted_destinations": sorted(ctx["counted_scopes"]),
         "tactic": canonical_tactic(step.tactic),
-        "baseline_name": _playbook_name(step.playbook_id),
+        "baseline_name": ctx["baseline_names"].get(step.playbook_id, ""),
         # This system's known gap / N/A, with what is needed to remove it.
         "blind_spots": [
             {"id": b.id, "reason": b.reason, "override_type": b.override_type or "gap",
@@ -3567,15 +3656,7 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
             if row["tactic"] not in tactics:
                 tactics.append(row["tactic"])
 
-    totals = {
-        "total": len(steps),
-        "covered": sum(1 for s in steps if s["status"] == "green"),
-        "gap": sum(1 for s in steps if s["status"] == "amber"),
-        "na": sum(1 for s in steps if s["status"] == "grey"),
-        "none": sum(1 for s in steps if s["status"] == "red"),
-        "unmapped": sum(1 for s in steps if not s.get("mapped_count")),
-        "uncounted": sum(1 for s in steps if s.get("uncounted_count")),
-    }
+    totals = step_totals(steps)
 
     if status:
         steps = [s for s in steps if s["status"] == status]
@@ -3589,8 +3670,22 @@ def get_system_steps(system_id: str, client_id: str = None, search: str = "", ta
     tactics.sort(key=lambda t: tactic_sort_key(t, "attack"))
     return {
         "steps": steps, "totals": totals, "tactics": tactics,
-        "baselines": [{"id": b["playbook_id"], "name": b["playbook_name"]} for b in baselines],
+        "baselines": [{"id": b["playbook_id"], "name": b["playbook_name"], "description": b["playbook_description"],
+                       "applied_at": b["applied_at"]} for b in baselines],
         "coverage_undefined": all(b.get("coverage_undefined") for b in baselines) if baselines else False,
+    }
+
+
+def step_totals(steps: List[Dict]) -> Dict[str, int]:
+    """The system page's metric strip for these techniques: Covered is ``covered / (total - na)``."""
+    return {
+        "total": len(steps),
+        "covered": sum(1 for s in steps if s["status"] == "green"),
+        "gap": sum(1 for s in steps if s["status"] == "amber"),
+        "na": sum(1 for s in steps if s["status"] == "grey"),
+        "none": sum(1 for s in steps if s["status"] == "red"),
+        "unmapped": sum(1 for s in steps if not s.get("mapped_count")),
+        "uncounted": sum(1 for s in steps if s.get("uncounted_count")),
     }
 
 
@@ -3734,30 +3829,6 @@ def get_system_baselines(
         covered_ttps = set()
         ttp_rule_counts = {}
 
-    # Batch lookup: rule name -> (rule_id, space) for clickable rule badges
-    rule_name_lookup: Dict[str, Dict] = {}
-    if include_detection_details:
-        try:
-            with _get_conn() as conn:
-                rrows = conn.execute(
-                    "SELECT rule_id, name, space, raw_data FROM detection_rules ORDER BY name"
-                ).fetchall()
-            for rid, rname, rspace, raw_data in rrows:
-                info = {"rule_id": rid, "name": rname or rid, "space": rspace or "default"}
-                if rname:
-                    rule_name_lookup[rname] = info
-                if rid:
-                    rule_name_lookup[rid] = info
-                try:
-                    raw = json.loads(raw_data) if isinstance(raw_data, str) and raw_data.strip() else (raw_data or {})
-                    raw_id = str(raw.get("id") or "").strip() if isinstance(raw, dict) else ""
-                    if raw_id:
-                        rule_name_lookup[raw_id] = info
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
     # Which destinations count toward THIS system, resolved once for every step below.
     _all_steps_by_pb = {row[1]: _get_playbook_steps(row[1]) for row in rows}
     _all_dets = [d for sts in _all_steps_by_pb.values() for st in sts for d in st.detections]
@@ -3829,13 +3900,12 @@ def get_system_baselines(
                 for d in step.detections:
                     if (d.source or "manual") == "sigma":
                         continue  # sigma rules are not appliable
+                    # The mapping names its own rule and destination: a rule id is only a rule
+                    # together with the SIEM and space it was picked from, never looked up alone.
                     label = d.rule_ref or d.note or "Rule"
-                    rule_info = rule_name_lookup.get(label) or rule_name_lookup.get(d.rule_ref or "")
-                    display_label = rule_info.get("name") if rule_info else label
                     entry = {"id": d.id, "rule_ref": d.rule_ref, "note": d.note, "label": label,
-                             "display_label": display_label,
-                             "rule_id": rule_info["rule_id"] if rule_info else None,
-                             "space": rule_info["space"] if rule_info else None}
+                             "display_label": d.note or label,
+                             "rule_id": d.rule_ref or None, "siem_id": d.siem_id, "space": d.space}
                     if d.id in applied_step_det_ids:
                         step_applied.append(entry)
                     else:
@@ -4458,7 +4528,8 @@ def create_baseline_snapshot(
     from datetime import datetime as _dt
 
     # Calculate current coverage for this baseline
-    all_baselines = get_system_baselines(system_id)
+    all_baselines = get_system_baselines(system_id, playbook_ids=[baseline_id], include_detection_details=False,
+                                         client_id=client_id)
     bl = next((b for b in all_baselines if b["playbook_id"] == baseline_id), None)
     if not bl:
         return None
@@ -4508,7 +4579,7 @@ def create_all_baseline_snapshots(
     from datetime import datetime as _dt
 
     ts = captured_at or _dt.utcnow()
-    all_baselines = get_system_baselines(system_id, client_id=client_id)
+    all_baselines = get_system_baselines(system_id, include_detection_details=False, client_id=client_id)
     results = []
     for bl in all_baselines:
         snap = create_baseline_snapshot(

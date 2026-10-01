@@ -2181,7 +2181,6 @@ def create_app() -> FastAPI:
         KINDS as _MITRE_KINDS,
         resolve_source as _resolve_mitre_source,
         source_context as _mitre_source_context,
-        active_client_for as _resolve_active_client_for_mitre,
         coverage_for as _get_mitre_coverage,
         resolve_detail as _resolve_mitre_detail,
     )
@@ -2360,10 +2359,10 @@ def create_app() -> FastAPI:
         capability_slug: str,
         user: CurrentUser,
         db: DbDep,
+        client_id: ActiveClient,
     ):
         detail = db.get_nist_capability_detail(group_code, capability_slug, domain="enterprise")
-        cid = _resolve_active_client_for_mitre(request, user, db)
-        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, cid)
+        covered_ttps, ttp_rule_counts = _get_mitre_coverage(db, client_id)
         if not detail:
             return render_template(
                 "pages/core/placeholder.html",
@@ -2668,6 +2667,7 @@ def create_app() -> FastAPI:
                     siem_rule_counts[str(space)] = entry  # legacy fallback
         except Exception as _exc:
             logger.warning(f"siem_rule_counts read for client {client_id} failed: {_exc}")
+        from app.api.management import can_switch_to_client
         return render_template(
             "pages/admin/client_detail.html",
             request,
@@ -2695,6 +2695,7 @@ def create_app() -> FastAPI:
                 "siem_rule_counts": siem_rule_counts,
                 "siem_rule_counts_by_pair": siem_rule_counts_by_pair,
                 "all_clients": [c for c in db.list_clients() if c["id"] != client_id],
+                "can_switch": can_switch_to_client(user, client_id, db),
             }
         )
     

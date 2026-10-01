@@ -1,0 +1,111 @@
+{# System report: coverage trend from the chosen baselines' snapshots. Included by report/system_report.html. #}
+{% if report.snapshots is defined and report.snapshots and report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
+{# --- Build trend data: group snapshots by baseline, sort by date --- #}
+{%- set ns_trend = namespace(baselines={}, dates=[], colors=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16']) -%}
+{%- for snap in report.snapshots | sort(attribute='captured_at') -%}
+  {%- set bname = snap.baseline_name -%}
+  {%- if bname not in ns_trend.baselines -%}
+    {%- set _ = ns_trend.baselines.update({bname: []}) -%}
+  {%- endif -%}
+  {%- set _ = ns_trend.baselines[bname].append(snap) -%}
+  {%- set dstr = snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '' -%}
+  {%- if dstr and dstr not in ns_trend.dates -%}
+    {%- set ns_trend.dates = ns_trend.dates + [dstr] -%}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- set chart_w = 500 -%}
+{%- set chart_h = 200 -%}
+{%- set pad_l = 35 -%}
+{%- set pad_r = 15 -%}
+{%- set pad_t = 15 -%}
+{%- set pad_b = 40 -%}
+{%- set plot_w = chart_w - pad_l - pad_r -%}
+{%- set plot_h = chart_h - pad_t - pad_b -%}
+{%- set n_dates = ns_trend.dates | length -%}
+
+<div class="section-banner avoid-break" id="sec-trend">
+    <div class="section-banner-title">Baseline Coverage Trend</div>
+    <div class="section-banner-sub">Historical coverage percentage over time for {{ report.system.name }}</div>
+</div>
+
+{% if n_dates >= 1 %}
+<div style="text-align:center;margin:3mm 0 5mm;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ chart_w }} {{ chart_h }}" style="width:100%;max-width:{{ chart_w }}px;font-family:'Liberation Sans',Arial,sans-serif;">
+  <!-- Grid lines -->
+  {% for pct in [0, 25, 50, 75, 100] %}
+  {%- set gy = pad_t + plot_h - (pct / 100 * plot_h) -%}
+  <line x1="{{ pad_l }}" y1="{{ gy }}" x2="{{ pad_l + plot_w }}" y2="{{ gy }}" stroke="#e5e7eb" stroke-width="0.5"/>
+  <text x="{{ pad_l - 3 }}" y="{{ gy + 2 }}" text-anchor="end" font-size="5.5" fill="#6e7681">{{ pct }}%</text>
+  {% endfor %}
+
+  <!-- Axis lines -->
+  <line x1="{{ pad_l }}" y1="{{ pad_t }}" x2="{{ pad_l }}" y2="{{ pad_t + plot_h }}" stroke="#d0d7de" stroke-width="1"/>
+  <line x1="{{ pad_l }}" y1="{{ pad_t + plot_h }}" x2="{{ pad_l + plot_w }}" y2="{{ pad_t + plot_h }}" stroke="#d0d7de" stroke-width="1"/>
+
+  <!-- Date labels on X-axis -->
+  {% for dstr in ns_trend.dates %}
+  {%- set dx = pad_l + (loop.index0 / (n_dates - 1) * plot_w) if n_dates > 1 else pad_l + plot_w / 2 -%}
+  <text x="{{ dx }}" y="{{ pad_t + plot_h + 12 }}" text-anchor="middle" font-size="4.5" fill="#6e7681" transform="rotate(-25 {{ dx }} {{ pad_t + plot_h + 12 }})">{{ dstr[:10] }}</text>
+  {% endfor %}
+
+  <!-- Data series (one polyline per baseline) -->
+  {%- set ns_ci = namespace(i=0) -%}
+  {% for bname, snaps in ns_trend.baselines.items() %}
+  {%- set color = ns_trend.colors[ns_ci.i % (ns_trend.colors | length)] -%}
+  {%- set ns_pts = namespace(points='') -%}
+  {%- for snap in snaps -%}
+    {%- set dstr = snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '' -%}
+    {%- set di = ns_trend.dates.index(dstr) if dstr in ns_trend.dates else 0 -%}
+    {%- set px = pad_l + (di / (n_dates - 1) * plot_w) if n_dates > 1 else pad_l + plot_w / 2 -%}
+    {%- set py = pad_t + plot_h - (snap.score_percentage / 100 * plot_h) -%}
+    {%- set ns_pts.points = ns_pts.points ~ px ~ ',' ~ py ~ ' ' -%}
+    <!-- Data point dot -->
+    <circle cx="{{ px }}" cy="{{ py }}" r="2.5" fill="{{ color }}" stroke="white" stroke-width="0.8"/>
+    <text x="{{ px }}" y="{{ py - 4 }}" text-anchor="middle" font-size="4.5" fill="{{ color }}" font-weight="600">{{ snap.score_percentage | round | int }}%</text>
+  {%- endfor -%}
+  {% if snaps | length > 1 %}
+  <polyline points="{{ ns_pts.points }}" fill="none" stroke="{{ color }}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+  {% endif %}
+  {%- set ns_ci.i = ns_ci.i + 1 -%}
+  {% endfor %}
+</svg>
+</div>
+
+<!-- Legend -->
+<div style="display:flex;flex-wrap:wrap;gap:3mm;justify-content:center;margin-bottom:4mm;">
+  {%- set ns_li = namespace(i=0) -%}
+  {% for bname in ns_trend.baselines.keys() %}
+  {%- set color = ns_trend.colors[ns_li.i % (ns_trend.colors | length)] -%}
+  <div style="display:flex;align-items:center;gap:1.5mm;">
+    <span style="display:inline-block;width:8mm;height:2mm;background:{{ color }};border-radius:1mm;"></span>
+    <span style="font-size:6pt;color:var(--text-2);">{{ bname }}</span>
+  </div>
+  {%- set ns_li.i = ns_li.i + 1 -%}
+  {% endfor %}
+</div>
+
+<!-- Snapshot data table -->
+<table style="margin-bottom:4mm;">
+    <thead>
+        <tr><th>Date</th><th>Label</th><th>Baseline</th><th>Score</th><th style="text-align:center;">Covered</th><th style="text-align:center;">Known gap</th><th style="text-align:center;">No coverage</th><th style="text-align:center;">N/A</th></tr>
+    </thead>
+    <tbody>
+        {% for snap in report.snapshots | sort(attribute='captured_at', reverse=True) %}
+        <tr>
+            <td style="font-family:var(--ff-mono);font-size:6pt;white-space:nowrap;">{{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}</td>
+            <td>{% if snap.label %}<span class="badge badge-primary" style="font-size:5.5pt;">{{ snap.label }}</span>{% else %}—{% endif %}</td>
+            <td style="font-weight:600;">{{ snap.baseline_name }}</td>
+            <td><span class="badge {% if snap.score_percentage >= 75 %}badge-green{% elif snap.score_percentage >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ snap.score_percentage | round | int }}%</span></td>
+            <td style="text-align:center;"><span class="badge badge-green">{{ snap.count_green }}</span></td>
+            <td style="text-align:center;"><span class="badge badge-amber">{{ snap.count_amber }}</span></td>
+            <td style="text-align:center;"><span class="badge badge-red">{{ snap.count_red }}</span></td>
+            <td style="text-align:center;"><span class="badge badge-grey">{{ snap.count_grey }}</span></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p style="font-size:7pt;color:var(--text-3);text-align:center;margin:4mm 0;">No audit snapshots have been recorded for this system.</p>
+{% endif %}
+{% endif %}

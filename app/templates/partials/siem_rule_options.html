@@ -24,7 +24,7 @@
         Carry this technique's ATT&amp;CK IDs
     </div>
     {% for rule in mapped_rules %}
-    <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option u-bg-none"
+    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
             onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
@@ -35,12 +35,9 @@
             <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
                 {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
-                    {# Not clickable here. The whole option is one control -- picking this rule --
-                       and a clickable pill inside it swallows the click (it stops propagation to
-                       open the technique panel), so landing on one silently did something else
-                       instead of selecting the rule. #}
+                    {# A pill opens the side panel (closing this window), never picks the rule. #}
                     {% for tech in rule.mitre_ids[:3] %}
-                    {{ mitre_pill(tech, neutral=true, clickable=false, size='sm') }}
+                    {{ mitre_pill(tech, neutral=true, size='sm', close_modal=true) }}
                     {% endfor %}
                     {% if rule.mitre_ids|length > 3 %}
                     <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>
@@ -68,7 +65,7 @@
     </div>
     {% for rule in all_rules %}
     {# The route leaves out only the exact (rule, destination) copies offered above. #}
-    <button name="+ ● Enabled ○ Disabled" type="button" class="siem-rule-option u-bg-none"
+    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none"
             style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
             onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
             onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
@@ -79,12 +76,9 @@
             <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
                 {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
-                    {# Not clickable here. The whole option is one control -- picking this rule --
-                       and a clickable pill inside it swallows the click (it stops propagation to
-                       open the technique panel), so landing on one silently did something else
-                       instead of selecting the rule. #}
+                    {# A pill opens the side panel (closing this window), never picks the rule. #}
                     {% for tech in rule.mitre_ids[:3] %}
-                    {{ mitre_pill(tech, neutral=true, clickable=false, size='sm') }}
+                    {{ mitre_pill(tech, neutral=true, size='sm', close_modal=true) }}
                     {% endfor %}
                     {% if rule.mitre_ids|length > 3 %}
                     <span class="mitre-pill mitre-neutral mitre-sm">+{{ rule.mitre_ids|length - 3 }}</span>

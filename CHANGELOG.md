@@ -4,6 +4,31 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.0.2] — 2026-10-01
+
+### Added
+- **Every integration has its own "Verify TLS certificate" setting.** SIEMs, GitLab and Keycloak entries in Management and every CTI connector now have a box, off by default, that decides whether TIDE checks that integration's certificate. It applies to everything TIDE sends to that integration, including rule sync, promotion, Sigma deploys and CTI exports to a SIEM. Test Connection uses whatever is ticked on the form. See "TLS certificates" in the README.
+  - **When upgrading:** every SIEM starts with the box off. Until now, rule sync and promotion checked the SIEM's certificate against any CA certificate you had installed, while other calls did not check it. If you installed your SIEM's CA certificate, tick the box on each SIEM to keep its certificate checked. CTI connectors keep their current setting.
+
+### Changed
+- **A system's report now matches its page.** It shows the same six figures as the system page (Covered, Techniques, No coverage, Known gaps, Unmapped, Not counted), a list of priority gaps, and a Coverage by SIEM section. Rules mapped somewhere the system isn't measured are highlighted in red, because they don't count toward its coverage. In Export report you choose which baselines to include, and the figures cover only those baselines.
+  - Rules are shown by name, never by ID. Each rule, dashboard, report, log or known gap shows the date it was added.
+  - The technical report adds a coverage matrix by baseline and tactic, and a detail entry for each technique: its status, risks, what covers it and its ATT&CK techniques. You choose the gaps only, every technique, or none. Sigma suggestions and the ATT&CK heatmap are no longer included.
+  - Markdown exports have the same sections and figures. The PDF has a linked table of contents, bookmarks and "Page X of Y".
+- **A sync now deletes the score history of rules that no longer exist** (deleted in Kibana, re-created under a new ID, or at a destination no longer linked), so client databases stop growing with history nobody can see. Rules marked deprecated keep theirs. The README has a new section, "Reclaiming disk space", on compacting a database to recover the space.
+
+### Security
+- **A NIST 800-53 capability page now shows coverage only for a client you belong to.** It took the client from the browser without checking you were assigned to it, so a user could see another client's rule coverage of that capability's techniques.
+- **The Management query page can no longer read files in the container.** A query may now read only the chosen database's own tables and views, the same rule the external query API has followed since 6.0.1. A slow query no longer holds up the rest of TIDE while it runs.
+
+### Fixed
+- **Add link in a rule's window links the rule you pick.** It could reply "No rule found in that destination" for a rule it had just suggested, when the name was typed in different capitals or not picked from the list. It now links the suggestion you click, even when another rule in that destination has the same name, and accepts a typed name in any capitals. The suggestion list no longer covers the Add link button, so a click there can't pick a different rule by mistake.
+- **The Systems list and each system's page load faster.** They no longer read every rule in the client to label a technique's mapped rules. Each mapping already records its rule and the SIEM and space it was picked from, so a rule with the same ID in another SIEM can no longer be shown in its place.
+- **A rule's History shows again when it was created and edited in Kibana.** Since 6.0.0 these events were recorded but not shown against the rule. The next sync of each client attaches the ones already recorded, and new ones show as they happen.
+- **A baseline on another client's page in Management now opens.** Clicking it switches you to that client and opens the template on the Baselines page, instead of an empty page for the client you were on. Only superadmins and users assigned to that client get the link; everyone else sees the name only.
+- **Two of the Management query page's ready-made queries failed**: "Systems in selected tenant DB" and "Threat actors in selected tenant DB" now run.
+- **Clicking a technique's ATT&CK pill on a system's or template's technique card now opens its side panel**, as it does everywhere else, instead of the technique's window. The same goes for the table view and for the pills in Add coverage's rule list. Clicking anywhere else on the card still opens the technique's window.
+
 ## [6.0.1] - 2026-09-30
 
 ### Added

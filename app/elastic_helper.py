@@ -24,6 +24,8 @@ except ModuleNotFoundError:
     # raising `ModuleNotFoundError: No module named 'log'` → HTTP 500.
     from app.log import log_debug, log_error, log_info
 
+from app.services.tls import Session as TlsSession, siem_verify
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
 
@@ -73,7 +75,7 @@ def ping_detection_space(kibana_url: str, api_key: str, space: str,
     url = f"{kibana_url.rstrip('/')}/s/{space}/api/detection_engine/rules/_find?per_page=1&page=1"
     headers = {"kbn-xsrf": "true", "Authorization": f"ApiKey {api_key}"}
     try:
-        resp = requests.get(url, headers=headers, verify=False, timeout=(connect_timeout, read_timeout))
+        resp = requests.get(url, headers=headers, verify=siem_verify(url), timeout=(connect_timeout, read_timeout))
     except Exception as exc:
         return False, _request_failure(exc, read_timeout)
     if resp.status_code == 200:
@@ -88,9 +90,11 @@ def test_elastic_connection_full(
     timeout: int = CONNECT_TIMEOUT,
     read_timeout: int = READ_TIMEOUT,
     linked_spaces=None,
+    verify=None,
 ):
     """Three-tier connectivity / privilege test against a single Kibana.
 
+    ``verify`` overrides the SIEM's saved TLS setting (the form tests what is ticked, unsaved).
     Each check is independent and recorded so the operator sees exactly
     which capability is missing rather than a single pass/fail. Returns::
 
@@ -142,7 +146,8 @@ def test_elastic_connection_full(
         started = _time.monotonic()
         try:
             r = requests.request(
-                method, url, headers=headers, verify=False, timeout=(timeout, read_timeout)
+                method, url, headers=headers, verify=siem_verify(url) if verify is None else verify,
+                timeout=(timeout, read_timeout),
             )
             return r, None, int((_time.monotonic() - started) * 1000)
         except Exception as e:
@@ -1007,9 +1012,9 @@ def flatten_properties(props, prefix=""):
 def _es_get(session, base_url, es_direct_url, path, timeout=60):
     """GET an Elasticsearch path directly, or through the Kibana console proxy."""
     if es_direct_url:
-        return session.get(f"{es_direct_url}{path}", verify=False, timeout=timeout)
+        return session.get(f"{es_direct_url}{path}", verify=siem_verify(es_direct_url), timeout=timeout)
     return session.post(f"{base_url}/api/console/proxy", params={"path": path, "method": "GET"},
-                        verify=False, timeout=timeout)
+                        timeout=timeout)
 
 
 def fetch_field_caps(session, base_url, pattern, es_direct_url=None):
@@ -1067,13 +1072,14 @@ def calculate_score(rule_data, weights=None):
     return score_rule(rule_data, weights)
 
 
-def _new_session(api_key):
-    """Requests session for one SIEM's Kibana, sized for the parallel lookups below."""
+def _new_session(api_key, url):
+    """Requests session for the SIEM at ``url`` (its TLS setting applies), sized for the parallel
+    lookups below."""
     # NOTE (4.1.14 Fix 15): Do NOT add `Connection: close` here. Combined with a large thread pool it
     # caused TCP port exhaustion against the default urllib3 pool of 10, surfacing as
     # `urllib3.connectionpool is full` and SSL `Max retries exceeded` redirect storms. The
     # HTTPAdapter below sizes the pool to absorb the parallelism instead.
-    session = requests.Session()
+    session = TlsSession()
     adapter = requests.adapters.HTTPAdapter(pool_connections=25, pool_maxsize=25, max_retries=3)
     session.mount('http://', adapter)
     session.mount('https://', adapter)
@@ -1082,7 +1088,7 @@ def _new_session(api_key):
         "Authorization": f"ApiKey {api_key}",
         "Content-Type": "application/json",
     })
-    session.verify = False
+    session.verify = siem_verify(url)
     return session
 
 
@@ -1294,7 +1300,7 @@ def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elast
     Raises on any network or HTTP failure so an outage is never mistaken for a deleted rule.
     """
     base_url = kibana_url.rstrip('/')
-    session = _new_session(api_key)
+    session = _new_session(api_key, kibana_url)
     endpoint = f"{base_url}/s/{space}/api/detection_engine/rules"
     rule = None
     for param in ("id", "rule_id"):
@@ -1339,7 +1345,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
         return pd.DataFrame()
 
     base_url = kibana_url.rstrip('/')
-    session = _new_session(api_key)
+    session = _new_session(api_key, kibana_url)
 
     spaces = [s.strip() for s in (spaces or []) if s and s.strip()]
     if not spaces:
@@ -1652,20 +1658,15 @@ class _TimeoutAdapter(requests.adapters.HTTPAdapter):
         return super().send(request, **kwargs)
 
 
-def _make_session(api_key: str) -> "requests.Session":
-    """Build a requests session with the given API key.
+def _make_session(api_key: str, url: str) -> "requests.Session":
+    """Requests session for the SIEM at ``url``, with the given API key and that SIEM's TLS
+    verification setting (app.services.tls).
 
-    Mounts a sized HTTPAdapter (same pattern as ``fetch_detection_rules`` —
-    see 4.1.14 Fix 15) so that SSL certificate verification is properly
-    suppressed for self-signed / private-CA Kibana endpoints and the
-    connection pool is not exhausted during multi-step promotion operations
-    (exception-list copy, target verify GET, source DELETE).  Without this
-    adapter the default urllib3 pool raises ``SSL: CERTIFICATE_VERIFY_FAILED``
-    on non-public CAs even when ``session.verify = False`` is set, because
-    urllib3 rebuilds the SSL context on each new connection without honouring
-    the session-level flag.
+    Mounts a sized HTTPAdapter (same pattern as ``fetch_detection_rules`` — see 4.1.14 Fix 15) so
+    the connection pool is not exhausted during multi-step promotion operations (exception-list
+    copy, target verify GET, source DELETE).
     """
-    session = requests.Session()
+    session = TlsSession()
     adapter = _TimeoutAdapter(
         pool_connections=10, pool_maxsize=10, max_retries=3,
     )
@@ -1676,7 +1677,7 @@ def _make_session(api_key: str) -> "requests.Session":
         "Content-Type": "application/json",
         "Authorization": f"ApiKey {api_key}",
     })
-    session.verify = False
+    session.verify = siem_verify(url)
     return session
 
 
@@ -1712,11 +1713,11 @@ def _fetch_preview_alerts(session, base_url, space, preview_id, es_direct_url=No
         try:
             if es_direct_url:
                 url = f"{es_direct_url}/{index}/_search"
-                resp = session.post(url, json=search_body, params=search_params, verify=False, timeout=15)
+                resp = session.post(url, json=search_body, params=search_params, verify=siem_verify(es_direct_url), timeout=15)
             else:
                 path = f"/{index}/_search?track_total_hits=true"
                 proxy_url = f"{base_url}/api/console/proxy"
-                resp = session.post(proxy_url, json=search_body, params={"path": path, "method": "POST"}, verify=False, timeout=15)
+                resp = session.post(proxy_url, json=search_body, params={"path": path, "method": "POST"}, timeout=15)
 
             if resp.status_code == 200:
                 result = resp.json()
@@ -1763,7 +1764,7 @@ def preview_detection_rule(rule_data, space="default", lookback="24h",
             "No SIEM connection resolved for this rule's space. Ensure the active "
             "client has a SIEM assigned in Settings covering this space."
         )
-    session, base_url = _make_session(api_key), kibana_url
+    session, base_url = _make_session(api_key, kibana_url), kibana_url
 
     if space.lower() == "default":
         endpoint = f"{base_url}/api/detection_engine/rules/preview"
@@ -2084,7 +2085,7 @@ def create_detection_rule(
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key", None
     
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
     
     # Remove read-only fields
@@ -2136,7 +2137,7 @@ def update_detection_rule(
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key"
     
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
     
     # Prepare update (preserve rule_id and id fields)
@@ -2187,7 +2188,7 @@ def restore_detection_rule(
         rule.pop(readonly, None)
     rule["enabled"] = False
 
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     prefix = _space_api_prefix(kibana_url.rstrip("/"), space)
     url = f"{prefix}/api/detection_engine/rules"
     try:
@@ -2222,7 +2223,7 @@ def enable_detection_rule(
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key"
     
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
     prefix = _space_api_prefix(base_url, space)
     
@@ -2254,7 +2255,7 @@ def disable_detection_rule(
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key"
     
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
     prefix = _space_api_prefix(base_url, space)
     
@@ -2289,7 +2290,7 @@ def delete_detection_rule(
     """
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key"
-    session = _make_session(api_key)
+    session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
     prefix = _space_api_prefix(base_url, space)
     try:
@@ -2338,7 +2339,7 @@ def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
     if not (kibana_url and api_key and rule_id):
         return "unknown", None
     try:
-        found = _lookup_rule_by_rule_id(_make_session(api_key), kibana_url.rstrip("/"), space, rule_id)
+        found = _lookup_rule_by_rule_id(_make_session(api_key, kibana_url), kibana_url.rstrip("/"), space, rule_id)
     except Exception:
         return "unknown", None
     return ("found", found) if found else ("absent", None)
@@ -2363,9 +2364,9 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     if not (target_kibana_url and target_api_key):
         return False, "Promotion requires target SIEM kibana_url + api_key (none resolved)."
 
-    src_session = _make_session(source_api_key)
+    src_session = _make_session(source_api_key, source_kibana_url)
     src_base = source_kibana_url.rstrip("/")
-    tgt_session = _make_session(target_api_key)
+    tgt_session = _make_session(target_api_key, target_kibana_url)
     tgt_base = target_kibana_url.rstrip("/")
     
     rule = rule_data.copy()

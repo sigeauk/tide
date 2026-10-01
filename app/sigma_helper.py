@@ -1274,28 +1274,29 @@ def send_rule_to_siem(
 
     try:
         import urllib3
+        from app.services.tls import siem_verify
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
         check_response = requests.get(
             f"{url}?rule_id={rule_id}",
             headers=headers,
-            verify=False,
+            verify=siem_verify(kibana_url),
             timeout=30,
         )
 
         if check_response.status_code == 200:
             response = requests.put(
-                url, json=payload, headers=headers, verify=False, timeout=30
+                url, json=payload, headers=headers, verify=siem_verify(kibana_url), timeout=30
             )
             action = "updated"
         else:
             response = requests.post(
-                url, json=payload, headers=headers, verify=False, timeout=30
+                url, json=payload, headers=headers, verify=siem_verify(kibana_url), timeout=30
             )
             action = "created"
             if response.status_code == 409:
                 response = requests.put(
-                    url, json=payload, headers=headers, verify=False, timeout=30
+                    url, json=payload, headers=headers, verify=siem_verify(kibana_url), timeout=30
                 )
                 action = "updated"
 

@@ -44,6 +44,7 @@ from app.api.cti_deps import (
     tlp_filter_clause,
 )
 from app.api.deps import ActiveClient, RequireUser, RequireAdmin, DbDep
+from app.services import tls
 from app.services.cti_database import open_cti_db
 
 import logging
@@ -470,6 +471,7 @@ def _fetch_opencti_report_files_live(
                 json={"query": query, "variables": variables},
                 headers=headers,
                 timeout=(8, 20),
+                verify=tls.verify_arg(cfg.get("verify_tls")),
             )
             if resp.status_code != 200:
                 continue
@@ -561,7 +563,8 @@ def _fetch_crowdstrike_report_indicator_stix_ids_live(
         return []
 
     try:
-        token = cs._get_falcon_token(api_base, client_id, client_secret)
+        token = cs._get_falcon_token(api_base, client_id, client_secret,
+                                     verify=tls.verify_arg(cfg.get("verify_tls")))
     except Exception:
         return []
 
@@ -592,7 +595,7 @@ def _fetch_crowdstrike_report_indicator_stix_ids_live(
                     headers=headers,
                     params=params,
                     timeout=45,
-                    verify=bool(cfg.get("verify_tls", True)),
+                    verify=tls.verify_arg(cfg.get("verify_tls")),
                 )
             except Exception:
                 break
@@ -653,7 +656,8 @@ def _download_opencti_file_live(
     ]
     for url in candidates:
         try:
-            resp = requests.get(url, headers=headers, timeout=(8, 30))
+            resp = requests.get(url, headers=headers, timeout=(8, 30),
+                                verify=tls.verify_arg(cfg.get("verify_tls")))
             if resp.status_code != 200:
                 continue
             ctype = (resp.headers.get("Content-Type") or "").lower()

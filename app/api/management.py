@@ -15,8 +15,15 @@ from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
 from app.api.deps import DbDep, RequireAdmin, RequireSuperadmin, ActiveClient
+from app.services import tls
 
 logger = logging.getLogger(__name__)
+
+
+def _form_tls_verify(form) -> Optional[bool]:
+    """The integration form's "Verify TLS certificate" box, or None when the form has no such field."""
+    value = form.get("tls_verify")
+    return None if value is None else str(value).lower() in ("true", "on", "1")
 
 # ---------------------------------------------------------------------------
 # In-memory move-task tracker (async move system)
@@ -451,7 +458,8 @@ async def test_keycloak_connection(request: Request, db: DbDep, user: RequireAdm
         from starlette.concurrency import run_in_threadpool
         discovery_url = f"{url.rstrip('/')}/realms/{realm}/.well-known/openid-configuration"
         # In a worker thread: an unreachable Keycloak must not hold up the rest of TIDE.
-        resp = await run_in_threadpool(_req.get, discovery_url, timeout=8, verify=False)
+        resp = await run_in_threadpool(_req.get, discovery_url, timeout=8,
+                                       verify=tls.verify_arg(_form_tls_verify(form)))
         if resp.status_code == 200:
             _persist("pass", f"Realm '{realm}' discovered")
             return HTMLResponse(
@@ -489,7 +497,7 @@ async def create_keycloak(request: Request, db: DbDep, user: RequireAdmin):
 
     db.create_keycloak_inventory_item(label=label, url=url, realm=realm,
                                       client_id_enc=client_id_val,
-                                      client_secret_enc=client_secret)
+                                      client_secret_enc=client_secret, tls_verify=bool(_form_tls_verify(form)))
     logger.info(f"Keycloak instance created: {label} by {user.username}")
 
     instances = db.list_keycloak_inventory()
@@ -520,6 +528,8 @@ async def update_keycloak(request: Request, keycloak_id: str, db: DbDep, user: R
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
 
+    if _form_tls_verify(form) is not None:
+        updates["tls_verify"] = _form_tls_verify(form)
     db.update_keycloak_inventory_item(keycloak_id, **updates)
     logger.info(f"Keycloak instance updated: {keycloak_id} by {user.username}")
 
@@ -903,7 +913,7 @@ async def create_gitlab(request: Request, db: DbDep, user: RequireAdmin):
             <div class="toast toast-warning">Label and URL are required.</div>
         </div>""")
 
-    db.create_gitlab_inventory_item(label=label, url=url, token_enc=token,
+    db.create_gitlab_inventory_item(label=label, url=url, token_enc=token, tls_verify=bool(_form_tls_verify(form)),
                                     default_group=default_group)
     logger.info(f"GitLab instance created: {label} by {user.username}")
 
@@ -932,6 +942,8 @@ async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: Requi
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
 
+    if _form_tls_verify(form) is not None:
+        updates["tls_verify"] = _form_tls_verify(form)
     db.update_gitlab_inventory_item(gitlab_id, **updates)
     logger.info(f"GitLab instance updated: {gitlab_id} by {user.username}")
 
@@ -1031,8 +1043,9 @@ async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     db.create_siem_inventory_item(
         siem_type=siem_type, label=label,
         elasticsearch_url=elasticsearch_url, kibana_url=kibana_url,
-        api_token_enc=api_token,
+        api_token_enc=api_token, tls_verify=bool(_form_tls_verify(form)),
     )
+    tls.invalidate()
     logger.info(f"SIEM inventory item created: {label} by {user.username}")
 
     siems = db.list_siem_inventory()
@@ -1075,7 +1088,10 @@ async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireSu
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
 
+    if _form_tls_verify(form) is not None:
+        updates["tls_verify"] = _form_tls_verify(form)
     db.update_siem_inventory_item(siem_id, **updates)
+    tls.invalidate()
     logger.info(f"SIEM inventory item updated: {siem_id} by {user.username}")
 
     siems = db.list_siem_inventory()
@@ -1093,6 +1109,7 @@ def delete_siem(request: Request, siem_id: str, db: DbDep, user: RequireSuperadm
         <div hx-swap-oob="afterbegin:#toast-container">
             <div class="toast toast-warning">SIEM not found.</div>
         </div>""")
+    tls.invalidate()
     logger.info(f"SIEM inventory item deleted: {siem_id} by {user.username}")
 
     siems = db.list_siem_inventory()
@@ -1204,7 +1221,8 @@ async def test_siem_connection(request: Request, db: DbDep, user: RequireSuperad
         from app.elastic_helper import test_elastic_connection_full
         # In a worker thread: the checks wait on Kibana, and the rest of TIDE must not.
         linked = db.get_siem_spaces(siem_id) if siem_id else []
-        result = await run_in_threadpool(test_elastic_connection_full, kibana_url, api_token, linked_spaces=linked)
+        result = await run_in_threadpool(test_elastic_connection_full, kibana_url, api_token, linked_spaces=linked,
+                                         verify=tls.verify_arg(_form_tls_verify(form)))
         # Persist roll-up + per-check JSON so the SIEMs tab pill stays accurate
         # and the operator can revisit the result without re-testing.
         if siem_id:
@@ -1299,7 +1317,7 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
                 json={"query": "{ me { name } }"},
                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
                 timeout=10,
-                verify=False,
+                verify=tls.verify_arg(item.get("tls_verify")),
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -1320,7 +1338,7 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
             headers = {}
             if token:
                 headers["PRIVATE-TOKEN"] = token
-            resp = http_requests.get(api_url, headers=headers, timeout=10, verify=False)
+            resp = http_requests.get(api_url, headers=headers, timeout=10, verify=tls.verify_arg(item.get("tls_verify")))
             if resp.status_code == 200:
                 try:
                     data = resp.json()
@@ -1338,7 +1356,7 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
             if not url:
                 return False, "Missing URL"
             discovery_url = f"{url.rstrip('/')}/realms/{realm}/.well-known/openid-configuration"
-            resp = http_requests.get(discovery_url, timeout=8, verify=False)
+            resp = http_requests.get(discovery_url, timeout=8, verify=tls.verify_arg(item.get("tls_verify")))
             if resp.status_code == 200:
                 return True, f"Realm '{realm}' discovered"
             if resp.status_code == 404:
@@ -2044,9 +2062,9 @@ async def assign_baseline_to_client(request: Request, client_id: str, db: DbDep,
     try:
         _assign(baseline_id, client_id)
     except ValueError as e:
-        return _render_client_baselines_partial(client_id, db, toast=str(e))
+        return _render_client_baselines_partial(client_id, db, user, toast=str(e))
     logger.info(f"Baseline {baseline_id} assigned to client {client_id} by {user.username}")
-    return _render_client_baselines_partial(client_id, db, toast="Baseline assigned.")
+    return _render_client_baselines_partial(client_id, db, user, toast="Baseline assigned.")
 
 
 @router.delete("/clients/{client_id}/baselines/{baseline_id}", response_class=HTMLResponse)
@@ -2057,7 +2075,7 @@ def remove_baseline_from_client(request: Request, client_id: str, baseline_id: s
     default_cid = db.get_default_client_id()
     _unassign(baseline_id, client_id, default_client_id=default_cid)
     logger.info(f"Baseline {baseline_id} removed from client {client_id} by {user.username}")
-    return _render_client_baselines_partial(client_id, db, toast="Baseline removed.")
+    return _render_client_baselines_partial(client_id, db, user, toast="Baseline removed.")
 
 
 # ---------------------------------------------------------------------------
@@ -2099,7 +2117,7 @@ async def clone_baseline(request: Request, client_id: str,
     baseline_id = str(form.get("baseline_id", "")).strip()
     if not source_client_id or not baseline_id:
         return _render_client_baselines_partial(
-            client_id, db, toast="Missing source client or baseline.")
+            client_id, db, user, toast="Missing source client or baseline.")
     try:
         result = clone_baseline_cross_tenant(
             source_client_id=source_client_id,
@@ -2107,13 +2125,13 @@ async def clone_baseline(request: Request, client_id: str,
             baseline_id=baseline_id,
         )
     except ValueError as e:
-        return _render_client_baselines_partial(client_id, db, toast=str(e))
+        return _render_client_baselines_partial(client_id, db, user, toast=str(e))
     logger.info(
         f"Baseline '{result['name']}' cloned into client {client_id} "
         f"by {user.username} ({result['steps']} steps)"
     )
     return _render_client_baselines_partial(
-        client_id, db,
+        client_id, db, user,
         toast=f"Cloned '{result['name']}' ({result['steps']} steps).",
     )
 
@@ -2908,7 +2926,7 @@ def _render_siems_tab(siems: list) -> str:
                 <div style="display:flex;gap:0.25rem;">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editSiem('{sid}', '{lbl_esc}', '{stype_esc}', '{escape(s.get("elasticsearch_url") or "")}', '{escape(s.get("kibana_url") or "")}')"
+                            onclick="editSiem('{sid}', '{lbl_esc}', '{stype_esc}', '{escape(s.get("elasticsearch_url") or "")}', '{escape(s.get("kibana_url") or "")}', {'true' if s.get('tls_verify') else 'false'})"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3343,7 +3361,7 @@ def _render_gitlab_tab(instances: list) -> str:
                 <div style="display:flex;gap:0.25rem;">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editGitLab('{iid}', '{lbl_esc}', '{url_esc}', '{grp_esc}')"
+                            onclick="editGitLab('{iid}', '{lbl_esc}', '{url_esc}', '{grp_esc}', {'true' if i.get('tls_verify') else 'false'})"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3434,7 +3452,7 @@ def _render_keycloak_tab(instances: list) -> str:
                 <div style="display:flex;gap:0.25rem;">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editKeycloak('{iid}', '{lbl_esc}', '{url_esc}', '{realm_esc}')"
+                            onclick="editKeycloak('{iid}', '{lbl_esc}', '{url_esc}', '{realm_esc}', {'true' if i.get('tls_verify') else 'false'})"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3872,7 +3890,13 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
     return HTMLResponse(f"{html}{edit_modal_oob}{toast_html}")
 
 
-def _render_client_baselines_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
+def can_switch_to_client(user, client_id: str, db) -> bool:
+    """Whether ``user`` may make ``client_id`` their active client (the rule /api/clients/switch
+    enforces): superadmins may use any client, everyone else only those they are assigned to."""
+    return bool(user) and (user.is_superadmin or client_id in db.get_user_client_ids(user.id))
+
+
+def _render_client_baselines_partial(client_id: str, db, user, toast: str = None) -> HTMLResponse:
     """Re-render the client baselines section using Jinja2 partial."""
     from html import escape
     import os
@@ -3895,6 +3919,7 @@ def _render_client_baselines_partial(client_id: str, db, toast: str = None) -> H
         client=client, client_baselines=client_baselines,
         available_baselines=available_baselines,
         all_clients=other_clients,
+        can_switch=can_switch_to_client(user, client_id, db),
     )
 
     # OOB update the edit-baselines-modal
@@ -3980,6 +4005,10 @@ import os as _os_q
 import re as _re_q
 import time as _time_q
 
+from starlette.concurrency import run_in_threadpool as _run_in_threadpool_q
+
+from app.services.sql_guard import SqlRejected, check_references, own_tables
+
 try:
     import duckdb as _duckdb_q
 except Exception:  # pragma: no cover - duckdb is a hard dep at runtime
@@ -4037,11 +4066,11 @@ _QUERY_PRESETS = [
      "sql": ("SELECT table_name FROM information_schema.tables "
              "WHERE table_schema = 'main' ORDER BY table_name")},
     {"id": "tenant_systems", "label": "Systems in selected tenant DB", "target": "tenant",
-     "sql": "SELECT id, name, classification_id, created_at FROM systems ORDER BY name"},
+     "sql": "SELECT id, name, classification, created_at FROM systems ORDER BY name"},
     {"id": "tenant_threat_actors", "label": "Threat actors in selected tenant DB",
      "target": "tenant",
-     "sql": ("SELECT id, name, source, updated_at FROM threat_actors "
-             "ORDER BY updated_at DESC NULLS LAST LIMIT 100")},
+     "sql": ("SELECT name, origin, ttp_count, source, last_updated FROM threat_actors "
+             "ORDER BY last_updated DESC NULLS LAST LIMIT 100")},
     # 4.1.14: SIEM/space introspection presets. Pinned to target='tenant'
     # because since 4.1.13 (Migration 45) `detection_rules` lives in each
     # tenant DB, not the shared DB. Running these in shared scope would
@@ -4163,6 +4192,34 @@ def _validate_sql(sql: str):
         if _re_q.search(r"(^|[^A-Z_])" + _re_q.escape(tok) + r"([^A-Z_]|$)", upper):
             return None, f"Forbidden token '{tok}' present."
     return s, None
+
+
+_QUERY_TABLE_NAME = _re_q.compile(r'"?([A-Za-z_][A-Za-z0-9_]*)"?')
+
+
+def _check_query(conn, sql: str) -> None:
+    """Raise SqlRejected unless the statement reads only the target database's own tables, so it
+    cannot read a file (a path as a table, read_csv, query('...')). SHOW, DESCRIBE and SUMMARIZE
+    name one of those tables or wrap a query; EXPLAIN wraps a query."""
+    m = _re_q.match(r"\s*(?:--[^\n]*\n\s*)*([A-Za-z]+)\b(.*)", sql, _re_q.S)
+    kw, rest = m.group(1).upper(), m.group(2).strip()
+    if kw in ("SELECT", "WITH"):
+        check_references(conn, sql, catalog_views=True)
+    elif kw == "EXPLAIN":
+        check_references(conn, _re_q.sub(r"^ANALYZE\b", "", rest, flags=_re_q.I).strip(), catalog_views=True)
+    elif kw == "SHOW" and _re_q.fullmatch(r"(ALL\s+)?TABLES", rest, _re_q.I):
+        return
+    elif kw in ("SHOW", "DESCRIBE", "DESC", "SUMMARIZE"):
+        name = _QUERY_TABLE_NAME.fullmatch(rest)
+        if name:
+            if name.group(1).lower() not in own_tables(conn):
+                raise SqlRejected(f"Unknown table: {name.group(1)}")
+        elif kw == "SHOW":
+            raise SqlRejected("SHOW takes TABLES or a table name.")
+        else:
+            check_references(conn, rest, catalog_views=True)
+    else:
+        raise SqlRejected(f"Statement type '{kw}' is not allowed (read-only mode).")
 
 
 def _render_query_results(rows, cols, elapsed_ms, truncated):
@@ -4478,19 +4535,22 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
     cleaned, err = _validate_sql(sql_raw)
     if err:
         return HTMLResponse(f'<div class="alert alert-error">{_esc(err)}</div>')
+    # Copying the file and running the query can take seconds: keep it off the event loop.
+    return HTMLResponse(await _run_in_threadpool_q(_run_query, path, target_key, cleaned))
+
+
+def _run_query(path: str, target_key: str, cleaned: str) -> str:
+    """Run a validated statement against a snapshot of ``path`` and render the result."""
+    import shutil as _shutil_q
+    import tempfile as _tempfile_q
     upper = cleaned.upper()
-    if "LIMIT" not in upper and (upper.startswith("SELECT") or upper.startswith("WITH")):
-        wrapped = f"SELECT * FROM ({cleaned}) AS _q LIMIT {_QUERY_MAX_ROWS + 1}"
-    else:
-        wrapped = cleaned
+    is_select = upper.startswith("SELECT") or upper.startswith("WITH")
+    wrapped = f"SELECT * FROM ({cleaned}) AS _q LIMIT {_QUERY_MAX_ROWS + 1}" if is_select and "LIMIT" not in upper else cleaned
     started = _time_q.monotonic()
-    conn = None
     try:
         # Snapshot-copy the DB so we never contend with the live writer.
         # DuckDB enforces a single-process file lock, so a direct read_only
         # open against the live file fails with a Conflicting lock error.
-        import shutil as _shutil_q
-        import tempfile as _tempfile_q
         with _tempfile_q.TemporaryDirectory(prefix="tide_q_") as tmpd:
             snap = _os_q.path.join(tmpd, _os_q.path.basename(path))
             _shutil_q.copy2(path, snap)
@@ -4501,26 +4561,21 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
                 except Exception:
                     pass
             conn = _duckdb_q.connect(snap, read_only=True)
-            cur = conn.execute(wrapped)
-            cols = [d[0] for d in (cur.description or [])]
-            rows = cur.fetchall()
-        elapsed_ms = int((_time_q.monotonic() - started) * 1000)
-        truncated = False
-        if (upper.startswith("SELECT") or upper.startswith("WITH")) and len(rows) > _QUERY_MAX_ROWS:
-            rows = rows[:_QUERY_MAX_ROWS]
-            truncated = True
-        return HTMLResponse(_render_query_results(rows, cols, elapsed_ms, truncated))
+            try:
+                _check_query(conn, cleaned)
+                cur = conn.execute(wrapped)
+                cols = [d[0] for d in (cur.description or [])]
+                rows = cur.fetchall()
+            finally:
+                conn.close()
+    except SqlRejected as exc:
+        return f'<div class="alert alert-error">{_esc(str(exc))}</div>'
     except Exception as exc:
         logger.warning("query_exec failed on %s: %s", target_key, exc)
-        return HTMLResponse(
-            f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
-        )
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        return f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+    elapsed_ms = int((_time_q.monotonic() - started) * 1000)
+    truncated = is_select and len(rows) > _QUERY_MAX_ROWS
+    return _render_query_results(rows[:_QUERY_MAX_ROWS] if truncated else rows, cols, elapsed_ms, truncated)
 
 
 # ===========================================================================

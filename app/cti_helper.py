@@ -496,7 +496,7 @@ def process_mitre_knowledge(bundle_data, source_name="unknown"):
         "group_associations": pd.DataFrame(group_associations),
     }
 
-def get_threat_landscape(api_url, api_token):
+def get_threat_landscape(api_url, api_token, verify=False):
     """
     Fetches Intrusion Sets and their TTPs from OpenCTI via GraphQL.
     Paginates through all results.
@@ -560,7 +560,8 @@ def get_threat_landscape(api_url, api_token):
                 f"{base_url}/graphql",
                 json={'query': query, 'variables': variables},
                 headers=headers,
-                timeout=60
+                timeout=60,
+                verify=verify,
             )
             
             if response.status_code != 200:

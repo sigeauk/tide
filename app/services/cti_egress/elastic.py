@@ -16,6 +16,8 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 import requests
 
+from app.services import tls
+
 from ._common import (
     BATCH_SIZE,
     HISTORY_PREFIX,
@@ -163,7 +165,9 @@ def run(client_id: str, target: Dict[str, Any], *,
     history_index = _history_index_for(now)
     own_session = session is None
     if own_session:
-        session = requests.Session()
+        # The target writes to a SIEM's Elasticsearch: that SIEM's TLS setting applies.
+        session = tls.Session()
+        session.verify = tls.siem_verify(es_url)
 
     try:
         batch: List[Tuple[str, Dict[str, Any]]] = []

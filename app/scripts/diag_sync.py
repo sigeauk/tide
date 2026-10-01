@@ -233,21 +233,18 @@ def _check_db() -> dict:
                 print(f"     {cid[:8]} '{name}' db_filename={fn!r}")
 
         if "client_siem_map" in tables:
-            try:
-                maps = c.execute(
-                    "SELECT client_id, siem_id, environment_role, space "
-                    "FROM client_siem_map"
-                ).fetchall()
-            except Exception:
-                maps = c.execute(
-                    "SELECT client_id, siem_id, NULL, NULL "
-                    "FROM client_siem_map"
-                ).fetchall()
+            # Each row is a destination: (client, siem, space) with the name the client gave it
+            # (migration 65); older DBs had a production/staging role instead of a name.
+            cols = {r[1] for r in c.execute("PRAGMA table_info('client_siem_map')").fetchall()}
+            label = "name" if "name" in cols else "environment_role" if "environment_role" in cols else "NULL"
+            maps = c.execute(
+                f"SELECT client_id, siem_id, {label}, space FROM client_siem_map"
+            ).fetchall()
             info["mappings"] = maps
             print(f"  client_siem_map rows: {len(maps)}")
-            for cid, sid, role, space in maps:
+            for cid, sid, name, space in maps:
                 print(f"     client={cid[:8]} siem={sid[:8]} "
-                      f"role={role!r} space={space!r}")
+                      f"name={name!r} space={space!r}")
         info["db_read_ok"] = True
     except Exception as exc:
         print(f"  ERROR reading shared DB: {exc}")
@@ -432,16 +429,16 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
         print("")
         print("  Per-mapping space check (client_siem_map):")
         siem_lookup = {s.get("id"): s for s in siems}
-        for cid, sid, role, space in mappings:
+        for cid, sid, name, space in mappings:
             siem = siem_lookup.get(sid)
             if not siem or not siem.get("kibana_url") or not siem.get("api_token"):
-                print(f"     client={cid[:8]} siem={sid[:8]} role={role!r} "
+                print(f"     client={cid[:8]} siem={sid[:8]} name={name!r} "
                       f"space={space!r}  -- siem record missing or no token, "
                       f"skipped.")
                 continue
             real_spaces = real_spaces_per_siem.get(sid)
             if real_spaces is not None and space not in real_spaces:
-                print(f"     client={cid[:8]} siem={sid[:8]} role={role!r} "
+                print(f"     client={cid[:8]} siem={sid[:8]} name={name!r} "
                       f"space={space!r}  X NOT a real Kibana space on "
                       f"'{siem.get('label')}'. Real spaces: "
                       f"{sorted(real_spaces)}. This mapping will produce "
@@ -472,10 +469,10 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                         extra = f" (Kibana total={r.json().get('total')})"
                     except Exception:
                         pass
-                print(f"     client={cid[:8]} siem={sid[:8]} role={role!r} "
+                print(f"     client={cid[:8]} siem={sid[:8]} name={name!r} "
                       f"space={space!r}  {tag}{extra}  url={ep}")
             except Exception as e:
-                print(f"     client={cid[:8]} siem={sid[:8]} role={role!r} "
+                print(f"     client={cid[:8]} siem={sid[:8]} name={name!r} "
                       f"space={space!r}  ERROR: {type(e).__name__}: {e}")
 
 
@@ -854,18 +851,18 @@ def _check_dry_run_urls(info: dict) -> None:
 
     legacy_shape_seen = False
     printed = 0
-    for client_id, siem_id, role, space in mappings:
+    for client_id, siem_id, name, space in mappings:
         siem = siems.get(siem_id)
         client_name = clients.get(client_id, "<unknown>")
         if not siem:
             print(f"  [client={client_name!r}] [siem={siem_id[:8]}] "
-                  f"[space={space!r}] [role={role!r}] -- SKIP: "
+                  f"[space={space!r}] [name={name!r}] -- SKIP: "
                   "siem_id not found in siem_inventory")
             continue
         base_url = (siem.get("kibana_url") or "").rstrip("/")
         if not base_url:
             print(f"  [client={client_name!r}] [siem={siem.get('label')!r}] "
-                  f"[space={space!r}] [role={role!r}] -- SKIP: "
+                  f"[space={space!r}] [name={name!r}] -- SKIP: "
                   "siem_inventory.kibana_url is empty")
             continue
         # Mirror the post-4.1.14 fetch_detection_rules URL shape exactly.
@@ -887,7 +884,7 @@ def _check_dry_run_urls(info: dict) -> None:
         }
         print(
             f"  [client={client_name!r}] [siem={siem.get('label')!r}] "
-            f"[space={space!r}] [role={role!r}]"
+            f"[space={space!r}] [name={name!r}]"
         )
         print(f"     METHOD : GET")
         print(f"     URL    : {url}")
@@ -950,7 +947,7 @@ def _check_live_sync_trace(info: dict) -> None:
 
     # (client_id → [(siem_id, space)]) — from the already-read mappings
     scopes_by_client: dict = {}
-    for cid, sid, _role, space in mappings:
+    for cid, sid, _name, space in mappings:
         sp = (space or "default").strip().lower() or "default"
         scopes_by_client.setdefault(cid, []).append((sid, sp))
 

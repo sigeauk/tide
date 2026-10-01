@@ -1,0 +1,159 @@
+{# System report: device exposure (KEV CVEs matched to this system's hosts). Included by
+   report/system_report.html when the report includes devices. #}
+<div class="section-banner avoid-break" id="sec-devices">
+    <div class="section-banner-title">Device Exposure</div>
+    <div class="section-banner-sub">Known exploited vulnerabilities on {{ report.system.name }}'s devices, and whether they are detected</div>
+</div>
+
+{% if report.include_devices is not defined or report.include_devices %}
+<!-- RAG Legend -->
+<div class="legend">
+    <span><span class="swatch" style="background:var(--danger)"></span> Red — At Risk (CVE match, no detection)</span>
+    <span><span class="swatch" style="background:var(--warning)"></span> Amber — Monitored (CVE match, detection applied)</span>
+    <span><span class="swatch" style="background:var(--success)"></span> Green — Clean (no vulnerabilities found)</span>
+</div>
+
+<div class="summary-grid avoid-break">
+    <div class="stat-card">
+        <span class="stat-value">{{ report.total_hosts }}</span>
+        <span class="stat-label">Total Devices</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if report.total_cves > 0 %}danger{% else %}success{% endif %}">{{ report.total_cves }}</span>
+        <span class="stat-label">Unique CVEs</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value danger">{{ report.red_hosts }}</span>
+        <span class="stat-label">At Risk Devices</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value warning">{{ report.amber_hosts }}</span>
+        <span class="stat-label">Monitored Devices</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value success">{{ report.green_hosts }}</span>
+        <span class="stat-label">Clean Devices</span>
+    </div>
+    <div class="stat-card">
+        <span class="stat-value {% if report.coverage_ratio >= 80 %}success{% elif report.coverage_ratio >= 40 %}warning{% else %}danger{% endif %}">{{ report.coverage_ratio }}%</span>
+        <span class="stat-label">Coverage Ratio</span>
+    </div>
+</div>
+
+<div class="exec-narrative avoid-break">
+    <strong>{{ report.system.name }}</strong> comprises {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }}
+    with {{ report.total_cves }} unique CVE{{ 's' if report.total_cves != 1 else '' }} identified across the estate.
+    {% if report.total_cves == 0 %}
+    No known exploited vulnerabilities were matched against the installed software inventory. The system is currently in a clean state.
+    {% elif report.coverage_ratio >= 80 %}
+    Detection coverage is <strong style="color:var(--success)">strong at {{ report.coverage_ratio }}%</strong> — the majority of vulnerability-device pairings have active detection rules in place.
+    {% if report.red_hosts > 0 %}{{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} remain{{ '' if report.red_hosts != 1 else 's' }} at risk and should be prioritised for remediation.{% endif %}
+    {% elif report.coverage_ratio >= 40 %}
+    Detection coverage is <strong style="color:var(--warning)">moderate at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk with matched CVEs but no active detection.
+    Increasing rule coverage for the top CVEs listed below would materially reduce exposure.
+    {% else %}
+    Detection coverage is <strong style="color:var(--danger)">low at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} of {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk.
+    Immediate action is recommended to deploy detection rules against the highest-impact CVEs.
+    {% endif %}
+    {% if report.total_grey_pairs > 0 %}
+    {{ report.total_grey_pairs }} vulnerability-device pairing{{ 's' if report.total_grey_pairs != 1 else '' }} {{ 'have' if report.total_grey_pairs != 1 else 'has' }} been marked as blind spots and excluded from scoring.
+    {% endif %}
+</div>
+{% endif %}
+
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 2 — VULNERABILITY COVERAGE RATIO  (device data)
+     ══════════════════════════════════════════════════════ -->
+{% if report.include_devices is not defined or report.include_devices %}
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">Vulnerability Coverage Ratio</div>
+    <div class="section-banner-sub">Detection coverage across all CVE-host pairings</div>
+</div>
+
+<table>
+    <thead>
+        <tr><th>Metric</th><th>Count</th><th>Percentage</th></tr>
+    </thead>
+    <tbody>
+        <tr>
+            <td><span class="badge badge-amber">Amber</span> Monitored (CVE + Detection Applied)</td>
+            <td>{{ report.total_amber_pairs }}</td>
+            <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
+        </tr>
+        <tr>
+            <td><span class="badge badge-red">Red</span> At Risk (CVE + No Detection)</td>
+            <td>{{ report.total_red_pairs }}</td>
+            <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ 100 - report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
+        </tr>
+    </tbody>
+</table>
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 3 — TOP 5 CRITICAL CVEs  (device data)
+     ══════════════════════════════════════════════════════ -->
+{% if report.top5_cves %}
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">Top 5 Critical CVEs</div>
+    <div class="section-banner-sub">Ranked by number of at-risk hosts</div>
+</div>
+
+<table>
+    <thead>
+        <tr><th>CVE ID</th><th>Vulnerability</th><th>Vendor / Product</th><th>At Risk</th><th>Monitored</th><th>MITRE Techniques</th><th>Ransomware</th></tr>
+    </thead>
+    <tbody>
+        {% for cve in report.top5_cves %}
+        <tr>
+            <td style="font-weight:600;white-space:nowrap;">{{ cve.cve_id }}</td>
+            <td>{{ cve.vulnerability_name[:60] }}{% if cve.vulnerability_name|length > 60 %}…{% endif %}</td>
+            <td style="font-size:6.5pt;">{{ cve.vendor_project }} / {{ cve.product }}</td>
+            <td><span class="badge badge-red">{{ cve.hosts_red|length }}</span></td>
+            <td><span class="badge badge-amber">{{ cve.hosts_amber|length }}</span></td>
+            <td>
+                {% for t in cve.techniques %}
+                <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}</span>
+                {% endfor %}
+                {% if not cve.techniques %}<span style="color:var(--text-3)">—</span>{% endif %}
+            </td>
+            <td>{% if cve.known_ransomware %}<span class="badge badge-red">Yes</span>{% else %}No{% endif %}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+{% endif %}{# include_devices — vuln ratio + top5 CVEs #}
+
+<!-- ══════════════════════════════════════════════════════
+     SECTION 4 — DEVICE STATUS SUMMARY
+     ══════════════════════════════════════════════════════ -->
+{% if report.include_devices is not defined or report.include_devices %}
+<div class="section-banner avoid-break">
+    <div class="section-banner-title">Device Status Summary</div>
+    <div class="section-banner-sub">Per-device vulnerability and detection overview</div>
+</div>
+
+<table>
+    <thead>
+        <tr><th>Device</th><th>IP Address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
+    </thead>
+    <tbody>
+        {% for h in report.host_rows %}
+        <tr>
+            <td style="font-weight:600;">{{ h.name }}</td>
+            <td style="font-family:var(--ff-mono);font-size:6.5pt;">{{ h.ip }}</td>
+            <td style="font-size:6.5pt;">{{ h.os[:30] }}{% if h.os|length > 30 %}…{% endif %}</td>
+            <td>
+                {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
+                {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
+                {% elif h.rag == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
+                {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
+            </td>
+            <td>{{ h.cve_count }}</td>
+            <td>{{ h.red_count }}</td>
+            <td>{{ h.amber_count }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}

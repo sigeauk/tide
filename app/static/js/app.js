@@ -1662,16 +1662,35 @@ console.debug('TIDE app.js loading...');
 
     // Add-link search results (rule_modal.html): clicking a match fills the name box with the
     // exact name (so the exact-match lookup on submit succeeds) and closes the dropdown.
+    // Add link: a picked suggestion is linked by its rule id (names repeat within a destination).
     window.tidePickLinkTarget = function (btn) {
+        var form = btn.closest('form');
         var results = btn.closest('.rm-add-link__results');
-        var input = results && results.parentElement && results.parentElement.querySelector('input[name="target_name"]');
-        if (input) input.value = btn.dataset.name;
+        if (form) {
+            form.target_name.value = btn.dataset.name;
+            form.target_rule_id.value = btn.dataset.ruleId || '';
+        }
+        if (results) results.innerHTML = '';
+    };
+    // A pick belongs to the destination it was found in.
+    window.tideClearLinkTarget = function (form) {
+        form.target_rule_id.value = '';
+        var results = form.querySelector('.rm-add-link__results');
         if (results) results.innerHTML = '';
     };
     document.addEventListener('click', function (e) {
         document.querySelectorAll('.rm-add-link__results').forEach(function (r) {
             if (!r.contains(e.target) && e.target.name !== 'target_name') r.innerHTML = '';
         });
+    });
+    // Tabbing out of the name box (not into its suggestions) closes them. Deferred, so a click on a
+    // suggestion lands first (Safari doesn't focus a clicked button).
+    document.addEventListener('focusout', function (e) {
+        if (e.target.name !== 'target_name' || !e.target.closest('.rm-add-link')) return;
+        var results = e.target.closest('.rm-add-link').querySelector('.rm-add-link__results');
+        setTimeout(function () {
+            if (results && !results.contains(document.activeElement)) results.innerHTML = '';
+        }, 200);
     });
 
     // Merge button (rule_migration_diff.html), wired as a plain onclick attribute rather than a

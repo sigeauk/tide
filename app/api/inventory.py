@@ -2959,6 +2959,12 @@ def _group_affected_by_system(cve):
 # Report Generation Endpoints
 # ---------------------------------------------------------------------------
 
+def _no_fetch(url: str, *args, **kwargs):
+    """WeasyPrint's resource fetcher for reports, which are self-contained: nothing is fetched,
+    so text a user typed can never make the renderer read a file or call out."""
+    raise ValueError(f"Report resources are not fetched: {url}")
+
+
 @router.get("/api/inventory/systems/{system_id}/report")
 def api_system_report(
     request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient,
@@ -2967,8 +2973,12 @@ def api_system_report(
     classification: str = Query("Official"),
     include_devices: str = Query("1"),
     include_baselines: str = Query("1"),
+    baseline_id: List[str] = Query([]),
+    techniques: str = Query("gaps", pattern="^(gaps|all|none)$"),
 ):
-    """Generate a System report — CISO Executive Summary or Technical Deep Dive."""
+    """Generate a System report — CISO Executive Summary or Technical Deep Dive — for the chosen
+    baselines (``baseline_id``, repeated; all of them when none are named). ``techniques`` picks
+    which techniques get a detail entry in a technical report."""
     import os
     from datetime import datetime
     from app.services.report_generator import CLASSIFICATION_OPTIONS
@@ -2979,15 +2989,18 @@ def api_system_report(
     # Parse query parameters
     include_devices_flag = include_devices == "1"
     include_baselines_flag = include_baselines == "1"
-    
-    report_data = build_system_report_data(system_id, include_devices=include_devices_flag, client_id=client_id)
+
+    report_data = build_system_report_data(
+        system_id, include_devices=include_devices_flag, client_id=client_id,
+        baseline_ids=[b for b in baseline_id if b], techniques=techniques if mode == "technical" else "none",
+    )
     if not report_data:
         raise HTTPException(status_code=404, detail="System not found")
 
     report_data["mode"] = mode
     report_data["classification"] = classification
     report_data["include_devices"] = include_devices_flag
-    report_data["include_baselines"] = include_baselines_flag
+    report_data["include_baselines"] = include_baselines_flag and bool(report_data["baselines"])
 
     safe_name = report_data["system"]["name"].replace(" ", "_").replace("/", "_")[:30]
     level_tag = "ciso" if mode == "executive" else "technical"
@@ -3014,7 +3027,7 @@ def api_system_report(
         env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
         template = env.get_template("report/system_report.html")
         html_str = template.render(report=report_data)
-        pdf_bytes = WeasyprintHTML(string=html_str).write_pdf()
+        pdf_bytes = WeasyprintHTML(string=html_str, url_fetcher=_no_fetch).write_pdf()
     except ImportError:
         logger.error("WeasyPrint is not installed in this environment")
         raise HTTPException(status_code=500, detail="PDF generation requires WeasyPrint. Check server installation.")
@@ -3167,30 +3180,74 @@ def api_baseline_report(
 # Markdown generation helpers
 # ---------------------------------------------------------------------------
 
+def _md(value) -> str:
+    """A value safe inside a Markdown table cell."""
+    return str(value if value not in (None, "") else "—").replace("|", "\\|").replace("\n", " ")
+
+
+def _md_date(value) -> str:
+    return value.strftime("%Y-%m-%d") if value else "date not recorded"
+
+
+def _md_coverage_line(c: dict) -> str:
+    """One thing covering a technique, as '- **Rule added 2026-10-01** by alice — name (where) · state'."""
+    by = f" by {c['by']}" if c.get("by") else ""
+    where = f" at {c['destination']}" if c.get("destination") else ""
+    bits = [c["flag"]] if c.get("flag") else []
+    if c.get("score") is not None:
+        bits.append(f"rule score {c['score']}%")
+    if c.get("note"):
+        bits.append(c["note"])
+    if c.get("url"):
+        bits.append(c["url"])
+    tail = f" · {' · '.join(bits)}" if bits else ""
+    return f"- **{c['label']} added {_md_date(c.get('added'))}**{by} — {c['name']}{where}{tail}"
+
+
 def _generate_system_markdown(data: dict, classification: str) -> str:
-    """Generate a Markdown system report."""
+    """Generate a Markdown system report: the same sections and figures as the PDF."""
     mode = data.get("mode", "executive")
     sys = data["system"]
+    t = data["totals"]
+    scored = t["total"] - t["na"]
+    show_baselines = data.get("include_baselines")
     lines = [
         f"<!-- {classification} -->",
         "",
         f"# {sys['name']} — {'Technical Deep Dive' if mode == 'technical' else 'CISO Executive Summary'}",
         "",
         f"**Classification:** {classification}",
+    ]
+    if sys.get("classification"):
+        lines.append(f"**System classification:** {sys['classification']}")
+    lines += [
         f"**Generated:** {data['generated_at']}",
         f"**Audience:** {'Technical / Engineer' if mode == 'technical' else 'Executive / CISO'}",
-        "",
-        "---",
-        "",
-        "## Executive Summary",
-        "",
-        "| Metric | Value |",
-        "|--------|-------|",
     ]
-    
-    # Add device stats only if include_devices is True
+    if show_baselines:
+        names = ", ".join(b["name"] for b in data["baselines"])
+        lines.append(f"**Baselines:** {'All — ' if data.get('all_baselines') else ''}{names}")
+    if sys.get("description"):
+        lines += ["", sys["description"]]
+    lines += ["", "---", "", "## Executive Summary", ""]
+
+    if show_baselines:
+        covered = "—" if data["coverage_pct"] is None else f"{data['coverage_pct']}% ({t['covered']} of {scored} scored)"
+        lines += [
+            data["narrative"],
+            "",
+            "| Covered | Techniques | No coverage | Known gaps | Unmapped | Not counted |",
+            "|---------|------------|-------------|------------|----------|-------------|",
+            f"| {covered} | {t['total']} | {t['none']} | {t['gap']} | {t['unmapped']} | {t['uncounted']} |",
+            "",
+        ]
+        if data["coverage_undefined"]:
+            lines += ["> No SIEM coverage destinations are set for this system, so Covered is not scored.", ""]
+
     if data.get("include_devices"):
         lines += [
+            "| Metric | Value |",
+            "|--------|-------|",
             f"| Total Devices | {data['total_hosts']} |",
             f"| Unique CVEs | {data['total_cves']} |",
             f"| At Risk (Red) | {data['red_hosts']} |",
@@ -3198,11 +3255,65 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             f"| Blind Spots (Grey) | {data.get('grey_hosts', 0)} |",
             f"| Clean (Green) | {data['green_hosts']} |",
             f"| Coverage Ratio | {data['coverage_ratio']}% |",
+            "",
         ]
-    
-    lines.append("")
 
-    # Top 5 CVEs (only if include_devices is True)
+    if show_baselines:
+        lines += [
+            "## Baselines",
+            "",
+            "| Baseline | Techniques | Covered | No coverage | Known gaps | N/A | Coverage |",
+            "|----------|------------|---------|-------------|------------|-----|----------|",
+        ]
+        for b in data["baselines"]:
+            bt = b["totals"]
+            lines.append(f"| {_md(b['name'])} | {bt['total']} | {bt['covered']} | {bt['none']} | {bt['gap']} | "
+                         f"{bt['na']} | {b['coverage_pct']}% |")
+        lines.append("")
+
+        lines += ["## Priority Gaps", ""]
+        if data["priority_gaps"]:
+            lines += ["| Priority | Technique | ATT&CK | Baseline | Status | Reason |",
+                      "|----------|-----------|--------|----------|--------|--------|"]
+            for g in data["priority_gaps"]:
+                ids = ", ".join(a["id"] for a in g["attack"])
+                lines.append(f"| {_md(g['priority_label'] or 'Not set')} | {_md(g['title'])} | {_md(ids)} | "
+                             f"{_md(g['baseline_name'])} | {g['status_label']} | {_md(g['mark_reason'])} |")
+        else:
+            lines.append("No technique in the selected baselines is without coverage.")
+        lines.append("")
+
+        lines += ["## Coverage by SIEM", ""]
+        if data["siem_coverage"]:
+            lines += ["| Destination | In SIEM coverage | Rules | Techniques mapped | Techniques covered |",
+                      "|-------------|------------------|-------|-------------------|--------------------|"]
+            for s in data["siem_coverage"]:
+                lines.append(f"| {_md(s['name'])} | {'Yes' if s['counted'] else 'No'} | {s['rules']} | "
+                             f"{s['mapped']} | {s['covering']} |")
+        else:
+            lines.append("No rules are mapped and no SIEM coverage destinations are set.")
+        lines.append("")
+        if data["uncounted_mappings"]:
+            lines += ["### Rules outside SIEM coverage", "",
+                      "These rules are mapped, but sit where this system is not measured, so they do not count as coverage.", "",
+                      "| Rule | Destination | Technique | Baseline | Added |",
+                      "|------|-------------|-----------|----------|-------|"]
+            for u in data["uncounted_mappings"]:
+                lines.append(f"| {_md(u['rule'])} | {_md(u['destination'])} | {_md(u['technique'])} | "
+                             f"{_md(u['baseline'])} | {_md_date(u['added'])} |")
+            lines.append("")
+
+        if data.get("snapshots"):
+            lines += ["## Coverage Snapshots", "",
+                      "| Date | Label | Baseline | Score | Covered | Known gaps | No coverage | N/A |",
+                      "|------|-------|----------|-------|---------|------------|-------------|-----|"]
+            for s in data["snapshots"]:
+                when = s["captured_at"].strftime("%Y-%m-%d %H:%M") if s["captured_at"] else "—"
+                lines.append(f"| {when} | {_md(s['label'])} | {_md(s['baseline_name'])} | "
+                             f"{round(s['score_percentage'] or 0)}% | {s['count_green']} | {s['count_amber']} | "
+                             f"{s['count_red']} | {s['count_grey']} |")
+            lines.append("")
+
     if data.get("top5_cves") and data.get("include_devices"):
         lines += [
             "## Top 5 Critical CVEs",
@@ -3219,7 +3330,6 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             )
         lines.append("")
 
-    # Device Status (only if include_devices is True)
     if data.get("include_devices"):
         lines += [
             "## Device Status Summary",
@@ -3235,94 +3345,72 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
             )
         lines.append("")
 
-    # Baseline Coverage
-    baselines = data.get("baselines", [])
-    if baselines:
-        lines += [
-            "## Baseline Coverage",
-            "",
-            "| Baseline | Techniques | Covered | Gaps | Coverage |",
-            "|----------|-------|---------|------|----------|",
-        ]
-        for bl in baselines:
-            gaps = bl["total_steps"] - bl["covered_steps"]
-            lines.append(
-                f"| {bl['playbook_name']} | {bl['total_steps']} | "
-                f"{bl['covered_steps']} | {gaps} | {bl['coverage_pct']}% |"
-            )
-        lines.append("")
+    if mode == "technical" and show_baselines:
+        lines += ["## Coverage Matrix", ""]
+        for b in data["baselines"]:
+            lines += [f"### {b['name']}", ""]
+            if b.get("description"):
+                lines += [f"_{b['description']}_", ""]
+            tactic = None
+            for tech in (x for x in data["techniques"] if x["baseline_id"] == b["id"]):
+                if tech["tactic"] != tactic:
+                    tactic = tech["tactic"]
+                    lines += ["", f"#### {tactic or 'Unassigned'}", "",
+                              "| # | Technique | ATT&CK | Priority | Status | Covered by |",
+                              "|---|-----------|--------|----------|--------|------------|"]
+                by = tech["rule_names"] + [f"{n} (not in SIEM coverage)" for n in tech["uncounted_rule_names"]]
+                by += [f"{c['label']}: {c['name']}" for c in tech["coverage"] if c["flag"] == "Non-alerting"]
+                if tech["status"] in ("amber", "grey"):
+                    by = [tech["mark_reason"]] + by
+                status = tech["status_label"] + (" (non-alerting)" if tech["non_alerting"] else "")
+                lines.append(f"| {tech['number'] or ''} | {_md(tech['title'])} | "
+                             f"{_md(', '.join(a['id'] for a in tech['attack']))} | {_md(tech['priority_label'])} | "
+                             f"{status} | {_md('; '.join(n for n in by if n))} |")
+            lines.append("")
 
-    # Technical detail
-    if mode == "technical":
-        # Baseline gap analysis (grouped by tactic)
-        if baselines:
-            lines += ["## Baseline Gap Analysis", ""]
-            for bl in baselines:
-                lines.append(f"### {bl['playbook_name']}")
-                if bl.get("playbook_description"):
-                    lines.append(f"_{bl['playbook_description']}_")
+        if data["detailed_techniques"]:
+            lines += ["## Technique Detail", ""]
+            if data["technique_scope"] == "gaps":
+                lines += ["_Techniques with no coverage or a known gap._", ""]
+            for tech in data["detailed_techniques"]:
+                facts = [f"**Status:** {tech['status_label']}" + (" (non-alerting)" if tech["non_alerting"] else "")]
+                if tech["priority_label"]:
+                    facts.append(f"**Priority:** {tech['priority_label']}")
+                if tech["category_label"]:
+                    facts.append(f"**Category:** {tech['category_label']}")
+                facts += [f"**Tactic:** {tech['tactic'] or 'Unassigned'}", f"**Baseline:** {tech['baseline_name']}"]
+                if tech["evidence_score"] is not None:
+                    facts.append(f"**Strongest rule:** {tech['evidence_rule']} ({tech['evidence_score']}%)")
+                lines += [f"### {tech['title']}", "", " · ".join(facts), ""]
+                if tech["description"]:
+                    lines += [tech["description"], ""]
+                lines += ["**Coverage**", ""]
+                lines += [_md_coverage_line(c) for c in tech["coverage"]] or ["Nothing covers this technique yet."]
+                lines += ["", "**MITRE ATT&CK**", ""]
+                lines += [f"- {a['id']} {a['name']}".rstrip() + (f" ({a['tactic']})" if a["tactic"] else "")
+                          for a in tech["attack"]] or ["No MITRE techniques mapped to this technique."]
                 lines.append("")
-                
-                # Group steps by tactic
-                tactics_grouped = {}
-                for step in bl.get("tactics", []):
-                    tactic = step.get("tactic") or "Unassigned"
-                    if tactic not in tactics_grouped:
-                        tactics_grouped[tactic] = []
-                    tactics_grouped[tactic].append(step)
-                
-                # Render each tactic with its steps
-                for tactic in sorted(tactics_grouped.keys()):
-                    lines.append(f"#### {tactic}")
-                    lines.append("")
-                    lines.append("| # | Technique | ATT&CK | Applied Rules | Status |")
-                    lines.append("|------|-------|-----------|----------------|--------|")
-                    for step in tactics_grouped[tactic]:
-                        # Determine status display
-                        if step["status"] == "grey":
-                            status = "N/A"
-                        elif step["status"] == "green":
-                            status = "Detected"
-                        elif step["status"] == "amber":
-                            status = "Known Gap"
-                        else:
-                            status = "Missing"
-                        
-                        # Get applied detections (rules that are actually in place)
-                        applied_rules = step.get("applied_dets", [])
-                        applied_display = ", ".join(
-                            d.get('rule_ref') or d.get('note') or 'Rule'
-                            for d in applied_rules
-                        ) if applied_rules else "—"
-                        
-                        lines.append(
-                            f"| {step['step_number']} | {step['title']} | "
-                            f"{step['technique_id'] or '—'} | {applied_display} | {status} |"
-                        )
-                    lines.append("")
 
-        if data.get("all_cves") and data.get("include_devices"):
-            lines += ["## CVE Breakdown (Technical Detail)", ""]
-            for cve in data["all_cves"]:
-                lines.append(f"### {cve['cve_id']}")
-                lines.append(f"_{cve.get('vulnerability_name', '')}_")
+    if mode == "technical" and data.get("all_cves") and data.get("include_devices"):
+        lines += ["## CVE Breakdown (Technical Detail)", ""]
+        for cve in data["all_cves"]:
+            lines.append(f"### {cve['cve_id']}")
+            lines.append(f"_{cve.get('vulnerability_name', '')}_")
+            lines.append("")
+            if cve.get("techniques"):
+                lines.append("**MITRE Techniques:** " + ", ".join(f"`{t['id']}`" for t in cve["techniques"]))
                 lines.append("")
-                if cve.get("techniques"):
-                    lines.append("**MITRE Techniques:** " + ", ".join(
-                        f"`{t['id']}`" for t in cve["techniques"]
-                    ))
-                    lines.append("")
-                lines.append("| Host | IP | Status | Active Rules |")
-                lines.append("|------|----|--------|-------------|")
-                for h in cve.get("hosts_red", []):
-                    lines.append(f"| {h['name']} | {h['ip']} | At Risk | — |")
-                for h in cve.get("hosts_amber", []):
-                    rules = ", ".join(h.get("rule_names", [])) or "—"
-                    lines.append(f"| {h['name']} | {h['ip']} | Monitored | {rules} |")
-                for h in cve.get("hosts_grey", []):
-                    reason = h.get("blind_spot_reason", "")[:40] or "—"
-                    lines.append(f"| {h['name']} | {h['ip']} | Blind Spot | {reason} |")
-                lines.append("")
+            lines.append("| Host | IP | Status | Active Rules |")
+            lines.append("|------|----|--------|-------------|")
+            for h in cve.get("hosts_red", []):
+                lines.append(f"| {h['name']} | {h['ip']} | At Risk | — |")
+            for h in cve.get("hosts_amber", []):
+                rules = ", ".join(h.get("rule_names", [])) or "—"
+                lines.append(f"| {h['name']} | {h['ip']} | Monitored | {rules} |")
+            for h in cve.get("hosts_grey", []):
+                reason = h.get("blind_spot_reason", "")[:40] or "—"
+                lines.append(f"| {h['name']} | {h['ip']} | Blind Spot | {reason} |")
+            lines.append("")
 
     lines += [
         "---",

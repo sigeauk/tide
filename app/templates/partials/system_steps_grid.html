@@ -44,7 +44,7 @@
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             hx-trigger="click, keyup[key=='Enter']">
             <td class="rt-name"><span class="rt-title" title="{{ step.title }}">{{ step.title }}</span></td>
-            <td>{% for tid in (step.display_technique_ids | default([]))[:2] %}{{ mitre_pill(tid, neutral=true, clickable=false, size='sm') }}{% endfor %}{% if (step.display_technique_ids | default([])) | length > 2 %}<span class="text-muted"> +{{ (step.display_technique_ids | length) - 2 }}</span>{% endif %}</td>
+            <td>{% for tid in (step.display_technique_ids | default([]))[:2] %}{{ mitre_pill(tid, neutral=true, clickable=true, size='sm') }}{% endfor %}{% if (step.display_technique_ids | default([])) | length > 2 %}<span class="text-muted"> +{{ (step.display_technique_ids | length) - 2 }}</span>{% endif %}</td>
             <td><span class="sys-tactic">{{ tactic_icon(step.tactic, "12") }} {{ step.tactic }}</span></td>
             <td class="rt-sub" title="{{ step.baseline_name }}">{{ step.baseline_name }}</td>
             {% if template %}

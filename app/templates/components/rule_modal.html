@@ -516,21 +516,28 @@
                     <p class="rm-empty">Not linked to another rule.</p>
                     {% endif %}
                     {% if move_targets %}
+                    {# Destination, then the name with its suggestions, then Add link: the suggestions
+                       list sits in the flow, so it pushes Add link down instead of covering it.
+                       Picking a suggestion fills target_rule_id (names repeat within a destination);
+                       typing again clears it. #}
                     <form class="rm-add-link" hx-post="/api/rules/{{ rule.rule_id }}/links?{{ scope_qs }}"
                           hx-target="#modal-container" hx-swap="innerHTML">
-                        <div style="position:relative; flex: 1 1 10rem;">
+                        <select name="target_scope" class="form-input" aria-label="Destination to link to"
+                                onchange="tideClearLinkTarget(this.form)">
+                            {% for t in move_targets %}
+                            <option value="{{ t.siem_id }}|{{ t.space }}">{{ t.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="rm-add-link__name">
                             <input type="text" name="target_name" class="form-input" placeholder="Rule name to link…"
-                                   required autocomplete="off"
+                                   required autocomplete="off" aria-label="Rule name to link"
+                                   oninput="this.form.target_rule_id.value = ''"
                                    hx-get="/api/rules/link-search" hx-trigger="keyup changed delay:300ms, focus"
                                    hx-include="closest form" hx-vals='{"exclude_rule_id": "{{ rule.rule_id }}", "exclude_siem_id": "{{ siem_id | default(rule.siem_id, true) }}", "exclude_space": "{{ space }}"}'
                                    hx-target="next .rm-add-link__results" hx-swap="outerHTML">
                             <div class="rm-add-link__results"></div>
                         </div>
-                        <select name="target_scope" class="form-input">
-                            {% for t in move_targets %}
-                            <option value="{{ t.siem_id }}|{{ t.space }}">{{ t.name }}</option>
-                            {% endfor %}
-                        </select>
+                        <input type="hidden" name="target_rule_id" value="">
                         <button type="submit" class="btn btn-secondary btn-sm">Add link</button>
                     </form>
                     {% endif %}

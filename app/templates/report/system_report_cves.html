@@ -1,0 +1,116 @@
+{# System report: CVE breakdown by vulnerability and by host (technical, with devices). Included by
+   report/system_report.html. #}
+<!-- ── SECTION 8: CVE BREAKDOWN BY VULNERABILITY ─────────── -->
+{% if report.include_devices is not defined or report.include_devices %}
+<div class="page-break"></div>
+
+<div class="section-banner avoid-break" id="sec-cves">
+    <div class="section-banner-title">CVE Breakdown — By Vulnerability</div>
+    <div class="section-banner-sub">Comprehensive per-CVE analysis with affected hosts and detection status</div>
+</div>
+
+{% for cve in report.all_cves %}
+<div class="detail-card">
+    <div class="detail-card-header">
+        <div>
+            <strong style="color:var(--primary);font-size:8pt;">{{ cve.cve_id }}</strong>
+            <span style="color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ cve.vulnerability_name[:80] }}</span>
+        </div>
+        <div style="display:flex;gap:1.5mm;">
+            {% if cve.known_ransomware %}<span class="badge badge-red">Ransomware</span>{% endif %}
+            <span class="badge badge-red">{{ cve.hosts_red|length }} At Risk</span>
+            <span class="badge badge-amber">{{ cve.hosts_amber|length }} Monitored</span>
+        </div>
+    </div>
+
+    {% if cve.short_description %}
+    <div style="font-size:6.5pt;color:var(--text-3);margin-bottom:2mm;">{{ cve.short_description[:200] }}</div>
+    {% endif %}
+
+    {% if cve.techniques %}
+    <div style="margin-bottom:2mm;">
+        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">MITRE:</span>
+        {% for t in cve.techniques %}
+        <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}{% if t.name %} {{ t.name }}{% endif %}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if cve.detections %}
+    <div style="margin-bottom:2mm;">
+        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">Detection Rules:</span>
+        {% for d in cve.detections %}
+        <span class="badge badge-primary" style="font-size:5.5pt;">{{ d.note or d.rule_ref or 'Rule' }}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <table style="margin-bottom:0;">
+        <thead><tr><th>Host</th><th>IP</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+        <tbody>
+            {% for h in cve.hosts_red %}
+            <tr>
+                <td>{{ h.name }}</td><td style="font-family:var(--ff-mono);font-size:6pt;">{{ h.ip }}</td>
+                <td><span class="badge badge-red">At Risk</span></td><td style="color:var(--text-3);">—</td>
+            </tr>
+            {% endfor %}
+            {% for h in cve.hosts_amber %}
+            <tr>
+                <td>{{ h.name }}</td><td style="font-family:var(--ff-mono);font-size:6pt;">{{ h.ip }}</td>
+                <td><span class="badge badge-amber">Monitored</span></td>
+                <td>{% for r in h.rule_names %}<span class="badge badge-primary" style="font-size:5pt;">{{ r }}</span> {% endfor %}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+
+<!-- ── SECTION 9: CVE BREAKDOWN BY HOST ──────────────────── -->
+<div class="page-break"></div>
+
+<div class="section-banner avoid-break" id="sec-hosts">
+    <div class="section-banner-title">CVE Breakdown — By Host</div>
+    <div class="section-banner-sub">Per-device CVE exposure and active detection rules</div>
+</div>
+
+{% for h in report.host_rows %}
+{% if h.cves %}
+<div class="detail-card">
+    <div class="detail-card-header">
+        <div>
+            <strong>{{ h.name }}</strong>
+            {% if h.ip %}<span style="font-family:var(--ff-mono);color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ h.ip }}</span>{% endif %}
+            {% if h.os %}<span style="color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ h.os }}</span>{% endif %}
+        </div>
+        <div>
+            {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
+            {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
+            {% elif h.rag == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
+            {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
+        </div>
+    </div>
+    <table style="margin-bottom:0;">
+        <thead><tr><th>CVE</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
+        <tbody>
+            {% for c in h.cves %}
+            <tr>
+                <td style="font-weight:600;white-space:nowrap;">{{ c.cve_id }}</td>
+                <td>
+                    {% if c.status == 'red' %}<span class="badge badge-red">At Risk</span>
+                    {% elif c.status == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
+                    {% else %}<span class="badge badge-amber">Monitored</span>{% endif %}
+                </td>
+                <td>
+                    {% if c.rule_names %}
+                        {% for r in c.rule_names %}<span class="badge badge-primary" style="font-size:5pt;">{{ r }}</span> {% endfor %}
+                    {% else %}<span style="color:var(--text-3);">—</span>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{% endfor %}
+{% endif %}{# include_devices #}

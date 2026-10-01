@@ -2208,8 +2208,11 @@ async def search_rule_link_targets(
     )
     if not matches:
         return HTMLResponse('<div class="rm-add-link__results"><p class="rm-empty">No matching rule in that destination.</p></div>')
+    # Each suggestion carries its rule id: names are not unique in a destination, so picking one
+    # links that exact rule rather than whatever has the same name.
     items = "".join(
-        f'<button type="button" onclick="tidePickLinkTarget(this)" data-name="{escape(m["name"])}">{escape(m["name"])}</button>'
+        f'<button type="button" onclick="tidePickLinkTarget(this)" data-name="{escape(m["name"])}" '
+        f'data-rule-id="{escape(m["rule_id"])}">{escape(m["name"])}</button>'
         for m in matches
     )
     return HTMLResponse(f'<div class="rm-add-link__results">{items}</div>')
@@ -2225,32 +2228,46 @@ async def add_rule_link(
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
 ):
-    """Manually link this rule to another one, found by name within a chosen destination."""
+    """Manually link this rule to another one in a chosen destination: the rule picked from the
+    search (``target_rule_id``), else the one the typed name resolves to there."""
     form = await request.form()
     target_name = str(form.get("target_name") or "").strip()
+    target_rule_id = str(form.get("target_rule_id") or "").strip()
     target_siem_id, _, target_space = str(form.get("target_scope") or "").partition("|")
+    target_siem_id, target_space = target_siem_id.strip(), target_space.strip()
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
         return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
     flash = ""
-    if not target_name or not target_siem_id or not target_space:
+    if not (target_name or target_rule_id) or not target_siem_id or not target_space:
         flash = "Choose a target destination and type the rule's name."
     else:
-        with db.get_connection() as conn:
-            matches = conn.execute(
-                "SELECT rule_id FROM detection_rules WHERE siem_id = ? AND space = ? AND name = ?",
-                [target_siem_id, target_space, target_name],
-            ).fetchall()
-        if not matches:
-            flash = f'No rule named "{target_name}" found in that destination.'
-        elif len(matches) > 1:
-            flash = f'Multiple rules named "{target_name}" found in that destination -- rename one first.'
+        dest = next(
+            (s.get("name") or s.get("label") for s in (db.get_client_siems(client_id) or [])
+             if s.get("id") == target_siem_id and str(s.get("space") or "default") == target_space),
+            None,
+        )
+        if not dest:
+            flash = "That destination is not linked to this client."
         else:
-            username = user.name or user.username if user else "Unknown"
-            link_id = db.create_rule_link(
-                rule_id, siem_id, space, matches[0][0], target_siem_id, target_space, username,
-            )
-            flash = "Linked." if link_id else "Could not link -- these two are already linked, or one no longer exists."
+            # A rule is its id at one SIEM and space (CLAUDE.md section 6): a picked suggestion is
+            # looked up exactly there; a typed name is resolved the way the search matched it.
+            if target_rule_id:
+                picked = db.get_rule_by_id(target_rule_id, target_space, siem_id=target_siem_id, client_id=client_id)
+                matches = [picked.rule_id] if picked and not picked.deprecated else []
+            else:
+                matches = db.rule_ids_named(target_siem_id, target_space, target_name)
+            label = target_name or "that rule"
+            if not matches:
+                flash = f'No rule named "{label}" in {dest}. Pick one from the list.'
+            elif len(matches) > 1:
+                flash = f'{len(matches)} rules in {dest} are named "{label}". Pick one from the list.'
+            else:
+                username = user.name or user.username if user else "Unknown"
+                link_id = db.create_rule_link(
+                    rule_id, siem_id, space, matches[0], target_siem_id, target_space, username,
+                )
+                flash = "Linked." if link_id else "Could not link -- these two are already linked, or one no longer exists."
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     response = request.app.state.templates.TemplateResponse(
         request, "components/rule_modal.html",

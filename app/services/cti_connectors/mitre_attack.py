@@ -49,6 +49,11 @@ FIELDS: List[FieldSpec] = [
         type="number", default=0,
         help="Safety cap. 0 = no cap.",
     ),
+    FieldSpec(
+        key="verify_tls", label="Verify TLS certificate",
+        type="bool", default=False,
+        help="Leave off for a self-signed certificate.",
+    ),
 ]
 
 
@@ -61,7 +66,7 @@ def _profile_from_config(cfg: Dict[str, Any]) -> TaxiiVendorProfile:
         collections=cols,
         auth_mode="none",
         page_size=int(cfg.get("page_size") or 1000),
-        verify_tls=True,
+        verify_tls=bool(cfg.get("verify_tls")),
         max_objects_per_collection=int(
             cfg.get("max_objects_per_collection") or 0
         ),

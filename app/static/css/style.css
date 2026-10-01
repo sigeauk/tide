@@ -7887,10 +7887,12 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 }
 
 .rm-linked-list { margin-bottom: 0.6rem; }
-.rm-add-link { display: flex; gap: 0.4rem; flex-wrap: wrap; position: relative; }
-.rm-add-link input[type="text"] { flex: 1 1 10rem; min-width: 0; }
+.rm-add-link { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: flex-start; }
+.rm-add-link__name { flex: 1 1 10rem; min-width: 0; }
+.rm-add-link__name input[type="text"] { width: 100%; }
+/* In the flow, not floating: an open list pushes Add link down rather than covering it. */
 .rm-add-link__results {
-  position: absolute; top: 100%; left: 0; right: 0; z-index: 5; margin-top: 0.15rem;
+  margin-top: 0.15rem;
   background: var(--color-bg-layer-5); border: 1px solid var(--color-border);
   border-radius: var(--radius-sm); box-shadow: var(--shadow-md); max-height: 11rem; overflow-y: auto;
 }

@@ -29,6 +29,8 @@ from typing import Optional, Tuple, Set
 import requests as _requests
 import urllib3 as _urllib3
 
+from app.services.tls import siem_verify
+
 _urllib3.disable_warnings(_urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
@@ -62,7 +64,7 @@ def _live_lookup(kibana_url: str, api_token: str,
                 "Authorization": f"ApiKey {api_token}",
                 "Content-Type": "application/json",
             },
-            verify=False,
+            verify=siem_verify(url),
             timeout=timeout,
         )
     except Exception as exc:  # noqa: BLE001 — network/SSL/anything

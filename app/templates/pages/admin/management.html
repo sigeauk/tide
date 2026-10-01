@@ -10,6 +10,15 @@
 {% endblock %}
 
 {% block content %}
+{# Each integration's own "Verify TLS certificate" box, off by default (app/services/tls.py). #}
+{% macro tls_verify_row(dom_id) %}
+<div>
+    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+        <input type="checkbox" id="{{ dom_id }}" name="tls_verify"> Verify TLS certificate
+    </label>
+    <span class="text-secondary" style="font-size:0.75rem;">Leave off for a self-signed certificate. When on, the certificate must come from a public CA or from a CA certificate installed in the container.</span>
+</div>
+{% endmacro %}
 <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
     <div>
         <h1 class="page-title-hero">Management</h1>
@@ -457,6 +466,7 @@
                 </div>
             </div>
 
+            {{ tls_verify_row('siem-form-tls-verify') }}
             <div id="siem-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testSiemConnection()"
@@ -551,6 +561,7 @@
                        placeholder="security-team">
                 <span class="text-secondary" style="font-size:0.75rem;">GitLab group where reports will be pushed.</span>
             </div>
+            {{ tls_verify_row('gitlab-form-tls-verify') }}
             <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
                 <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeGitLabModal()">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
@@ -594,6 +605,7 @@
                 <input name="Keycloak Form Client Secret" type="password" id="keycloak-form-client-secret" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
+            {{ tls_verify_row('keycloak-form-tls-verify') }}
             <div id="keycloak-test-result" style="min-height:1.5rem;"></div>
             <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testKeycloakConnection()"
@@ -816,19 +828,21 @@ function showCreateSiemModal() {
     document.getElementById('siem-form-label').value = '';
     document.getElementById('siem-form-type').value = 'elastic';
     document.getElementById('siem-form-type').disabled = false;
+    document.getElementById('siem-form-tls-verify').checked = false;
     _clearSiemFields();
     document.getElementById('siem-test-result').innerHTML = '';
     updateSiemFields();
     document.getElementById('siem-modal').style.display = 'flex';
 }
 
-function editSiem(id, label, type, esUrl, kbUrl) {
+function editSiem(id, label, type, esUrl, kbUrl, tlsVerify) {
     document.getElementById('siem-modal-title').textContent = 'Edit SIEM';
     document.getElementById('siem-form-submit').textContent = 'Save';
     document.getElementById('siem-form-id').value = id;
     document.getElementById('siem-form-label').value = label;
     document.getElementById('siem-form-type').value = type;
     document.getElementById('siem-form-type').disabled = true;
+    document.getElementById('siem-form-tls-verify').checked = !!tlsVerify;
     _clearSiemFields();
     // Populate the right fields based on type
     if (type === 'elastic') {
@@ -855,6 +869,7 @@ async function submitSiemForm(e) {
     var formData = new FormData();
     formData.append('label', document.getElementById('siem-form-label').value);
     formData.append('siem_type', type);
+    formData.append('tls_verify', document.getElementById('siem-form-tls-verify').checked ? 'true' : 'false');
 
     if (type === 'elastic') {
         formData.append('elasticsearch_url', document.getElementById('siem-form-es-url').value);
@@ -898,6 +913,7 @@ async function testSiemConnection() {
     formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
     formData.append('api_token', document.getElementById('siem-form-token').value);
     formData.append('siem_type', document.getElementById('siem-form-type').value);
+    formData.append('tls_verify', document.getElementById('siem-form-tls-verify').checked ? 'true' : 'false');
 
     try {
         var resp = await fetch('/api/management/siems/test-connection', {method: 'POST', body: formData});
@@ -989,10 +1005,11 @@ function showCreateGitLabModal() {
     document.getElementById('gitlab-form-url').value = '';
     document.getElementById('gitlab-form-token').value = '';
     document.getElementById('gitlab-form-group').value = '';
+    document.getElementById('gitlab-form-tls-verify').checked = false;
     document.getElementById('gitlab-modal').style.display = 'flex';
 }
 
-function editGitLab(id, label, url, group) {
+function editGitLab(id, label, url, group, tlsVerify) {
     document.getElementById('gitlab-modal-title').textContent = 'Edit GitLab Instance';
     document.getElementById('gitlab-form-submit').textContent = 'Save';
     document.getElementById('gitlab-form-id').value = id;
@@ -1000,6 +1017,7 @@ function editGitLab(id, label, url, group) {
     document.getElementById('gitlab-form-url').value = url;
     document.getElementById('gitlab-form-token').value = '';
     document.getElementById('gitlab-form-group').value = group === '—' ? '' : group;
+    document.getElementById('gitlab-form-tls-verify').checked = !!tlsVerify;
     document.getElementById('gitlab-modal').style.display = 'flex';
 }
 
@@ -1015,6 +1033,7 @@ async function submitGitLabForm(e) {
     formData.append('url', document.getElementById('gitlab-form-url').value);
     formData.append('token', document.getElementById('gitlab-form-token').value);
     formData.append('default_group', document.getElementById('gitlab-form-group').value);
+    formData.append('tls_verify', document.getElementById('gitlab-form-tls-verify').checked ? 'true' : 'false');
 
     var url = id ? '/api/management/gitlab/' + id : '/api/management/gitlab';
     var method = id ? 'PUT' : 'POST';
@@ -1042,10 +1061,11 @@ function showCreateKeycloakModal() {
     document.getElementById('keycloak-form-realm').value = 'master';
     document.getElementById('keycloak-form-client-id').value = '';
     document.getElementById('keycloak-form-client-secret').value = '';
+    document.getElementById('keycloak-form-tls-verify').checked = false;
     document.getElementById('keycloak-modal').style.display = 'flex';
 }
 
-function editKeycloak(id, label, url, realm) {
+function editKeycloak(id, label, url, realm, tlsVerify) {
     document.getElementById('keycloak-modal-title').textContent = 'Edit Keycloak Instance';
     document.getElementById('keycloak-form-submit').textContent = 'Save';
     document.getElementById('keycloak-form-id').value = id;
@@ -1054,6 +1074,7 @@ function editKeycloak(id, label, url, realm) {
     document.getElementById('keycloak-form-realm').value = realm || 'master';
     document.getElementById('keycloak-form-client-id').value = '';
     document.getElementById('keycloak-form-client-secret').value = '';
+    document.getElementById('keycloak-form-tls-verify').checked = !!tlsVerify;
     document.getElementById('keycloak-modal').style.display = 'flex';
 }
 
@@ -1070,6 +1091,7 @@ async function submitKeycloakForm(e) {
     formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
     formData.append('client_id', document.getElementById('keycloak-form-client-id').value);
     formData.append('client_secret', document.getElementById('keycloak-form-client-secret').value);
+    formData.append('tls_verify', document.getElementById('keycloak-form-tls-verify').checked ? 'true' : 'false');
 
     var url = id ? '/api/management/keycloak/' + id : '/api/management/keycloak';
     var method = id ? 'PUT' : 'POST';
@@ -1096,6 +1118,7 @@ async function testKeycloakConnection() {
     formData.append('keycloak_id', document.getElementById('keycloak-form-id').value);
     formData.append('url', document.getElementById('keycloak-form-url').value);
     formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
+    formData.append('tls_verify', document.getElementById('keycloak-form-tls-verify').checked ? 'true' : 'false');
     try {
         var resp = await fetch('/api/management/keycloak/test-connection', {method: 'POST', body: formData});
         result.innerHTML = await resp.text();

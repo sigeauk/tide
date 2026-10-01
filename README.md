@@ -205,6 +205,12 @@ GITLAB_TOKEN="your-token"
 | `GITLAB_URL` | Internal GitLab for reports | ❌ |
 | `SYNC_INTERVAL_MINUTES` | Background sync interval (default: 60) | ❌ |
 
+### TLS certificates
+
+Each integration in Management (every SIEM, GitLab and Keycloak entry, and every CTI connector) has its own **Verify TLS certificate** box. It is off by default, because TIDE usually runs standalone against self-signed certificates. When it is ticked, the integration's certificate must come from a public CA or from your own CA: save that CA certificate as `certs/ca.crt`, which `docker-compose.yml` installs into the container when it starts. Use **Test Connection** on the form to check a setting before saving it.
+
+`SSL_VERIFY` in `.env` controls only TIDE's own Keycloak sign-in.
+
 ---
 
 ## Design System
@@ -257,6 +263,23 @@ Copying the whole `data/` folder to an identical TIDE version also works, and ad
 **Single sign-on users and a new Keycloak.** Users come across with the export (or a copied `data/`), but a new realm issues new Keycloak IDs. At first login TIDE matches the user by Keycloak ID, then by username, then by email, and re-links accounts marked keycloak/hybrid, keeping their roles and tenants. So users only need to exist in the new realm with the same username or email. Local-only accounts are never auto-linked to SSO. The superadmin flag is re-read from the Keycloak `superadmin` group at each login.
 
 **Changing a SIEM's role (production/staging).** Rules are keyed by rule ID, SIEM and space, not by role, and a baseline step points at its rule by rule ID, so the mapping is kept when a SIEM is switched either way. Baseline technique coverage is counted from production rules only, so a technique reads as uncovered while its rule's SIEM is staging, and returns when it is production again. Mapped rules in a staging SIEM are labelled "Staging" on the baseline step.
+
+### Reclaiming disk space
+
+A database file never shrinks on its own. Every rule sync rewrites rows, and a sync also deletes the score history of rules that no longer exist, so over time much of a file can be empty space. To find out how much, run `docker exec tide-app python -m app.scripts.diag_sync --state`: its Files section shows each file's empty space and the command to reclaim it.
+
+To compact a file, stop TIDE, because only one process may open a database at a time:
+
+```bash
+docker compose stop tide-app
+# Dry run: reports the file size and how much would be reclaimed, and changes nothing
+docker compose run --rm --no-deps tide-app python -m app.scripts.compact_duckdb /app/data/<file>.duckdb
+# Compact it
+docker compose run --rm --no-deps tide-app python -m app.scripts.compact_duckdb /app/data/<file>.duckdb --apply
+docker compose up -d
+```
+
+The file is rewritten into a new one and checked table by table (row counts and indexes) before it replaces the original. If any check fails, the original is left untouched. The original is kept next to it as `<file>.duckdb.pre-compact-<timestamp>`: delete it once TIDE runs normally.
 
 ### Transient Data (Recalculated)
 

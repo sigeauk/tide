@@ -1,21 +1,25 @@
 <!DOCTYPE html>
 <!--
-    TIDE System Report — PDF Template  (v5 — Unified Print-Friendly)
+    TIDE System Report — PDF Template  (v6 — matches the system page)
     ─────────────────────────────────────────────────────────────────
-    Changes over v4:
-      • Cover page matching Threat Report brand (dark cover, light body).
-      • Table of Contents after cover.
-      • White body background — fully printer-friendly.
-      • Badges/pills use proper padding so they never overlap table borders.
-      • Unified design tokens shared with Threat Report.
+      • Figures are the system page's own: the metric strip, statuses and each technique as its
+        window shows it, for the baselines chosen at export.
+      • Technical reports add the coverage matrix and a detail entry per technique.
+      • Device and CVE sections are partials (system_report_devices / _trend / _cves).
     Airgap-safe: NO external fonts, images or URLs.
 -->
 {%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
 {%- set clf_color = _clf_colors.get(report.classification or 'Official', '#1a7f37') -%}
+{%- set show_baselines = report.include_baselines -%}
+{%- set show_devices = report.include_devices -%}
+{%- set technical = report.mode == 'technical' -%}
+{%- set t = report.totals -%}
+{%- set scored = t.total - t.na -%}
+{%- set status_badge = {'green': 'badge-green', 'amber': 'badge-amber', 'grey': 'badge-grey', 'red': 'badge-red'} -%}
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<title>{{ report.system.name }} — {% if report.mode == 'technical' %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}</title>
+<title>{{ report.system.name }} — {% if technical %}Technical Deep Dive{% else %}CISO Executive Summary{% endif %}</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -26,6 +30,7 @@
     size: A4 portrait;
     margin: 0;
     background-color: #ffffff;
+    @top-left      { content: none; }
     @top-center    { content: none; }
     @bottom-center { content: none; }
 }
@@ -34,6 +39,11 @@
     size: A4 portrait;
     margin: 15mm;
     background-color: #ffffff;
+    @top-left {
+        content: string(sysname);
+        font-family: "Liberation Sans", Arial, sans-serif;
+        font-size: 6.5pt; color: #6e7681;
+    }
     @top-center {
         content: "{{ report.classification or 'Official' }}";
         font-family: "Liberation Sans", Arial, sans-serif;
@@ -41,24 +51,7 @@
         color: {{ clf_color }};
     }
     @bottom-center {
-        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  {{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6pt; color: #6e7681;
-    }
-}
-
-@page landscape {
-    size: A4 landscape;
-    margin: 12mm 10mm 18mm 10mm;
-    background-color: #ffffff;
-    @top-center {
-        content: "{{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6.5pt; font-weight: 700;
-        color: {{ clf_color }};
-    }
-    @bottom-center {
-        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  {{ report.classification or 'Official' }}";
+        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) " of " counter(pages) "  ·  {{ report.classification or 'Official' }}";
         font-family: "Liberation Sans", Arial, sans-serif;
         font-size: 6pt; color: #6e7681;
     }
@@ -84,10 +77,12 @@
     --danger:  #c0392b;
     --warning: #9a6700;
     --success: #1a7f37;
+    --info:    #1a4fa3;
 
     --gap-bg: #fff0ee;  --gap-bd: #e67e74;  --gap-tx: #c0392b;
     --cov-bg: #eefaf1;  --cov-bd: #52c87b;  --cov-tx: #1a7f37;
     --amb-bg: #fef9ee;  --amb-bd: #d4a84b;  --amb-tx: #9a6700;
+    --inf-bg: #eef4ff;  --inf-bd: #70a8e8;  --inf-tx: #1a4fa3;
 
     --ff:      "Liberation Sans", Arial, Helvetica, sans-serif;
     --ff-mono: "Liberation Mono", "Courier New", monospace;
@@ -102,7 +97,7 @@ html, body {
 }
 
 /* ══════════════════════════════════════════════════════
-   COVER PAGE  (white print-friendly design)
+   COVER PAGE
    ══════════════════════════════════════════════════════ */
 .cover {
     page: cover;
@@ -116,65 +111,74 @@ html, body {
 .cover-bottombar { width:100%; height:4mm;  background:var(--primary); flex-shrink:0; margin-top:auto; }
 .cover-body      { flex:1; display:flex; flex-direction:column; justify-content:center; padding:10mm 20mm 8mm 20mm; }
 .cover-logo      { font-size:42pt; font-weight:700; color:var(--primary); letter-spacing:0.12em; display:block; margin-bottom:2mm; }
-.cover-tagline { font-size:8pt; color:var(--text-2); text-transform:uppercase; letter-spacing:0.18em; margin-bottom:18mm; }
+.cover-tagline   { font-size:8pt; color:var(--text-2); text-transform:uppercase; letter-spacing:0.18em; margin-bottom:18mm; }
 .cover-rule      { border:none; border-top:1px solid #3b434d; width:80mm; margin:0 auto 16mm auto; }
 .cover-title     { font-size:24pt; font-weight:700; color:var(--text); margin-bottom:3mm; line-height:1.2; }
-.cover-subtitle  { font-size:10pt; color:var(--text-2); margin-bottom:6mm; }
+.cover-system    { font-size:13pt; font-weight:700; color:var(--text-2); margin-bottom:2mm; string-set: sysname content(); }
+.cover-subtitle  { font-size:9pt; color:var(--text-2); margin-bottom:6mm; }
 .cover-level-pill {
     display:inline-block; background:#21262d; color:#8b949e;
     font-size:7pt; font-weight:600; padding:1mm 5mm; border-radius:3mm;
-    border:1px solid #30363d; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:10mm;
+    border:1px solid #30363d; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:8mm;
 }
 .cover-clf-badge {
     display:inline-block; font-size:8pt; font-weight:700;
     color:{{ clf_color }}; border:1.5px solid {{ clf_color }};
     padding:1.5mm 6mm; border-radius:2mm; text-transform:uppercase;
-    letter-spacing:0.1em; margin-bottom:12mm;
+    letter-spacing:0.1em; margin-bottom:6mm;
 }
-.cover-system-pill {
-    display:inline-block; background:var(--primary-d); color:var(--primary);
-    font-size:8pt; font-weight:600; padding:2mm 5mm; border-radius:3mm;
-    margin:1mm 1.5mm; border:1px solid #1e4d82;
+.cover-sys-clf {
+    display:inline-block; font-size:7pt; font-weight:700; padding:1mm 4mm; border-radius:3mm;
+    border:1px solid var(--border); color:var(--text-2); text-transform:uppercase; letter-spacing:0.08em;
 }
+.cover-baselines { font-size:7.5pt; color:var(--text-2); margin-bottom:8mm; }
 .cover-meta { margin-top:auto; padding-top:6mm; font-size:7pt; color:#6e7681; border-top:1px solid #21262d; }
 
 /* ══════════════════════════════════════════════════════
-   SECTION BANNERS  (left-accent, no coloured background)
+   SECTION BANNERS
    ══════════════════════════════════════════════════════ */
 .section-banner {
     border-left:3px solid var(--border); padding:1.5mm 0 1.5mm 5mm;
-    margin-bottom:5mm; page-break-inside:avoid;
+    margin-bottom:5mm; page-break-inside:avoid; break-after:avoid;
 }
-.section-banner-title { font-size:11pt; font-weight:700; color:var(--text-2); line-height:1.2; }
+.section-banner-title { font-size:11pt; font-weight:700; color:var(--text-2); line-height:1.2;
+                        bookmark-level:1; bookmark-label:content(); }
 .section-banner-sub   { font-size:7pt; color:var(--text-3); margin-top:1mm; }
+.sub-heading {
+    font-size:9pt; font-weight:700; color:var(--text); margin:5mm 0 2mm 0; break-after:avoid;
+    bookmark-level:2; bookmark-label:content();
+}
 
 /* ══════════════════════════════════════════════════════
-   STAT CARDS (Executive Summary)
+   METRIC CARDS  (the system page's metric strip)
    ══════════════════════════════════════════════════════ */
 .summary-grid {
-    display:grid; grid-template-columns:repeat(6,1fr); gap:3mm; margin-bottom:7mm;
+    display:grid; grid-template-columns:repeat(6,1fr); gap:3mm; margin-bottom:5mm;
 }
 .stat-card {
     background:#f3f4f6; border:1px solid var(--border); border-top:3px solid var(--primary);
     border-radius:2mm; padding:3.5mm 2.5mm; text-align:center; page-break-inside:avoid;
 }
 .stat-value {
-    font-size:20pt; font-weight:700; color:#1a4fa3; line-height:1; display:block; margin-bottom:1.5mm;
+    font-size:18pt; font-weight:700; color:#1a4fa3; line-height:1; display:block; margin-bottom:1.5mm;
 }
 .stat-value.danger  { color: var(--danger); }
 .stat-value.success { color: var(--success); }
 .stat-value.warning { color: var(--warning); }
+.stat-value.plain   { color: var(--text); }
 .stat-label {
-    font-size:5.5pt; color:var(--text-3); text-transform:uppercase; letter-spacing:0.1em; display:block;
+    font-size:5.5pt; color:var(--text-2); font-weight:700; text-transform:uppercase; letter-spacing:0.1em; display:block;
 }
+.stat-sub { font-size:5.5pt; color:var(--text-3); display:block; margin-top:1mm; line-height:1.3; }
 
 /* ══════════════════════════════════════════════════════
-   TABLE STYLES  (unified — light theme, printer-friendly)
+   TABLES
    ══════════════════════════════════════════════════════ */
 table {
     width:100%; border-collapse:collapse; font-size:7.5pt;
     table-layout:auto; page-break-inside:auto; border:1px solid var(--border); margin-bottom:5mm;
 }
+thead { display: table-header-group; }
 table tr { page-break-inside:avoid; }
 th {
     background:var(--th-bg); color:var(--th-tx); text-transform:uppercase;
@@ -182,13 +186,22 @@ th {
     padding:2.5mm 3mm; text-align:left; border:1px solid var(--border);
 }
 td {
-    padding:2.5mm 3mm; border:1px solid var(--border); vertical-align:top;
+    padding:2mm 3mm; border:1px solid var(--border); vertical-align:top;
     color:var(--text-2); line-height:1.4; word-wrap:break-word; overflow-wrap:break-word;
 }
 tbody tr:nth-child(even) td { background:var(--row-alt); }
+tr.tactic-row td {
+    background:var(--primary-d) !important; color:#ffffff; font-weight:700; font-size:6.5pt;
+    text-transform:uppercase; letter-spacing:0.06em; padding:1.5mm 3mm;
+}
+td.num  { font-family:var(--ff-mono); font-size:6.5pt; white-space:nowrap; }
+td.mono { font-family:var(--ff-mono); font-size:6.5pt; }
+.muted  { color:var(--text-3); }
+.flag-danger { color:var(--danger); font-weight:700; }
+a { color:inherit; text-decoration:none; }
 
 /* ══════════════════════════════════════════════════════
-   BADGES & PILLS  (proper padding — no overlap)
+   BADGES & PILLS
    ══════════════════════════════════════════════════════ */
 .badge {
     display:inline-block; padding:0.8mm 2.5mm; border-radius:10mm;
@@ -199,14 +212,21 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
 .badge-amber  { background:var(--amb-bg); border-color:var(--amb-bd); color:var(--amb-tx); }
 .badge-green  { background:var(--cov-bg); border-color:var(--cov-bd); color:var(--cov-tx); }
 .badge-grey   { background:#f0f0f0; border-color:#b0b0b0; color:#6e7681; }
-.badge-primary{ background:#eef4ff; border-color:#70a8e8; color:#1a4fa3; }
+.badge-primary{ background:var(--inf-bg); border-color:var(--inf-bd); color:var(--inf-tx); }
+.badge-outline{ background:#ffffff; border-color:var(--border); color:var(--text-2); }
+
+.prio { display:inline-block; padding:0.8mm 2.5mm; border-radius:1mm; font-size:6pt; font-weight:700;
+        white-space:nowrap; border:1px solid transparent; vertical-align:middle; }
+.prio-critical { background:#c0392b; color:#ffffff; }
+.prio-high     { background:var(--gap-bg); border-color:var(--gap-bd); color:var(--gap-tx); }
+.prio-medium   { background:var(--amb-bg); border-color:var(--amb-bd); color:var(--amb-tx); }
+.prio-low      { background:#f0f0f0; border-color:#b0b0b0; color:#6e7681; }
 
 .mitre-pill {
-    display:inline-block; padding:0.8mm 2.5mm; border-radius:2mm;
-    font-size:6pt; font-weight:700; margin:0.5mm; white-space:nowrap; vertical-align:middle;
+    display:inline-block; padding:0.5mm 2mm; border-radius:1mm; font-family:var(--ff-mono);
+    font-size:6pt; font-weight:700; margin:0.3mm 0.5mm 0.3mm 0; white-space:nowrap; vertical-align:middle;
+    background:#ffffff; border:1px solid var(--border); color:var(--text-2);
 }
-.mitre-pill.covered { background:var(--cov-bg); border:1px solid var(--cov-bd); color:var(--cov-tx); }
-.mitre-pill.gap     { background:var(--gap-bg); border:1px solid var(--gap-bd); color:var(--gap-tx); }
 
 /* ══════════════════════════════════════════════════════
    COVERAGE BAR
@@ -218,127 +238,98 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
 .coverage-bar .fill.bad  { background:var(--danger); }
 
 /* ══════════════════════════════════════════════════════
-   DETAIL CARDS  (light surface for technical sections)
+   TECHNIQUE DETAIL
    ══════════════════════════════════════════════════════ */
-.detail-card {
-    background:#f6f8fa; border:1px solid var(--border); border-radius:2mm;
-    padding:3mm 4mm; margin-bottom:3mm; page-break-inside:avoid;
+.tech {
+    border:1px solid var(--border); border-left:3px solid var(--border); border-radius:2mm;
+    padding:3mm 4mm; margin-bottom:4mm;
 }
-.detail-card-header {
-    display:flex; justify-content:space-between; align-items:center; margin-bottom:2mm;
+.tech-red   { border-left-color:var(--danger); }
+.tech-amber { border-left-color:#d4a84b; }
+.tech-green { border-left-color:var(--success); }
+.tech-grey  { border-left-color:#b0b0b0; }
+.tech-head  { break-inside:avoid; break-after:avoid; margin-bottom:2mm; }
+.tech-title { font-size:9.5pt; font-weight:700; color:var(--text); margin-bottom:1.5mm;
+              bookmark-level:3; bookmark-label:content(); }
+.tech-pills { margin-bottom:1mm; }
+.tech-pills > * { margin-right:1mm; }
+.tech-meta  { font-size:6.5pt; color:var(--text-3); }
+.tech-desc  { font-size:7.5pt; color:var(--text-2); margin-bottom:2mm; white-space:pre-line; }
+.tech-label { font-size:6pt; font-weight:700; text-transform:uppercase; letter-spacing:0.08em;
+              color:var(--text-3); margin:2.5mm 0 1mm 0; break-after:avoid; }
+
+.cov-item {
+    border:1px solid var(--border); border-left:3px solid var(--border); border-radius:1.5mm;
+    padding:1.5mm 2.5mm; margin-bottom:1.5mm; break-inside:avoid; font-size:7pt;
 }
+.cov-success { border-left-color:var(--success); }
+.cov-warning { border-left-color:#d4a84b; background:var(--amb-bg); }
+.cov-danger  { border-left-color:var(--danger); background:var(--gap-bg); }
+.cov-info    { border-left-color:var(--inf-bd); }
+.cov-muted   { border-left-color:#b0b0b0; }
+.cov-when    { font-weight:700; color:var(--text); }
+.cov-name    { font-weight:700; color:var(--text); }
+.cov-note    { font-size:6.5pt; color:var(--text-3); margin-top:0.5mm; }
+.empty       { font-size:7pt; color:var(--text-3); font-style:italic; }
+
+.attack-list { font-size:7pt; }
+.attack-list div { margin-bottom:0.5mm; }
 
 /* ══════════════════════════════════════════════════════
-   LEGEND
-   ══════════════════════════════════════════════════════ */
-.legend {
-    display:flex; gap:4mm; font-size:6.5pt; margin-bottom:5mm; color:var(--text-3);
-}
-.legend .swatch {
-    display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:1.5mm; vertical-align:middle;
-}
-
-/* ══════════════════════════════════════════════════════
-   TOC
+   TOC, LEGEND, NARRATIVE
    ══════════════════════════════════════════════════════ */
 .toc-item {
     display:flex; align-items:baseline; gap:2mm; padding:1.5mm 0;
     border-bottom:1px dotted var(--border); font-size:8pt;
 }
 .toc-item .toc-num  { font-weight:700; color:var(--primary); min-width:6mm; }
-.toc-item .toc-text { color:var(--text); }
+.toc-item .toc-text { color:var(--text); flex:1; }
+.toc-item .toc-page::after { content: target-counter(attr(href), page); color:var(--text-3); }
 
-/* Footer + page controls */
-.page-break { page-break-after:always; }
-.avoid-break { page-break-inside:avoid; }
-
-.report-footer {
-    margin-top:10mm; padding-top:4mm; border-top:1px solid var(--border);
-    font-size:6.5pt; color:var(--text-3); text-align:center;
+.legend {
+    display:flex; gap:4mm; font-size:6.5pt; margin-bottom:5mm; color:var(--text-3);
 }
-
-/* Landscape pages for wide tables */
-.landscape { page:landscape; }
-
-/* ══════════════════════════════════════════════════════
-   MITRE HEATMAP — CSS GRID  (dark landscape page, split × 2)
-   ══════════════════════════════════════════════════════ */
-@page matrix-page {
-    size: A4 landscape;
-    margin: 8mm;
-    background-color: #ffffff;
-    @top-center {
-        content: "{{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6.5pt; font-weight: 700;
-        color: {{ clf_color }};
-    }
-    @bottom-center {
-        content: "TIDE — Threat Intelligence Detection Engineering  ·  Page " counter(page) "  ·  {{ report.classification or 'Official' }}";
-        font-family: "Liberation Sans", Arial, sans-serif;
-        font-size: 6pt; color: #6e7681;
-    }
+.legend .swatch {
+    display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:1.5mm; vertical-align:middle;
 }
-
-:root {
-    --gap-cell-bg: #fff0ee; --gap-cell-bd: #e67e74; --gap-cell-tx: #c0392b;
-    --cov-cell-bg: #eefaf1; --cov-cell-bd: #52c87b; --cov-cell-tx: #1a7f37;
-    --na-cell-bg:  #f0f0f0; --na-cell-bd:  #b0b0b0; --na-cell-tx:  #6e7681;
-    --kg-cell-bg:  #fef9ee; --kg-cell-bd:  #d4a84b; --kg-cell-tx:  #9a6700;
-}
-
-.matrix-section {
-    page: matrix-page;
-    page-break-before: always;
-    break-before: page;
-    background: #ffffff;
-    color: var(--text);
-}
-.matrix-header-row {
-    display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 3mm;
-}
-.matrix-heading { font-size: 11pt; font-weight: 700; color: var(--text); line-height: 1.2; }
-.matrix-sub { font-size: 6.5pt; color: var(--text-3); margin-top: 1mm; }
-.matrix-legend { display: flex; flex-wrap: wrap; gap: 2mm; align-items: center; justify-content: flex-end; max-width: 110mm; }
-.legend-tile {
-    display: inline-block; font-size: 5.5pt; font-weight: 700;
-    padding: 0.8mm 2.5mm; border-radius: 1mm; border: 1px solid transparent;
-    text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
-}
-.legend-tile.gap       { background: var(--gap-cell-bg); border-color: var(--gap-cell-bd); color: var(--gap-cell-tx); }
-.legend-tile.covered   { background: var(--cov-cell-bg); border-color: var(--cov-cell-bd); color: var(--cov-cell-tx); }
-.legend-tile.na        { background: var(--na-cell-bg);  border-color: var(--na-cell-bd);  color: var(--na-cell-tx); }
-.legend-tile.known-gap { background: var(--kg-cell-bg);  border-color: var(--kg-cell-bd);  color: var(--kg-cell-tx); }
-
-.matrix-container { display: grid; gap: 1.5mm; width: 100%; }
-.tactic-column { display: flex; flex-direction: column; gap: 0.8mm; min-width: 0; overflow: hidden; }
-.tactic-header {
-    color: var(--text-2); font-size: 5pt; font-weight: 700; letter-spacing: 0.04em;
-    text-transform: uppercase; padding: 0 0.8mm 2mm 0.8mm;
-    border-bottom: 1px solid var(--border); text-align: center; line-height: 1.2;
-    overflow-wrap: break-word; min-height: 9mm;
-    display: flex; align-items: flex-end; justify-content: center;
-}
-.ttp-cell {
-    font-size: 4.5pt; font-weight: 700; padding: 0.8mm 0.5mm;
-    border-radius: 1mm; border: 1px solid transparent;
-    text-align: center; line-height: 1.1; overflow: hidden;
-}
-.ttp-cell.status-gap       { background: var(--gap-cell-bg); border-color: var(--gap-cell-bd); color: var(--gap-cell-tx); }
-.ttp-cell.status-covered   { background: var(--cov-cell-bg); border-color: var(--cov-cell-bd); color: var(--cov-cell-tx); }
-.ttp-cell.status-na        { background: var(--na-cell-bg);  border-color: var(--na-cell-bd);  color: var(--na-cell-tx); }
-.ttp-cell.status-known-gap { background: var(--kg-cell-bg);  border-color: var(--kg-cell-bd);  color: var(--kg-cell-tx); }
-.ttp-rule-indicator { font-size: 3.5pt; opacity: 0.75; display: block; }
-
-/* Executive narrative */
 .exec-narrative {
     background: #f6f8fa; border: 1px solid var(--border); border-left: 3px solid var(--primary);
     border-radius: 2mm; padding: 4mm 5mm; margin-bottom: 6mm; font-size: 8.5pt;
     line-height: 1.6; color: var(--text);
 }
+.callout {
+    border:1px solid var(--amb-bd); background:var(--amb-bg); color:var(--amb-tx);
+    border-radius:2mm; padding:2.5mm 4mm; margin-bottom:5mm; font-size:7.5pt;
+}
+.callout-danger { border-color:var(--gap-bd); background:var(--gap-bg); color:var(--gap-tx); }
+
+/* Legacy helpers used by the device partials */
+.detail-card {
+    background:#f6f8fa; border:1px solid var(--border); border-radius:2mm;
+    padding:3mm 4mm; margin-bottom:3mm; page-break-inside:avoid;
+}
+.detail-card-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:2mm; }
+
+.page-break { page-break-after:always; }
+.avoid-break { page-break-inside:avoid; }
+.report-footer {
+    margin-top:10mm; padding-top:4mm; border-top:1px solid var(--border);
+    font-size:6.5pt; color:var(--text-3); text-align:center;
+}
 </style>
 </head>
 <body>
+
+{# ── Shared pieces ─────────────────────────────────────────────── #}
+{% macro status_pill(tech) -%}
+<span class="badge {{ status_badge.get(tech.status, 'badge-red') }}">{{ tech.status_label }}</span>
+{%- endmacro %}
+{% macro priority_pill(tech) -%}
+{% if tech.priority %}<span class="prio prio-{{ tech.priority }}">{{ tech.priority_label }}</span>{% endif %}
+{%- endmacro %}
+{% macro technique_link(tech) -%}
+{% if tech.detailed %}<a href="#t-{{ tech.step_id }}">{{ tech.title }}</a>{% else %}{{ tech.title }}{% endif %}
+{%- endmacro %}
 
 <!-- ══════════════════════════════════════════════════════
      COVER PAGE
@@ -349,16 +340,24 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
         <span class="cover-logo">TIDE</span>
         <div class="cover-tagline">Threat Intelligence Detection Engineering</div>
         <hr class="cover-rule"/>
-        <div class="cover-title">System Vulnerability Report</div>
-        <div class="cover-subtitle">{{ report.system.name }}{% if report.system.description %} — {{ report.system.description }}{% endif %}</div>
-        <div class="cover-level-pill">
-            {%- if report.mode == 'technical' -%}Technical / Engineer{%- else -%}Executive / CISO{%- endif -%}
+        <div class="cover-title">System Coverage Report</div>
+        <div class="cover-system">{{ report.system.name }}</div>
+        {% if report.system.description %}<div class="cover-subtitle">{{ report.system.description }}</div>{% endif %}
+        {% if report.system.classification %}
+        <div style="margin-bottom:6mm;">
+            <span class="cover-sys-clf"{% if report.system.classification_color %} style="color:{{ report.system.classification_color }};border-color:{{ report.system.classification_color }};"{% endif %}
+                  title="System classification">{{ report.system.classification }}</span>
         </div>
-        <br/>
-        <div class="cover-clf-badge">{{ report.classification or 'Official' }}</div>
-        <div class="cover-meta">
-            Generated: {{ report.generated_at }}
+        {% endif %}
+        {% if show_baselines %}
+        <div class="cover-baselines">
+            {{ 'All baselines' if report.all_baselines else 'Selected baselines' }}:
+            {{ report.baselines | map(attribute='name') | join(' · ') }}
         </div>
+        {% endif %}
+        <div><span class="cover-level-pill">{% if technical %}Technical / Engineer{% else %}Executive / CISO{% endif %}</span></div>
+        <div><span class="cover-clf-badge">{{ report.classification or 'Official' }}</span></div>
+        <div class="cover-meta">Generated: {{ report.generated_at }}</div>
     </div>
     <div class="cover-bottombar"></div>
 </div>
@@ -366,561 +365,318 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
 <!-- ══════════════════════════════════════════════════════
      TABLE OF CONTENTS
      ══════════════════════════════════════════════════════ -->
+{%- set toc = [] -%}
+{%- if show_baselines -%}
+  {%- set _ = toc.append(('sec-summary', 'Executive Summary')) -%}
+  {%- set _ = toc.append(('sec-baselines', 'Baselines')) -%}
+  {%- set _ = toc.append(('sec-gaps', 'Priority Gaps')) -%}
+  {%- set _ = toc.append(('sec-siem', 'Coverage by SIEM')) -%}
+  {%- if report.snapshots -%}{%- set _ = toc.append(('sec-trend', 'Baseline Coverage Trend')) -%}{%- endif -%}
+{%- endif -%}
+{%- if show_devices -%}{%- set _ = toc.append(('sec-devices', 'Device Exposure')) -%}{%- endif -%}
+{%- if technical and show_baselines -%}
+  {%- set _ = toc.append(('sec-matrix', 'Coverage Matrix')) -%}
+  {%- if report.detailed_techniques -%}{%- set _ = toc.append(('sec-detail', 'Technique Detail')) -%}{%- endif -%}
+{%- endif -%}
+{%- if technical and show_devices -%}
+  {%- set _ = toc.append(('sec-cves', 'CVE Breakdown — By Vulnerability')) -%}
+  {%- set _ = toc.append(('sec-hosts', 'CVE Breakdown — By Host')) -%}
+{%- endif -%}
 <div class="section-banner avoid-break" style="margin-top:0;">
     <div class="section-banner-title">Table of Contents</div>
 </div>
-
-<div style="margin-bottom:7mm;">
-    <div class="toc-item"><span class="toc-num">1</span><span class="toc-text">Executive Summary</span></div>
-    {% if report.include_devices is not defined or report.include_devices %}
-    <div class="toc-item"><span class="toc-num">2</span><span class="toc-text">Vulnerability Coverage Ratio</span></div>
-    {% if report.top5_cves %}<div class="toc-item"><span class="toc-num">3</span><span class="toc-text">Top 5 Critical CVEs</span></div>{% endif %}
-    <div class="toc-item"><span class="toc-num">4</span><span class="toc-text">Device Status Summary</span></div>
-    {% endif %}
-    {% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
-    <div class="toc-item"><span class="toc-num">5</span><span class="toc-text">Baseline Coverage</span></div>
-    {% if report.snapshots is defined and report.snapshots %}<div class="toc-item"><span class="toc-num">5b</span><span class="toc-text">Baseline Coverage Trend</span></div>{% endif %}
-    {% if report.snapshots is defined and report.snapshots %}<div class="toc-item"><span class="toc-num">5c</span><span class="toc-text">Audit History</span></div>{% endif %}
-    {% endif %}
-    {% if report.baseline_active_tactics is defined and report.baseline_active_tactics %}<div class="toc-item"><span class="toc-num">6</span><span class="toc-text">System MITRE ATT&amp;CK Heatmap</span></div>{% endif %}
-    {% if report.mode == 'technical' %}
-    {% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}<div class="toc-item"><span class="toc-num">7</span><span class="toc-text">Technical Breakdown — Baseline Gap Analysis</span></div>{% endif %}
-    {% if report.include_devices is not defined or report.include_devices %}<div class="toc-item"><span class="toc-num">8</span><span class="toc-text">CVE Breakdown by Vulnerability</span></div>{% endif %}
-    {% if report.include_devices is not defined or report.include_devices %}<div class="toc-item"><span class="toc-num">9</span><span class="toc-text">CVE Breakdown by Host</span></div>{% endif %}
-    {% endif %}
+<div style="margin-bottom:8mm;">
+    {% for anchor, label in toc %}
+    <div class="toc-item"><span class="toc-num">{{ loop.index }}</span><span class="toc-text">{{ label }}</span><a class="toc-page" href="#{{ anchor }}"></a></div>
+    {% endfor %}
 </div>
 
 <div class="page-break"></div>
 
+{% if show_baselines %}
 <!-- ══════════════════════════════════════════════════════
-     SECTION 1 — EXECUTIVE SUMMARY
+     EXECUTIVE SUMMARY  (the system page's metric strip)
      ══════════════════════════════════════════════════════ -->
-<div class="section-banner avoid-break">
+<div class="section-banner avoid-break" id="sec-summary">
     <div class="section-banner-title">Executive Summary</div>
-    <div class="section-banner-sub">System vulnerability and detection coverage overview for {{ report.system.name }}</div>
+    <div class="section-banner-sub">Detection coverage for {{ report.system.name }} across {{ 'all its baselines' if report.all_baselines else 'the selected baselines' }}</div>
 </div>
 
-{% if report.include_devices is not defined or report.include_devices %}
-<!-- RAG Legend -->
-<div class="legend">
-    <span><span class="swatch" style="background:var(--danger)"></span> Red — At Risk (CVE match, no detection)</span>
-    <span><span class="swatch" style="background:var(--warning)"></span> Amber — Monitored (CVE match, detection applied)</span>
-    <span><span class="swatch" style="background:var(--success)"></span> Green — Clean (no vulnerabilities found)</span>
-</div>
-
+{%- set pct = report.coverage_pct -%}
 <div class="summary-grid avoid-break">
     <div class="stat-card">
-        <span class="stat-value">{{ report.total_hosts }}</span>
-        <span class="stat-label">Total Devices</span>
+        <span class="stat-value {% if pct is none %}plain{% elif pct >= 80 %}success{% elif pct >= 40 %}warning{% else %}danger{% endif %}">{{ '—' if pct is none else pct ~ '%' }}</span>
+        <span class="stat-label">Covered</span>
+        <span class="stat-sub">{% if pct is none %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</span>
     </div>
     <div class="stat-card">
-        <span class="stat-value {% if report.total_cves > 0 %}danger{% else %}success{% endif %}">{{ report.total_cves }}</span>
-        <span class="stat-label">Unique CVEs</span>
+        <span class="stat-value plain">{{ t.total }}</span>
+        <span class="stat-label">Techniques</span>
+        <span class="stat-sub">across {{ "this system's" if report.all_baselines else "the selected" }} baselines</span>
     </div>
     <div class="stat-card">
-        <span class="stat-value danger">{{ report.red_hosts }}</span>
-        <span class="stat-label">At Risk Devices</span>
+        <span class="stat-value danger">{{ t.none }}</span>
+        <span class="stat-label">No coverage</span>
+        <span class="stat-sub">nothing catching this yet</span>
     </div>
     <div class="stat-card">
-        <span class="stat-value warning">{{ report.amber_hosts }}</span>
-        <span class="stat-label">Monitored Devices</span>
+        <span class="stat-value warning">{{ t.gap }}</span>
+        <span class="stat-label">Known gaps</span>
+        <span class="stat-sub">accepted, with a reason</span>
     </div>
     <div class="stat-card">
-        <span class="stat-value success">{{ report.green_hosts }}</span>
-        <span class="stat-label">Clean Devices</span>
+        <span class="stat-value plain">{{ t.unmapped }}</span>
+        <span class="stat-label">Unmapped</span>
+        <span class="stat-sub">no rule chosen for them</span>
     </div>
     <div class="stat-card">
-        <span class="stat-value {% if report.coverage_ratio >= 80 %}success{% elif report.coverage_ratio >= 40 %}warning{% else %}danger{% endif %}">{{ report.coverage_ratio }}%</span>
-        <span class="stat-label">Coverage Ratio</span>
+        <span class="stat-value {% if t.uncounted %}warning{% else %}plain{% endif %}">{{ t.uncounted }}</span>
+        <span class="stat-label">Not counted</span>
+        <span class="stat-sub">rule is only where this system isn't measured</span>
     </div>
 </div>
 
-<div class="exec-narrative avoid-break">
-    <strong>{{ report.system.name }}</strong> comprises {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }}
-    with {{ report.total_cves }} unique CVE{{ 's' if report.total_cves != 1 else '' }} identified across the estate.
-    {% if report.total_cves == 0 %}
-    No known exploited vulnerabilities were matched against the installed software inventory. The system is currently in a clean state.
-    {% elif report.coverage_ratio >= 80 %}
-    Detection coverage is <strong style="color:var(--success)">strong at {{ report.coverage_ratio }}%</strong> — the majority of vulnerability-device pairings have active detection rules in place.
-    {% if report.red_hosts > 0 %}{{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} remain{{ '' if report.red_hosts != 1 else 's' }} at risk and should be prioritised for remediation.{% endif %}
-    {% elif report.coverage_ratio >= 40 %}
-    Detection coverage is <strong style="color:var(--warning)">moderate at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} device{{ 's' if report.red_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk with matched CVEs but no active detection.
-    Increasing rule coverage for the top CVEs listed below would materially reduce exposure.
-    {% else %}
-    Detection coverage is <strong style="color:var(--danger)">low at {{ report.coverage_ratio }}%</strong>. {{ report.red_hosts }} of {{ report.total_hosts }} device{{ 's' if report.total_hosts != 1 else '' }} {{ 'are' if report.red_hosts != 1 else 'is' }} at risk.
-    Immediate action is recommended to deploy detection rules against the highest-impact CVEs.
-    {% endif %}
-    {% if report.total_grey_pairs > 0 %}
-    {{ report.total_grey_pairs }} vulnerability-device pairing{{ 's' if report.total_grey_pairs != 1 else '' }} {{ 'have' if report.total_grey_pairs != 1 else 'has' }} been marked as blind spots and excluded from scoring.
-    {% endif %}
-</div>
+{% if report.coverage_undefined %}
+<div class="callout avoid-break">No SIEM coverage destinations are set for this system, so Covered is not scored. Set them on the system page (SIEM coverage) to measure it.</div>
 {% endif %}
 
-{% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
-{% if report.baseline_narrative is defined and report.baseline_narrative %}
-<div class="exec-narrative avoid-break">
-    {{ report.baseline_narrative }}
-</div>
-{% endif %}
-{% endif %}
+<div class="exec-narrative avoid-break">{{ report.narrative }}</div>
 
-<!-- ══════════════════════════════════════════════════════
-     SECTION 2 — VULNERABILITY COVERAGE RATIO  (device data)
-     ══════════════════════════════════════════════════════ -->
-{% if report.include_devices is not defined or report.include_devices %}
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">Vulnerability Coverage Ratio</div>
-    <div class="section-banner-sub">Detection coverage across all CVE-host pairings</div>
-</div>
-
-<table>
-    <thead>
-        <tr><th>Metric</th><th>Count</th><th>Percentage</th></tr>
-    </thead>
+{%- set non_alerting = report.techniques | selectattr('non_alerting') | list | length -%}
+{%- set review_due = report.techniques | selectattr('review_due') | list | length -%}
+<table class="avoid-break">
+    <thead><tr><th>Status</th><th>Techniques</th><th>What it means</th></tr></thead>
     <tbody>
-        <tr>
-            <td><span class="badge badge-amber">Amber</span> Monitored (CVE + Detection Applied)</td>
-            <td>{{ report.total_amber_pairs }}</td>
-            <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
-        </tr>
-        <tr>
-            <td><span class="badge badge-red">Red</span> At Risk (CVE + No Detection)</td>
-            <td>{{ report.total_red_pairs }}</td>
-            <td>{% if (report.total_amber_pairs + report.total_red_pairs) > 0 %}{{ 100 - report.coverage_ratio }}%{% else %}N/A{% endif %}</td>
-        </tr>
+        <tr><td><span class="badge badge-green">Covered</span></td><td>{{ t.covered }}{% if non_alerting %} <span class="muted">({{ non_alerting }} non-alerting)</span>{% endif %}</td>
+            <td>A counted rule applied to this system, or a dashboard, report or log watching it (non-alerting: someone has to look).</td></tr>
+        <tr><td><span class="badge badge-amber">Known gap</span></td><td>{{ t.gap }}{% if review_due %} <span class="flag-danger">({{ review_due }} review due)</span>{% endif %}</td>
+            <td>Accepted, with a reason recorded.</td></tr>
+        <tr><td><span class="badge badge-red">No coverage</span></td><td>{{ t.none }}</td><td>Nothing catching this yet.</td></tr>
+        <tr><td><span class="badge badge-grey">Not applicable</span></td><td>{{ t.na }}</td><td>Considered and left out of the score.</td></tr>
     </tbody>
 </table>
 
 <!-- ══════════════════════════════════════════════════════
-     SECTION 3 — TOP 5 CRITICAL CVEs  (device data)
+     BASELINES
      ══════════════════════════════════════════════════════ -->
-{% if report.top5_cves %}
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">Top 5 Critical CVEs</div>
-    <div class="section-banner-sub">Ranked by number of at-risk hosts</div>
+<div class="section-banner avoid-break" id="sec-baselines">
+    <div class="section-banner-title">Baselines</div>
+    <div class="section-banner-sub">Each baseline's techniques on {{ report.system.name }}</div>
 </div>
 
 <table>
     <thead>
-        <tr><th>CVE ID</th><th>Vulnerability</th><th>Vendor / Product</th><th>At Risk</th><th>Monitored</th><th>MITRE Techniques</th><th>Ransomware</th></tr>
-    </thead>
-    <tbody>
-        {% for cve in report.top5_cves %}
-        <tr>
-            <td style="font-weight:600;white-space:nowrap;">{{ cve.cve_id }}</td>
-            <td>{{ cve.vulnerability_name[:60] }}{% if cve.vulnerability_name|length > 60 %}…{% endif %}</td>
-            <td style="font-size:6.5pt;">{{ cve.vendor_project }} / {{ cve.product }}</td>
-            <td><span class="badge badge-red">{{ cve.hosts_red|length }}</span></td>
-            <td><span class="badge badge-amber">{{ cve.hosts_amber|length }}</span></td>
-            <td>
-                {% for t in cve.techniques %}
-                <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}</span>
-                {% endfor %}
-                {% if not cve.techniques %}<span style="color:var(--text-3)">—</span>{% endif %}
-            </td>
-            <td>{% if cve.known_ransomware %}<span class="badge badge-red">Yes</span>{% else %}No{% endif %}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% endif %}
-{% endif %}{# include_devices — vuln ratio + top5 CVEs #}
-
-<!-- ══════════════════════════════════════════════════════
-     SECTION 4 — DEVICE STATUS SUMMARY
-     ══════════════════════════════════════════════════════ -->
-{% if report.include_devices is not defined or report.include_devices %}
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">Device Status Summary</div>
-    <div class="section-banner-sub">Per-device vulnerability and detection overview</div>
-</div>
-
-<table>
-    <thead>
-        <tr><th>Device</th><th>IP Address</th><th>OS</th><th>Status</th><th>CVEs</th><th>At Risk</th><th>Monitored</th></tr>
-    </thead>
-    <tbody>
-        {% for h in report.host_rows %}
-        <tr>
-            <td style="font-weight:600;">{{ h.name }}</td>
-            <td style="font-family:var(--ff-mono);font-size:6.5pt;">{{ h.ip }}</td>
-            <td style="font-size:6.5pt;">{{ h.os[:30] }}{% if h.os|length > 30 %}…{% endif %}</td>
-            <td>
-                {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
-                {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
-                {% elif h.rag == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
-                {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
-            </td>
-            <td>{{ h.cve_count }}</td>
-            <td>{{ h.red_count }}</td>
-            <td>{{ h.amber_count }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
-{% endif %}
-
-<!-- ══════════════════════════════════════════════════════
-     SECTION 5 — BASELINE COVERAGE
-     ══════════════════════════════════════════════════════ -->
-{% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">Baseline Coverage</div>
-    <div class="section-banner-sub">Assurance baseline compliance for {{ report.system.name }}</div>
-</div>
-
-<table>
-    <thead>
-        <tr><th>Baseline</th><th>Techniques</th><th>Covered</th><th>Gaps</th><th>N/A</th><th>Coverage</th></tr>
+        <tr><th>Baseline</th><th>Techniques</th><th>Covered</th><th>No coverage</th><th>Known gaps</th><th>N/A</th><th style="width:22%">Coverage</th></tr>
     </thead>
     <tbody>
         {% for bl in report.baselines %}
+        {%- set p = bl.coverage_pct -%}
         <tr>
-            <td style="font-weight:600;">{{ bl.playbook_name }}</td>
-            <td>{{ bl.total_steps }}</td>
-            <td><span class="badge badge-green">{{ bl.covered_steps }}</span></td>
-            <td><span class="badge badge-red">{{ bl.total_steps - bl.covered_steps - (bl.na_steps or 0) }}</span></td>
-            <td><span class="badge badge-grey">{{ bl.na_steps or 0 }}</span></td>
+            <td><strong style="color:var(--text);">{{ bl.name }}</strong>
+                {% if bl.description %}<div class="muted" style="font-size:6.5pt;">{{ bl.description }}</div>{% endif %}
+                {% if bl.applied_at %}<div class="muted" style="font-size:6pt;">Applied {{ bl.applied_at.strftime('%Y-%m-%d') }}</div>{% endif %}</td>
+            <td>{{ bl.totals.total }}</td>
+            <td><span class="badge badge-green">{{ bl.totals.covered }}</span></td>
+            <td><span class="badge badge-red">{{ bl.totals.none }}</span></td>
+            <td><span class="badge badge-amber">{{ bl.totals.gap }}</span></td>
+            <td><span class="badge badge-grey">{{ bl.totals.na }}</span></td>
             <td>
-                <span class="badge {% if bl.coverage_pct >= 75 %}badge-green{% elif bl.coverage_pct >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ bl.coverage_pct }}%</span>
-                <div class="coverage-bar"><div class="fill {% if bl.coverage_pct >= 75 %}good{% elif bl.coverage_pct >= 50 %}warn{% else %}bad{% endif %}" style="width:{{ bl.coverage_pct }}%"></div></div>
+                {% if report.coverage_undefined %}<span class="muted">not scored</span>{% else %}
+                <span class="badge {% if p >= 80 %}badge-green{% elif p >= 40 %}badge-amber{% else %}badge-red{% endif %}">{{ p }}%</span>
+                <div class="coverage-bar"><div class="fill {% if p >= 80 %}good{% elif p >= 40 %}warn{% else %}bad{% endif %}" style="width:{{ p }}%"></div></div>
+                {% endif %}
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
-{% endif %}
 
 <!-- ══════════════════════════════════════════════════════
-     SECTION 5b — BASELINE COVERAGE TREND (Historical)
+     PRIORITY GAPS
      ══════════════════════════════════════════════════════ -->
-{% if report.snapshots is defined and report.snapshots and report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
-{# --- Build trend data: group snapshots by baseline, sort by date --- #}
-{%- set ns_trend = namespace(baselines={}, dates=[], colors=['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#84cc16']) -%}
-{%- for snap in report.snapshots | sort(attribute='captured_at') -%}
-  {%- set bname = snap.baseline_name -%}
-  {%- if bname not in ns_trend.baselines -%}
-    {%- set _ = ns_trend.baselines.update({bname: []}) -%}
-  {%- endif -%}
-  {%- set _ = ns_trend.baselines[bname].append(snap) -%}
-  {%- set dstr = snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '' -%}
-  {%- if dstr and dstr not in ns_trend.dates -%}
-    {%- set ns_trend.dates = ns_trend.dates + [dstr] -%}
-  {%- endif -%}
-{%- endfor -%}
-
-{%- set chart_w = 500 -%}
-{%- set chart_h = 200 -%}
-{%- set pad_l = 35 -%}
-{%- set pad_r = 15 -%}
-{%- set pad_t = 15 -%}
-{%- set pad_b = 40 -%}
-{%- set plot_w = chart_w - pad_l - pad_r -%}
-{%- set plot_h = chart_h - pad_t - pad_b -%}
-{%- set n_dates = ns_trend.dates | length -%}
-
-<div class="section-banner avoid-break" style="margin-top:6mm;">
-    <div class="section-banner-title">Baseline Coverage Trend</div>
-    <div class="section-banner-sub">Historical coverage percentage over time for {{ report.system.name }}</div>
+<div class="section-banner avoid-break" id="sec-gaps">
+    <div class="section-banner-title">Priority Gaps</div>
+    <div class="section-banner-sub">Techniques with no coverage or a known gap, highest priority first</div>
 </div>
 
-{% if n_dates >= 1 %}
-<div style="text-align:center;margin:3mm 0 5mm;">
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {{ chart_w }} {{ chart_h }}" style="width:100%;max-width:{{ chart_w }}px;font-family:'Liberation Sans',Arial,sans-serif;">
-  <!-- Grid lines -->
-  {% for pct in [0, 25, 50, 75, 100] %}
-  {%- set gy = pad_t + plot_h - (pct / 100 * plot_h) -%}
-  <line x1="{{ pad_l }}" y1="{{ gy }}" x2="{{ pad_l + plot_w }}" y2="{{ gy }}" stroke="#e5e7eb" stroke-width="0.5"/>
-  <text x="{{ pad_l - 3 }}" y="{{ gy + 2 }}" text-anchor="end" font-size="5.5" fill="#6e7681">{{ pct }}%</text>
-  {% endfor %}
-
-  <!-- Axis lines -->
-  <line x1="{{ pad_l }}" y1="{{ pad_t }}" x2="{{ pad_l }}" y2="{{ pad_t + plot_h }}" stroke="#d0d7de" stroke-width="1"/>
-  <line x1="{{ pad_l }}" y1="{{ pad_t + plot_h }}" x2="{{ pad_l + plot_w }}" y2="{{ pad_t + plot_h }}" stroke="#d0d7de" stroke-width="1"/>
-
-  <!-- Date labels on X-axis -->
-  {% for dstr in ns_trend.dates %}
-  {%- set dx = pad_l + (loop.index0 / (n_dates - 1) * plot_w) if n_dates > 1 else pad_l + plot_w / 2 -%}
-  <text x="{{ dx }}" y="{{ pad_t + plot_h + 12 }}" text-anchor="middle" font-size="4.5" fill="#6e7681" transform="rotate(-25 {{ dx }} {{ pad_t + plot_h + 12 }})">{{ dstr[:10] }}</text>
-  {% endfor %}
-
-  <!-- Data series (one polyline per baseline) -->
-  {%- set ns_ci = namespace(i=0) -%}
-  {% for bname, snaps in ns_trend.baselines.items() %}
-  {%- set color = ns_trend.colors[ns_ci.i % (ns_trend.colors | length)] -%}
-  {%- set ns_pts = namespace(points='') -%}
-  {%- for snap in snaps -%}
-    {%- set dstr = snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '' -%}
-    {%- set di = ns_trend.dates.index(dstr) if dstr in ns_trend.dates else 0 -%}
-    {%- set px = pad_l + (di / (n_dates - 1) * plot_w) if n_dates > 1 else pad_l + plot_w / 2 -%}
-    {%- set py = pad_t + plot_h - (snap.score_percentage / 100 * plot_h) -%}
-    {%- set ns_pts.points = ns_pts.points ~ px ~ ',' ~ py ~ ' ' -%}
-    <!-- Data point dot -->
-    <circle cx="{{ px }}" cy="{{ py }}" r="2.5" fill="{{ color }}" stroke="white" stroke-width="0.8"/>
-    <text x="{{ px }}" y="{{ py - 4 }}" text-anchor="middle" font-size="4.5" fill="{{ color }}" font-weight="600">{{ snap.score_percentage | round | int }}%</text>
-  {%- endfor -%}
-  {% if snaps | length > 1 %}
-  <polyline points="{{ ns_pts.points }}" fill="none" stroke="{{ color }}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
-  {% endif %}
-  {%- set ns_ci.i = ns_ci.i + 1 -%}
-  {% endfor %}
-</svg>
-</div>
-
-<!-- Legend -->
-<div style="display:flex;flex-wrap:wrap;gap:3mm;justify-content:center;margin-bottom:4mm;">
-  {%- set ns_li = namespace(i=0) -%}
-  {% for bname in ns_trend.baselines.keys() %}
-  {%- set color = ns_trend.colors[ns_li.i % (ns_trend.colors | length)] -%}
-  <div style="display:flex;align-items:center;gap:1.5mm;">
-    <span style="display:inline-block;width:8mm;height:2mm;background:{{ color }};border-radius:1mm;"></span>
-    <span style="font-size:6pt;color:var(--text-2);">{{ bname }}</span>
-  </div>
-  {%- set ns_li.i = ns_li.i + 1 -%}
-  {% endfor %}
-</div>
-
-<!-- Snapshot data table -->
-<table style="margin-bottom:4mm;">
-    <thead>
-        <tr><th>Date</th><th>Label</th><th>Baseline</th><th>Score</th><th style="text-align:center;">Green</th><th style="text-align:center;">Amber</th><th style="text-align:center;">Red</th><th style="text-align:center;">N/A</th></tr>
-    </thead>
+{% if report.priority_gaps %}
+<table>
+    <thead><tr><th>Priority</th><th>Technique</th><th>ATT&amp;CK</th><th>Baseline</th><th>Status</th><th>Reason</th></tr></thead>
     <tbody>
-        {% for snap in report.snapshots | sort(attribute='captured_at', reverse=True) %}
+        {% for g in report.priority_gaps %}
         <tr>
-            <td style="font-family:var(--ff-mono);font-size:6pt;white-space:nowrap;">{{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}</td>
-            <td>{% if snap.label %}<span class="badge badge-primary" style="font-size:5.5pt;">{{ snap.label }}</span>{% else %}—{% endif %}</td>
-            <td style="font-weight:600;">{{ snap.baseline_name }}</td>
-            <td><span class="badge {% if snap.score_percentage >= 75 %}badge-green{% elif snap.score_percentage >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ snap.score_percentage | round | int }}%</span></td>
-            <td style="text-align:center;"><span class="badge badge-green">{{ snap.count_green }}</span></td>
-            <td style="text-align:center;"><span class="badge badge-amber">{{ snap.count_amber }}</span></td>
-            <td style="text-align:center;"><span class="badge badge-red">{{ snap.count_red }}</span></td>
-            <td style="text-align:center;"><span class="badge badge-grey">{{ snap.count_grey }}</span></td>
+            <td>{% if g.priority %}{{ priority_pill(g) }}{% else %}<span class="muted">Not set</span>{% endif %}</td>
+            <td style="color:var(--text);font-weight:600;">{{ technique_link(g) }}<div class="muted" style="font-weight:400;font-size:6pt;">{{ g.tactic }}</div></td>
+            <td>{% for a in g.attack %}<span class="mitre-pill">{{ a.id }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
+            <td style="font-size:6.5pt;">{{ g.baseline_name }}</td>
+            <td>{{ status_pill(g) }}{% if g.review_due %} <span class="badge badge-amber">Review due</span>{% endif %}</td>
+            <td style="font-size:6.5pt;">{% if g.mark_reason %}<em>{{ g.mark_reason }}</em>{% elif g.uncounted_rule_names %}<span class="flag-danger">Mapped only outside SIEM coverage</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
 {% else %}
-<p style="font-size:7pt;color:var(--text-3);text-align:center;margin:4mm 0;">No audit snapshots have been recorded for this system.</p>
-{% endif %}
+<p class="empty" style="margin-bottom:5mm;">No technique in the selected baselines is without coverage.</p>
 {% endif %}
 
 <!-- ══════════════════════════════════════════════════════
-     SECTION 6 — SYSTEM MITRE ATT&CK HEATMAP
+     COVERAGE BY SIEM
      ══════════════════════════════════════════════════════ -->
-{% if report.baseline_active_tactics is defined and report.baseline_active_tactics %}
-{%- set hm_tactics = report.baseline_active_tactics -%}
-{%- set hm_matrix = report.baseline_matrix -%}
-
-<div class="matrix-section">
-    <div class="matrix-header-row">
-        <div>
-            <div class="matrix-heading">System MITRE ATT&amp;CK® Baseline Heatmap</div>
-            <div class="matrix-sub">Technique coverage derived from all applied assurance baselines.</div>
-        </div>
-        <div class="matrix-legend">
-            <span class="legend-tile covered">Detected</span>
-            <span class="legend-tile known-gap">Known Gap</span>
-            <span class="legend-tile gap">Missing</span>
-            <span class="legend-tile na">N/A</span>
-        </div>
-    </div>
-    <div class="matrix-container" style="grid-template-columns: repeat({{ hm_tactics | length }}, 1fr);">
-        {% for tactic in hm_tactics %}
-        <div class="tactic-column">
-            <div class="tactic-header">{{ tactic }}</div>
-            {% for cell in hm_matrix[tactic] | sort(attribute='id') %}
-            <div class="ttp-cell status-{{ cell.status }}">
-                {{ cell.id }}
-                {% if cell.rule_count %}<span class="ttp-rule-indicator">#{{ cell.rule_count }}</span>{% endif %}
-            </div>
-            {% endfor %}
-        </div>
-        {% endfor %}
-    </div>
+<div class="section-banner avoid-break" id="sec-siem">
+    <div class="section-banner-title">Coverage by SIEM</div>
+    <div class="section-banner-sub">Where this system's rules are, and whether each place counts toward its coverage</div>
 </div>
+
+{% if report.siem_coverage %}
+<table>
+    <thead><tr><th>Destination</th><th>In SIEM coverage</th><th>Rules</th><th>Techniques mapped</th><th>Techniques covered</th></tr></thead>
+    <tbody>
+        {% for s in report.siem_coverage %}
+        <tr>
+            <td style="font-weight:600;color:var(--text);">{% if s.color %}<span style="display:inline-block;width:6px;height:6px;border-radius:1px;background:{{ s.color }};margin-right:1.5mm;"></span>{% endif %}{{ s.name }}</td>
+            <td>{% if s.counted %}<span class="badge badge-green">Yes</span>{% else %}<span class="badge badge-red">No — does not count</span>{% endif %}</td>
+            <td>{{ s.rules }}</td>
+            <td>{{ s.mapped }}</td>
+            <td>{{ s.covering }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% if report.coverage_undefined %}<p class="muted" style="font-size:6.5pt;margin-top:-3mm;margin-bottom:5mm;">No SIEM coverage destinations are set, so every destination counts for now.</p>{% endif %}
+{% else %}
+<p class="empty" style="margin-bottom:5mm;">No rules are mapped and no SIEM coverage destinations are set.</p>
 {% endif %}
 
-<!-- ══════════════════════════════════════════════════════
-     TECHNICAL DEEP DIVE PAGES
-     ══════════════════════════════════════════════════════ -->
-{% if report.mode == 'technical' %}
+{% if report.uncounted_mappings %}
+<div class="sub-heading">Rules outside SIEM coverage</div>
+<div class="callout callout-danger avoid-break">These rules are mapped, but sit where this system is not measured, so they do not count as coverage. Add the destination to the system's SIEM coverage, or map the rule where the system is measured.</div>
+<table>
+    <thead><tr><th>Rule</th><th>Destination</th><th>Technique</th><th>Baseline</th><th>Added</th></tr></thead>
+    <tbody>
+        {% for u in report.uncounted_mappings %}
+        <tr>
+            <td class="flag-danger">{{ u.rule }}</td>
+            <td>{{ u.destination }}</td>
+            <td>{{ u.technique }}</td>
+            <td style="font-size:6.5pt;">{{ u.baseline }}</td>
+            <td class="num">{{ u.added.strftime('%Y-%m-%d') if u.added else '—' }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}
 
-<!-- ── SECTION 7: BASELINE GAP ANALYSIS (Technical) ─────────────────── -->
-{% if report.baselines and (report.include_baselines is not defined or report.include_baselines) %}
+{% include "report/system_report_trend.html" %}
+{% endif %}{# show_baselines #}
+
+{% if show_devices %}
 <div class="page-break"></div>
+{% include "report/system_report_devices.html" %}
+{% endif %}
 
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">Technical Breakdown — Baseline Gap Analysis</div>
-    <div class="section-banner-sub">Grouped by Baseline → MITRE Tactic. Known Gap / N/A rows display user justification.</div>
+{% if technical and show_baselines %}
+<!-- ══════════════════════════════════════════════════════
+     COVERAGE MATRIX  (baseline → tactic → technique)
+     ══════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section-banner avoid-break" id="sec-matrix">
+    <div class="section-banner-title">Coverage Matrix</div>
+    <div class="section-banner-sub">Every technique by baseline and ATT&amp;CK tactic. Rules shown in red are mapped outside this system's SIEM coverage and do not count.</div>
 </div>
 
 {% for bl in report.baselines %}
-<div class="detail-card">
-    <div class="detail-card-header">
-        <strong style="font-size:8.5pt;">{{ bl.playbook_name }}</strong>
-        <span class="badge {% if bl.coverage_pct >= 75 %}badge-green{% elif bl.coverage_pct >= 50 %}badge-amber{% else %}badge-red{% endif %}">{{ bl.coverage_pct }}% covered</span>
+{%- set rows = report.techniques | selectattr('baseline_id', 'equalto', bl.id) | list -%}
+<div class="sub-heading">{{ bl.name }}{% if not report.coverage_undefined %} — {{ bl.coverage_pct }}% covered{% endif %}</div>
+{% if rows %}
+<table>
+    <thead><tr><th style="width:4%">#</th><th style="width:27%">Technique</th><th style="width:13%">ATT&amp;CK</th><th style="width:9%">Priority</th><th style="width:12%">Status</th><th>Covered by</th></tr></thead>
+    <tbody>
+        {%- set ns = namespace(tactic=none) -%}
+        {% for tech in rows %}
+        {% if tech.tactic != ns.tactic %}{% set ns.tactic = tech.tactic %}
+        <tr class="tactic-row"><td colspan="6">{{ tech.tactic or 'Unassigned' }}</td></tr>
+        {% endif %}
+        <tr>
+            <td class="num">{{ tech.number or '' }}</td>
+            <td style="color:var(--text);font-weight:600;">{{ technique_link(tech) }}</td>
+            <td>{% for a in tech.attack %}<span class="mitre-pill">{{ a.id }}</span>{% else %}<span class="muted">—</span>{% endfor %}</td>
+            <td>{{ priority_pill(tech) }}</td>
+            <td>{{ status_pill(tech) }}{% if tech.non_alerting %}<div class="muted" style="font-size:6pt;">non-alerting</div>{% endif %}</td>
+            <td style="font-size:6.5pt;">
+                {% if tech.status in ('amber', 'grey') and tech.mark_reason %}<div><em>{{ tech.mark_reason }}</em></div>{% endif %}
+                {% for n in tech.rule_names %}<div>{{ n }}</div>{% endfor %}
+                {% for n in tech.uncounted_rule_names %}<div class="flag-danger">{{ n }} — not in SIEM coverage</div>{% endfor %}
+                {% for c in tech.coverage if c.flag == 'Non-alerting' %}<div>{{ c.label }}: {{ c.name }}</div>{% endfor %}
+                {% if not tech.coverage %}<span class="muted">—</span>{% endif %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty" style="margin-bottom:4mm;">This baseline has no techniques yet.</p>
+{% endif %}
+{% endfor %}
+
+{% if report.detailed_techniques %}
+<!-- ══════════════════════════════════════════════════════
+     TECHNIQUE DETAIL  (each as its window shows it)
+     ══════════════════════════════════════════════════════ -->
+<div class="page-break"></div>
+<div class="section-banner avoid-break" id="sec-detail">
+    <div class="section-banner-title">Technique Detail</div>
+    <div class="section-banner-sub">{% if report.technique_scope == 'gaps' %}Techniques with no coverage or a known gap: what{% else %}Every technique: what{% endif %} covers each, when it was added, and its ATT&amp;CK techniques</div>
+</div>
+
+{% for tech in report.detailed_techniques %}
+<div class="tech tech-{{ tech.status }}" id="t-{{ tech.step_id }}">
+    <div class="tech-head">
+        <div class="tech-title">{{ tech.title }}</div>
+        <div class="tech-pills">
+            {{ status_pill(tech) }}
+            {% if tech.non_alerting %}<span class="badge badge-primary">Non-alerting</span>{% endif %}
+            {{ priority_pill(tech) }}
+            {% if tech.review_due %}<span class="badge badge-amber">Review due</span>{% endif %}
+            <span class="badge badge-outline">{{ tech.tactic or 'Unassigned' }}</span>
+            {% for a in tech.attack %}<span class="mitre-pill">{{ a.id }}</span>{% endfor %}
+        </div>
+        <div class="tech-meta">
+            Baseline: {{ tech.baseline_name }}
+            {% if tech.category_label %} · Category: {{ tech.category_label }}{% endif %}
+            {% if tech.evidence_score is not none %} · Strongest rule: {{ tech.evidence_rule }} ({{ tech.evidence_score }}%){% endif %}
+        </div>
     </div>
-    {% if bl.playbook_description %}
-    <div style="font-size:6.5pt;color:var(--text-3);margin-bottom:2mm;">{{ bl.playbook_description }}</div>
-    {% endif %}
-    {% set tactic_groups = bl.tactics | groupby('tactic') | list %}
-    {% for tactic, steps in tactic_groups | sort %}
-    <div style="margin-bottom:3mm;">
-        <div style="font-size:7pt;font-weight:600;background:var(--primary-d,#1a3a5c);color:var(--primary,#3b82f6);padding:2mm;margin-bottom:1mm;border-radius:2mm;">{{ tactic or 'Unassigned' }}</div>
-        <table style="margin-bottom:0;">
-            <thead><tr><th style="width:30%">Technique</th><th style="width:15%">T#</th><th style="width:35%">Rule</th><th style="width:20%">Status</th></tr></thead>
-            <tbody>
-                {% for step in steps %}
-                <tr>
-                    <td style="font-size:6.5pt;">{{ step.title }}</td>
-                    <td style="font-family:var(--ff-mono);font-size:6.5pt;">{{ step.technique_id or '—' }}</td>
-                    <td style="font-size:6pt;">
-                        {% if step.status == 'grey' or step.status == 'amber' %}
-                            <span style="color:var(--text-2);font-style:italic;">{{ step.blind_spot_reason or '—' }}</span>
-                        {% elif step.applied_dets %}
-                            <span style="font-family:var(--ff-mono);">{{ step.applied_dets | map(attribute='rule_ref') | select | list | join(', ') or step.applied_dets | map(attribute='note') | select | list | join(', ') or '—' }}</span>
-                        {% else %}
-                            <span style="color:var(--text-3);">—</span>
-                        {% endif %}
-                    </td>
-                    <td style="font-size:6.5pt;">
-                        {% if step.status == 'green' %}
-                            <span class="badge badge-green">Detected</span>
-                        {% elif step.status == 'grey' %}
-                            <span class="badge badge-grey">N/A</span>
-                        {% elif step.status == 'amber' %}
-                            <span class="badge badge-amber">Known Gap</span>
-                        {% else %}
-                            <span class="badge badge-red">Missing</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
+    {% if tech.description %}<div class="tech-desc">{{ tech.description }}</div>{% endif %}
+
+    <div class="tech-label">Coverage</div>
+    {% for c in tech.coverage %}
+    <div class="cov-item cov-{{ c.tone }}">
+        <span class="cov-when">{{ c.label }} added {{ c.added.strftime('%Y-%m-%d') if c.added else '(date not recorded)' }}</span>{% if c.by %} <span class="muted">by {{ c.by }}</span>{% endif %}
+        — <span class="cov-name">{{ c.name }}</span>{% if c.destination %} <span class="muted">at {{ c.destination }}</span>{% endif %}
+        {% if c.flag %}<span class="badge {{ {'success': 'badge-green', 'warning': 'badge-amber', 'danger': 'badge-red', 'info': 'badge-primary'}.get(c.tone, 'badge-grey') }}">{{ c.flag }}</span>{% endif %}
+        {% if c.score is not none %}<span class="badge badge-outline">Rule score {{ c.score }}%</span>{% endif %}
+        {% if c.note or c.url %}<div class="cov-note">{{ c.note }}{% if c.note and c.url %} · {% endif %}{{ c.url }}</div>{% endif %}
     </div>
+    {% else %}
+    <p class="empty">Nothing covers this technique yet.</p>
     {% endfor %}
+
+    <div class="tech-label">MITRE ATT&amp;CK</div>
+    {% if tech.attack %}
+    <div class="attack-list">
+        {% for a in tech.attack %}<div><span class="mitre-pill">{{ a.id }}</span> {{ a.name }}{% if a.tactic %} <span class="muted">· {{ a.tactic }}</span>{% endif %}</div>{% endfor %}
+    </div>
+    {% else %}
+    <p class="empty">No MITRE techniques mapped to this technique.</p>
+    {% endif %}
 </div>
 {% endfor %}
 {% endif %}
+{% endif %}{# technical and show_baselines #}
 
-<!-- ── SECTION 8: CVE BREAKDOWN BY VULNERABILITY ─────────── -->
-{% if report.include_devices is not defined or report.include_devices %}
-<div class="page-break"></div>
-
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">CVE Breakdown — By Vulnerability</div>
-    <div class="section-banner-sub">Comprehensive per-CVE analysis with affected hosts and detection status</div>
-</div>
-
-{% for cve in report.all_cves %}
-<div class="detail-card">
-    <div class="detail-card-header">
-        <div>
-            <strong style="color:var(--primary);font-size:8pt;">{{ cve.cve_id }}</strong>
-            <span style="color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ cve.vulnerability_name[:80] }}</span>
-        </div>
-        <div style="display:flex;gap:1.5mm;">
-            {% if cve.known_ransomware %}<span class="badge badge-red">Ransomware</span>{% endif %}
-            <span class="badge badge-red">{{ cve.hosts_red|length }} At Risk</span>
-            <span class="badge badge-amber">{{ cve.hosts_amber|length }} Monitored</span>
-        </div>
-    </div>
-
-    {% if cve.short_description %}
-    <div style="font-size:6.5pt;color:var(--text-3);margin-bottom:2mm;">{{ cve.short_description[:200] }}</div>
-    {% endif %}
-
-    {% if cve.techniques %}
-    <div style="margin-bottom:2mm;">
-        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">MITRE:</span>
-        {% for t in cve.techniques %}
-        <span class="mitre-pill {% if t.has_detection %}covered{% else %}gap{% endif %}">{{ t.id }}{% if t.name %} {{ t.name }}{% endif %}</span>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if cve.detections %}
-    <div style="margin-bottom:2mm;">
-        <span style="font-size:5.5pt;color:var(--text-3);font-weight:600;">Detection Rules:</span>
-        {% for d in cve.detections %}
-        <span class="badge badge-primary" style="font-size:5.5pt;">{{ d.note or d.rule_ref or 'Rule' }}</span>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    <table style="margin-bottom:0;">
-        <thead><tr><th>Host</th><th>IP</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
-        <tbody>
-            {% for h in cve.hosts_red %}
-            <tr>
-                <td>{{ h.name }}</td><td style="font-family:var(--ff-mono);font-size:6pt;">{{ h.ip }}</td>
-                <td><span class="badge badge-red">At Risk</span></td><td style="color:var(--text-3);">—</td>
-            </tr>
-            {% endfor %}
-            {% for h in cve.hosts_amber %}
-            <tr>
-                <td>{{ h.name }}</td><td style="font-family:var(--ff-mono);font-size:6pt;">{{ h.ip }}</td>
-                <td><span class="badge badge-amber">Monitored</span></td>
-                <td>{% for r in h.rule_names %}<span class="badge badge-primary" style="font-size:5pt;">{{ r }}</span> {% endfor %}</td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
-{% endfor %}
-
-<!-- ── SECTION 9: CVE BREAKDOWN BY HOST ──────────────────── -->
-<div class="page-break"></div>
-
-<div class="section-banner avoid-break">
-    <div class="section-banner-title">CVE Breakdown — By Host</div>
-    <div class="section-banner-sub">Per-device CVE exposure and active detection rules</div>
-</div>
-
-{% for h in report.host_rows %}
-{% if h.cves %}
-<div class="detail-card">
-    <div class="detail-card-header">
-        <div>
-            <strong>{{ h.name }}</strong>
-            {% if h.ip %}<span style="font-family:var(--ff-mono);color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ h.ip }}</span>{% endif %}
-            {% if h.os %}<span style="color:var(--text-3);margin-left:2mm;font-size:6.5pt;">{{ h.os }}</span>{% endif %}
-        </div>
-        <div>
-            {% if h.rag == 'green' %}<span class="badge badge-green">Clean</span>
-            {% elif h.rag == 'amber' %}<span class="badge badge-amber">Monitored</span>
-            {% elif h.rag == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
-            {% else %}<span class="badge badge-red">At Risk</span>{% endif %}
-        </div>
-    </div>
-    <table style="margin-bottom:0;">
-        <thead><tr><th>CVE</th><th>Status</th><th>Active Rule(s)</th></tr></thead>
-        <tbody>
-            {% for c in h.cves %}
-            <tr>
-                <td style="font-weight:600;white-space:nowrap;">{{ c.cve_id }}</td>
-                <td>
-                    {% if c.status == 'red' %}<span class="badge badge-red">At Risk</span>
-                    {% elif c.status == 'grey' %}<span class="badge badge-grey">Blind Spot</span>
-                    {% else %}<span class="badge badge-amber">Monitored</span>{% endif %}
-                </td>
-                <td>
-                    {% if c.rule_names %}
-                        {% for r in c.rule_names %}<span class="badge badge-primary" style="font-size:5pt;">{{ r }}</span> {% endfor %}
-                    {% else %}<span style="color:var(--text-3);">—</span>{% endif %}
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
+{% if technical and show_devices %}
+{% include "report/system_report_cves.html" %}
 {% endif %}
-{% endfor %}
-{% endif %}{# include_devices #}
-
-{% endif %}{# technical mode #}
 
 <div class="report-footer">
     Report generated by TIDE — Threat Intelligence Detection Engineering
