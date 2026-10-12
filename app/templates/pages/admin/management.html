@@ -13,13 +13,13 @@
 {# Each integration's own "Verify TLS certificate" box, off by default (app/services/tls.py). #}
 {% macro tls_verify_row(dom_id) %}
 <div>
-    <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+    <label class="check-label">
         <input type="checkbox" id="{{ dom_id }}" name="tls_verify"> Verify TLS certificate
     </label>
-    <span class="text-secondary" style="font-size:0.75rem;">Leave off for a self-signed certificate. When on, the certificate must come from a public CA or from a CA certificate installed in the container.</span>
+    <span class="form-hint">Leave off for a self-signed certificate. When on, the certificate must come from a public CA or from a CA certificate installed in the container.</span>
 </div>
 {% endmacro %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;">
+<div class="page-header">
     <div>
         <h1 class="page-title-hero">Management</h1>
         <p class="page-subtitle">Centralized administration for tenants, users, integrations, Sigma assets, and classifications.</p>
@@ -42,12 +42,12 @@
         <div class="settings-tabs settings-tabs--inline">
             <button name="Clients" class="settings-tab {% if tu_tab == 'clients' %}active{% endif %}"
                     hx-get="/api/management/tab/clients" hx-target="#management-content" hx-swap="innerHTML"
-                    onclick="activateMgmtTab(this,'clients')">
+                    data-click="mgmt.tab" data-tab="clients">
                 {{ icon('users', '16') }} Clients
             </button>
             <button name="Users" class="settings-tab {% if tu_tab == 'users' %}active{% endif %}"
                     hx-get="/api/management/tab/users" hx-target="#management-content" hx-swap="innerHTML"
-                    onclick="activateMgmtTab(this,'users')">
+                    data-click="mgmt.tab" data-tab="users">
                 {{ icon('user', '16') }} Users
             </button>
         </div>
@@ -55,7 +55,7 @@
              hx-get="/api/management/tab/{{ tu_tab }}"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">Loading&hellip;</div>
+            <div class="loading-note loading-note--center">Loading&hellip;</div>
         </div>
     </div>
 </details>
@@ -68,7 +68,7 @@
         <span class="mgmt-section__hint">Portable backup of rules, baselines and users</span>
     </summary>
     <div class="mgmt-section__body" name="Open Data Transfer" hx-get="/api/management/tab/data-transfer" hx-trigger="load" hx-swap="innerHTML">
-        <div class="text-secondary" style="padding:1rem;">Loading&hellip;</div>
+        <div class="loading-note">Loading&hellip;</div>
     </div>
 </details>
 {% endif %}
@@ -97,26 +97,9 @@
             </summary>
             <div name="Open Siems" id="mgmt-sub-siems" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/siems" hx-trigger="load" hx-swap="innerHTML">
-                <div class="text-secondary" style="padding:1rem;">Loading SIEMs…</div>
+                <div class="loading-note">Loading SIEMs…</div>
             </div>
         </details>
-        {% else %}
-        <details class="mgmt-subsection">
-            <summary class="mgmt-subsection__summary">
-                {{ icon('shield-check', '16') }}
-                <span class="mgmt-subsection__title">SIEMs</span>
-                <span class="mgmt-subsection__hint">Platform-admin only</span>
-            </summary>
-            <div class="mgmt-subsection__body">
-                <p class="text-secondary" style="font-size:0.85rem;margin:0;">
-                    The global SIEM inventory (and stored API tokens) is restricted to
-                    platform admins. To link or unlink a SIEM for a tenant you administer,
-                    open <strong>Settings → Clients</strong>, pick the tenant, and use the
-                    SIEMs section on the client detail page.
-                </p>
-            </div>
-        </details>
-        {% endif %}
 
         <details class="mgmt-subsection" open>
             <summary class="mgmt-subsection__summary">
@@ -126,7 +109,7 @@
             </summary>
             <div name="Open Connectors" id="mgmt-sub-connectors" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/connectors" hx-trigger="load" hx-swap="innerHTML">
-                <div class="text-secondary" style="padding:1rem;">Loading Connectors…</div>
+                <div class="loading-note">Loading Connectors…</div>
             </div>
         </details>
 
@@ -146,7 +129,7 @@
             </summary>
             <div name="Open Gitlab" id="mgmt-sub-gitlab" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/gitlab" hx-trigger="load" hx-swap="innerHTML">
-                <div class="text-secondary" style="padding:1rem;">Loading GitLab…</div>
+                <div class="loading-note">Loading GitLab…</div>
             </div>
         </details>
 
@@ -158,9 +141,26 @@
             </summary>
             <div name="Open Keycloak" id="mgmt-sub-keycloak" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/keycloak" hx-trigger="load" hx-swap="innerHTML">
-                <div class="text-secondary" style="padding:1rem;">Loading Keycloak…</div>
+                <div class="loading-note">Loading Keycloak…</div>
             </div>
         </details>
+        {% else %}
+        {# SIEMs, connectors, GitLab and Keycloak serve the whole install and hold its credentials. #}
+        <details class="mgmt-subsection">
+            <summary class="mgmt-subsection__summary">
+                {{ icon('shield-check', '16') }}
+                <span class="mgmt-subsection__title">SIEMs, connectors, GitLab and Keycloak</span>
+                <span class="mgmt-subsection__hint">Platform-admin only</span>
+            </summary>
+            <div class="mgmt-subsection__body">
+                <p class="text-secondary fs-base m-0">
+                    These serve every client and hold their credentials, so only platform admins
+                    set them up. To link a SIEM or a connector to a client you administer, open
+                    the client from <strong>Clients</strong> above and use its SIEMs or connectors section.
+                </p>
+            </div>
+        </details>
+        {% endif %}
     </div>
 </details>
 
@@ -175,9 +175,9 @@
         <span class="mgmt-section__hint">Pipelines &amp; templates (assign per tenant)</span>
     </summary>
     <div class="mgmt-section__body">
-        <p class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
-            Manage pySigma <code style="color:var(--color-primary);">ProcessingPipeline</code> and
-            postprocessing <code style="color:var(--color-primary);">template</code> YAML files.
+        <p class="section-intro">
+            Manage pySigma <code class="code-accent">ProcessingPipeline</code> and
+            postprocessing <code class="code-accent">template</code> YAML files.
             Each file is assigned to one or more tenants — Sigma conversions for a tenant
             see only the assets assigned to that tenant.
         </p>
@@ -188,43 +188,38 @@
                 <span class="mgmt-subsection__hint">./data/sigma_pipelines/</span>
             </summary>
             <div class="mgmt-subsection__body">
-                <div style="display:grid;grid-template-columns:220px 1fr;gap:1rem;align-items:start;">
-                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
-                        <div id="pipeline-list"
-                             class="u-bg-action" style="display:flex;flex-direction:column;gap:0.15rem;min-height:140px;max-height:340px;
-                                    border:1px solid var(--color-border);border-radius:var(--radius-sm);
-                                    padding:0.4rem;overflow-y:auto">
-                            <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
+                <div class="asset-editor">
+                    <div class="asset-editor__col">
+                        <div id="pipeline-list" class="asset-editor__list">
+                            <span class="text-muted fs-sm">Loading…</span>
                         </div>
-                        <div style="display:flex;gap:0.35rem;">
-                            <button name="+ New Pipeline" type="button" class="btn btn-secondary btn-sm" onclick="pipelineNew()" style="flex:1;">
+                        <div class="asset-editor__buttons">
+                            <button name="+ New Pipeline" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="pipeline">
                                 + New Pipeline
                             </button>
-                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm" onclick="loadPipelineList()" title="Refresh" style="padding:0 0.6rem;">
+                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm asset-editor__refresh" data-click="mgmt.assetList" data-asset="pipeline" title="Refresh">
                                 &#8635;
                             </button>
                         </div>
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
-                        <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <input name="Pipeline Name Input" type="text" id="pipeline-name-input" class="form-input"
-                                   placeholder="pipeline-name" style="flex:1;min-width:0;font-size:0.85rem;">
-                            <button name="Save" type="button" class="btn btn-primary btn-sm" onclick="pipelineSave()">Save</button>
+                    <div class="asset-editor__col">
+                        <div class="asset-editor__bar">
+                            <input name="Pipeline Name Input" type="text" id="pipeline-name-input" class="form-input asset-editor__name"
+                                   placeholder="pipeline-name">
+                            <button name="Save" type="button" class="btn btn-primary btn-sm" data-click="mgmt.assetSave" data-asset="pipeline">Save</button>
                             <button name="Delete" type="button" class="btn btn-danger btn-sm" id="pipeline-delete-btn"
-                                    onclick="pipelineDelete()" style="display:none;">Delete</button>
+                                    data-click="mgmt.assetDelete" data-asset="pipeline" style="display:none;">Delete</button>
                         </div>
-                        <textarea id="pipeline-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
-                        <div id="pipeline-tenants-row"
-                             style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
-                            <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
-                            <span id="pipeline-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
-                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm"
-                                    onclick="openSigmaAssignModal('pipeline')"
-                                    style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
+                        <textarea id="pipeline-yaml-editor" class="asset-editor__yaml"></textarea>
+                        <div id="pipeline-tenants-row" class="asset-editor__tenants">
+                            <span class="text-secondary fs-sm">Assigned tenants:</span>
+                            <span id="pipeline-tenants-chips" class="chip-row"></span>
+                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm asset-editor__assign"
+                                    data-click="mgmt.assignOpen" data-asset="pipeline">
                                 Assign tenants…
                             </button>
                         </div>
-                        <div id="pipeline-status" style="font-size:0.75rem;min-height:1.2em;"></div>
+                        <div id="pipeline-status" class="status-line"></div>
                     </div>
                 </div>
             </div>
@@ -236,43 +231,38 @@
                 <span class="mgmt-subsection__hint">./data/sigma_templates/</span>
             </summary>
             <div class="mgmt-subsection__body">
-                <div style="display:grid;grid-template-columns:220px 1fr;gap:1rem;align-items:start;">
-                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
-                        <div id="template-list"
-                             class="u-bg-action" style="display:flex;flex-direction:column;gap:0.15rem;min-height:140px;max-height:340px;
-                                    border:1px solid var(--color-border);border-radius:var(--radius-sm);
-                                    padding:0.4rem;overflow-y:auto">
-                            <span style="color:var(--color-text-muted);font-size:0.78rem;">Loading…</span>
+                <div class="asset-editor">
+                    <div class="asset-editor__col">
+                        <div id="template-list" class="asset-editor__list">
+                            <span class="text-muted fs-sm">Loading…</span>
                         </div>
-                        <div style="display:flex;gap:0.35rem;">
-                            <button name="+ New Template" type="button" class="btn btn-secondary btn-sm" onclick="templateNew()" style="flex:1;">
+                        <div class="asset-editor__buttons">
+                            <button name="+ New Template" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="template">
                                 + New Template
                             </button>
-                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm" onclick="loadTemplateList()" title="Refresh" style="padding:0 0.6rem;">
+                            <button name="Refresh" type="button" class="btn btn-secondary btn-sm asset-editor__refresh" data-click="mgmt.assetList" data-asset="template" title="Refresh">
                                 &#8635;
                             </button>
                         </div>
                     </div>
-                    <div style="display:flex;flex-direction:column;gap:0.5rem;">
-                        <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <input name="Template Name Input" type="text" id="template-name-input" class="form-input"
-                                   placeholder="template-name" style="flex:1;min-width:0;font-size:0.85rem;">
-                            <button name="Save" type="button" class="btn btn-primary btn-sm" onclick="templateSave()">Save</button>
+                    <div class="asset-editor__col">
+                        <div class="asset-editor__bar">
+                            <input name="Template Name Input" type="text" id="template-name-input" class="form-input asset-editor__name"
+                                   placeholder="template-name">
+                            <button name="Save" type="button" class="btn btn-primary btn-sm" data-click="mgmt.assetSave" data-asset="template">Save</button>
                             <button name="Delete" type="button" class="btn btn-danger btn-sm" id="template-delete-btn"
-                                    onclick="templateDelete()" style="display:none;">Delete</button>
+                                    data-click="mgmt.assetDelete" data-asset="template" style="display:none;">Delete</button>
                         </div>
-                        <textarea id="template-yaml-editor" style="display:block;width:100%;height:280px;"></textarea>
-                        <div id="template-tenants-row"
-                             style="display:flex;flex-wrap:wrap;gap:0.4rem;align-items:center;font-size:0.8rem;">
-                            <span class="text-secondary" style="font-size:0.78rem;">Assigned tenants:</span>
-                            <span id="template-tenants-chips" style="display:inline-flex;flex-wrap:wrap;gap:0.25rem;"></span>
-                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm"
-                                    onclick="openSigmaAssignModal('template')"
-                                    style="margin-left:auto;font-size:0.78rem;padding:0.15rem 0.5rem;">
+                        <textarea id="template-yaml-editor" class="asset-editor__yaml"></textarea>
+                        <div id="template-tenants-row" class="asset-editor__tenants">
+                            <span class="text-secondary fs-sm">Assigned tenants:</span>
+                            <span id="template-tenants-chips" class="chip-row"></span>
+                            <button name="Assign tenants…" type="button" class="btn btn-secondary btn-sm asset-editor__assign"
+                                    data-click="mgmt.assignOpen" data-asset="template">
                                 Assign tenants…
                             </button>
                         </div>
-                        <div id="template-status" style="font-size:0.75rem;min-height:1.2em;"></div>
+                        <div id="template-status" class="status-line"></div>
                     </div>
                 </div>
             </div>
@@ -282,27 +272,23 @@
 
 <!-- Tenant assignment modal for sigma assets -->
 <div name="Sigma Assign Modal" class="modal-overlay" id="sigma-assign-modal" style="display:none;"
-     onclick="if(event.target===this) closeSigmaAssignModal()">
-    <div class="modal" style="max-width:420px;">
+     data-click="mgmt.assignBackdrop">
+    <div class="modal-content modal-sm modal-narrow">
         <div class="modal-header">
-            <h3 id="sigma-assign-title">Assign tenants</h3>
-            <button  name="Close Modal" class="modal-close" onclick="closeSigmaAssignModal()">&times;</button>
+            <h3 class="modal-title" id="sigma-assign-title">Assign tenants</h3>
+            <button name="Close Modal" type="button" class="modal-x" data-click="mgmt.assignClose">&#x2715;</button>
         </div>
-        <div class="modal-body">
-            <p class="text-secondary" style="font-size:0.82rem;margin-bottom:0.75rem;">
-                Pick at least one tenant. The asset is only available to Sigma conversions
-                for the tenants you select here.
-            </p>
-            <div id="sigma-assign-checkboxes"
-                 style="display:flex;flex-direction:column;gap:0.35rem;max-height:280px;overflow-y:auto;
-                        padding:0.5rem;border:1px solid var(--color-border);border-radius:var(--radius-sm);">
-                <span class="text-secondary" style="font-size:0.78rem;">Loading clients…</span>
-            </div>
-            <div id="sigma-assign-error" class="text-danger" style="font-size:0.78rem;margin-top:0.5rem;min-height:1em;"></div>
+        <p class="modal-intro">
+            Pick at least one tenant. The asset is only available to Sigma conversions
+            for the tenants you select here.
+        </p>
+        <div id="sigma-assign-checkboxes" class="check-list">
+            <span class="text-secondary fs-sm">Loading clients…</span>
         </div>
-        <div class="modal-footer">
-            <button name="Cancel" type="button" class="btn btn-secondary btn-sm" onclick="closeSigmaAssignModal()">Cancel</button>
-            <button name="Save assignment" type="button" class="btn btn-primary btn-sm" onclick="saveSigmaAssignment()">Save assignment</button>
+        <div id="sigma-assign-error" class="text-danger form-error"></div>
+        <div class="form-footer form-footer--end mt-md">
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.assignClose">Cancel</button>
+            <button name="Save assignment" type="button" class="btn btn-primary btn-sm" data-click="mgmt.assignSave">Save assignment</button>
         </div>
     </div>
 </div>
@@ -314,19 +300,17 @@
         <span class="mgmt-section__hint">Per-tenant data classification labels</span>
     </summary>
     <div class="mgmt-section__body">
-        <p class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
+        <p class="section-intro">
             Classifications are applied to systems to indicate handling restrictions.
             Changes here apply to the active tenant
-            (<code style="color:var(--color-primary);">active_client_id</code> cookie).
+            (<code class="code-accent">active_client_id</code> cookie).
         </p>
 
         <form name="Submit Classifications" hx-post="/api/inventory/classifications" hx-target="#clf-list" hx-swap="innerHTML"
               hx-on::after-request="if(event.detail.successful){this.reset();}"
-              style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
-            <input type="text" name="name" class="form-input" placeholder="Classification name" required
-                   style="min-width:160px;max-width:220px;font-size:0.85rem;">
-            <input type="color" name="color" value="#6b7280" title="Pick a colour"
-                   style="width:36px;height:36px;border:var(--border-card);border-radius:var(--radius-sm);cursor:pointer;padding:2px;">
+              class="inline-form">
+            <input type="text" name="name" class="form-input inline-form__name" placeholder="Classification name" required>
+            <input type="color" name="color" value="#6b7280" title="Pick a colour" class="color-swatch-input">
             <button name="Add" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Add</button>
         </form>
 
@@ -334,7 +318,7 @@
              hx-get="/api/inventory/classifications"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <span class="text-secondary" style="font-size:0.8rem;">Loading...</span>
+            <span class="text-secondary text-sm">Loading...</span>
         </div>
     </div>
 </details>
@@ -355,38 +339,37 @@
          hx-get="/api/management/tab/query"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <div class="text-secondary" style="padding:1rem;">Loading query console...</div>
+        <div class="loading-note">Loading query console...</div>
     </div>
 </details>
 {% endif %}
 
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
 <div name="Client Modal" class="modal-overlay" id="client-modal" style="display:none;"
-     onclick="if(event.target===this) closeClientModal()">
+     data-click="clients.backdrop">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="client-modal-title">New Client</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeClientModal()">&#x2715;</button>
+                    data-click="clients.close">&#x2715;</button>
         </div>
-        <form id="client-form" onsubmit="return submitClientForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="client-form" data-submit="clients.submit" data-after="tab" class="form-stack">
             <input name="Client Form Id" type="hidden" id="client-form-id" value="">
             <div>
-                <label for="client-form-name" class="form-label">Name <span style="color:var(--color-danger)">*</span></label>
+                <label for="client-form-name" class="form-label">Name <span class="req">*</span></label>
                 <input name="Client Form Name" type="text" id="client-form-name" class="form-input" required maxlength="100" placeholder="Acme Corp">
             </div>
             <div>
                 <label for="client-form-slug" class="form-label">Slug</label>
                 <input name="Client Form Slug" type="text" id="client-form-slug" class="form-input" maxlength="50" placeholder="acme-corp" pattern="[a-z0-9\-]+">
-                <span class="text-secondary" style="font-size:0.75rem;">Lowercase letters, numbers, hyphens only.</span>
+                <span class="form-hint">Lowercase letters, numbers, hyphens only.</span>
             </div>
             <div>
                 <label for="client-form-desc" class="form-label">Description</label>
                 <textarea id="client-form-desc" class="form-input" rows="3" placeholder="Optional description..."></textarea>
             </div>
-            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeClientModal()">Cancel</button>
+            <div class="form-footer form-footer--end">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="clients.close">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
             </div>
         </form>
@@ -395,24 +378,23 @@
 
 <!-- ── Create / Edit SIEM Modal ───────────────────────────────────── -->
 <div name="Siem Modal" class="modal-overlay" id="siem-modal" style="display:none;"
-     onclick="if(event.target===this) closeSiemModal()">
-    <div class="modal-content modal-sm" style="max-width:560px;">
+     data-click="mgmt.siemBackdrop">
+    <div class="modal-content modal-sm modal-560">
         <div class="modal-header">
             <h3 class="modal-title" id="siem-modal-title">New SIEM</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeSiemModal()">&#x2715;</button>
+                    data-click="mgmt.siemClose">&#x2715;</button>
         </div>
-        <form id="siem-form" onsubmit="return submitSiemForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="siem-form" data-submit="mgmt.siemSubmit" class="form-stack">
             <input name="Siem Form Id" type="hidden" id="siem-form-id" value="">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+            <div class="form-grid-2">
                 <div>
-                    <label for="siem-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                    <label for="siem-form-label" class="form-label">Label <span class="req">*</span></label>
                     <input type="text" id="siem-form-label" name="label" class="form-input" required maxlength="200" placeholder="Primary Elastic">
                 </div>
                 <div>
                     <label for="siem-form-type" class="form-label">Type</label>
-                    <select id="siem-form-type" name="siem_type" class="form-input" onchange="updateSiemFields()">
+                    <select id="siem-form-type" name="siem_type" class="form-input" data-change="mgmt.siemType">
                         <option value="elastic">Elastic</option>
                         <option value="splunk">Splunk</option>
                         <option value="sentinel">Sentinel</option>
@@ -422,7 +404,7 @@
 
             <!-- Elastic-specific fields -->
             <div id="siem-fields-elastic">
-                <div style="display:flex;flex-direction:column;gap:1rem;">
+                <div class="form-stack">
                     <div>
                         <label for="siem-form-es-url" class="form-label">Elasticsearch URL</label>
                         <input type="text" id="siem-form-es-url" name="elasticsearch_url" class="form-input" placeholder="https://es.example.com:9200">
@@ -440,7 +422,7 @@
 
             <!-- Splunk-specific fields -->
             <div id="siem-fields-splunk" style="display:none;">
-                <div style="display:flex;flex-direction:column;gap:1rem;">
+                <div class="form-stack">
                     <div>
                         <label class="form-label">Splunk URL</label>
                         <input name="Siem Form Splunk Url" type="text" id="siem-form-splunk-url" class="form-input" placeholder="https://splunk.example.com:8089">
@@ -454,7 +436,7 @@
 
             <!-- Sentinel-specific fields -->
             <div id="siem-fields-sentinel" style="display:none;">
-                <div style="display:flex;flex-direction:column;gap:1rem;">
+                <div class="form-stack">
                     <div>
                         <label class="form-label">Sentinel URL</label>
                         <input name="Siem Form Sentinel Url" type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
@@ -467,12 +449,12 @@
             </div>
 
             {{ tls_verify_row('siem-form-tls-verify') }}
-            <div id="siem-test-result" style="min-height:1.5rem;"></div>
-            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testSiemConnection()"
+            <div id="siem-test-result" class="form-result"></div>
+            <div class="form-footer">
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.siemTest"
                         id="siem-test-btn">Test Connection</button>
-                <div style="display:flex;gap:0.5rem;">
-                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeSiemModal()">Cancel</button>
+                <div class="btn-group">
+                    <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.siemClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
                 </div>
             </div>
@@ -482,22 +464,21 @@
 
 <!-- ── Create / Edit OpenCTI Modal ───────────────────────────────── -->
 <div name="Opencti Modal" class="modal-overlay" id="opencti-modal" style="display:none;"
-     onclick="if(event.target===this) closeOpenCTIModal()">
-    <div class="modal-content modal-sm" style="max-width:500px;">
+     data-click="mgmt.openctiBackdrop">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="opencti-modal-title">New OpenCTI Instance</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeOpenCTIModal()">&#x2715;</button>
+                    data-click="mgmt.openctiClose">&#x2715;</button>
         </div>
-        <form id="opencti-form" onsubmit="return submitOpenCTIForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="opencti-form" data-submit="mgmt.openctiSubmit" class="form-stack">
             <input name="Opencti Form Id" type="hidden" id="opencti-form-id" value="">
             <div>
-                <label for="opencti-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <label for="opencti-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Opencti Form Label" type="text" id="opencti-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
             </div>
             <div>
-                <label for="opencti-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <label for="opencti-form-url" class="form-label">URL <span class="req">*</span></label>
                 <input name="Opencti Form Url" type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
             </div>
             <div>
@@ -512,17 +493,17 @@
                     <option value="cti">CTI &mdash; STIX bundle pull into per-tenant CTI DB</option>
                     <option value="both">both &mdash; actors + CTI</option>
                 </select>
-                <span class="text-secondary" style="font-size:0.75rem;">
+                <span class="form-hint">
                     <strong>actors</strong> keeps the existing intrusion-set behavior unchanged.
                     <strong>CTI</strong>/<strong>both</strong> enables the Sync CTI button on the card.
                 </span>
             </div>
-            <div id="opencti-test-result" style="min-height:1.5rem;"></div>
-            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testOpenCTIConnection()"
+            <div id="opencti-test-result" class="form-result"></div>
+            <div class="form-footer">
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.openctiTest"
                         id="opencti-test-btn">Test Connection</button>
-                <div style="display:flex;gap:0.5rem;">
-                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeOpenCTIModal()">Cancel</button>
+                <div class="btn-group">
+                    <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.openctiClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
                 </div>
             </div>
@@ -532,22 +513,21 @@
 
 <!-- ── Create / Edit GitLab Modal ─────────────────────────────────── -->
 <div name="Gitlab Modal" class="modal-overlay" id="gitlab-modal" style="display:none;"
-     onclick="if(event.target===this) closeGitLabModal()">
-    <div class="modal-content modal-sm" style="max-width:500px;">
+     data-click="mgmt.gitlabBackdrop">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="gitlab-modal-title">New GitLab Instance</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeGitLabModal()">&#x2715;</button>
+                    data-click="mgmt.gitlabClose">&#x2715;</button>
         </div>
-        <form id="gitlab-form" onsubmit="return submitGitLabForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="gitlab-form" data-submit="mgmt.gitlabSubmit" class="form-stack">
             <input name="Gitlab Form Id" type="hidden" id="gitlab-form-id" value="">
             <div>
-                <label for="gitlab-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <label for="gitlab-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Gitlab Form Label" type="text" id="gitlab-form-label" class="form-input" required maxlength="200" placeholder="Internal GitLab">
             </div>
             <div>
-                <label for="gitlab-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <label for="gitlab-form-url" class="form-label">URL <span class="req">*</span></label>
                 <input name="Gitlab Form Url" type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
             </div>
             <div>
@@ -559,11 +539,11 @@
                 <label for="gitlab-form-group" class="form-label">Default Group / Namespace</label>
                 <input name="Gitlab Form Group" type="text" id="gitlab-form-group" class="form-input" maxlength="200"
                        placeholder="security-team">
-                <span class="text-secondary" style="font-size:0.75rem;">GitLab group where reports will be pushed.</span>
+                <span class="form-hint">GitLab group where reports will be pushed.</span>
             </div>
             {{ tls_verify_row('gitlab-form-tls-verify') }}
-            <div style="display:flex;gap:0.5rem;justify-content:flex-end;">
-                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeGitLabModal()">Cancel</button>
+            <div class="form-footer form-footer--end">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.gitlabClose">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
             </div>
         </form>
@@ -572,28 +552,27 @@
 
 <!-- ── Create / Edit Keycloak Modal ─────────────────────────────────── -->
 <div name="Keycloak Modal" class="modal-overlay" id="keycloak-modal" style="display:none;"
-     onclick="if(event.target===this) closeKeycloakModal()">
-    <div class="modal-content modal-sm" style="max-width:500px;">
+     data-click="mgmt.keycloakBackdrop">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="keycloak-modal-title">New Keycloak Instance</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeKeycloakModal()">&#x2715;</button>
+                    data-click="mgmt.keycloakClose">&#x2715;</button>
         </div>
-        <form id="keycloak-form" onsubmit="return submitKeycloakForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="keycloak-form" data-submit="mgmt.keycloakSubmit" class="form-stack">
             <input name="Keycloak Form Id" type="hidden" id="keycloak-form-id" value="">
             <div>
-                <label for="keycloak-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <label for="keycloak-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Keycloak Form Label" type="text" id="keycloak-form-label" class="form-input" required maxlength="200" placeholder="Corporate SSO">
             </div>
             <div>
-                <label for="keycloak-form-url" class="form-label">URL <span style="color:var(--color-danger)">*</span></label>
+                <label for="keycloak-form-url" class="form-label">URL <span class="req">*</span></label>
                 <input name="Keycloak Form Url" type="text" id="keycloak-form-url" class="form-input" required placeholder="https://keycloak.example.com">
             </div>
             <div>
                 <label for="keycloak-form-realm" class="form-label">Realm</label>
                 <input name="master" type="text" id="keycloak-form-realm" class="form-input" placeholder="master" value="master">
-                <span class="text-secondary" style="font-size:0.75rem;">The Keycloak realm name (default: master).</span>
+                <span class="form-hint">The Keycloak realm name (default: master).</span>
             </div>
             <div>
                 <label for="keycloak-form-client-id" class="form-label">Client ID</label>
@@ -606,12 +585,12 @@
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             {{ tls_verify_row('keycloak-form-tls-verify') }}
-            <div id="keycloak-test-result" style="min-height:1.5rem;"></div>
-            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" onclick="testKeycloakConnection()"
+            <div id="keycloak-test-result" class="form-result"></div>
+            <div class="form-footer">
+                <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.keycloakTest"
                         id="keycloak-test-btn">Test Connection</button>
-                <div style="display:flex;gap:0.5rem;">
-                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeKeycloakModal()">Cancel</button>
+                <div class="btn-group">
+                    <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.keycloakClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
                 </div>
             </div>
@@ -621,34 +600,33 @@
 
 <!-- ── Create / Edit Connector Modal (multi-vendor CTI framework) ─── -->
 <div name="Connector Modal" class="modal-overlay" id="connector-modal" style="display:none;"
-     onclick="if(event.target===this) closeConnectorModal()">
-    <div class="modal-content modal-sm" style="max-width:560px;">
+     data-click="mgmt.connectorBackdrop">
+    <div class="modal-content modal-sm modal-560">
         <div class="modal-header">
             <h3 class="modal-title" id="connector-modal-title">New Connector</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="closeConnectorModal()">&#x2715;</button>
+                    data-click="mgmt.connectorClose">&#x2715;</button>
         </div>
-        <form id="connector-form" onsubmit="return submitConnectorForm(event)"
-              style="display:flex;flex-direction:column;gap:1rem;">
+        <form id="connector-form" data-submit="mgmt.connectorSubmit" class="form-stack">
             <input name="Connector Form Id" type="hidden" id="connector-form-id" value="">
             <div>
-                <label for="connector-form-vendor" class="form-label">Vendor <span style="color:var(--color-danger)">*</span></label>
+                <label for="connector-form-vendor" class="form-label">Vendor <span class="req">*</span></label>
                 <select name="Connector Form Vendor" id="connector-form-vendor" class="form-input"
-                        onchange="onConnectorVendorChange()" required>
-                    <!-- options injected by showCreateConnectorModal() -->
+                        data-change="mgmt.connectorVendor" required>
+                    <!-- options added when the dialog opens (management.js) -->
                 </select>
-                <span class="text-secondary" style="font-size:0.75rem;">Vendor cannot be changed after creation.</span>
+                <span class="form-hint">Vendor cannot be changed after creation.</span>
             </div>
             <div>
-                <label for="connector-form-label" class="form-label">Label <span style="color:var(--color-danger)">*</span></label>
+                <label for="connector-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Connector Form Label" type="text" id="connector-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
             </div>
             {# 5.0.0 — the per-connector Kind dropdown was retired with the
                legacy OpenCTI GraphQL fetcher. Every TAXII vendor now pulls
                a full STIX bundle, so the create form defaults to "cti"
                server-side and the operator has nothing useful to tweak. #}
-            <div id="connector-vendor-fields" style="display:flex;flex-direction:column;gap:0.75rem;">
-                <div class="text-secondary" style="font-size:0.8125rem;">Select a vendor to see its configuration fields.</div>
+            <div id="connector-vendor-fields" class="form-stack form-stack--md">
+                <div class="text-secondary fs-md">Select a vendor to see its configuration fields.</div>
             </div>
             <div>
                 <label for="connector-form-interval" class="form-label">Auto-sync interval</label>
@@ -659,15 +637,13 @@
                     <option value="360">Every 6 hours</option>
                     <option value="1440">Every 24 hours</option>
                 </select>
-                <span class="text-secondary" style="font-size:0.75rem;">Runs in the background through the same job queue as the manual Sync button.</span>
+                <span class="form-hint">Runs in the background through the same job queue as the manual Sync button.</span>
             </div>
-            <div id="connector-test-result" style="min-height:1.5rem;"></div>
-            <div style="display:flex;gap:0.5rem;justify-content:space-between;align-items:center;">
-                <span class="text-secondary" style="font-size:0.75rem;">
-                    Stored secrets are kept encrypted server-side.
-                </span>
-                <div style="display:flex;gap:0.5rem;">
-                    <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeConnectorModal()">Cancel</button>
+            <div id="connector-test-result" class="form-result"></div>
+            <div class="form-footer">
+                <span class="form-hint">Secrets are stored encrypted and aren't shown again after saving.</span>
+                <div class="btn-group">
+                    <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.connectorClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="connector-form-submit">Create</button>
                 </div>
             </div>
@@ -676,21 +652,21 @@
 </div>
 
 <div name="Connector Import Modal" class="modal-overlay" id="connector-import-modal" style="display:none;"
-     onclick="if(event.target===this) closeImportConnectorModal()">
-    <div class="modal-content modal-sm" style="max-width:640px;">
+     data-click="mgmt.importBackdrop">
+    <div class="modal-content modal-sm modal-640">
         <div class="modal-header">
             <h3 class="modal-title">Import Connectors</h3>
-            <button  name="Close Modal" type="button" class="modal-close" aria-label="Close"
-                    onclick="closeImportConnectorModal()">&#x2715;</button>
+            <button name="Close Modal" type="button" class="modal-x" aria-label="Close"
+                    data-click="mgmt.importClose">&#x2715;</button>
         </div>
-        <form id="connector-import-form" onsubmit="return submitImportConnectorForm(event)">
-            <p class="text-secondary" style="margin:0 0 0.5rem 0;font-size:0.85rem;">
+        <form id="connector-import-form" data-submit="mgmt.importSubmit">
+            <p class="modal-intro">
                 Paste a connector descriptor or array exported from another TIDE instance. Each entry must include
                 <code>vendor</code> and <code>label</code>; <code>config</code> fields are validated against the vendor schema.
             </p>
-            <details style="margin-bottom:0.75rem;font-size:0.8125rem;">
-                <summary class="text-secondary" style="cursor:pointer;">Example payload</summary>
-                <pre class="u-bg-hex-1a1a1a" style="margin:0.5rem 0 0 0;padding:0.5rem;border-radius:4px;overflow:auto">{
+            <details class="example-block">
+                <summary class="text-secondary">Example payload</summary>
+                <pre class="code-block">{
   "connectors": [
     {
       "vendor": "opencti",
@@ -703,14 +679,13 @@
 }</pre>
             </details>
             <div>
-                <label for="connector-import-payload">JSON payload *</label>
-                <textarea id="connector-import-payload" name="payload" rows="12"
-                          style="width:100%;font-family:monospace;font-size:0.8125rem;"
+                <label for="connector-import-payload" class="form-label">JSON payload <span class="req">*</span></label>
+                <textarea id="connector-import-payload" name="payload" rows="12" class="form-input mono-input"
                           placeholder='{ "vendor": "opencti", "label": "...", "config": { ... } }'></textarea>
             </div>
-            <div id="connector-import-result" style="margin-top:0.5rem;"></div>
-            <div style="display:flex;gap:0.5rem;justify-content:flex-end;margin-top:0.75rem;">
-                <button name="Cancel" type="button" class="btn btn-secondary" onclick="closeImportConnectorModal()">Cancel</button>
+            <div id="connector-import-result" class="mt-sm"></div>
+            <div class="form-footer form-footer--end mt-md">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.importClose">Cancel</button>
                 <button name="Import" type="submit" class="btn btn-primary">Import</button>
             </div>
         </form>
@@ -719,928 +694,3 @@
 
 {% endblock %}
 
-{% block scripts %}
-<script>
-// Tab switching — pure HTMX, no page reload
-function activateMgmtTab(btn, tabName) {
-    document.querySelectorAll('.settings-tab').forEach(function(t) { t.classList.remove('active'); });
-    btn.classList.add('active');
-    history.replaceState(null, '', '/management?tab=' + tabName);
-}
-
-// Client modal
-function showCreateClientModal() {
-    document.getElementById('client-modal-title').textContent = 'New Client';
-    document.getElementById('client-form-submit').textContent = 'Create';
-    document.getElementById('client-form-id').value = '';
-    document.getElementById('client-form-name').value = '';
-    document.getElementById('client-form-slug').value = '';
-    document.getElementById('client-form-slug').disabled = false;
-    document.getElementById('client-form-desc').value = '';
-    document.getElementById('client-modal').style.display = 'flex';
-}
-
-function editClient(id, name, desc) {
-    document.getElementById('client-modal-title').textContent = 'Edit Client';
-    document.getElementById('client-form-submit').textContent = 'Save';
-    document.getElementById('client-form-id').value = id;
-    document.getElementById('client-form-name').value = name;
-    document.getElementById('client-form-slug').value = '';
-    document.getElementById('client-form-slug').disabled = true;
-    document.getElementById('client-form-desc').value = desc;
-    document.getElementById('client-modal').style.display = 'flex';
-}
-
-function closeClientModal() {
-    document.getElementById('client-modal').style.display = 'none';
-}
-
-async function submitClientForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('client-form-id').value;
-    var payload = {
-        name: document.getElementById('client-form-name').value,
-        description: document.getElementById('client-form-desc').value || null,
-    };
-    if (!id) {
-        payload.slug = document.getElementById('client-form-slug').value || null;
-    }
-    var url = id ? '/api/clients/' + id : '/api/clients';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {
-            method: method,
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify(payload),
-        });
-        if (!resp.ok) {
-            var err = await resp.json();
-            showToast(err.detail || 'Request failed', 'error');
-            return false;
-        }
-        closeClientModal();
-        htmx.ajax('GET', '/api/management/tab/clients', '#management-content');
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-
-async function confirmDeleteClient(id, name) {
-    if (!confirm('Delete client "' + name + '"? This cannot be undone.')) return;
-    try {
-        var resp = await fetch('/api/clients/' + id, {method: 'DELETE'});
-        if (!resp.ok) {
-            var err = await resp.json();
-            showToast(err.detail || 'Delete failed', 'error');
-            return;
-        }
-        htmx.ajax('GET', '/api/management/tab/clients', '#management-content');
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-}
-
-// SIEM modal — dynamic fields per type
-function updateSiemFields() {
-    var type = document.getElementById('siem-form-type').value;
-    document.getElementById('siem-fields-elastic').style.display = type === 'elastic' ? '' : 'none';
-    document.getElementById('siem-fields-splunk').style.display = type === 'splunk' ? '' : 'none';
-    document.getElementById('siem-fields-sentinel').style.display = type === 'sentinel' ? '' : 'none';
-    // Only show Test Connection for elastic
-    document.getElementById('siem-test-btn').style.display = type === 'elastic' ? '' : 'none';
-    document.getElementById('siem-test-result').innerHTML = '';
-}
-
-function _clearSiemFields() {
-    ['siem-form-es-url','siem-form-kb-url','siem-form-token',
-     'siem-form-splunk-url','siem-form-splunk-token',
-     'siem-form-sentinel-url','siem-form-sentinel-token'].forEach(function(id) {
-        var el = document.getElementById(id);
-        if (el) el.value = '';
-    });
-}
-
-function showCreateSiemModal() {
-    document.getElementById('siem-modal-title').textContent = 'New SIEM';
-    document.getElementById('siem-form-submit').textContent = 'Create';
-    document.getElementById('siem-form-id').value = '';
-    document.getElementById('siem-form-label').value = '';
-    document.getElementById('siem-form-type').value = 'elastic';
-    document.getElementById('siem-form-type').disabled = false;
-    document.getElementById('siem-form-tls-verify').checked = false;
-    _clearSiemFields();
-    document.getElementById('siem-test-result').innerHTML = '';
-    updateSiemFields();
-    document.getElementById('siem-modal').style.display = 'flex';
-}
-
-function editSiem(id, label, type, esUrl, kbUrl, tlsVerify) {
-    document.getElementById('siem-modal-title').textContent = 'Edit SIEM';
-    document.getElementById('siem-form-submit').textContent = 'Save';
-    document.getElementById('siem-form-id').value = id;
-    document.getElementById('siem-form-label').value = label;
-    document.getElementById('siem-form-type').value = type;
-    document.getElementById('siem-form-type').disabled = true;
-    document.getElementById('siem-form-tls-verify').checked = !!tlsVerify;
-    _clearSiemFields();
-    // Populate the right fields based on type
-    if (type === 'elastic') {
-        document.getElementById('siem-form-es-url').value = esUrl || '';
-        document.getElementById('siem-form-kb-url').value = kbUrl || '';
-    } else if (type === 'splunk') {
-        document.getElementById('siem-form-splunk-url').value = kbUrl || '';
-    } else if (type === 'sentinel') {
-        document.getElementById('siem-form-sentinel-url').value = kbUrl || '';
-    }
-    document.getElementById('siem-test-result').innerHTML = '';
-    updateSiemFields();
-    document.getElementById('siem-modal').style.display = 'flex';
-}
-
-function closeSiemModal() {
-    document.getElementById('siem-modal').style.display = 'none';
-}
-
-async function submitSiemForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('siem-form-id').value;
-    var type = document.getElementById('siem-form-type').value;
-    var formData = new FormData();
-    formData.append('label', document.getElementById('siem-form-label').value);
-    formData.append('siem_type', type);
-    formData.append('tls_verify', document.getElementById('siem-form-tls-verify').checked ? 'true' : 'false');
-
-    if (type === 'elastic') {
-        formData.append('elasticsearch_url', document.getElementById('siem-form-es-url').value);
-        formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
-        formData.append('api_token', document.getElementById('siem-form-token').value);
-    } else if (type === 'splunk') {
-        formData.append('kibana_url', document.getElementById('siem-form-splunk-url').value);
-        formData.append('api_token', document.getElementById('siem-form-splunk-token').value);
-    } else if (type === 'sentinel') {
-        formData.append('kibana_url', document.getElementById('siem-form-sentinel-url').value);
-        formData.append('api_token', document.getElementById('siem-form-sentinel-token').value);
-    }
-
-    var url = id ? '/api/management/siems/' + id : '/api/management/siems';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {method: method, body: formData});
-        if (!resp.ok) {
-            showToast('Request failed', 'error');
-            return false;
-        }
-        closeSiemModal();
-        var html = await resp.text();
-        var panel = document.getElementById('mgmt-sub-siems') || document.getElementById('management-content');
-        panel.innerHTML = html;
-        htmx.process(panel);
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-
-async function testSiemConnection() {
-    var btn = document.getElementById('siem-test-btn');
-    var result = document.getElementById('siem-test-result');
-    btn.disabled = true;
-    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
-
-    var formData = new FormData();
-    formData.append('siem_id', document.getElementById('siem-form-id').value);
-    formData.append('kibana_url', document.getElementById('siem-form-kb-url').value);
-    formData.append('api_token', document.getElementById('siem-form-token').value);
-    formData.append('siem_type', document.getElementById('siem-form-type').value);
-    formData.append('tls_verify', document.getElementById('siem-form-tls-verify').checked ? 'true' : 'false');
-
-    try {
-        var resp = await fetch('/api/management/siems/test-connection', {method: 'POST', body: formData});
-        result.innerHTML = await resp.text();
-    } catch (ex) {
-        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
-    }
-    btn.disabled = false;
-}
-
-// OpenCTI modal
-function showCreateOpenCTIModal() {
-    document.getElementById('opencti-modal-title').textContent = 'New OpenCTI Instance';
-    document.getElementById('opencti-form-submit').textContent = 'Create';
-    document.getElementById('opencti-form-id').value = '';
-    document.getElementById('opencti-form-label').value = '';
-    document.getElementById('opencti-form-url').value = '';
-    document.getElementById('opencti-form-token').value = '';
-    document.getElementById('opencti-form-kind').value = 'actors';
-    document.getElementById('opencti-modal').style.display = 'flex';
-}
-
-function editOpenCTI(id, label, url, kind) {
-    document.getElementById('opencti-modal-title').textContent = 'Edit OpenCTI Instance';
-    document.getElementById('opencti-form-submit').textContent = 'Save';
-    document.getElementById('opencti-form-id').value = id;
-    document.getElementById('opencti-form-label').value = label;
-    document.getElementById('opencti-form-url').value = url;
-    document.getElementById('opencti-form-token').value = '';
-    var k = (kind || 'actors').toLowerCase();
-    if (k !== 'actors' && k !== 'cti' && k !== 'both') k = 'actors';
-    document.getElementById('opencti-form-kind').value = k;
-    document.getElementById('opencti-modal').style.display = 'flex';
-}
-
-function closeOpenCTIModal() {
-    document.getElementById('opencti-modal').style.display = 'none';
-}
-
-async function testOpenCTIConnection() {
-    var btn = document.getElementById('opencti-test-btn');
-    var result = document.getElementById('opencti-test-result');
-    btn.disabled = true;
-    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
-    var formData = new FormData();
-    formData.append('opencti_id', document.getElementById('opencti-form-id').value);
-    formData.append('url', document.getElementById('opencti-form-url').value);
-    formData.append('token', document.getElementById('opencti-form-token').value);
-    try {
-        var resp = await fetch('/api/management/opencti/test-connection', {method: 'POST', body: formData});
-        result.innerHTML = await resp.text();
-    } catch (ex) {
-        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
-    }
-    btn.disabled = false;
-}
-
-async function submitOpenCTIForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('opencti-form-id').value;
-    var formData = new FormData();
-    formData.append('label', document.getElementById('opencti-form-label').value);
-    formData.append('url', document.getElementById('opencti-form-url').value);
-    formData.append('token', document.getElementById('opencti-form-token').value);
-    formData.append('kind', document.getElementById('opencti-form-kind').value);
-
-    var url = id ? '/api/management/opencti/' + id : '/api/management/opencti';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {method: method, body: formData});
-        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
-        closeOpenCTIModal();
-        var html = await resp.text();
-        var panel = document.getElementById('mgmt-sub-opencti') || document.getElementById('management-content');
-        panel.innerHTML = html;
-        htmx.process(panel);
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-
-// GitLab modal
-function showCreateGitLabModal() {
-    document.getElementById('gitlab-modal-title').textContent = 'New GitLab Instance';
-    document.getElementById('gitlab-form-submit').textContent = 'Create';
-    document.getElementById('gitlab-form-id').value = '';
-    document.getElementById('gitlab-form-label').value = '';
-    document.getElementById('gitlab-form-url').value = '';
-    document.getElementById('gitlab-form-token').value = '';
-    document.getElementById('gitlab-form-group').value = '';
-    document.getElementById('gitlab-form-tls-verify').checked = false;
-    document.getElementById('gitlab-modal').style.display = 'flex';
-}
-
-function editGitLab(id, label, url, group, tlsVerify) {
-    document.getElementById('gitlab-modal-title').textContent = 'Edit GitLab Instance';
-    document.getElementById('gitlab-form-submit').textContent = 'Save';
-    document.getElementById('gitlab-form-id').value = id;
-    document.getElementById('gitlab-form-label').value = label;
-    document.getElementById('gitlab-form-url').value = url;
-    document.getElementById('gitlab-form-token').value = '';
-    document.getElementById('gitlab-form-group').value = group === '—' ? '' : group;
-    document.getElementById('gitlab-form-tls-verify').checked = !!tlsVerify;
-    document.getElementById('gitlab-modal').style.display = 'flex';
-}
-
-function closeGitLabModal() {
-    document.getElementById('gitlab-modal').style.display = 'none';
-}
-
-async function submitGitLabForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('gitlab-form-id').value;
-    var formData = new FormData();
-    formData.append('label', document.getElementById('gitlab-form-label').value);
-    formData.append('url', document.getElementById('gitlab-form-url').value);
-    formData.append('token', document.getElementById('gitlab-form-token').value);
-    formData.append('default_group', document.getElementById('gitlab-form-group').value);
-    formData.append('tls_verify', document.getElementById('gitlab-form-tls-verify').checked ? 'true' : 'false');
-
-    var url = id ? '/api/management/gitlab/' + id : '/api/management/gitlab';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {method: method, body: formData});
-        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
-        closeGitLabModal();
-        var html = await resp.text();
-        var panel = document.getElementById('mgmt-sub-gitlab') || document.getElementById('management-content');
-        panel.innerHTML = html;
-        htmx.process(panel);
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-
-// Keycloak modal
-function showCreateKeycloakModal() {
-    document.getElementById('keycloak-modal-title').textContent = 'New Keycloak Instance';
-    document.getElementById('keycloak-form-submit').textContent = 'Create';
-    document.getElementById('keycloak-form-id').value = '';
-    document.getElementById('keycloak-form-label').value = '';
-    document.getElementById('keycloak-form-url').value = '';
-    document.getElementById('keycloak-form-realm').value = 'master';
-    document.getElementById('keycloak-form-client-id').value = '';
-    document.getElementById('keycloak-form-client-secret').value = '';
-    document.getElementById('keycloak-form-tls-verify').checked = false;
-    document.getElementById('keycloak-modal').style.display = 'flex';
-}
-
-function editKeycloak(id, label, url, realm, tlsVerify) {
-    document.getElementById('keycloak-modal-title').textContent = 'Edit Keycloak Instance';
-    document.getElementById('keycloak-form-submit').textContent = 'Save';
-    document.getElementById('keycloak-form-id').value = id;
-    document.getElementById('keycloak-form-label').value = label;
-    document.getElementById('keycloak-form-url').value = url;
-    document.getElementById('keycloak-form-realm').value = realm || 'master';
-    document.getElementById('keycloak-form-client-id').value = '';
-    document.getElementById('keycloak-form-client-secret').value = '';
-    document.getElementById('keycloak-form-tls-verify').checked = !!tlsVerify;
-    document.getElementById('keycloak-modal').style.display = 'flex';
-}
-
-function closeKeycloakModal() {
-    document.getElementById('keycloak-modal').style.display = 'none';
-}
-
-async function submitKeycloakForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('keycloak-form-id').value;
-    var formData = new FormData();
-    formData.append('label', document.getElementById('keycloak-form-label').value);
-    formData.append('url', document.getElementById('keycloak-form-url').value);
-    formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
-    formData.append('client_id', document.getElementById('keycloak-form-client-id').value);
-    formData.append('client_secret', document.getElementById('keycloak-form-client-secret').value);
-    formData.append('tls_verify', document.getElementById('keycloak-form-tls-verify').checked ? 'true' : 'false');
-
-    var url = id ? '/api/management/keycloak/' + id : '/api/management/keycloak';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {method: method, body: formData});
-        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
-        closeKeycloakModal();
-        var html = await resp.text();
-        var panel = document.getElementById('mgmt-sub-keycloak') || document.getElementById('management-content');
-        panel.innerHTML = html;
-        htmx.process(panel);
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-
-async function testKeycloakConnection() {
-    var btn = document.getElementById('keycloak-test-btn');
-    var result = document.getElementById('keycloak-test-result');
-    btn.disabled = true;
-    result.innerHTML = '<span class="text-secondary" style="font-size:0.8125rem;">Testing...</span>';
-    var formData = new FormData();
-    formData.append('keycloak_id', document.getElementById('keycloak-form-id').value);
-    formData.append('url', document.getElementById('keycloak-form-url').value);
-    formData.append('realm', document.getElementById('keycloak-form-realm').value || 'master');
-    formData.append('tls_verify', document.getElementById('keycloak-form-tls-verify').checked ? 'true' : 'false');
-    try {
-        var resp = await fetch('/api/management/keycloak/test-connection', {method: 'POST', body: formData});
-        result.innerHTML = await resp.text();
-    } catch (ex) {
-        result.innerHTML = '<span class="badge badge-danger">Network error</span>';
-    }
-    btn.disabled = false;
-}
-</script>
-
-<script>
-// ===== Sigma Assets — pipeline & template editor =====
-var _pipelineCurrentFile = null;
-var _pipelineCM = null;
-var _pendingPipelineContent = null;
-var _templateCurrentFile = null;
-var _templateCM = null;
-var _pendingTemplateContent = null;
-var _sigmaAssignmentsCache = { pipeline: {}, template: {} };
-var _sigmaAssignTarget = { type: null, filename: null };
-var _sigmaClientsCache = null;
-
-function _sigmaApiJson(url, options) {
-    var opts = Object.assign({ credentials: 'same-origin' }, options || {});
-    return fetch(url, opts).then(function(r) {
-        var ct = (r.headers.get('content-type') || '').toLowerCase();
-        if (r.status === 401) {
-            window.location.href = '/login?next=/management';
-            throw new Error('Authentication required');
-        }
-        if (!ct.includes('application/json')) {
-            if (r.redirected || ct.includes('text/html')) {
-                window.location.href = '/login?next=/management';
-                throw new Error('Session expired');
-            }
-            throw new Error('Unexpected response type from API');
-        }
-        return r.json().then(function(body) {
-            if (!r.ok) {
-                throw new Error((body && (body.detail || body.message)) || ('Request failed (' + r.status + ')'));
-            }
-            return body;
-        });
-    });
-}
-
-function _setStatus(elId, msg, isError) {
-    var el = document.getElementById(elId);
-    if (!el) return;
-    el.textContent = msg;
-    el.style.color = isError ? 'var(--color-danger, #f85149)' : 'var(--color-success, #3fb950)';
-}
-function pl_status(msg, isError) { _setStatus('pipeline-status', msg, isError); }
-function tpl_status(msg, isError) { _setStatus('template-status', msg, isError); }
-
-function _renderTenantChips(assetType, filename) {
-    var el = document.getElementById(assetType + '-tenants-chips');
-    if (!el) return;
-    var clients = (_sigmaAssignmentsCache[assetType] || {})[filename] || [];
-    if (!filename) {
-        el.innerHTML = '<span class="text-secondary" style="font-size:0.75rem;">— save first —</span>';
-        return;
-    }
-    if (!clients.length) {
-        el.innerHTML = '<span class="badge badge-warn" style="font-size:0.7rem;">unassigned</span>';
-        return;
-    }
-    el.innerHTML = clients.map(function(c) {
-        return '<span class="badge badge-info" style="font-size:0.7rem;">' + (c.name || c.id) + '</span>';
-    }).join('');
-}
-
-function _refreshAssignmentsFor(assetType) {
-    return _sigmaApiJson('/api/sigma/assignments/' + assetType + '?_v=' + Date.now())
-        .then(function(map) {
-            _sigmaAssignmentsCache[assetType] = map || {};
-            var current = (assetType === 'pipeline') ? _pipelineCurrentFile : _templateCurrentFile;
-            _renderTenantChips(assetType, current);
-        })
-        .catch(function() { /* non-fatal */ });
-}
-
-window.loadPipelineList = function() {
-    var bust = Date.now();
-    return _sigmaApiJson('/api/sigma/saved-pipelines?_v=' + bust)
-        .then(function(pipelines) {
-            var list = document.getElementById('pipeline-list');
-            if (!list) return;
-            if (!pipelines.length) {
-                list.innerHTML = '<span style="color:var(--color-text-muted);font-size:0.78rem;">No pipelines saved.</span>';
-                return _refreshAssignmentsFor('pipeline');
-            }
-            list.innerHTML = pipelines.map(function(pl) {
-                var active = _pipelineCurrentFile === pl.filename;
-                var safeFile = encodeURIComponent(pl.filename);
-                return '<button name="' + pl.display + '" type="button" class="pipeline-list-item" data-file="' + safeFile + '" '
-                    + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
-                    + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
-                    + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
-                    + 'font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-                    + pl.display + '</button>';
-            }).join('');
-            return _refreshAssignmentsFor('pipeline');
-        })
-        .catch(function(err) { pl_status(err.message || 'Failed to load pipelines.', true); });
-};
-
-window.pipelineLoad = function(filename) {
-    _sigmaApiJson('/api/sigma/saved-pipelines/' + encodeURIComponent(filename))
-        .then(function(data) {
-            _pipelineCurrentFile = data.filename;
-            document.getElementById('pipeline-name-input').value = data.filename.replace(/\.ya?ml$/, '');
-            if (_pipelineCM) {
-                _pipelineCM.setValue(data.content);
-                setTimeout(function() { _pipelineCM.refresh(); }, 80);
-            } else {
-                _pendingPipelineContent = data.content;
-                initPipelineEditor();
-            }
-            document.getElementById('pipeline-delete-btn').style.display = '';
-            _renderTenantChips('pipeline', data.filename);
-            loadPipelineList();
-            pl_status('');
-        })
-        .catch(function(err) { pl_status(err.message || 'Failed to load pipeline.', true); });
-};
-
-window.pipelineNew = function() {
-    _pipelineCurrentFile = null;
-    document.getElementById('pipeline-name-input').value = '';
-    var stub = 'name: my-custom-pipeline\npriority: 20\n\ntransformations:\n  - id: map_fields\n    type: field_name_mapping\n    mapping:\n      Image: process.executable\n';
-    if (_pipelineCM) _pipelineCM.setValue(stub);
-    document.getElementById('pipeline-delete-btn').style.display = 'none';
-    _renderTenantChips('pipeline', null);
-    pl_status('');
-};
-
-window.pipelineSave = function() {
-    var name = document.getElementById('pipeline-name-input').value.trim();
-    if (!name) { pl_status('Enter a name.', true); return; }
-    var content = _pipelineCM ? _pipelineCM.getValue() : '';
-    var fd = new FormData();
-    fd.append('name', name);
-    fd.append('content', content);
-    _sigmaApiJson('/api/sigma/saved-pipelines', { method: 'POST', body: fd })
-        .then(function(data) {
-            _pipelineCurrentFile = data.filename;
-            document.getElementById('pipeline-delete-btn').style.display = '';
-            pl_status('Saved: ' + data.filename);
-            return loadPipelineList();
-        })
-        .catch(function(err) { pl_status(err.message || 'Failed to save pipeline.', true); });
-};
-
-window.pipelineDelete = function() {
-    if (!_pipelineCurrentFile || !confirm('Delete this pipeline?')) return;
-    _sigmaApiJson('/api/sigma/saved-pipelines/' + encodeURIComponent(_pipelineCurrentFile), { method: 'DELETE' })
-        .then(function() { pipelineNew(); loadPipelineList(); })
-        .catch(function(err) { pl_status(err.message || 'Failed to delete pipeline.', true); });
-};
-
-window.loadTemplateList = function() {
-    var bust = Date.now();
-    return _sigmaApiJson('/api/sigma/saved-templates?_v=' + bust)
-        .then(function(templates) {
-            var list = document.getElementById('template-list');
-            if (!list) return;
-            if (!templates.length) {
-                list.innerHTML = '<span style="color:var(--color-text-muted);font-size:0.78rem;">No templates saved.</span>';
-                return _refreshAssignmentsFor('template');
-            }
-            list.innerHTML = templates.map(function(tpl) {
-                var active = _templateCurrentFile === tpl.filename;
-                var safeFile = encodeURIComponent(tpl.filename);
-                return '<button name="' + tpl.display + '" type="button" class="template-list-item" data-file="' + safeFile + '" '
-                    + 'style="width:100%;text-align:left;background:' + (active ? 'var(--color-bg-action-hover)' : 'none') + ';'
-                    + 'font-weight:' + (active ? '600' : 'normal') + ';border:none;padding:0.3rem 0.5rem;'
-                    + 'border-radius:var(--radius-sm);cursor:pointer;color:var(--color-text);'
-                    + 'font-size:0.82rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
-                    + tpl.display + '</button>';
-            }).join('');
-            return _refreshAssignmentsFor('template');
-        })
-        .catch(function(err) { tpl_status(err.message || 'Failed to load templates.', true); });
-};
-
-window.templateLoad = function(filename) {
-    _sigmaApiJson('/api/sigma/saved-templates/' + encodeURIComponent(filename))
-        .then(function(data) {
-            _templateCurrentFile = data.filename;
-            document.getElementById('template-name-input').value = data.filename.replace(/\.ya?ml$/, '');
-            if (_templateCM) {
-                _templateCM.setValue(data.content);
-                setTimeout(function() { _templateCM.refresh(); }, 80);
-            } else {
-                _pendingTemplateContent = data.content;
-                initTemplateEditor();
-            }
-            document.getElementById('template-delete-btn').style.display = '';
-            _renderTenantChips('template', data.filename);
-            loadTemplateList();
-            tpl_status('');
-        })
-        .catch(function(err) { tpl_status(err.message || 'Failed to load template.', true); });
-};
-
-window.templateNew = function() {
-    _templateCurrentFile = null;
-    document.getElementById('template-name-input').value = '';
-    var stub = 'vars:\n  index_names:\n    - logs-*\npostprocessing:\n  - type: template\n    template: |+\n      {{ query }}\n';
-    if (_templateCM) _templateCM.setValue(stub);
-    document.getElementById('template-delete-btn').style.display = 'none';
-    _renderTenantChips('template', null);
-    tpl_status('');
-};
-
-window.templateSave = function() {
-    var name = document.getElementById('template-name-input').value.trim();
-    if (!name) { tpl_status('Enter a name.', true); return; }
-    var content = _templateCM ? _templateCM.getValue() : '';
-    var fd = new FormData();
-    fd.append('name', name);
-    fd.append('content', content);
-    _sigmaApiJson('/api/sigma/saved-templates', { method: 'POST', body: fd })
-        .then(function(data) {
-            _templateCurrentFile = data.filename;
-            document.getElementById('template-delete-btn').style.display = '';
-            tpl_status('Saved: ' + data.filename);
-            return loadTemplateList();
-        })
-        .catch(function(err) { tpl_status(err.message || 'Failed to save template.', true); });
-};
-
-window.templateDelete = function() {
-    if (!_templateCurrentFile || !confirm('Delete this template?')) return;
-    _sigmaApiJson('/api/sigma/saved-templates/' + encodeURIComponent(_templateCurrentFile), { method: 'DELETE' })
-        .then(function() { templateNew(); loadTemplateList(); })
-        .catch(function(err) { tpl_status(err.message || 'Failed to delete template.', true); });
-};
-
-function initPipelineEditor() {
-    if (typeof CodeMirror === 'undefined') { setTimeout(initPipelineEditor, 300); return; }
-    var el = document.getElementById('pipeline-yaml-editor');
-    if (!el || el._cmInited) return;
-    el._cmInited = true;
-    _pipelineCM = CodeMirror.fromTextArea(el, {
-        mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2
-    });
-    _pipelineCM.setSize(null, 300);
-    if (_pendingPipelineContent) {
-        _pipelineCM.setValue(_pendingPipelineContent);
-        _pendingPipelineContent = null;
-    }
-}
-
-function initTemplateEditor() {
-    if (typeof CodeMirror === 'undefined') { setTimeout(initTemplateEditor, 300); return; }
-    var el = document.getElementById('template-yaml-editor');
-    if (!el || el._cmInited) return;
-    el._cmInited = true;
-    _templateCM = CodeMirror.fromTextArea(el, {
-        mode: 'yaml', theme: 'material-darker', lineNumbers: true, tabSize: 2
-    });
-    _templateCM.setSize(null, 300);
-    if (_pendingTemplateContent) {
-        _templateCM.setValue(_pendingTemplateContent);
-        _pendingTemplateContent = null;
-    }
-}
-
-function initSigmaListHandlers() {
-    var pList = document.getElementById('pipeline-list');
-    if (pList && !pList._bound) {
-        pList._bound = true;
-        pList.addEventListener('click', function(e) {
-            var btn = e.target.closest('.pipeline-list-item');
-            if (!btn) return;
-            var raw = btn.getAttribute('data-file') || '';
-            if (raw) pipelineLoad(decodeURIComponent(raw));
-        });
-    }
-    var tList = document.getElementById('template-list');
-    if (tList && !tList._bound) {
-        tList._bound = true;
-        tList.addEventListener('click', function(e) {
-            var btn = e.target.closest('.template-list-item');
-            if (!btn) return;
-            var raw = btn.getAttribute('data-file') || '';
-            if (raw) templateLoad(decodeURIComponent(raw));
-        });
-    }
-}
-
-// ===== Tenant assignment modal =====
-
-function _loadClientsForAssign() {
-    if (_sigmaClientsCache) return Promise.resolve(_sigmaClientsCache);
-    return _sigmaApiJson('/api/clients').then(function(clients) {
-        _sigmaClientsCache = clients || [];
-        return _sigmaClientsCache;
-    });
-}
-
-window.openSigmaAssignModal = function(assetType) {
-    var current = (assetType === 'pipeline') ? _pipelineCurrentFile : _templateCurrentFile;
-    if (!current) {
-        alert('Save the ' + assetType + ' first, then assign tenants.');
-        return;
-    }
-    _sigmaAssignTarget = { type: assetType, filename: current };
-    document.getElementById('sigma-assign-title').textContent =
-        'Assign tenants — ' + current;
-    document.getElementById('sigma-assign-error').textContent = '';
-    var modal = document.getElementById('sigma-assign-modal');
-    modal.style.display = 'flex';
-    var box = document.getElementById('sigma-assign-checkboxes');
-    box.innerHTML = '<span class="text-secondary" style="font-size:0.78rem;">Loading clients…</span>';
-    var assigned = (_sigmaAssignmentsCache[assetType] || {})[current] || [];
-    var assignedIds = new Set(assigned.map(function(c) { return c.id; }));
-    _loadClientsForAssign().then(function(clients) {
-        if (!clients.length) {
-            box.innerHTML = '<span class="text-secondary" style="font-size:0.78rem;">No clients defined.</span>';
-            return;
-        }
-        box.innerHTML = clients.map(function(c) {
-            var checked = assignedIds.has(c.id) ? 'checked' : '';
-            return '<label style="display:flex;align-items:center;gap:0.4rem;cursor:pointer;font-size:0.82rem;">'
-                 + '<input name="' + c.id + '" type="checkbox" value="' + c.id + '" ' + checked + '> '
-                 + (c.name || c.id) + '</label>';
-        }).join('');
-    }).catch(function(err) {
-        box.innerHTML = '<span class="text-danger" style="font-size:0.78rem;">' + (err.message || 'Failed to load clients.') + '</span>';
-    });
-};
-
-window.closeSigmaAssignModal = function() {
-    document.getElementById('sigma-assign-modal').style.display = 'none';
-    _sigmaAssignTarget = { type: null, filename: null };
-};
-
-window.saveSigmaAssignment = function() {
-    var t = _sigmaAssignTarget;
-    if (!t.type || !t.filename) return;
-    var checks = document.querySelectorAll('#sigma-assign-checkboxes input[type=checkbox]:checked');
-    var ids = Array.prototype.map.call(checks, function(c) { return c.value; });
-    var errEl = document.getElementById('sigma-assign-error');
-    errEl.textContent = '';
-    if (!ids.length) {
-        errEl.textContent = 'Pick at least one tenant.';
-        return;
-    }
-    _sigmaApiJson('/api/sigma/assignments/' + t.type + '/' + encodeURIComponent(t.filename), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_ids: ids })
-    }).then(function() {
-        closeSigmaAssignModal();
-        _refreshAssignmentsFor(t.type);
-    }).catch(function(err) {
-        errEl.textContent = err.message || 'Failed to save assignment.';
-    });
-};
-
-// Init when the Sigma section is opened
-(function initSigmaAssetsSection() {
-    var section = document.getElementById('mgmt-sigma-section');
-    if (!section) return;
-    var inited = false;
-    function maybeInit() {
-        if (inited) return;
-        inited = true;
-        initSigmaListHandlers();
-        initPipelineEditor();
-        initTemplateEditor();
-        loadPipelineList();
-        loadTemplateList();
-    }
-    if (section.open) maybeInit();
-    section.addEventListener('toggle', function() {
-        if (section.open) {
-            maybeInit();
-            setTimeout(function() {
-                if (_pipelineCM) _pipelineCM.refresh();
-                if (_templateCM) _templateCM.refresh();
-            }, 80);
-        }
-    });
-})();
-
-// ── Connectors modal (multi-vendor CTI framework) ─────────────────
-window._connectorVendors = [];  // populated by _render_connectors_tab embedding
-window._editingConnector = null;
-
-function showCreateConnectorModal() {
-    document.getElementById('connector-modal-title').textContent = 'New Connector';
-    document.getElementById('connector-form-submit').textContent = 'Create';
-    document.getElementById('connector-form-id').value = '';
-    document.getElementById('connector-form-label').value = '';
-    document.getElementById('connector-form-interval').value = '';
-    var vsel = document.getElementById('connector-form-vendor');
-    vsel.innerHTML = (window._connectorVendors || [])
-        .map(function(v) { return '<option value="' + v.name + '">' + v.label + '</option>'; })
-        .join('');
-    vsel.disabled = false;
-    document.getElementById('connector-test-result').innerHTML = '';
-    onConnectorVendorChange();
-    document.getElementById('connector-modal').style.display = 'flex';
-}
-
-function editConnector(id) {
-    var c = (window._connectorRows || []).find(function(r) { return r.id === id; });
-    if (!c) return;
-    window._editingConnector = c;
-    document.getElementById('connector-modal-title').textContent = 'Edit Connector';
-    document.getElementById('connector-form-submit').textContent = 'Save';
-    document.getElementById('connector-form-id').value = id;
-    document.getElementById('connector-form-label').value = c.label || '';
-    // Auto-sync interval: match against one of the preset options, fall
-    // back to '' (Off) if the stored value isn't one of the presets so
-    // the operator sees a defined state.
-    var presetIntervals = ['', '15', '60', '360', '1440'];
-    var ivStr = c.sync_interval_minutes == null ? '' : String(c.sync_interval_minutes);
-    document.getElementById('connector-form-interval').value =
-        presetIntervals.indexOf(ivStr) >= 0 ? ivStr : '';
-    var vsel = document.getElementById('connector-form-vendor');
-    vsel.innerHTML = (window._connectorVendors || [])
-        .map(function(v) { return '<option value="' + v.name + '"' + (v.name === c.vendor ? ' selected' : '') + '>' + v.label + '</option>'; })
-        .join('');
-    vsel.disabled = true;
-    document.getElementById('connector-test-result').innerHTML = '';
-    onConnectorVendorChange();
-    document.getElementById('connector-modal').style.display = 'flex';
-}
-
-function closeConnectorModal() {
-    document.getElementById('connector-modal').style.display = 'none';
-    window._editingConnector = null;
-}
-
-function showImportConnectorModal() {
-    document.getElementById('connector-import-payload').value = '';
-    document.getElementById('connector-import-result').innerHTML = '';
-    document.getElementById('connector-import-modal').style.display = 'flex';
-}
-
-function closeImportConnectorModal() {
-    document.getElementById('connector-import-modal').style.display = 'none';
-}
-
-async function submitImportConnectorForm(ev) {
-    ev.preventDefault();
-    var payload = document.getElementById('connector-import-payload').value;
-    var result = document.getElementById('connector-import-result');
-    result.innerHTML = '<span class="text-secondary">Importing…</span>';
-    var fd = new FormData();
-    fd.append('payload', payload);
-    try {
-        var resp = await fetch('/api/management/connectors/import', { method: 'POST', body: fd });
-        var html = await resp.text();
-        if (!resp.ok) {
-            result.innerHTML = html;
-            return false;
-        }
-        document.getElementById('mgmt-sub-connectors').innerHTML = html;
-        closeImportConnectorModal();
-    } catch (ex) {
-        result.innerHTML = '<div class="alert alert-error">Import failed: ' + (ex && ex.message ? ex.message : ex) + '</div>';
-    }
-    return false;
-}
-
-async function onConnectorVendorChange() {
-    var vendor = document.getElementById('connector-form-vendor').value;
-    var container = document.getElementById('connector-vendor-fields');
-    if (!vendor) { container.innerHTML = ''; return; }
-    container.innerHTML = '<div class="text-secondary" style="font-size:0.8125rem;">Loading fields…</div>';
-    try {
-        var resp = await fetch('/api/management/connectors/vendor-fields/' + encodeURIComponent(vendor));
-        container.innerHTML = await resp.text();
-        // Pre-fill non-secret values when editing
-        if (window._editingConnector && window._editingConnector.vendor === vendor) {
-            var cfg = window._editingConnector.config || {};
-            Object.keys(cfg).forEach(function(key) {
-                var inp = container.querySelector('[name="cfg_' + key + '"]');
-                if (inp && inp.type !== 'password') inp.value = cfg[key];
-            });
-        }
-    } catch (ex) {
-        container.innerHTML = '<span class="badge badge-danger">Failed to load vendor fields</span>';
-    }
-}
-
-async function submitConnectorForm(e) {
-    e.preventDefault();
-    var id = document.getElementById('connector-form-id').value;
-    var form = document.getElementById('connector-form');
-    var formData = new FormData();
-    formData.append('vendor', document.getElementById('connector-form-vendor').value);
-    formData.append('label', document.getElementById('connector-form-label').value);
-    formData.append('kind', 'cti');
-    formData.append('sync_interval_minutes', document.getElementById('connector-form-interval').value || '');
-    // Append all cfg_* fields from the vendor-specific block
-    form.querySelectorAll('[name^="cfg_"]').forEach(function(inp) {
-        if (inp.type === 'checkbox') {
-            formData.append(inp.name, inp.checked ? 'true' : 'false');
-        } else {
-            formData.append(inp.name, inp.value);
-        }
-    });
-    var url = id ? '/api/management/connectors/' + id : '/api/management/connectors';
-    var method = id ? 'PUT' : 'POST';
-    try {
-        var resp = await fetch(url, {method: method, body: formData});
-        if (!resp.ok) { showToast('Request failed', 'error'); return false; }
-        closeConnectorModal();
-        var html = await resp.text();
-        var panel = document.getElementById('mgmt-sub-connectors');
-        if (panel) { panel.innerHTML = html; htmx.process(panel); }
-    } catch (ex) {
-        showToast('Network error', 'error');
-    }
-    return false;
-}
-</script>
-{% endblock %}

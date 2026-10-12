@@ -1,5 +1,14 @@
 (function () {
-    var config = window.TIDE_APM_RUM_CONFIG;
+    // The page's settings (base.html, #apm-rum-config); the address parts come from the page itself.
+    var config = null;
+    try {
+        var el = document.getElementById('apm-rum-config');
+        config = el ? JSON.parse(el.textContent) : null;
+    } catch (_) { config = null; }
+    if (config) {
+        config.serverUrl = window.location.origin + '/apm';
+        config.distributedTracingOrigins = [window.location.origin];
+    }
     if (!config || !window.elasticApm || typeof window.elasticApm.init !== 'function') {
         return;
     }
@@ -13,7 +22,7 @@
 
     function applyInteractionHints(rootNode) {
         var root = rootNode && rootNode.querySelectorAll ? rootNode : document;
-        var controls = root.querySelectorAll('a[name], button[name], [name][hx-get], [name][hx-post], [name][hx-put], [name][hx-delete], [name][hx-patch], [name][onclick]');
+        var controls = root.querySelectorAll('a[name], button[name], [name][hx-get], [name][hx-post], [name][hx-put], [name][hx-delete], [name][hx-patch], [name][data-click]');
 
         controls.forEach(function(control) {
             var label = sanitizeLabel(control.getAttribute('name'));

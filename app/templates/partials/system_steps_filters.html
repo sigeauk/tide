@@ -34,10 +34,10 @@
         </select>
     </div>
 
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">Tactic</label>
         <button type="button" id="sys-tactic-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
-                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-tactic-dropdown');">
+                data-click="filterDropdown.toggle" data-target="sys-tactic-dropdown">
             <span id="sys-tactic-label">Tactic</span>{{ icon('chevron-down', '14') }}
         </button>
         <div id="sys-tactic-dropdown" class="tide-filter-dropdown" style="display:none;">
@@ -60,10 +60,10 @@
     </div>
 
     {% if not template %}
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">Coverage</label>
         <button type="button" id="sys-coverage-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
-                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-coverage-dropdown');">
+                data-click="filterDropdown.toggle" data-target="sys-coverage-dropdown">
             <span id="sys-coverage-label">Coverage</span>{{ icon('chevron-down', '14') }}
         </button>
         <div id="sys-coverage-dropdown" class="tide-filter-dropdown" style="display:none;">
@@ -95,10 +95,10 @@
         </select>
     </div>
 
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">Group by</label>
         <button type="button" id="sys-group-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
-                onclick="event.stopPropagation(); tideToggleFilterDropdown('sys-group-dropdown');">
+                data-click="filterDropdown.toggle" data-target="sys-group-dropdown">
             <span id="sys-group-label">None</span>{{ icon('chevron-down', '14') }}
         </button>
         <div id="sys-group-dropdown" class="tide-filter-dropdown" style="display:none;">
@@ -125,27 +125,3 @@
         <input type="hidden" id="sys-view" name="view" value="{{ f.view }}">
     </div>
 </div>
-<script>
-// Remembered choices, applied before the grid below first loads. Placed here, ahead of the grid,
-// because that is the one order that holds both on a full page load (htmx is deferred) and on a
-// boosted navigation (htmx runs swapped-in scripts in document order, before later elements'
-// load triggers). Only sets values: htmx may not exist yet.
-(function () {
-    var bar = document.getElementById('sys-filters');
-    if (!bar) return;
-    var fromUrl = (bar.getAttribute('data-url-keys') || '').split(',');
-    var p = {};
-    try { p = JSON.parse(localStorage.getItem(bar.getAttribute('data-pref-key')) || '{}') || {}; } catch (_) { /* storage blocked */ }
-    if (fromUrl.indexOf('tactic_sort') === -1 && p.tactic_sort) document.getElementById('sys-tactic-sort').value = p.tactic_sort;
-    if (fromUrl.indexOf('sort_name') === -1 && typeof p.sort_name === 'string') document.getElementById('sys-sort-name').value = p.sort_name;
-    // Grouping: the URL's, else this browser's last, else the page's default (the Baselines page
-    // groups by template, so an empty one still shows).
-    var group = Array.isArray(p.group) ? p.group : (bar.getAttribute('data-default-group') || '').split(',').filter(Boolean);
-    if (fromUrl.indexOf('group') === -1 && (Array.isArray(p.group) || group.length)) {
-        bar.querySelectorAll('input[name="group"][type="checkbox"]').forEach(function (c) { c.checked = group.indexOf(c.value) !== -1; });
-    }
-    var view = document.getElementById('sys-view');
-    if (fromUrl.indexOf('view') === -1) view.value = p.view === 'table' ? 'table' : 'cards';
-    if (!view.value) view.value = 'cards';
-})();
-</script>

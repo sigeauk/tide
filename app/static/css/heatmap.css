@@ -143,46 +143,6 @@
 }
 
 /* ========================================
- * STATUS COLORS - Muted, professional
- * ======================================== */
-
-.status-gap {
-    background-color: oklch(28% 0.08 25);
-    border-color: oklch(38% 0.10 25);
-    color: oklch(75% 0.06 25);
-}
-
-.status-gap:hover {
-    background-color: oklch(32% 0.10 25);
-    transform: scale(1.02);
-    box-shadow: 0 2px 8px oklch(20% 0.05 25 / 0.3);
-}
-
-.status-covered {
-    background-color: oklch(28% 0.06 145);
-    border-color: oklch(38% 0.08 145);
-    color: oklch(75% 0.05 145);
-}
-
-.status-covered:hover {
-    background-color: oklch(32% 0.08 145);
-    transform: scale(1.02);
-    box-shadow: 0 2px 8px oklch(20% 0.04 145 / 0.3);
-}
-
-.status-defense {
-    background-color: oklch(28% 0.05 220);
-    border-color: oklch(38% 0.07 220);
-    color: oklch(75% 0.04 220);
-}
-
-.status-defense:hover {
-    background-color: oklch(32% 0.07 220);
-    transform: scale(1.02);
-    box-shadow: 0 2px 8px oklch(20% 0.03 220 / 0.3);
-}
-
-/* ========================================
  * MATRIX CONTAINER
  * ======================================== */
 
@@ -238,9 +198,16 @@
     font-weight: 500;
     padding: 0.375rem 0.5rem;
     border-radius: var(--radius-sm);
-    border: 1px solid transparent;
+    border: 1px solid;
     cursor: pointer;
     transition: all var(--transition-fast);
+    /* Colour: the state's token (--hm-tone, --hm-text, set below) mixed into the surface, so a
+       matrix of hundreds of cells stays calm and follows the theme. */
+    --hm-tone: var(--color-muted);
+    --hm-text: var(--color-text-muted);
+    background-color: color-mix(in srgb, var(--hm-tone) 12%, var(--color-bg-surface));
+    border-color: color-mix(in srgb, var(--hm-tone) 30%, var(--color-border-muted));
+    color: color-mix(in srgb, var(--hm-text) 80%, var(--color-text-secondary));
     text-align: center;
     white-space: nowrap;
     display: flex;
@@ -259,6 +226,20 @@
     opacity: 0.8;
 }
 
+.ttp-card:hover {
+    background-color: color-mix(in srgb, var(--hm-tone) 20%, var(--color-bg-surface));
+    border-color: color-mix(in srgb, var(--hm-tone) 55%, var(--color-border));
+    transform: scale(1.02);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Cell states (RAG + grey, and defence in depth) */
+.ttp-card.status-covered { --hm-tone: var(--color-success); --hm-text: var(--color-success-text); }
+.ttp-card.status-amber   { --hm-tone: var(--color-warning); --hm-text: var(--color-warning-text); }
+.ttp-card.status-gap     { --hm-tone: var(--color-danger);  --hm-text: var(--color-danger-text); }
+.ttp-card.status-defense { --hm-tone: var(--color-info);    --hm-text: var(--color-info-text); }
+.ttp-card.status-na      { --hm-tone: var(--color-muted);   --hm-text: var(--color-text-muted); }
+
 /* ========================================
  * SLIDE-OVER PANEL
  * ======================================== */
@@ -266,7 +247,7 @@
 .slide-panel-overlay {
     position: fixed;
     inset: 0;
-    background-color: oklch(10% 0.02 var(--brand-hue) / 0.7);
+    background-color: var(--color-overlay);
     z-index: 100;
     display: flex;
     justify-content: flex-end;

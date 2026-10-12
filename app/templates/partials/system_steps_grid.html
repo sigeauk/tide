@@ -78,11 +78,11 @@
         {# Inside <summary>: stop the click folding the group, then open the window. #}
         {% if template %}
         <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
-                onclick="event.preventDefault();event.stopPropagation();htmx.ajax('GET', '/api/baselines/{{ g.key }}/manage', {target: '#modal-container', swap: 'innerHTML'});"
+                data-click="steps.openDialog" data-url="/api/baselines/{{ g.key }}/manage"
                 title="Rename {{ g.label }}, add a technique, apply it to a system, import, export or delete it">{{ icon_text('settings', 'Manage', '12') }}</button>
         {% else %}
         <button name="Manage Baseline" type="button" class="btn btn-secondary btn-sm"
-                onclick="event.preventDefault();event.stopPropagation();htmx.ajax('GET', '/api/systems/{{ system_id }}/baselines/{{ g.key }}/edit', {target: '#modal-container', swap: 'innerHTML'});"
+                data-click="steps.openDialog" data-url="/api/systems/{{ system_id }}/baselines/{{ g.key }}/edit"
                 title="Rename {{ g.label }}, change its description, or remove it from this system">{{ icon_text('settings', 'Manage', '12') }}</button>
         {% endif %}
         {% endif %}

@@ -98,12 +98,13 @@
 </div>
 {%- endmacro %}
 
-{# The header's "…" menu: which sections show, and Reset layout. A call block adds the window's own
-   actions under them (the technique window's Delete technique). #}
+{# The header's sections menu: which sections show, and Reset layout. Alone it is a layout button;
+   a call block adds the window's own actions under them (the technique window's Delete technique),
+   so it shows as "…" instead. #}
 {% macro layout_menu(hint='drag') -%}
 <div class="rh-more rm-layout" data-more data-rm-layout>
     <button name="Window Sections" type="button" class="rm-iconbtn rm-iconbtn--boxed" data-more-toggle
-            aria-haspopup="menu" aria-expanded="false" title="Choose which sections to show" aria-label="Sections">{{ icon('more-horizontal', '16') }}</button>
+            aria-haspopup="menu" aria-expanded="false" title="Choose which sections to show" aria-label="Sections">{{ icon('more-horizontal' if caller is defined else 'layout', '16') }}</button>
     <div class="rh-more__menu rm-layout__menu" role="menu" hidden data-keep-open>
         <p class="rm-layout__head">Show sections</p>
         <div class="rm-layout__list" data-rm-layout-list></div>

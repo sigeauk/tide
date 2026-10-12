@@ -3,8 +3,10 @@ API routes for Detection Rules (Rule Health page).
 """
 
 import json
+import re
 from datetime import datetime, timedelta
-from urllib.parse import unquote
+from html import escape
+from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Request, Query, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
@@ -204,7 +206,9 @@ def _get_filtered_rules(db, filters: RuleFilters, client_id: str):
     Every rule is now its own card -- ``deduped`` is kept only so callers that filtered/counted
     through it don't need to change (see ``_dedupe_display_rules``)."""
     all_filters = filters.model_copy(update={"page": 1, "page_size": 1_000_000})
-    rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id)
+    # Slim: the grid and the metrics read only each rule's Kibana rule_id and language, which are
+    # columns of their own, so the rule JSON (tens of MB for a large client) isn't loaded.
+    rules, _, _ = db.get_rules(filters=all_filters, client_id=client_id, slim=True)
     return rules, _dedupe_display_rules(db, rules, client_id)
 
 
@@ -215,22 +219,33 @@ def _get_filtered_deduped_rules(db, filters: RuleFilters, client_id: str) -> Lis
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
-MITRE_TACTIC_MAP = {
-    "Reconnaissance": {"id": "TA0043", "reference": "/mitre/tactic?id=TA0043"},
-    "Resource Development": {"id": "TA0042", "reference": "/mitre/tactic?id=TA0042"},
-    "Initial Access": {"id": "TA0001", "reference": "/mitre/tactic?id=TA0001"},
-    "Execution": {"id": "TA0002", "reference": "/mitre/tactic?id=TA0002"},
-    "Persistence": {"id": "TA0003", "reference": "/mitre/tactic?id=TA0003"},
-    "Privilege Escalation": {"id": "TA0004", "reference": "/mitre/tactic?id=TA0004"},
-    "Defense Evasion": {"id": "TA0005", "reference": "/mitre/tactic?id=TA0005"},
-    "Credential Access": {"id": "TA0006", "reference": "/mitre/tactic?id=TA0006"},
-    "Discovery": {"id": "TA0007", "reference": "/mitre/tactic?id=TA0007"},
-    "Lateral Movement": {"id": "TA0008", "reference": "/mitre/tactic?id=TA0008"},
-    "Collection": {"id": "TA0009", "reference": "/mitre/tactic?id=TA0009"},
-    "Exfiltration": {"id": "TA0010", "reference": "/mitre/tactic?id=TA0010"},
-    "Command And Control": {"id": "TA0011", "reference": "/mitre/tactic?id=TA0011"},
-    "Impact": {"id": "TA0040", "reference": "/mitre/tactic?id=TA0040"},
-}
+
+def rule_dom_id(rule_id, siem_id, space) -> str:
+    """The DOM id of one rule's card or row, unique per destination: a rule_id is shared by every
+    copy of a rule, so the destination is part of it. Slugified, as it ends up in a CSS selector."""
+    def slug(value) -> str:
+        return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or ""))
+    return f"rule-{slug(rule_id)}--{slug(siem_id)}--{slug(space or 'default')}"
+
+
+def rule_window(rule_id, siem_id, space) -> dict:
+    """What the browser needs to open one rule's window in place of the current one, keeping its
+    place in prev/next (app.js tideShowRuleAfterAction): the window's URL and the card's DOM id."""
+    space = space or "default"
+    url = f"/api/rules/{quote(str(rule_id), safe='')}/history-modal?space={quote(space, safe='')}"
+    if siem_id:
+        url += f"&siem_id={quote(str(siem_id), safe='')}"
+    return {"url": url, "dom_id": rule_dom_id(rule_id, siem_id, space)}
+
+def _tactic_meta(label: str) -> Optional[dict]:
+    """The ATT&CK name, id and reference of the tactic a picker group is labelled with, for a
+    rule's threat entry; None if it isn't a tactic."""
+    from app.attack_tactics import ID_BY_NAME, tactic_name
+    name = tactic_name(label)
+    if not name:
+        return None
+    tid = ID_BY_NAME[name]
+    return {"name": name, "id": tid, "reference": f"/mitre/tactic?id={tid}"}
 
 
 def _parse_scope_pair(scope_pair: str) -> tuple[str, str]:
@@ -306,10 +321,10 @@ def _build_threat_entries(mitre_ids: list[str], technique_lookup: dict[str, dict
         option = technique_lookup.get(technique_id.upper())
         if not option:
             continue
-        tactic = option["tactic"]
-        tactic_meta = MITRE_TACTIC_MAP.get(tactic)
+        tactic_meta = _tactic_meta(option["tactic"])
         if not tactic_meta:
             continue
+        tactic = tactic_meta["name"]
         bucket = tactic_map.setdefault(
             tactic,
             {
@@ -881,6 +896,25 @@ def _resolve_kibana_url(db, rule, client_id: str) -> str:
     return ""
 
 
+def _filter_scope_options(db, client_id: str):
+    """Rule Health's SIEM filter options: ``(scopes, spaces)`` holding rules in this client's
+    database, as ``"siem_id|space"`` (space lowercased) and space keys, limited to destinations
+    still linked to the client (as _prune_orphan_scopes does for the metrics). The same keys the
+    unfiltered metrics' ``rules_by_scope`` / ``rules_by_space`` gave, from one DISTINCT query
+    instead of loading every rule."""
+    with db.get_connection() as conn:
+        try:
+            pairs = conn.execute("SELECT DISTINCT siem_id, space FROM detection_rules WHERE space IS NOT NULL").fetchall()
+        except Exception:
+            return [], []
+    holder = RuleHealthMetrics(
+        rules_by_space={str(sp): 1 for _, sp in pairs},
+        rules_by_scope={f"{sid}|{str(sp).lower()}": 1 for sid, sp in pairs if sid is not None},
+    )
+    _prune_orphan_scopes(holder, db, client_id)
+    return sorted(holder.rules_by_scope), sorted(holder.rules_by_space)
+
+
 def _prune_orphan_scopes(metrics, db, client_id: str):
     """Strip rule-count buckets for spaces no longer in ``client_siem_map``.
 
@@ -1341,11 +1375,11 @@ async def record_test_search_time(
     except ValueError:
         ms = 0
     if mode not in ("add", "replace") or not (0 < ms <= 3_600_000):
-        return HTMLResponse('<div class="toast toast-danger" onclick="this.remove()">Not a valid search time.</div>', status_code=400)
+        return HTMLResponse('<div class="toast toast-danger" data-click="el.remove">Not a valid search time.</div>', status_code=400)
 
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="toast toast-danger" onclick="this.remove()">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="toast toast-danger" data-click="el.remove">Rule not found.</div>', status_code=404)
     rule_siem = rule.siem_id or siem_id or ""
     rule_space = rule.space or space
     sample_id = _search_time_rule_id(rule)
@@ -1375,7 +1409,7 @@ async def record_test_search_time(
     tail = (f" The rule now scores {new_score}%." if new_score is not None
             else " Its score will pick this up on the next sync.")
     response = HTMLResponse(
-        f'<div class="toast toast-success" onclick="this.remove()">{escape(f"{ms} ms {what}.")}{escape(tail)}</div>'
+        f'<div class="toast toast-success" data-click="el.remove">{escape(f"{ms} ms {what}.")}{escape(tail)}</div>'
     )
     response.headers["HX-Trigger"] = "refreshRules"
     return response
@@ -1454,18 +1488,11 @@ async def import_validation_file(
     untouched. This is for re-applying an old export, or a file recovered after a migration
     issue, without restarting the app.
     """
-    from html import escape
-
     def _script(message: str, kind: str = "success") -> HTMLResponse:
-        safe = escape(message).replace("\\", "\\\\").replace("`", "\\`").replace("</", "<\\/")
-        return HTMLResponse(
-            "<script>"
-            "document.getElementById('import-validation-modal').style.display='none';"
-            "document.getElementById('import-validation-form').reset();"
-            f"if (typeof showToast === 'function') showToast(`{safe}`, {kind!r});"
-            "htmx.trigger(document.body, 'refreshRules');"
-            "</script>"
-        )
+        # Closes the dialog (validationImported, rule_health.js), says how it went, refreshes the rules.
+        return HTMLResponse("", headers={"HX-Trigger": json.dumps({
+            "validationImported": None, "showToast": {"message": message, "type": kind}, "refreshRules": None,
+        })})
 
     raw = await file.read(_IMPORT_VALIDATION_MAX_BYTES + 1)
     if len(raw) > _IMPORT_VALIDATION_MAX_BYTES:
@@ -1530,6 +1557,35 @@ async def sync_rules(
     the ask small. Only a destination actually linked to this client is
     accepted, so a stray id can't be used to probe another tenant's SIEM.
     """
+    return _start_rule_sync(db, user, client_id, force_mapping, siem_id, space)
+
+
+@router.post("/sync/retry/{run_id}", response_class=HTMLResponse)
+async def retry_rule_sync(request: Request, run_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Run a failed, partial or interrupted rule sync again, over the same destination and with
+    the same mapping re-check. Anyone who can press Sync can retry; the run must be this client's."""
+    from app.services import sync_runs
+    run = sync_runs.get(run_id)
+    if not run or run["client_id"] != client_id or run["sync_kind"] != "rules":
+        return HTMLResponse('<div id="sync-status" class="sync-tracker sync-error"><span>That sync wasn\'t found for this client.</span></div>')
+    scope = run.get("scope") or {}
+    return _start_rule_sync(db, user, client_id, bool(scope.get("force_mapping")), scope.get("siem_id"),
+                            scope.get("space"), retry_of=run_id)
+
+
+@router.get("/sync/last", response_class=HTMLResponse)
+def last_rule_sync(request: Request, user: RequireUser, client_id: ActiveClient):
+    """Rule Health's line about this client's last rule sync: when, who, the result and, for a
+    failed, partial or interrupted run, why and Retry."""
+    from app.services import sync_runs
+    return request.app.state.templates.TemplateResponse(
+        request, "partials/rules/last_sync.html", {"run": sync_runs.last_rule_sync(client_id)})
+
+
+def _start_rule_sync(db, user, client_id: str, force_mapping: bool, siem_id: Optional[str], space: Optional[str],
+                     retry_of: Optional[str] = None) -> HTMLResponse:
+    """Start a rule sync for the active client and return its live tracker: Rule Health's Sync and
+    Retry share it. ``siem_id``/``space`` (both or neither) narrow it to one linked destination."""
     import asyncio
     from app.main import scheduled_sync, _start_sync_job
 
@@ -1551,12 +1607,15 @@ async def sync_rules(
         label = f"Initialising full mapping sync for {dest_name}..." if force_mapping else f"Initialising sync for {dest_name}..."
     else:
         label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
-    job_id = _start_sync_job(client_id, message=label)
+    job_id = _start_sync_job(client_id, message=label, actor=user.username, retry_of=retry_of,
+                             scope={"force_mapping": force_mapping, "siem_id": only_siem_id, "space": only_space,
+                                    "destination": dest_name})
 
     asyncio.create_task(scheduled_sync(force_mapping=force_mapping, client_id=client_id, job_id=job_id,
                                        only_siem_id=only_siem_id, only_space=only_space))
 
-    # Return live sync tracker that polls for status and refreshes grid on completion
+    # Return live sync tracker that polls for status; its "complete" answer (/api/sync/status)
+    # refreshes the grid and the metrics (syncComplete, rule_health.js).
     return HTMLResponse(
         '<div id="sync-status"'
         f'     hx-get="/api/sync/status?job_id={job_id}"'
@@ -1566,18 +1625,6 @@ async def sync_rules(
         '    <span class="sync-spinner"></span>'
         '    <span>Sync starting...</span>'
         '</div>'
-        '<script>'
-        '(function poll(){'
-        '  var iv=setInterval(function(){'
-        '    var el=document.getElementById("sync-status");'
-        '    if(el && el.classList.contains("sync-complete")){'
-        '      clearInterval(iv);'
-        '      htmx.trigger(document.body,"refreshRules");'
-        '      htmx.ajax("GET","/api/rules/metrics",{target:"#metrics-container",swap:"innerHTML"});'
-        '    }'
-        '  },1000);'
-        '})();'
-        '</script>'
     )
 
 
@@ -1689,13 +1736,7 @@ async def create_rule(
 
         # Sync so the new rule shows up. Rule Health shows the sync's progress; from anywhere else
         # (a technique window's Sigma Convert) the sync just runs.
-        return HTMLResponse(
-            '<div></div>'
-            '<script>'
-            '(function(){var s=document.getElementById("sync-status");'
-            'htmx.ajax("POST","/api/rules/sync",s?{target:s,swap:"outerHTML"}:{target:"body",swap:"none"});})();'
-            '</script>'
-        )
+        return HTMLResponse('<div hidden data-start-sync></div>')
     except Exception as e:
         logger.exception("create_rule failed")
         return HTMLResponse(
@@ -2047,6 +2088,75 @@ def _mapping_info(db, siem_id: str, rule) -> dict:
     return {"label": label, "known": info.get("known", 0), "patterns": info.get("patterns", 0)}
 
 
+def _index_patterns(db, siem_id: str, rule) -> list:
+    """Each of the rule's index patterns and whether it matches any index in the SIEM, from the field
+    catalogue (#63): the rule's own ``index`` list, else the indexes its field checks used (a data view
+    or ES|QL rule). Not checked yet stays unknown, never missing (CLAUDE.md §9)."""
+    from app.services.mapping_catalogue import MappingCatalogue
+
+    raw = rule.raw_data if isinstance(rule.raw_data, dict) else {}
+    patterns = [str(p) for p in (raw.get("index") or []) if p]
+    if not patterns:
+        patterns = sorted({str(row[0]) for row in (getattr(rule, "field_mappings", None) or []) if row})
+    if not patterns or not siem_id:
+        return []
+    try:
+        return MappingCatalogue(db, siem_id).pattern_states(patterns)
+    except Exception:
+        logger.warning("Could not read index patterns for rule %s", getattr(rule, "rule_id", "?"), exc_info=True)
+        return []
+
+
+# Kibana's last_execution.status -> what the Last run section says, and its colour.
+_RUN_STATUS = {
+    "succeeded": ("Succeeded", "success"),
+    "warning": ("Warning", "warning"),
+    "partial failure": ("Partial failure", "warning"),
+    "failed": ("Failed", "danger"),
+    "running": ("Running", "muted"),
+}
+
+
+def _last_run(rule) -> Optional[dict]:
+    """The rule's last run in Kibana, as TIDE recorded it at its last sync (#63): status, when, Kibana's
+    message (why it failed) and timings. None when Kibana has no run for it. Shown in the rule window
+    only; it differs per destination, so Compare leaves it out."""
+    raw = rule.raw_data if isinstance(rule.raw_data, dict) else {}
+    summary = raw.get("execution_summary") if isinstance(raw.get("execution_summary"), dict) else {}
+    last = summary.get("last_execution") if isinstance(summary.get("last_execution"), dict) else {}
+    if not last:
+        return None
+    status = str(last.get("status") or "").lower()
+    label, tone = _RUN_STATUS.get(status, (status.title() or "Unknown", "muted"))
+    when = None
+    try:
+        when = datetime.fromisoformat(str(last.get("date")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        pass
+    metrics = last.get("metrics") if isinstance(last.get("metrics"), dict) else {}
+
+    def _num(key):
+        try:
+            value = metrics.get(key)
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    gap = _num("execution_gap_duration_s")
+    return {
+        "label": label, "tone": tone, "when": when, "message": str(last.get("message") or "").strip(),
+        "search_ms": _num("total_search_duration_ms"), "indexing_ms": _num("total_indexing_duration_ms"),
+        "gap_s": gap, "gap": _duration(gap) if gap else "", "synced_at": getattr(rule, "last_updated", None),
+    }
+
+
+def _duration(seconds: float) -> str:
+    """A length of time as people say it: 45 s, 12 min, 5 h, 3 days."""
+    s = int(seconds)
+    return (f"{s} s" if s < 90 else f"{round(s / 60)} min" if s < 5400
+            else f"{round(s / 3600)} h" if s < 172800 else f"{round(s / 86400)} days")
+
+
 def _modal_with_card_oob(request, db, client_id: str, rule, space: str, siem_id: Optional[str],
                          settings, **modal_flags) -> HTMLResponse:
     """Re-render the Rule modal and refresh the card (or table row) behind it out-of-band."""
@@ -2145,6 +2255,8 @@ def _build_rule_modal_context(
         "just_validated": just_validated,
         "flash": flash,
         "mapping_info": _mapping_info(db, actual_siem, rule),
+        "index_patterns": _index_patterns(db, actual_siem, rule),
+        "last_run": _last_run(rule),
     }
 
 
@@ -2211,7 +2323,7 @@ async def search_rule_link_targets(
     # Each suggestion carries its rule id: names are not unique in a destination, so picking one
     # links that exact rule rather than whatever has the same name.
     items = "".join(
-        f'<button type="button" onclick="tidePickLinkTarget(this)" data-name="{escape(m["name"])}" '
+        f'<button type="button" data-click="rule.linkPick" data-name="{escape(m["name"])}" '
         f'data-rule-id="{escape(m["rule_id"])}">{escape(m["name"])}</button>'
         for m in matches
     )
@@ -2341,6 +2453,7 @@ async def edit_rule(
     rule_id: str,
     db: DbDep,
     user: RequireUser,
+    settings: SettingsDep,
     client_id: ActiveClient,
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
@@ -2407,6 +2520,7 @@ async def edit_rule(
         success, message = await run_in_threadpool(elastic_helper.update_detection_rule,
             rule_id=elastic_rule_id, rule_data=payload, space=space,
             kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+            on_recreated=db.kibana_recreate_hook(client_id, rule_id, actual_siem_id, space, user.username, user.id),
         )
         if not success:
             logger.error(
@@ -2414,10 +2528,13 @@ async def edit_rule(
                 rule_id, actual_siem_id, space, message,
             )
             return HTMLResponse(
-                f'<div class="empty-state-text">Rule update failed: {message}</div>',
+                f'<div class="empty-state-text">Rule update failed: {escape(str(message))}</div>',
                 status_code=409,
             )
-        update_message = "Rule updated."
+        # Anything Kibana had to do first (refresh or re-create the rule's API key) follows the
+        # plain "Updated rule '<name>'" (elastic_helper.update_detection_rule).
+        plain = f"Updated rule '{payload.get('name', elastic_rule_id)}'"
+        update_message = "Rule updated." + (f" {message[len(plain) + 2:]}" if message.startswith(plain + ". ") else "")
 
     change_message, changed_fields, field_diffs = _summarize_rule_changes(old_payload, payload)
     db.record_rule_history(
@@ -2436,12 +2553,18 @@ async def edit_rule(
         },
     )
 
-    return HTMLResponse(
-        '<div></div>'
-        '<script>'
-        'htmx.ajax("POST","/api/rules/sync",{target:"#sync-status",swap:"outerHTML"});'
-        '</script>'
-    )
+    # The rule window stays open on this rule, showing the change (#62): refresh just this rule
+    # from Kibana rather than the whole client, then re-render the window and its card behind it.
+    status, sync_message = 200, ""
+    if not rule.deprecated:   # a deprecated rule was changed in TIDE only; Kibana no longer has it
+        status, sync_message, _ = await run_in_threadpool(
+            sync_single_rule, db, client_id, rule_id, actual_siem_id, space, user.id, user.username,
+        )
+    refreshed = db.get_rule_by_id(rule_id, space, siem_id=actual_siem_id, thresholds=thresholds, client_id=client_id)
+    if not refreshed:
+        return HTMLResponse(f'<div class="empty-state-text">{escape(update_message)} {escape(sync_message)}</div>')
+    flash = update_message if status == 200 else f"{update_message} Refreshing it from Kibana failed: {sync_message}"
+    return _modal_with_card_oob(request, db, client_id, refreshed, space, actual_siem_id, settings, flash=flash)
 
 
 def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], space: str,
@@ -2605,7 +2728,7 @@ async def restore_rule(
     db.remap_rule_references(
         rule_id, new_rule_id, client_id,
         siem_id, space,
-        replacement_siem_id, replacement_space,
+        replacement_siem_id, replacement_space, actor=user.username,
     )
     # Restore is an identity replacement, not a migration mapping. The new
     # synced row is the sole TIDE record; remove the old SIEM-scope cache row
@@ -2670,17 +2793,11 @@ def delete_rule(
         action="deleted", actor_user_id=user.id, actor_name=user.username,
         detail={"message": message + ("" if remove_links else " Its links were kept.")},
     )
-    # The edit form's Back/close/Cancel controls navigate back to this same rule's history
-    # modal (see back_url in rule_create_form.html) — now 404, since the row is gone. Close the
-    # whole modal instead of leaving it open on a dead reference, and refresh the grid so the
-    # deleted card disappears without the user having to reload.
-    return HTMLResponse(
-        "<script>"
-        "var c = document.getElementById('modal-container'); if (c) c.innerHTML = '';"
-        "if (typeof showToast === 'function') showToast('Rule deleted from TIDE.', 'success');"
-        "htmx.trigger(document.body, 'refreshRules');"
-        "</script>"
-    )
+    # The rule window's Delete (app.js showDeleteRuleDialog) closes the window itself. The grid
+    # refreshes so the deleted card disappears without the user having to reload.
+    return HTMLResponse("", headers={"HX-Trigger": json.dumps({
+        "showToast": {"message": "Rule deleted from TIDE.", "type": "success"}, "refreshRules": None,
+    })})
 
 
 @router.post("/{rule_id}/enable", response_class=HTMLResponse)
@@ -2706,6 +2823,7 @@ async def enable_rule(
     success, message = await run_in_threadpool(elastic_helper.enable_detection_rule,
         rule_id,
         space=space,
+        on_recreated=db.kibana_recreate_hook(client_id, rule_id, siem_id, space, user.username, user.id),
         kibana_url=siem.get("kibana_url"),
         api_key=siem.get("api_token_enc"),
     )
@@ -2722,7 +2840,7 @@ async def enable_rule(
         actor_name=user.username,
         detail={"message": message},
     )
-    return HTMLResponse('<script>htmx.trigger(document.body,"refreshRules");</script>')
+    return HTMLResponse("", headers={"HX-Trigger": "refreshRules"})
 
 
 @router.post("/{rule_id}/disable", response_class=HTMLResponse)
@@ -2748,6 +2866,7 @@ async def disable_rule(
     success, message = await run_in_threadpool(elastic_helper.disable_detection_rule,
         rule_id,
         space=space,
+        on_recreated=db.kibana_recreate_hook(client_id, rule_id, siem_id, space, user.username, user.id),
         kibana_url=siem.get("kibana_url"),
         api_key=siem.get("api_token_enc"),
     )
@@ -2764,4 +2883,4 @@ async def disable_rule(
         actor_name=user.username,
         detail={"message": message},
     )
-    return HTMLResponse('<script>htmx.trigger(document.body,"refreshRules");</script>')
+    return HTMLResponse("", headers={"HX-Trigger": "refreshRules"})

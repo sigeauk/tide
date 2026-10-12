@@ -3,12 +3,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div  name="Linked SIEMs Edit" class="client-section-toggle" onclick="var b=document.getElementById('siems-body');var c=document.getElementById('siems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Linked SIEMs Edit" class="client-section-toggle" data-click="section.toggle" data-body="siems-body" data-chev="siems-chev">
     <span class="client-list-item__icon">{{ icon('server', '14') }}</span>
     <h2 class="client-section-toggle__title">Linked SIEMs</h2>
     <span class="badge badge-neutral badge--xs">{{ client_siems | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
-        <button  name="Open Edit Siems Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-siems-modal').style.display='flex'">
+    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
+        <button  name="Open Edit Siems Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-siems-modal">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -24,9 +24,9 @@
     {% set edit_id = 'siem-edit-' ~ loop.index %}
     <div class="client-list-item client-list-item--{% if s.is_active %}active{% else %}inactive{% endif %}">
         <div class="client-list-item__body">
-            <span class="client-siem-dot" style="background:{{ s.color or 'var(--color-border)' }};" title="This destination's card colour"></span>
-            <span class="client-list-item__title" style="cursor:default;">{{ s.label }}</span>
-            <span class="badge badge-muted" style="font-size:0.72rem;">{{ s.siem_type }}</span>
+            <span class="client-siem-dot" style="--swatch: {{ s.color or 'var(--color-border)' }}" title="This destination's card colour"></span>
+            <span class="client-list-item__title cursor-default">{{ s.label }}</span>
+            <span class="badge badge-muted fs-xs">{{ s.siem_type }}</span>
             <span class="badge badge-info badge--xs">{{ s.name }}</span>
             {% if s.is_active %}
             <span class="badge badge-success badge--xs">Active</span>
@@ -37,35 +37,35 @@
             {% if rc %}
             <span class="client-list-item__meta">
                 {{ icon('file-text', '12') }} {{ rc.total }} rules
-                (<span style="color:var(--color-success);font-weight:600;">{{ rc.enabled }}</span> enabled,
-                <span style="color:var(--color-muted);">{{ rc.total - rc.enabled }}</span> disabled)
+                (<span class="text-success fw-600">{{ rc.enabled }}</span> enabled,
+                <span class="text-muted">{{ rc.total - rc.enabled }}</span> disabled)
             </span>
             {% endif %}
         </div>
-        <div style="position:relative;flex:0 0 auto;">
+        <div class="relative flex-none">
             <button type="button" class="btn btn-ghost btn-sm" title="Edit this destination's name, default index and card colour"
-                    onclick="event.stopPropagation(); tideToggleSiemEdit('{{ edit_id }}')">
+                    data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">
                 {{ icon('more-vertical', '16') }}
             </button>
-            <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" onclick="event.stopPropagation()">
+            <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" data-stop-click>
                 <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/edit-destination"
                       hx-target="#client-siems-section" hx-swap="innerHTML">
                     <input type="hidden" name="space" value="{{ s.space or 'default' }}">
-                    <label class="form-label" style="font-size:0.72rem;">Name</label>
+                    <label class="form-label fs-xs">Name</label>
                     <input type="text" name="name" value="{{ s.name }}" class="form-input" required>
-                    <label class="form-label" style="font-size:0.72rem;margin-top:0.5rem;">Default index</label>
+                    <label class="form-label fs-xs mt-sm">Default index</label>
                     <input type="text" name="default_index" value="{{ s.default_index or '' }}" class="form-input" placeholder="logs-*">
-                    <label class="form-label" style="font-size:0.72rem;margin-top:0.5rem;">Card colour</label>
+                    <label class="form-label fs-xs mt-sm">Card colour</label>
                     <div class="client-siem-color-row">
                         {% for c in destination_color_palette %}
                         <button type="button" class="client-siem-swatch{% if (s.color or '') | lower == c | lower %} client-siem-swatch--selected{% endif %}"
-                                style="background:{{ c }};" data-color="{{ c }}"
-                                title="{{ c }}" onclick="tidePickSiemColor(this)"></button>
+                                style="--swatch: {{ c }}" data-color="{{ c }}"
+                                title="{{ c }}" data-click="clientSiems.pickColor"></button>
                         {% endfor %}
                         <input type="color" name="color" value="{{ s.color or destination_color_palette[0] }}" class="client-siem-color-input" title="Custom colour">
                     </div>
-                    <div style="display:flex;justify-content:flex-end;gap:0.4rem;margin-top:0.65rem;">
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="tideToggleSiemEdit('{{ edit_id }}')">Cancel</button>
+                    <div class="flex justify-end gap-sm mt-ms">
+                        <button type="button" class="btn btn-secondary btn-sm" data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">Cancel</button>
                         <button type="submit" class="btn btn-primary btn-sm">{{ icon('save', '12') }} Save</button>
                     </div>
                 </form>
@@ -86,83 +86,81 @@
    global RULE_VALIDATION_*_WEEKS settings take effect. Placeholders
    show the inherited default so operators can see what they'd revert
    to. #}
-<hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
+<hr class="divider-line divider-line--spaced">
 <form name="Submit Validation Thresholds" hx-post="/api/management/clients/{{ client.id }}/validation-thresholds"
       hx-target="#client-siems-section" hx-swap="innerHTML"
-    style="display:flex;gap:0.75rem;align-items:flex-start;flex-wrap:wrap;padding:0 0.25rem;">
-    <div style="flex:0 0 auto;min-width:10rem;">
-        <label class="form-label" style="font-size:0.78rem;">Validation mode</label>
-        <select name="rule_validation_mode" class="form-input" style="width:10rem;" onchange="window.__toggleValidationModeFields(this.value)">
+    class="flex gap-ms items-start flex-wrap py-0 px-xs">
+    <div class="siem-mode-col">
+        <label class="form-label fs-sm">Validation mode</label>
+        <select name="rule_validation_mode" class="form-input siem-mode-select" data-change="clientSiems.validationMode">
             <option value="master" {% if client.rule_validation_mode != 'criticality' %}selected{% endif %}>Master cadence</option>
             <option value="criticality" {% if client.rule_validation_mode == 'criticality' %}selected{% endif %}>By criticality</option>
         </select>
-        <label style="display:flex;align-items:center;gap:0.45rem;font-size:0.72rem;margin-top:0.45rem;white-space:nowrap;">
+        <label class="flex items-center gap-sm fs-xs mt-sm nowrap">
             <input type="hidden" name="delete_source_after_promotion" value="false">
             <input type="checkbox" name="delete_source_after_promotion" value="true"
                    {% if client.delete_source_after_promotion is not defined or client.delete_source_after_promotion %}checked{% endif %}>
             Delete source after promotion by default
         </label>
     </div>
-    <div style="flex:0 0 auto;">
-        <label class="form-label" style="font-size:0.78rem;">Master amber after (weeks)</label>
-        <input type="number" min="1" name="amber_weeks" class="form-input"
-               style="width:9rem;"
+    <div class="flex-none">
+        <label class="form-label fs-sm">Master amber after (weeks)</label>
+        <input type="number" min="1" name="amber_weeks" class="form-input siem-num-input"
                placeholder="{{ settings.rule_validation_amber_weeks }} (default)"
                value="{{ client.rule_validation_amber_weeks if client.rule_validation_amber_weeks is not none else '' }}">
     </div>
-    <div style="flex:0 0 auto;">
-        <label class="form-label" style="font-size:0.78rem;">Master expired after (weeks)</label>
-        <input type="number" min="1" name="expired_weeks" class="form-input"
-               style="width:9rem;"
+    <div class="flex-none">
+        <label class="form-label fs-sm">Master expired after (weeks)</label>
+        <input type="number" min="1" name="expired_weeks" class="form-input siem-num-input"
                placeholder="{{ settings.rule_validation_expired_weeks }} (default)"
                value="{{ client.rule_validation_expired_weeks if client.rule_validation_expired_weeks is not none else '' }}">
     </div>
-    <div id="criticality-validation-grid" style="display:{% if client.rule_validation_mode == 'criticality' %}grid{% else %}none{% endif %};grid-template-columns:repeat(4,minmax(0,1fr));gap:0.5rem;align-items:flex-end;flex:1 1 100%;margin-top:0.25rem;">
+    <div id="criticality-validation-grid" class="crit-grid"{% if client.rule_validation_mode != 'criticality' %} hidden{% endif %}>
         {% for severity in ['low', 'medium', 'high', 'critical'] %}
-        <div style="min-width:0;">
-            <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} amber</label>
+        <div class="min-w-0">
+            <label class="form-label fs-xs">{{ severity|title }} amber</label>
             <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
         </div>
-        <div style="min-width:0;">
-            <label class="form-label" style="font-size:0.72rem;">{{ severity|title }} expired</label>
+        <div class="min-w-0">
+            <label class="form-label fs-xs">{{ severity|title }} expired</label>
             <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
         </div>
         {% endfor %}
     </div>
-    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm" style="margin-top:1.45rem;">Save thresholds</button>
-    <span style="flex-basis:100%;color:var(--color-text-muted);font-size:0.72rem;">
+    <button name="Save thresholds" type="submit" class="btn btn-primary btn-sm mt-lg">Save thresholds</button>
+    <span class="siem-mode-hint">
         Leave blank to inherit the global default. Criticality mode stores overrides per severity.
     </span>
 </form>
 
 {# Per-client rule scoring weights: loaded on demand so the section works wherever this partial is rendered. #}
-<hr style="border:none;border-top:1px solid var(--color-border);margin:1rem 0 0.75rem;">
+<hr class="divider-line divider-line--spaced">
 <div id="client-scoring" hx-get="/api/management/clients/{{ client.id }}/scoring" hx-trigger="load" hx-swap="outerHTML"></div>
 </div>
 
 <!-- Edit SIEMs Modal -->
 <div name="Edit Siems Modal" id="edit-siems-modal" class="modal-overlay" style="display:none;"
-     onclick="if(event.target===this) this.style.display='none'">
+     data-click="backdrop.hide">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage SIEMs — {{ client.name }}</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="document.getElementById('edit-siems-modal').style.display='none'">&#x2715;</button>
+                    data-click="el.hide" data-target="edit-siems-modal">&#x2715;</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:1rem;">
+        <div class="stack gap-md">
             <!-- Current SIEMs with remove -->
             {% if client_siems %}
             <div>
                 <label class="form-label">Current SIEMs</label>
-                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                <div class="stack gap-xs">
                     {% for s in client_siems %}
-                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
-                        <span>{{ s.label }} <span class="badge badge-muted" style="font-size:0.65rem;">{{ s.name }}</span></span>
-                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
+                    <div class="u-bg-surface list-row list-row--plain">
+                        <span>{{ s.label }} <span class="badge badge-muted fs-2xs">{{ s.name }}</span></span>
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
                                 hx-delete="/api/management/clients/{{ client.id }}/siems/{{ s.id }}?space={{ s.space or 'default' }}"
                                 hx-target="#client-siems-section" hx-swap="innerHTML"
                                 hx-confirm="Unlink '{{ s.label }}' ({{ s.name }}) from this client?"
-                                style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                               >
                             {{ icon('x', '12') }} Remove
                         </button>
                     </div>
@@ -172,27 +170,27 @@
             {% endif %}
             <!-- Add SIEM form -->
             {% if available_siems is defined and available_siems %}
-            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <hr class="divider-line">
             <form name="Submit Siems" hx-post="/api/management/clients/{{ client.id }}/siems"
                   hx-target="#client-siems-section" hx-swap="innerHTML"
-                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-siems-modal').style.display='none'">
                 <label class="form-label">Add SIEM</label>
                 <select name="siem_id" class="form-input" required id="add-siem-select"
-                        onchange="onAddSiemChange(this)">
+                        data-change="clientSiems.addSiem">
                     <option value="" disabled selected>Select a SIEM&hellip;</option>
                     {% for si in available_siems %}
                     <option value="{{ si.id }}" data-siem-type="{{ si.siem_type }}">{{ si.label }} ({{ si.siem_type }})</option>
                     {% endfor %}
                 </select>
                 <div>
-                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                    <label class="form-label fs-sm text-muted mb-xs">
                         Name this destination (e.g. "Legacy Prod", "New SIEM Prod", "QA Sandbox")
                     </label>
                     <input type="text" name="name" class="form-input" placeholder="Production" required>
                 </div>
                 <div id="siem-space-field" style="display:none;">
-                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                    <label class="form-label fs-sm text-muted mb-xs">
                         Kibana space id (NOT the name above -- this is the actual space in Kibana).
                         Leave blank for Kibana's built-in <code>default</code> space.
                     </label>
@@ -201,7 +199,7 @@
                            placeholder="default"
                            list="">
                     <small id="add-siem-space-hint"
-                           style="display:block;margin-top:0.25rem;font-size:0.7rem;color:var(--color-text-muted);"></small>
+                           class="block mt-xs fs-xs text-muted"></small>
                     {# One <datalist> per SIEM so each SIEM only offers its
                        own spaces (CLAUDE.md §8.2 guarantee 1). The input's
                        ``list`` attribute is rewritten in JS when the SIEM
@@ -219,20 +217,20 @@
                     {% endif %}
                 </div>
                 <div>
-                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                    <label class="form-label fs-sm text-muted mb-xs">
                         Default index pattern (optional)
                     </label>
                     <input type="text" name="default_index" class="form-input" placeholder="logs-*">
                 </div>
                 <div>
-                    <label class="form-label" style="font-size:0.75rem;color:var(--color-text-muted);margin-bottom:0.2rem;">
+                    <label class="form-label fs-sm text-muted mb-xs">
                         Card colour &mdash; a free one is pre-selected; pick another if you'd rather
                     </label>
                     <div class="client-siem-color-row">
                         {% for c in destination_color_palette %}
                         <button type="button" class="client-siem-swatch{% if c | lower == next_free_color | lower %} client-siem-swatch--selected{% endif %}"
-                                style="background:{{ c }};" data-color="{{ c }}"
-                                title="{{ c }}" onclick="tidePickSiemColor(this)"></button>
+                                style="--swatch: {{ c }}" data-color="{{ c }}"
+                                title="{{ c }}" data-click="clientSiems.pickColor"></button>
                         {% endfor %}
                         <input type="color" name="color" value="{{ next_free_color }}" class="client-siem-color-input" title="Custom colour">
                     </div>
@@ -240,125 +238,13 @@
                 <button name="Link SIEM" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link SIEM</button>
             </form>
             {% endif %}
-            <div style="display:flex;justify-content:flex-end;">
+            <div class="flex justify-end">
                 <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
-                        onclick="document.getElementById('edit-siems-modal').style.display='none'">Close</button>
+                        data-click="el.hide" data-target="edit-siems-modal">Close</button>
             </div>
         </div>
     </div>
 </div>
 
-<script>
-// Per-SIEM rule-count map for the "default — 412 rules" hint shown
-// underneath the space input. Keyed by siem_id → space → total. CLAUDE.md
-// §8.2 guarantee 4: never key by space alone.
-window.__siemSpaceCounts = {{ (siem_space_counts | default({})) | tojson }};
-
-// Per-destination edit popover ("..." menu): one open at a time, closes on an outside click.
-window.tideToggleSiemEdit = function (id) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    var opening = el.style.display === 'none';
-    document.querySelectorAll('.client-siem-edit-popover').forEach(function (p) { p.style.display = 'none'; });
-    el.style.display = opening ? 'block' : 'none';
-};
-document.addEventListener('click', function (e) {
-    if (e.target.closest('.client-siem-edit-popover') || e.target.closest('[onclick*="tideToggleSiemEdit"]')) return;
-    document.querySelectorAll('.client-siem-edit-popover').forEach(function (p) { p.style.display = 'none'; });
-});
-
-// Colour swatches (edit popover + Add SIEM form) write into the sibling <input type="color">
-// and reflect the pick in the swatch row itself.
-window.tidePickSiemColor = function (btn) {
-    var row = btn.closest('.client-siem-color-row');
-    if (!row) return;
-    var input = row.querySelector('input[type="color"]');
-    if (input) input.value = btn.dataset.color;
-    row.querySelectorAll('.client-siem-swatch').forEach(function (s) { s.classList.remove('client-siem-swatch--selected'); });
-    btn.classList.add('client-siem-swatch--selected');
-};
-document.addEventListener('input', function (e) {
-    if (e.target.matches && e.target.matches('.client-siem-color-input')) {
-        var row = e.target.closest('.client-siem-color-row');
-        if (row) row.querySelectorAll('.client-siem-swatch').forEach(function (s) { s.classList.remove('client-siem-swatch--selected'); });
-    }
-});
-
-window.__toggleValidationModeFields = function(mode) {
-    var grid = document.getElementById('criticality-validation-grid');
-    if (!grid) return;
-    grid.style.display = (mode === 'criticality') ? 'grid' : 'none';
-};
-
-function onAddSiemChange(sel) {
-    var opt = sel.options[sel.selectedIndex];
-    var siemType = opt ? opt.getAttribute('data-siem-type') : '';
-    var siemId   = opt ? opt.value : '';
-    var field    = document.getElementById('siem-space-field');
-    var input    = document.getElementById('add-siem-space-input');
-    var hint     = document.getElementById('add-siem-space-hint');
-    field.style.display = (siemType === 'elastic') ? '' : 'none';
-    if (siemType !== 'elastic' || !siemId) {
-        if (input) { input.setAttribute('list', ''); input.value = ''; }
-        if (hint)  { hint.textContent = ''; }
-        return;
-    }
-    // Point the input's autocomplete at THIS SIEM's datalist only.
-    if (input) {
-        input.setAttribute('list', 'known-spaces-' + siemId);
-        input.value = '';
-    }
-    var counts = (window.__siemSpaceCounts || {})[siemId] || {};
-    // Spaces are fetched from the SIEM on demand so the list is always fresh,
-    // and present even when this page was rendered before the SIEM existed.
-    if (hint) hint.textContent = 'Loading spaces from the SIEM…';
-    var requested = siemId;
-    fetch('/api/management/siems/' + encodeURIComponent(siemId) + '/spaces', {credentials: 'same-origin'})
-        .then(function (r) { return r.json().catch(function () { return {}; }); })
-        .then(function (data) {
-            if (document.getElementById('add-siem-select').value !== requested) return;  // selection moved on
-            var spaces = (data && data.spaces) || [];
-            var listId = 'known-spaces-' + requested;
-            var list = document.getElementById(listId);
-            if (!list) {
-                list = document.createElement('datalist');
-                list.id = listId;
-                field.appendChild(list);
-            }
-            list.innerHTML = '';
-            spaces.forEach(function (sp) {
-                var o = document.createElement('option');
-                o.value = sp;
-                if (counts[sp]) o.label = counts[sp].total + ' rules';
-                list.appendChild(o);
-            });
-            input.setAttribute('list', listId);
-            hint.textContent = '';
-            if (!spaces.length) {
-                hint.textContent = ((data && data.message) || 'No spaces found.') + ' Type the Kibana space ID.';
-                return;
-            }
-            hint.appendChild(document.createTextNode('Spaces on this SIEM — click to use: '));
-            spaces.forEach(function (sp) {
-                var b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'btn btn-secondary btn-sm';
-                b.style.cssText = 'padding:0 0.4rem;margin:0 0.25rem 0.25rem 0;font-size:0.7rem;';
-                b.textContent = sp + (counts[sp] ? ' (' + counts[sp].total + ')' : '');
-                b.onclick = function () { input.value = sp; };
-                hint.appendChild(b);
-            });
-        })
-        .catch(function () {
-            if (hint) hint.textContent = 'Could not load spaces from the server. Type the Kibana space ID.';
-        });
-}
-
-// Back-compat shim — older callers still wire ``onchange="toggleSpaceField(this)"``.
-function toggleSpaceField(sel) { onAddSiemChange(sel); }
-
-document.addEventListener('DOMContentLoaded', function() {
-    var mode = document.querySelector('select[name="rule_validation_mode"]');
-    if (mode) window.__toggleValidationModeFields(mode.value);
-});
-</script>
+{# Rule counts per SIEM and space, for the Add SIEM form's space hint (client_detail.js). #}
+<script type="application/json" id="siem-space-counts">{{ (siem_space_counts | default({})) | tojson }}</script>

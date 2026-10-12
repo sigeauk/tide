@@ -734,7 +734,25 @@ def _coerce_egress_kind(value: Optional[str]) -> str:
 
 
 def _row_to_egress_target(row) -> dict:
-    return dict(zip(_EGRESS_TARGET_COLS, row))
+    from app.services.credentials import reveal_fields
+    return reveal_fields(dict(zip(_EGRESS_TARGET_COLS, row)), "api_key_enc")
+
+
+def seal_egress_keys(client_id: str) -> int:
+    """Encrypt egress API keys stored in plain text in this client's CTI DB, if it has one (#59)."""
+    import os
+    from app.services.credentials import PREFIX, seal
+    db_path = get_cti_db_path(client_id, None)
+    if not os.path.exists(db_path):
+        return 0
+    with open_cti_db(client_id) as conn:
+        rows = conn.execute(
+            "SELECT id, api_key_enc FROM cti_egress_targets "
+            "WHERE COALESCE(api_key_enc, '') <> '' AND NOT starts_with(api_key_enc, ?)", [PREFIX]
+        ).fetchall()
+        for rid, value in rows:
+            conn.execute("UPDATE cti_egress_targets SET api_key_enc = ? WHERE id = ?", [seal(value), rid])
+    return len(rows)
 
 
 def list_egress_targets(client_id: str, *,
@@ -768,6 +786,9 @@ _VALID_TLP_CEILINGS = {"clear", "white", "green", "amber", "red"}
 def _coerce_tlp_ceiling(value: Optional[str]) -> str:
     v = (value or "").strip().lower()
     return v if v in _VALID_TLP_CEILINGS else "amber"
+
+
+from app.services.credentials import seal  # noqa: E402
 
 
 def create_egress_target(client_id: str, *,
@@ -806,7 +827,7 @@ def create_egress_target(client_id: str, *,
             [target_id, label.strip(), kind_v, siem_id or None,
              index_pattern or "logs-ti_tide.indicator-*",
              latest_index or "logs-ti_tide_latest",
-             api_key_enc or None,
+             seal(api_key_enc) or None,
              (folder_path or None),
              (diode_endpoint or None),
              ceiling, bool(is_active)],
@@ -843,6 +864,8 @@ def update_egress_target(client_id: str, target_id: str, *,
             v = _coerce_egress_kind(v)
         if k == "is_active":
             v = bool(v)
+        if k == "api_key_enc":
+            v = seal(v)
         sets.append(f"{k} = ?")
         params.append(v)
     if not sets:

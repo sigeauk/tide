@@ -7,6 +7,8 @@ import duckdb
 import json
 import os
 import re
+
+from app.services.credentials import PREFIX as CREDENTIAL_PREFIX, reveal_fields, reveal_or_none, seal
 import time
 import uuid
 import pandas as pd
@@ -100,7 +102,11 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 79
+SCHEMA_VERSION = 84
+
+# The per-client role that opens Diagnostics for that client. Only a super admin can grant or
+# revoke it (set_user_roles(grant_support=...)).
+SUPPORT_ROLE = "SUPPORT"
 
 # Default colours offered (and auto-assigned) for a linked SIEM+space destination -- distinct
 # from each other at a glance, and legible as small dots/pills in both light and dark themes.
@@ -178,6 +184,30 @@ def validation_key(rule_id, raw_data=None) -> str:
 
 # SQL for the same key, for queries that do not load the rule JSON
 VALIDATION_KEY_SQL = "COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id)"
+
+
+def rule_json_keys(raw_data) -> Tuple[str, Optional[str]]:
+    """``(kibana_rule_id, rule_language)`` from a rule's Kibana JSON (dict or text), as stored in
+    detection_rules' columns of the same names: '' when the JSON has no rule_id, None when it has
+    no language. Every writer of raw_data keeps them in step."""
+    if isinstance(raw_data, str):
+        try:
+            raw_data = json.loads(raw_data)
+        except Exception:
+            raw_data = None
+    if not isinstance(raw_data, dict):
+        return "", None
+    language = raw_data.get("language")
+    return str(raw_data.get("rule_id") or ""), (str(language) if language is not None else None)
+
+
+# Fill kibana_rule_id / rule_language for rows written before they existed (rule_json_keys in SQL).
+RULE_KEY_BACKFILL_SQL = (
+    "UPDATE detection_rules SET "
+    "kibana_rule_id = CASE WHEN json_valid(raw_data) THEN COALESCE(json_extract_string(raw_data, '$.rule_id'), '') ELSE '' END, "
+    "rule_language = CASE WHEN json_valid(raw_data) THEN json_extract_string(raw_data, '$.language') END "
+    "WHERE kibana_rule_id IS NULL"
+)
 
 
 def validation_for(validation_data: Dict[str, Dict[str, str]], rule_id, rule_name) -> Dict[str, str]:
@@ -390,11 +420,11 @@ class DatabaseService:
                 ).fetchone()
                 if existing:
                     continue
-                config = _json.dumps({
+                config = seal(_json.dumps({
                     "url": url or "",
-                    "token": token_enc or "",
+                    "token": reveal_or_none(token_enc) or "",
                     "legacy_opencti_id": oid,
-                })
+                }))
                 conn.execute(
                     "INSERT INTO cti_connectors "
                     "(vendor, label, is_active, kind, config_json, "
@@ -3631,6 +3661,78 @@ class DatabaseService:
             logger.info("Migration 79: added tls_verify (off) to siem_inventory, gitlab_inventory, "
                         "keycloak_inventory; dropped the unused tls_insecure column.")
 
+        # ── Migration 80: page:diagnostics in every client's Role Templates ──
+        # The Diagnostics page is for super admins (its routes require it), so no role is given
+        # access here; the row is in the matrix so later roles can be. New clients copy an
+        # existing client's permissions, so seeding every client now covers them too.
+        if current_version < 80:
+            role_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM roles WHERE name IN ('ADMIN', 'ANALYST', 'ENGINEER')").fetchall()]
+            for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
+                for rid in role_ids:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, 'page:diagnostics', false, false) ON CONFLICT DO NOTHING",
+                        [rid, cid],
+                    )
+            self._set_schema_version(conn, 80)
+            logger.info("Migration 80: added page:diagnostics (no access) to every client's role templates.")
+
+        # ── Migration 81: the per-client SUPPORT role ────────────────────
+        # Held alongside a user's other roles on a client, it opens Diagnostics for that client
+        # (and nothing else). Only super admins grant it: set_user_roles(grant_support=...).
+        if current_version < 81:
+            conn.execute(
+                "INSERT INTO roles (name, description) VALUES (?, ?) ON CONFLICT DO NOTHING",
+                [SUPPORT_ROLE, "Diagnostics for this client: checks, look-ups and allowed fixes. Granted by super admins."],
+            )
+            support_id = conn.execute("SELECT id FROM roles WHERE name = ?", [SUPPORT_ROLE]).fetchone()[0]
+            for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
+                conn.execute(
+                    "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                    "VALUES (?, ?, 'page:diagnostics', true, true) ON CONFLICT DO NOTHING",
+                    [support_id, cid],
+                )
+            self._set_schema_version(conn, 81)
+            logger.info("Migration 81: added the SUPPORT role with Diagnostics access on every client.")
+
+        # ── Migration 82: Diagnostics fixes ──────────────────────────────
+        # Each client's own "Allow diagnostic fixes" switch (off; only a super admin turns it on),
+        # and a record of every fix: who, when, what changed, the backup taken first, and the rows
+        # needed to undo it (app.services.diagnostic_fixes).
+        if current_version < 82:
+            conn.execute("ALTER TABLE clients ADD COLUMN IF NOT EXISTS diagnostic_fixes BOOLEAN DEFAULT false")
+            conn.execute(self.DIAGNOSTIC_RUNS_DDL)
+            self._set_schema_version(conn, 82)
+            logger.info("Migration 82: added clients.diagnostic_fixes (off) and the diagnostic_runs table.")
+
+        # ── Migration 83: sync runs that outlive the process ─────────────
+        # sync_history (migration 42) becomes the record of every rule and CTI sync, written when
+        # one starts and when it ends (app.services.sync_runs): which client, what it covered
+        # (scope_json: destination, connector, mapping re-check), manual or scheduled, who started
+        # it, when it finished, and which run it retried. Live states: running, success, partial,
+        # failed, interrupted (still running when TIDE restarted). Existing rows keep their values.
+        if current_version < 83:
+            conn.execute("CREATE TABLE IF NOT EXISTS sync_history (id VARCHAR PRIMARY KEY, sync_kind VARCHAR NOT NULL, "
+                         "status VARCHAR NOT NULL, started_at TIMESTAMP NOT NULL DEFAULT now(), duration_ms INTEGER, "
+                         "total_count INTEGER, detail_json VARCHAR, error VARCHAR)")
+            for col, typ in (("client_id", "VARCHAR"), ("trigger", "VARCHAR"), ("actor", "VARCHAR"),
+                             ("label", "VARCHAR"), ("scope_json", "VARCHAR"), ("finished_at", "TIMESTAMP"),
+                             ("retry_of", "VARCHAR")):
+                conn.execute(f"ALTER TABLE sync_history ADD COLUMN IF NOT EXISTS {col} {typ}")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_sync_history_client_started ON sync_history (client_id, started_at)")
+            self._set_schema_version(conn, 83)
+            logger.info("Migration 83: sync_history records each sync's client, scope, trigger, finish and retry.")
+
+        # ── Migration 84: ending a user's sessions ───────────────────────
+        # Local sessions are signed, self-contained tokens (24 h). users.sessions_valid_after (UTC)
+        # ends every one issued before it: set by signing out, changing or resetting the password,
+        # and deactivation (DatabaseService.end_user_sessions, AuthService.get_user_from_session).
+        if current_version < 84:
+            conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMP")
+            self._set_schema_version(conn, 84)
+            logger.info("Migration 84: added users.sessions_valid_after.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -3711,6 +3813,26 @@ class DatabaseService:
             space_b VARCHAR NOT NULL,
             created_by VARCHAR,
             created_at TIMESTAMP DEFAULT now()
+        )
+    """
+
+    # Shared DB: one row per Diagnostics fix (migration 82). ``undo_data`` holds what the fix
+    # changed, as JSON, so Undo can put exactly those rows back.
+    DIAGNOSTIC_RUNS_DDL = """
+        CREATE TABLE IF NOT EXISTS diagnostic_runs (
+            id           VARCHAR PRIMARY KEY DEFAULT (uuid()),
+            fix_id       VARCHAR NOT NULL,
+            check_id     VARCHAR NOT NULL,
+            client_id    VARCHAR NOT NULL,
+            actor_id     VARCHAR,
+            actor        VARCHAR,
+            tide_version VARCHAR,
+            rows_changed INTEGER,
+            backup_path  VARCHAR,
+            undo_data    VARCHAR,
+            created_at   TIMESTAMP DEFAULT now(),
+            undone_at    TIMESTAMP,
+            undone_by    VARCHAR
         )
     """
 
@@ -4041,12 +4163,12 @@ class DatabaseService:
     _USER_COLS = [
         "id", "username", "email", "full_name", "password_hash", "keycloak_id",
         "auth_provider", "is_active", "is_superadmin", "change_on_next_login",
-        "created_at", "updated_at", "last_login",
+        "created_at", "updated_at", "last_login", "sessions_valid_after",
     ]
     _USER_SELECT = (
         "SELECT id, username, email, full_name, password_hash, keycloak_id, "
         "auth_provider, is_active, is_superadmin, change_on_next_login, "
-        "created_at, updated_at, last_login FROM users"
+        "created_at, updated_at, last_login, sessions_valid_after FROM users"
     )
 
     def get_user_by_username(self, username: str) -> Optional[Dict]:
@@ -4120,11 +4242,16 @@ class DatabaseService:
             row = conn.execute("SELECT id FROM users WHERE username = ?", [username]).fetchone()
             return row[0]
 
+    def end_user_sessions(self, user_id: str) -> None:
+        """End every local session this user has: any session issued before now is refused (#30).
+        Sessions carry their issue time to the microsecond, so one issued straight after still works."""
+        self.update_user(user_id, sessions_valid_after=datetime.utcnow())
+
     def update_user(self, user_id: str, **fields) -> bool:
         allowed = {
             "username", "email", "full_name", "password_hash", "is_active",
             "keycloak_id", "auth_provider", "change_on_next_login", "last_login",
-            "is_superadmin",
+            "is_superadmin", "sessions_valid_after",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -4150,26 +4277,32 @@ class DatabaseService:
         - When `client_id` is provided, return roles assigned in that tenant only.
         - When `client_id` is None, return the DISTINCT union across all tenants
           (compatible with legacy callers that treated roles as global).
+        - Only clients the user belongs to count (_MEMBER_ROLE): a role left on a client the
+          user was removed from grants nothing.
         """
         with self.get_shared_connection() as conn:
             if client_id is None:
                 rows = conn.execute(
                     "SELECT DISTINCT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
-                    "WHERE ur.user_id = ?", [user_id]
+                    f"WHERE ur.user_id = ? AND {self._MEMBER_ROLE}", [user_id]
                 ).fetchall()
             else:
                 rows = conn.execute(
                     "SELECT r.name FROM roles r JOIN user_roles ur ON r.id = ur.role_id "
-                    "WHERE ur.user_id = ? AND ur.client_id = ?", [user_id, client_id]
+                    f"WHERE ur.user_id = ? AND ur.client_id = ? AND {self._MEMBER_ROLE}", [user_id, client_id]
                 ).fetchall()
             return [r[0] for r in rows]
 
+    # A user_roles row (alias ur) on a client the user still belongs to.
+    _MEMBER_ROLE = ("EXISTS (SELECT 1 FROM user_clients uc "
+                    "WHERE uc.user_id = ur.user_id AND uc.client_id = ur.client_id)")
+
     def get_user_role_map(self, user_id: str) -> Dict[str, List[str]]:
-        """Return {client_id: [role_name, ...]} for the user across all tenants."""
+        """Return {client_id: [role_name, ...]} for the user across the clients they belong to."""
         with self.get_shared_connection() as conn:
             rows = conn.execute(
                 "SELECT ur.client_id, r.name FROM user_roles ur "
-                "JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ?",
+                f"JOIN roles r ON r.id = ur.role_id WHERE ur.user_id = ? AND {self._MEMBER_ROLE}",
                 [user_id],
             ).fetchall()
         out: Dict[str, List[str]] = {}
@@ -4187,6 +4320,7 @@ class DatabaseService:
         user_id: str,
         role_names: List[str],
         client_id: Optional[str] = None,
+        grant_support: bool = False,
     ):
         """Set a user's roles.
 
@@ -4194,8 +4328,21 @@ class DatabaseService:
         - Without `client_id` (legacy): replaces roles across every client the
           user is currently assigned to (or the default client when the user has
           no assignments). Falls back to the system default when neither exists.
+        - The SUPPORT role can only be granted or revoked by a super admin: unless
+          `grant_support` is set, the user keeps exactly the SUPPORT roles they had
+          and a requested SUPPORT is ignored. Callers pass `user.is_superadmin`.
         """
+        role_names = list(role_names)
         with self.get_shared_connection() as conn:
+            if not grant_support:
+                role_names = [r for r in role_names if r != SUPPORT_ROLE]
+                kept_support = [r[0] for r in conn.execute(
+                    "SELECT ur.client_id FROM user_roles ur JOIN roles r ON r.id = ur.role_id "
+                    "WHERE ur.user_id = ? AND r.name = ?" + (" AND ur.client_id = ?" if client_id is not None else ""),
+                    [user_id, SUPPORT_ROLE] + ([client_id] if client_id is not None else []),
+                ).fetchall()]
+            else:
+                kept_support = []
             if client_id is not None:
                 conn.execute(
                     "DELETE FROM user_roles WHERE user_id = ? AND client_id = ?",
@@ -4227,6 +4374,13 @@ class DatabaseService:
                         "VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
                         [user_id, cid, role_row[0]],
                     )
+            support_row = conn.execute("SELECT id FROM roles WHERE name = ?", [SUPPORT_ROLE]).fetchone() \
+                if kept_support else None
+            for cid in kept_support if support_row else []:
+                conn.execute(
+                    "INSERT INTO user_roles (user_id, client_id, role_id) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+                    [user_id, cid, support_row[0]],
+                )
 
     def set_user_superadmin(self, user_id: str, value: bool) -> None:
         """Toggle the superadmin flag — bypasses tenant role checks everywhere."""
@@ -4239,22 +4393,29 @@ class DatabaseService:
     def jit_provision_keycloak_user(self, keycloak_id: str, username: str,
                                      email: str = None, full_name: str = None,
                                      kc_role: Optional[str] = None,
-                                     is_superadmin: Optional[bool] = None) -> Dict:
+                                     is_superadmin: Optional[bool] = None,
+                                     login: bool = False) -> Dict:
         """Provision/refresh a Keycloak-backed user record.
 
-                - `kc_role` (one of ADMIN / ENGINEER / ANALYST) seeds the user's Primary
-                    Client role only when the account is first provisioned. Existing
-                    per-client roles are owned by TIDE and are never overwritten by an
-                    authentication refresh.
-        - `is_superadmin` reflects membership of the Keycloak `superadmin` group.
-          Pass `None` to leave the flag untouched.
+        - `kc_role` (one of ADMIN / ENGINEER / ANALYST) seeds the user's Primary Client role
+          only when the account is first provisioned.
+        - `is_superadmin` (membership of the Keycloak `superadmin` group) likewise seeds the
+          super-admin flag only when the account is first provisioned.
+        - After that, roles and the super-admin flag are owned by TIDE and an authentication
+          refresh never changes them: a grant or revoke made in TIDE stands.
+        - `login` marks an actual sign-in, the only time `last_login` is written. A refresh on
+          an ordinary request writes nothing unless the user's email or name changed.
         """
         existing = self.get_user_by_keycloak_id(keycloak_id)
         if existing:
-            self.update_user(existing["id"], email=email, full_name=full_name, last_login=datetime.now())
-            if is_superadmin is not None:
-                self.set_user_superadmin(existing["id"], is_superadmin)
-            return self.get_user_by_keycloak_id(keycloak_id)
+            changed = {k: v for k, v in (("email", email), ("full_name", full_name))
+                       if v and v != existing.get(k)}
+            if login:
+                changed["last_login"] = datetime.now()
+            if changed:
+                self.update_user(existing["id"], **changed)
+                return self.get_user_by_keycloak_id(keycloak_id)
+            return existing
         # Link existing account by username only if it is already SSO-capable.
         # Local-only accounts must never be auto-upgraded by SSO login.
         by_name = self.get_user_by_username(username)
@@ -4308,6 +4469,8 @@ class DatabaseService:
             self.assign_user_to_client(uid, default_cid, is_default=True)
         if is_superadmin is not None:
             self.set_user_superadmin(uid, is_superadmin)
+        if login:
+            self.update_user(uid, last_login=datetime.now())
         # Default to ANALYST when no group mapping was supplied.
         self._sync_kc_role_to_primary(uid, kc_role or "ANALYST")
         return self.get_user_by_id(uid)
@@ -4479,6 +4642,23 @@ class DatabaseService:
     # by name until a rule with that name shows up and they are bound to its id.
 
     _checked_rule_ready: set = set()
+    _rule_keys_ready: set = set()
+
+    def _ensure_rule_key_columns(self, conn) -> None:
+        """Add detection_rules.kibana_rule_id / rule_language and fill them for rows written before
+        they existed, once per tenant DB per process. A row whose JSON has no rule_id gets '', so
+        the backfill never runs over the same rows twice."""
+        from app.services.tenant_manager import get_tenant_db_path
+        key = get_tenant_db_path()
+        if key in self._rule_keys_ready:
+            return
+        try:
+            conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS kibana_rule_id VARCHAR")
+            conn.execute("ALTER TABLE detection_rules ADD COLUMN IF NOT EXISTS rule_language VARCHAR")
+            conn.execute(RULE_KEY_BACKFILL_SQL)
+        except duckdb.CatalogException:
+            return   # no detection_rules here yet: the first sync creates it with the columns
+        self._rule_keys_ready.add(key)
 
     def _ensure_checked_rule(self, conn) -> None:
         """Add ``checkedRule.rule_id`` and bind name-only rows to rule ids, once per tenant DB per process."""
@@ -4660,16 +4840,22 @@ class DatabaseService:
         filters: RuleFilters,
         thresholds: Optional[Tuple[int, int]] = None,
         client_id: Optional[str] = None,
+        slim: bool = False,
     ) -> Tuple[List[DetectionRule], int, str]:
         """
         Get paginated list of detection rules with filters.
         Returns (rules, total_count, last_sync).
+
+        ``slim``: leave out each rule's Kibana JSON; ``raw_data`` then holds only its ``rule_id`` and
+        ``language`` (from the kibana_rule_id / rule_language columns). For lists of rules (the grid,
+        the metrics); anything showing or editing one rule's query, fields or JSON must not use it.
 
         ``thresholds`` carries an optional ``(amber_weeks, expired_weeks)``
         tuple resolved by :meth:`get_client_validation_thresholds`. When
         omitted each rule's validation status uses the global defaults.
         """
         with self.get_connection() as conn:
+            self._ensure_rule_key_columns(conn)
             # Base query
             query = "SELECT * FROM detection_rules WHERE 1=1"
             params = []
@@ -4781,30 +4967,31 @@ class DatabaseService:
                     order_parts.append("COALESCE(name, '') ASC")
                 query += f" ORDER BY {', '.join(order_parts)}"
             
-            if fetch_all:
-                # Fetch ALL matching rows for Python-side sort/filter, then paginate
-                df = conn.execute(query, params).df()
-            else:
-                # Pagination (DB-side)
+            if slim:   # after the count, which is derived from "SELECT *"
+                query = query.replace("SELECT * FROM detection_rules", "SELECT * EXCLUDE (raw_data) FROM detection_rules", 1)
+            if not fetch_all:
+                # Pagination (DB-side); otherwise fetch ALL matching rows for Python-side sort/filter
                 offset = (filters.page - 1) * filters.page_size
                 query += f" LIMIT {filters.page_size} OFFSET {offset}"
-                df = conn.execute(query, params).df()
-            
+            # Plain rows, not a DataFrame: building one and walking it with iterrows() cost more
+            # than the query for a large client.
+            cur = conn.execute(query, params)
+            columns = [d[0] for d in cur.description]
+            rows = [dict(zip(columns, values)) for values in cur.fetchall()]
+
             # Get last sync time
-            try:
-                last_sync = df['last_updated'].max().strftime("%Y-%m-%d %H:%M") if not df.empty else "Never"
-            except:
-                last_sync = "Never"
+            stamps = [r["last_updated"] for r in rows if isinstance(r.get("last_updated"), datetime)]
+            last_sync = max(stamps).strftime("%Y-%m-%d %H:%M") if stamps else "Never"
         
         # Convert to models (search already applied in SQL)
         validation_data = self._load_validation_data()
         rules = []
         threshold_cache: Dict[Tuple[str, str], Tuple[int, int]] = {}
 
-        for _, row in df.iterrows():
+        for row in rows:
             try:
                 rule = self._row_to_rule(
-                    row.to_dict(),
+                    row,
                     validation_data,
                     thresholds,
                     client_id=client_id,
@@ -5021,13 +5208,15 @@ class DatabaseService:
         severity = payload.get("severity")
         enabled = payload.get("enabled")
         mitre_ids = payload.get("mitre_ids") or []
+        kibana_rule_id, rule_language = rule_json_keys(payload)
         with self.get_connection() as conn:
+            self._ensure_rule_key_columns(conn)
             row = conn.execute(
                 "UPDATE detection_rules SET name = COALESCE(?, name), "
                 "severity = COALESCE(?, severity), enabled = COALESCE(?, enabled), "
-                "mitre_ids = ?, raw_data = ?, last_updated = now() "
+                "mitre_ids = ?, raw_data = ?, kibana_rule_id = ?, rule_language = ?, last_updated = now() "
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
-                [name, severity, enabled, mitre_ids, raw_json, rule_id, siem_id, space],
+                [name, severity, enabled, mitre_ids, raw_json, kibana_rule_id, rule_language, rule_id, siem_id, space],
             ).fetchone()
         return row is not None
 
@@ -5090,9 +5279,19 @@ class DatabaseService:
         old_space: str,
         new_siem_id: str,
         new_space: str,
+        actor: Optional[str] = None,
     ) -> int:
-        """Move baseline references to a replacement rule and retain the old row."""
-        if not old_rule_id or not new_rule_id or old_rule_id == new_rule_id:
+        """A true Move's remap (CLAUDE.md §6): the baseline mappings that name the old rule *at its old
+        destination* now name the new rule at its new one, and the old row is kept, deprecated. Each
+        mapping keeps its id, where it is applied and its history, and the move is added to that
+        technique's history. Mappings at any other destination (a live copy of the same rule_id) and
+        those with no destination recorded are left alone. Runs when only the destination changes too:
+        Kibana keeps a rule's rule_id when it is moved. Returns how many mappings moved."""
+        from app.inventory_engine import relink_step_detection
+        old_space, new_space = old_space or "default", new_space or "default"
+        if not old_rule_id or not new_rule_id or not old_siem_id or not new_siem_id:
+            return 0
+        if (old_rule_id, old_siem_id, old_space) == (new_rule_id, new_siem_id, new_space):
             return 0
         with self.get_connection() as conn:
             conn.execute("BEGIN TRANSACTION")
@@ -5104,20 +5303,67 @@ class DatabaseService:
                 if not old_exists:
                     conn.execute("ROLLBACK")
                     return 0
-                changed = conn.execute(
-                    "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? RETURNING id",
-                    [new_rule_id, old_rule_id],
-                ).fetchall()
+                mappings = [r[0] for r in conn.execute(
+                    "SELECT id FROM step_detections WHERE rule_ref = ? AND siem_id = ? "
+                    "AND COALESCE(space, 'default') = ?",
+                    [old_rule_id, old_siem_id, old_space],
+                ).fetchall()]
+                for detection_id in mappings:
+                    relink_step_detection(detection_id, rule_ref=new_rule_id, siem_id=new_siem_id, space=new_space,
+                                          actor=actor, client_id=client_id, conn=conn)
                 conn.execute(
                     "UPDATE detection_rules SET deprecated = true "
                     "WHERE rule_id = ? AND siem_id = ? AND space = ?",
                     [old_rule_id, old_siem_id, old_space],
                 )
                 conn.execute("COMMIT")
-                return len(changed)
+                return len(mappings)
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
+
+    def note_rule_recreated(self, client_id: str, rule_id: str, siem_id: str, space: str,
+                            old_object_id: Optional[str], new_object_id: str, actor_name: Optional[str] = None,
+                            actor_user_id: Optional[str] = None) -> None:
+        """Kibana deleted and re-created a rule (same rule_id, new saved-object id) because its stored
+        API key couldn't be decrypted (elastic_helper._put_rule). TIDE keys rules by rule_id, so its
+        mappings, links and validation still match. What carries the saved-object id moves to the new
+        one, at this destination only: the stored JSON's id, search-time samples, and mappings recorded
+        by that id before destinations were (Migration 77). The rule's history says what happened."""
+        from app.services.tenant_manager import tenant_context_for
+        with tenant_context_for(client_id), self.get_connection() as conn:
+            row = conn.execute("SELECT raw_data FROM detection_rules WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                               [rule_id, siem_id, space]).fetchone()
+            if row and row[0]:
+                try:
+                    raw = json.loads(row[0]) if isinstance(row[0], str) else dict(row[0])
+                    raw["id"] = new_object_id
+                    conn.execute("UPDATE detection_rules SET raw_data = ? WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                                 [json.dumps(raw), rule_id, siem_id, space])
+                except (TypeError, ValueError):
+                    logger.warning("Rule %s: stored JSON unreadable; the next sync refreshes it", rule_id)
+            if old_object_id:
+                self._ensure_search_time_table(conn)
+                conn.execute("UPDATE rule_search_time_samples SET rule_id = ? WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                             [new_object_id, old_object_id, siem_id, space])
+                conn.execute("UPDATE step_detections SET rule_ref = ?, siem_id = ?, space = ? "
+                             "WHERE rule_ref = ? AND siem_id IS NULL",
+                             [rule_id, siem_id, space, old_object_id])
+        self.record_rule_history(
+            rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="recreated",
+            actor_user_id=actor_user_id, actor_name=actor_name,
+            detail={"message": "Kibana couldn't read the rule's stored API key and refreshing it didn't help, "
+                               "so TIDE deleted and re-created the rule there with the same rule ID. "
+                               f"Kibana ID {new_object_id}, was {old_object_id or 'unknown'}."},
+        )
+
+    def kibana_recreate_hook(self, client_id: str, rule_id: str, siem_id: str, space: str,
+                             actor_name: Optional[str] = None, actor_user_id: Optional[str] = None):
+        """The ``on_recreated(old_id, new_id)`` callback for elastic_helper's rule updates."""
+        def hook(old_object_id, new_object_id):
+            self.note_rule_recreated(client_id, rule_id, siem_id, space or "default", old_object_id, new_object_id,
+                                     actor_name=actor_name, actor_user_id=actor_user_id)
+        return hook
 
     # --- DUPLICATE RULE ROWS ---
     # Every genuinely different rule in a Kibana space has its own portable ``rule_id`` (the field
@@ -5199,8 +5445,9 @@ class DatabaseService:
                     ).fetchone():
                         continue
                     moved += len(conn.execute(
-                        "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? RETURNING id",
-                        [keep_rule_id, old_id],
+                        "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? AND siem_id = ? "
+                        "AND COALESCE(space, 'default') = ? RETURNING id",
+                        [keep_rule_id, old_id, siem_id, space or "default"],
                     ).fetchall())
                     conn.execute("DELETE FROM checkedRule WHERE rule_id = ?", [old_id])
                     conn.execute(
@@ -5498,28 +5745,36 @@ class DatabaseService:
                 return {}
         return {(sid, sp): {"reason": reason or "Unreachable", "checked_at": at} for sid, sp, reason, at in rows}
 
+    # A table k(r, s, sp) of (rule_id, siem_id, space) keys, from three parallel array parameters
+    # (_key_arrays): joining against it costs the same for 5 keys or 5,000.
+    _KEYS_CTE = "k AS (SELECT unnest(?::VARCHAR[]) AS r, unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp)"
+
+    @staticmethod
+    def _key_arrays(keys) -> List[List[str]]:
+        keys = list(keys)
+        return [[k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys]]
+
     def get_rule_links_bulk(
         self, items: List[Tuple[str, str, str]]
     ) -> Dict[Tuple[str, str, str], List[Dict[str, Any]]]:
         """For each (rule_id, siem_id, space) in ``items``, every other rule it's linked to --
         the link id (for unlinking), the linked rule's own id/siem/space/name, and its
         destination name and deprecated/enabled state. One query, not one per rule."""
-        keys = list({(str(r), str(s), str(sp)) for r, s, sp in items})
+        keys = {(str(r), str(s), str(sp)) for r, s, sp in items}
         if not keys:
             return {}
         with self.get_connection() as conn:
-            predicate = " OR ".join(
-                "(rule_a_id=? AND siem_a_id=? AND space_a=?) OR (rule_b_id=? AND siem_b_id=? AND space_b=?)"
-                for _ in keys
-            )
-            params: List[Any] = []
-            for rid, sid, sp in keys:
-                params.extend([rid, sid, sp, rid, sid, sp])
+            # The keys go in as three arrays joined against, not one OR term per key: Rule Health
+            # asks about every rule at once, and thousands of OR terms took DuckDB seconds to plan.
             try:
                 rows = conn.execute(
-                    f"SELECT id, rule_a_id, siem_a_id, space_a, rule_b_id, siem_b_id, space_b "
-                    f"FROM rule_links WHERE {predicate}",
-                    params,
+                    f"WITH {self._KEYS_CTE} "
+                    "SELECT l.id, l.rule_a_id, l.siem_a_id, l.space_a, l.rule_b_id, l.siem_b_id, l.space_b "
+                    "FROM rule_links l JOIN k ON l.rule_a_id = k.r AND l.siem_a_id = k.s AND l.space_a = k.sp "
+                    "UNION "
+                    "SELECT l.id, l.rule_a_id, l.siem_a_id, l.space_a, l.rule_b_id, l.siem_b_id, l.space_b "
+                    "FROM rule_links l JOIN k ON l.rule_b_id = k.r AND l.siem_b_id = k.s AND l.space_b = k.sp",
+                    self._key_arrays(keys),
                 ).fetchall()
             except duckdb.CatalogException:
                 # A tenant DB Migration 74 has not reached yet: show rules without links, never fail.
@@ -5530,15 +5785,14 @@ class DatabaseService:
             other_keys = set()
             for _id, ra, sa, spa, rb, sb, spb in rows:
                 other_keys.add((ra, sa, spa)); other_keys.add((rb, sb, spb))
-            rule_predicate = " OR ".join("(rule_id=? AND siem_id=? AND space=?)" for _ in other_keys)
-            rule_params = [v for triple in other_keys for v in triple]
             rule_info = {}
-            if other_keys:
-                for rid, sid, sp, name, dep, en in conn.execute(
-                    f"SELECT rule_id, siem_id, space, name, deprecated, enabled "
-                    f"FROM detection_rules WHERE {rule_predicate}", rule_params,
-                ).fetchall():
-                    rule_info[(rid, sid, sp)] = {"name": name, "deprecated": bool(dep), "enabled": bool(en)}
+            for rid, sid, sp, name, dep, en in conn.execute(
+                f"WITH {self._KEYS_CTE} "
+                "SELECT d.rule_id, d.siem_id, d.space, d.name, d.deprecated, d.enabled "
+                "FROM detection_rules d JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp",
+                self._key_arrays(other_keys),
+            ).fetchall():
+                rule_info[(rid, sid, sp)] = {"name": name, "deprecated": bool(dep), "enabled": bool(en)}
         dest_names, dest_colors = {}, {}
         with self.get_shared_connection() as sconn:
             siem_ids = {sid for _, sid, _ in other_keys}
@@ -5787,7 +6041,10 @@ class DatabaseService:
         _si = self._safe_int
         _ss = self._safe_str
 
-        # Parse raw_data
+        # Parse raw_data (a slim row has none: just the two values lists use, from their columns)
+        if 'raw_data' not in row and 'kibana_rule_id' in row:
+            row = {**row, 'raw_data': {k: v for k, v in (('rule_id', row.get('kibana_rule_id')),
+                                                          ('language', row.get('rule_language'))) if v}}
         raw_data = row.get('raw_data')
         if isinstance(raw_data, str):
             try:
@@ -8355,12 +8612,9 @@ class DatabaseService:
 
     def list_mitre_tactics(self, domain: str = "enterprise") -> List[Dict[str, Any]]:
         """List tactics with rollup counts for techniques and groups."""
+        from app.attack_tactics import TACTICS
         order_clause = "CASE t.tactic_id "
-        for index, tactic_id in enumerate([
-            "TA0043", "TA0042", "TA0001", "TA0002", "TA0003", "TA0004",
-            "TA0005", "TA0112", "TA0006", "TA0007", "TA0008", "TA0009",
-            "TA0011", "TA0010", "TA0040",
-        ]):
+        for index, tactic_id in enumerate(tid for tid, _, _ in TACTICS):
             order_clause += f"WHEN '{tactic_id}' THEN {index} "
         order_clause += "ELSE 999 END"
         include_all = (domain or "").strip().lower() == "all"
@@ -10084,6 +10338,7 @@ class DatabaseService:
                 raw['score_detail'] = detail
             return json.dumps(raw, default=str)
         
+        _keys = [rule_json_keys(r) for r in (df['raw_data'] if 'raw_data' in df.columns else [None] * len(df))]
         df['raw_data'] = df.apply(build_raw_data, axis=1)
 
         target_cols = [
@@ -10101,6 +10356,8 @@ class DatabaseService:
                 df[col] = None
         
         df_final = df[target_cols].copy()
+        df_final['kibana_rule_id'] = [k for k, _ in _keys]
+        df_final['rule_language'] = [lang for _, lang in _keys]
         # Not a detection_rules column: carried along so the score snapshot records the scoring model.
         df_final['scoring_version'] = df['scoring_version'] if 'scoring_version' in df.columns else None
 
@@ -10362,8 +10619,9 @@ class DatabaseService:
                         if not fresh_rule_id or fresh_rule_id == old_rule_id:
                             continue
                         conn.execute(
-                            "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ?",
-                            [fresh_rule_id, old_rule_id],
+                            "UPDATE step_detections SET rule_ref = ? WHERE rule_ref = ? AND siem_id = ? "
+                            "AND COALESCE(space, 'default') = ?",
+                            [fresh_rule_id, old_rule_id, old_siem_id, old_space or "default"],
                         )
                         conn.execute("DELETE FROM checkedRule WHERE rule_id = ?", [old_rule_id])
                         conn.execute(
@@ -10379,8 +10637,9 @@ class DatabaseService:
                         del existing_by_key[(old_rule_id, old_siem_id, old_space)]
 
                 # Insert fresh rules
+                self._ensure_rule_key_columns(conn)
                 conn.register('rules_source', df_final)
-                col_list = ', '.join(target_cols)
+                col_list = ', '.join(target_cols + ['kibana_rule_id', 'rule_language'])
                 conn.execute(f"""
                     INSERT INTO detection_rules ({col_list})
                     SELECT {col_list} FROM rules_source
@@ -10405,6 +10664,8 @@ class DatabaseService:
                         last_updated = EXCLUDED.last_updated,
                         mitre_ids = EXCLUDED.mitre_ids,
                         raw_data = EXCLUDED.raw_data,
+                        kibana_rule_id = EXCLUDED.kibana_rule_id,
+                        rule_language = EXCLUDED.rule_language,
                         deprecated = false
                 """)
                 
@@ -10675,7 +10936,8 @@ class DatabaseService:
         import secrets, hashlib
         raw_key = secrets.token_urlsafe(32)
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
-        with self.get_connection() as conn:
+        # API keys belong to users and live in the shared DB, where validation reads them (#57).
+        with self.get_shared_connection() as conn:
             conn.execute(
                 "INSERT INTO api_keys (key_hash, label, created_by_user_id) VALUES (?, ?, ?)",
                 [key_hash, label, created_by_user_id],
@@ -10685,7 +10947,7 @@ class DatabaseService:
 
     def list_api_keys(self, created_by_user_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Return API key metadata. Non-admin views should pass created_by_user_id."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             if created_by_user_id:
                 rows = conn.execute(
                     "SELECT key_hash, label, created_at, last_used_at, created_by_user_id "
@@ -10710,7 +10972,7 @@ class DatabaseService:
 
     def get_api_key(self, key_hash: str) -> Optional[Dict[str, Any]]:
         """Return API key metadata by hash."""
-        with self.get_connection() as conn:
+        with self.get_shared_connection() as conn:
             row = conn.execute(
                 "SELECT key_hash, label, created_at, last_used_at, created_by_user_id "
                 "FROM api_keys WHERE key_hash = ?",
@@ -10757,8 +11019,12 @@ class DatabaseService:
         import hashlib
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         with self.get_shared_connection() as conn:
+            # The key works only while its owner exists and is active: deactivating a user (or
+            # deleting them) stops their keys too (#30).
             row = conn.execute(
-                "SELECT key_hash, created_by_user_id FROM api_keys WHERE key_hash = ?",
+                "SELECT k.key_hash, k.created_by_user_id FROM api_keys k "
+                "JOIN users u ON u.id = k.created_by_user_id "
+                "WHERE k.key_hash = ? AND COALESCE(u.is_active, true)",
                 [key_hash],
             ).fetchone()
             if not row:
@@ -11070,10 +11336,15 @@ class DatabaseService:
             )
 
     def remove_user_from_client(self, user_id: str, client_id: str):
-        """Remove a user from a client."""
+        """Remove a user from a client, with their roles there: adding them back later starts
+        them with no roles rather than restoring what they had."""
         with self.get_shared_connection() as conn:
             conn.execute(
                 "DELETE FROM user_clients WHERE user_id = ? AND client_id = ?",
+                [user_id, client_id],
+            )
+            conn.execute(
+                "DELETE FROM user_roles WHERE user_id = ? AND client_id = ?",
                 [user_id, client_id],
             )
 
@@ -11117,10 +11388,10 @@ class DatabaseService:
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
+            return reveal_fields(dict(zip(
                 ["id", "client_id", "siem_type", "label", "base_url", "api_token_enc",
                  "space_list", "extra_config", "is_active", "created_at", "updated_at"], row
-            ))
+            )), "api_token_enc")
 
     def create_siem_config(self, client_id: str, siem_type: str, label: str,
                            base_url: str = None, api_token_enc: str = None,
@@ -11133,7 +11404,7 @@ class DatabaseService:
                 "INSERT INTO client_siem_configs "
                 "(client_id, siem_type, label, base_url, api_token_enc, space_list, extra_config) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [client_id, siem_type, label, base_url, api_token_enc, space_list, extra_json],
+                [client_id, siem_type, label, base_url, seal(api_token_enc), space_list, extra_json],
             )
             row = conn.execute(
                 "SELECT id FROM client_siem_configs WHERE client_id = ? AND label = ? "
@@ -11148,6 +11419,8 @@ class DatabaseService:
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
+        if "api_token_enc" in updates:
+            updates["api_token_enc"] = seal(updates["api_token_enc"])
         if "extra_config" in updates and isinstance(updates["extra_config"], dict):
             import json as _json
             updates["extra_config"] = _json.dumps(updates["extra_config"])
@@ -11168,6 +11441,38 @@ class DatabaseService:
                 [config_id],
             ).fetchone()
         return deleted is not None
+
+    # Where credentials are stored in the shared DB: (table, id column, credential column) (#59).
+    CREDENTIAL_COLUMNS = (
+        ("siem_inventory", "id", "api_token_enc"),
+        ("client_siem_configs", "id", "api_token_enc"),
+        ("opencti_inventory", "id", "token_enc"),
+        ("gitlab_inventory", "id", "token_enc"),
+        ("keycloak_inventory", "id", "client_secret_enc"),
+        ("cti_connectors", "id", "config_json"),
+    )
+
+    def seal_stored_credentials(self) -> int:
+        """Encrypt every credential still stored in plain text (from before encryption, #59).
+        Idempotent; returns how many values it encrypted."""
+        sealed = 0
+        with self.get_shared_connection() as conn:
+            tables = {r[0] for r in conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+            ).fetchall()}
+            for table, key, col in self.CREDENTIAL_COLUMNS:
+                if table not in tables:
+                    continue
+                rows = conn.execute(
+                    f"SELECT {key}, {col} FROM {table} WHERE COALESCE({col}, '') <> '' "
+                    f"AND NOT starts_with({col}, ?)", [CREDENTIAL_PREFIX]
+                ).fetchall()
+                for rid, value in rows:
+                    conn.execute(f"UPDATE {table} SET {col} = ? WHERE {key} = ?", [seal(value), rid])
+                sealed += len(rows)
+            if sealed:
+                conn.execute("CHECKPOINT")
+        return sealed
 
     # --- SIEM INVENTORY (centralized, shared across clients) ---
 
@@ -11202,11 +11507,11 @@ class DatabaseService:
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(
+            return reveal_fields(dict(zip(
                 ["id", "label", "siem_type", "elasticsearch_url", "kibana_url",
                  "api_token_enc",
                  "extra_config", "is_active", "tls_verify", "created_at", "updated_at"], row
-            ))
+            )), "api_token_enc")
 
     def create_siem_inventory_item(self, siem_type: str, label: str,
                                    elasticsearch_url: str = None, kibana_url: str = None,
@@ -11222,7 +11527,7 @@ class DatabaseService:
                  "api_token_enc, extra_config, tls_verify) "
                  "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                 [siem_type, label, elasticsearch_url, kibana_url, kibana_url,
-                                 api_token_enc, extra_json, bool(tls_verify)],
+                                 seal(api_token_enc), extra_json, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, siem_type, elasticsearch_url, kibana_url, "
@@ -11245,6 +11550,8 @@ class DatabaseService:
         if "kibana_url" in updates:
             # Keep legacy base_url aligned for old diagnostics / exports.
             updates["base_url"] = updates["kibana_url"]
+        if "api_token_enc" in updates:
+            updates["api_token_enc"] = seal(updates["api_token_enc"])
         if "extra_config" in updates and isinstance(updates["extra_config"], dict):
             import json as _json
             updates["extra_config"] = _json.dumps(updates["extra_config"])
@@ -11304,7 +11611,7 @@ class DatabaseService:
                 "name", "space", "default_index", "is_active", "created_at", "color"]
             result = []
             for r in rows:
-                d = dict(zip(cols, r))
+                d = reveal_fields(dict(zip(cols, r)), "api_token_enc")
                 # Normalise NULL/empty space to 'default' (Kibana built-in space)
                 if not d.get("space") or not str(d["space"]).strip():
                     d["space"] = "default"
@@ -11511,7 +11818,7 @@ class DatabaseService:
     def _row_to_connector(self, row) -> Dict:
         import json as _json
         rec = dict(zip(self._CONNECTOR_COLS, row))
-        raw = rec.pop("config_json", None) or "{}"
+        raw = reveal_or_none(rec.pop("config_json", None)) or "{}"
         try:
             rec["config"] = _json.loads(raw)
         except Exception:
@@ -11559,7 +11866,7 @@ class DatabaseService:
         import json as _json
         if kind not in ("actors", "cti", "both"):
             kind = "cti"
-        cfg = _json.dumps(config or {})
+        cfg = seal(_json.dumps(config or {}))
         with self.get_shared_connection() as conn:
             conn.execute(
                 "INSERT INTO cti_connectors "
@@ -11595,7 +11902,7 @@ class DatabaseService:
         if "kind" in updates and updates["kind"] not in ("actors", "cti", "both"):
             updates["kind"] = "cti"
         if "config" in fields and fields["config"] is not None:
-            updates["config_json"] = _json.dumps(fields["config"])
+            updates["config_json"] = seal(_json.dumps(fields["config"]))
         if not updates:
             return False
         set_clause = ", ".join(f"{k} = ?" for k in updates)
@@ -11729,12 +12036,12 @@ class DatabaseService:
             rows = conn.execute(
                 "SELECT id, label, url, default_group, is_active, tls_verify, "
                 "last_test_status, last_test_at, last_test_message, "
-                "created_at, updated_at "
+                "created_at, updated_at, COALESCE(token_enc, '') <> '' "
                 "FROM gitlab_inventory ORDER BY label"
             ).fetchall()
             cols = ["id", "label", "url", "default_group", "is_active", "tls_verify",
                     "last_test_status", "last_test_at", "last_test_message",
-                    "created_at", "updated_at"]
+                    "created_at", "updated_at", "token_set"]
             return [dict(zip(cols, r)) for r in rows]
 
     def create_gitlab_inventory_item(self, label: str, url: str,
@@ -11745,7 +12052,7 @@ class DatabaseService:
             conn.execute(
                 "INSERT INTO gitlab_inventory (label, url, token_enc, default_group, tls_verify) "
                 "VALUES (?, ?, ?, ?, ?)",
-                [label, url, token_enc, default_group, bool(tls_verify)],
+                [label, url, seal(token_enc), default_group, bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, url, default_group, is_active, created_at, updated_at "
@@ -11761,6 +12068,8 @@ class DatabaseService:
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
+        if "token_enc" in updates:
+            updates["token_enc"] = seal(updates["token_enc"])
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [gitlab_id]
         with self.get_shared_connection() as conn:
@@ -11833,7 +12142,7 @@ class DatabaseService:
             cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
                     "is_active", "tls_verify", "last_test_status", "last_test_at", "last_test_message",
                     "created_at", "updated_at"]
-            return [dict(zip(cols, r)) for r in rows]
+            return [reveal_fields(dict(zip(cols, r)), "client_secret_enc") for r in rows]
 
     def create_keycloak_inventory_item(self, label: str, url: str, realm: str = "master",
                                        client_id_enc: str = None,
@@ -11843,7 +12152,7 @@ class DatabaseService:
             conn.execute(
                 "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc, tls_verify) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                [label, url, realm, client_id_enc, client_secret_enc, bool(tls_verify)],
+                [label, url, realm, client_id_enc, seal(client_secret_enc), bool(tls_verify)],
             )
             row = conn.execute(
                 "SELECT id, label, url, realm, client_id_enc, client_secret_enc, is_active, "
@@ -11853,7 +12162,7 @@ class DatabaseService:
             ).fetchone()
             cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
                     "is_active", "created_at", "updated_at"]
-            return dict(zip(cols, row))
+            return reveal_fields(dict(zip(cols, row)), "client_secret_enc")
 
     def update_keycloak_inventory_item(self, keycloak_id: str, **fields) -> bool:
         """Update a Keycloak instance in the inventory."""
@@ -11861,6 +12170,8 @@ class DatabaseService:
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
+        if "client_secret_enc" in updates:
+            updates["client_secret_enc"] = seal(updates["client_secret_enc"])
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [keycloak_id]
         with self.get_shared_connection() as conn:

@@ -1,0 +1,43 @@
+{#
+  How a sync run (app.services.sync_runs) reads, wherever it is shown: Rule Health's last sync,
+  Diagnostics → Sync activity.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% set _SYNC_STATES = {
+    'running':     ('status-muted',   'Running'),
+    'success':     ('status-success', 'Done'),
+    'partial':     ('status-warning', 'Partly done'),
+    'failed':      ('status-danger',  'Failed'),
+    'interrupted': ('status-warning', 'Interrupted'),
+} %}
+
+{% macro sync_state(run) -%}
+{%- set cls, text = _SYNC_STATES.get(run.status, ('status-muted', run.status)) -%}
+<span class="status-pill {{ cls }}" title="{{ run.error or '' }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro sync_when(run) -%}
+{{ run.started_at.strftime('%d %b %H:%M') if run.started_at else '—' }}
+{%- endmacro %}
+
+{% macro sync_took(run) -%}
+{%- if run.duration_ms is not none -%}
+{%- set s = (run.duration_ms // 1000) -%}
+{{ (s // 60) ~ ' min ' ~ (s % 60) ~ ' s' if s >= 60 else s ~ ' s' }}
+{%- else -%}—{%- endif -%}
+{%- endmacro %}
+
+{% macro sync_what(run) -%}
+{{ run.kind_label }}
+{%- if run.scope.destination %} · {{ run.scope.destination }} only{% endif -%}
+{%- if run.scope.force_mapping %} · with mappings{% endif -%}
+{%- endmacro %}
+
+{% macro sync_retry(run, target='#sync-status', swap='outerHTML') -%}
+{%- if run.retryable -%}
+<button name="Retry Sync" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/rules/sync/retry/{{ run.id }}" hx-target="{{ target }}" hx-swap="{{ swap }}"
+        hx-disabled-elt="this" title="Run this sync again, over the same destinations">{{ icon('rotate-ccw', '13') }} Retry</button>
+{%- endif -%}
+{%- endmacro %}

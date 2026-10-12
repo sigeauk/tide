@@ -7,7 +7,8 @@ import logging
 from fastapi import APIRouter, Request, HTTPException, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from app.api.deps import DbDep, RequireUser, RequireAdmin, RequireSuperadmin, ActiveClient
+from app.api.deps import DbDep, ClientAdmin, RequireUser, RequireAdmin, RequireSuperadmin, ActiveClient
+from app.services.log_context import audit_admin
 from app.models.client import (
     ClientCreate, ClientUpdate,
     SIEMConfigCreate, SIEMConfigUpdate,
@@ -150,24 +151,26 @@ def switch_client(
 # ---------------------------------------------------------------------------
 
 @router.get("/{client_id}/users", response_class=JSONResponse)
-def get_client_users(client_id: str, db: DbDep, user: RequireAdmin):
+def get_client_users(client_id: str, db: DbDep, user: ClientAdmin):
     """List users assigned to a client."""
     return db.get_client_users(client_id)
 
 
 @router.post("/{client_id}/users", response_class=JSONResponse)
-def assign_user(client_id: str, data: UserClientAssignment, db: DbDep, user: RequireAdmin):
+def assign_user(client_id: str, data: UserClientAssignment, db: DbDep, user: ClientAdmin):
     """Assign a user to a client."""
     db.assign_user_to_client(data.user_id, client_id, is_default=data.is_default)
     logger.info(f"User {data.user_id} assigned to client {client_id} by {user.username}")
+    audit_admin("client_membership", user, target_id=data.user_id, added=[client_id], removed=[])
     return {"ok": True}
 
 
 @router.delete("/{client_id}/users/{user_id}", response_class=JSONResponse)
-def remove_user(client_id: str, user_id: str, db: DbDep, user: RequireAdmin):
+def remove_user(client_id: str, user_id: str, db: DbDep, user: ClientAdmin):
     """Remove a user from a client."""
     db.remove_user_from_client(user_id, client_id)
     logger.info(f"User {user_id} removed from client {client_id} by {user.username}")
+    audit_admin("client_membership", user, target_id=user_id, added=[], removed=[client_id])
     return {"ok": True}
 
 
@@ -176,13 +179,13 @@ def remove_user(client_id: str, user_id: str, db: DbDep, user: RequireAdmin):
 # ---------------------------------------------------------------------------
 
 @router.get("/{client_id}/siem", response_class=JSONResponse)
-def list_siem_configs(client_id: str, db: DbDep, user: RequireAdmin):
+def list_siem_configs(client_id: str, db: DbDep, user: ClientAdmin):
     """List SIEM configurations for a client."""
     return db.list_siem_configs(client_id)
 
 
 @router.post("/{client_id}/siem", response_class=JSONResponse, status_code=201)
-def create_siem_config(client_id: str, data: SIEMConfigCreate, db: DbDep, user: RequireAdmin):
+def create_siem_config(client_id: str, data: SIEMConfigCreate, db: DbDep, user: ClientAdmin):
     """Create a SIEM config for a client."""
     config = db.create_siem_config(
         client_id=client_id,
@@ -199,7 +202,7 @@ def create_siem_config(client_id: str, data: SIEMConfigCreate, db: DbDep, user: 
 @router.put("/{client_id}/siem/{config_id}", response_class=JSONResponse)
 def update_siem_config(
     client_id: str, config_id: str,
-    data: SIEMConfigUpdate, db: DbDep, user: RequireAdmin,
+    data: SIEMConfigUpdate, db: DbDep, user: ClientAdmin,
 ):
     """Update a SIEM config."""
     config = db.update_siem_config(
@@ -216,7 +219,7 @@ def update_siem_config(
 
 
 @router.delete("/{client_id}/siem/{config_id}", response_class=JSONResponse)
-def delete_siem_config(client_id: str, config_id: str, db: DbDep, user: RequireAdmin):
+def delete_siem_config(client_id: str, config_id: str, db: DbDep, user: ClientAdmin):
     """Delete a SIEM config."""
     ok = db.delete_siem_config(config_id)
     if not ok:

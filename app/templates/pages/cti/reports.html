@@ -9,7 +9,7 @@
         <h1 class="page-title-hero">CTI Reports</h1>
         <p class="page-subtitle">STIX reports from configured CTI sources.</p>
     </div>
-    <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
+    <div class="flex gap-sm items-center flex-wrap">
         <button name="Submit Sync" type="button" class="btn btn-primary btn-sm"
                 hx-post="/cti/reports/sync"
                 hx-target="#cti-sync-result"
@@ -87,39 +87,39 @@
 </form>
 
 {% if reports %}
-<div class="card card-flush" style="margin-top:1rem;">
+<div class="card card-flush mt-md">
     <div class="cve-list-header">
-        <div style="min-width:240px;">Report</div>
-        <div style="flex:1;">Labels</div>
-        <div style="white-space:nowrap;">Source · Published</div>
+        <div class="cti-id-col">Report</div>
+        <div class="grow">Labels</div>
+        <div class="nowrap">Source · Published</div>
     </div>
-    <div class="cve-list" style="padding:0.75rem 1rem;">
+    <div class="cve-list py-ms px-md">
     {% for r in reports %}
-    <div   name="Open Report Card" class="cve-card-item cve-card-item--unaffected"
-         style="cursor:pointer;" onclick="window.location='/cti/reports/{{ r.id }}'">
-        <div class="cve-card-item__id" style="min-width:240px;">
+    <div   name="Open Report Card" class="cve-card-item cve-card-item--unaffected cursor-pointer"
+         data-click="ui.go" data-href="/cti/reports/{{ r.id | urlencode }}">
+        <div class="cve-card-item__id cti-id-col">
             {{ icon('file-text','14') }}
-            <a  name="Reports" href="/cti/reports/{{ r.id }}" style="font-weight:600;text-decoration:none;font-size:0.95rem;margin-left:0.5rem;"
-               onclick="event.stopPropagation();">
+            <a  name="Reports" href="/cti/reports/{{ r.id }}" class="fw-600 no-underline fs-lg ml-sm"
+               data-stop-click>
                 {{ r.name or 'Untitled report' }}
             </a>
         </div>
-        <div  name="Report Labels" class="cve-card-item__body" onclick="event.stopPropagation();">
-            <div class="cve-card-item__desc" style="font-size:0.8125rem;color:var(--color-text-muted);">
+        <div  name="Report Labels" class="cve-card-item__body" data-stop-click>
+            <div class="cve-card-item__desc fs-md text-muted">
                 {% if r.labels %}
                 {% for lbl in r.labels[:5] %}
-                <span class="badge badge-secondary" style="margin-right:0.25rem;">{{ lbl }}</span>
+                <span class="badge badge-secondary mr-xs">{{ lbl }}</span>
                 {% endfor %}
                 {% if r.labels|length > 5 %}<span>+{{ r.labels|length - 5 }}</span>{% endif %}
                 {% else %}
-                <span style="opacity:0.6;">No labels</span>
+                <span class="dim">No labels</span>
                 {% endif %}
             </div>
         </div>
-        <div class="cve-card-item__right" style="display:flex;align-items:center;gap:0.5rem;">
-            <span style="font-size:0.75rem;color:var(--color-text-muted);white-space:nowrap;">
+        <div class="cve-card-item__right flex items-center gap-sm">
+            <span class="fs-sm text-muted nowrap">
                 {{ source_labels.get(r.source_id, '—') if r.source_id else '—' }}
-                <span style="margin:0 0.25rem;opacity:0.4;">&middot;</span>
+                <span class="dot-sep">&middot;</span>
                 {{ r.published or '—' }}
             </span>
         </div>
@@ -128,18 +128,18 @@
     </div>
 </div>
 {% else %}
-<div class="card card-padded-lg card-center" style="margin-top:1rem;">
-    <p class="text-muted" style="margin:0;">No reports match the current filters.</p>
+<div class="card card-padded-lg card-center mt-md">
+    <p class="text-muted m-0">No reports match the current filters.</p>
 </div>
 {% endif %}
 
-<div class="pagination" style="margin-top:1rem;">
+<div class="pagination mt-md">
     {% set qbase = '&search=' ~ search ~ '&source=' ~ selected_source ~ '&label=' ~ selected_label %}
     {% if page > 1 %}
         <a name="← Prev" class="btn btn-secondary"
            href="/cti/reports?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
     {% endif %}
-    <span style="margin:0 0.75rem;">Page {{ page }}</span>
+    <span class="my-0 mx-ms">Page {{ page }}</span>
     {% if reports|length == page_size %}
         <a name="Next →" class="btn btn-secondary"
            href="/cti/reports?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>

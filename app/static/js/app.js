@@ -351,7 +351,10 @@ console.debug('TIDE app.js loading...');
         sentinels.forEach(function(sentinel) {
             sentinel.dataset.observed = 'true';
             var scrollRegion = sentinel.closest('.rule-scroll-region');
-            var usesInnerScroll = scrollRegion && getComputedStyle(scrollRegion).overflowY !== 'visible';
+            // Watch the region only when it actually scrolls. A region that grows with its content
+            // (narrow screens) always "contains" the sentinel, which loaded every page in a row.
+            var usesInnerScroll = scrollRegion && getComputedStyle(scrollRegion).overflowY !== 'visible'
+                && scrollRegion.scrollHeight > scrollRegion.clientHeight + 1;
             var observer = new IntersectionObserver(function(entries) {
                 if (!entries.some(function(entry) { return entry.isIntersecting; })) return;
                 observer.disconnect();
@@ -759,6 +762,35 @@ console.debug('TIDE app.js loading...');
         document.addEventListener('htmx:afterSettle', once);
         htmx.trigger(sentinel, 'tideLoadMore');
     }
+    // After a Move or Merge the window stays open (#62) on the rule the action leaves you on:
+    // ``info`` is the server's X-Tide-Rule-Window, {url, dom_id}. A rule the list wasn't showing (a
+    // moved copy has a new destination, so a new card id) takes the place of the rule the action
+    // started from, so prev / next carry on from the same spot. A dialog such as Compare may have
+    // replaced the window meanwhile, hence the last window shown is remembered.
+    var ruleModalLastId = null;
+    document.addEventListener('htmx:afterSwap', function(e) {
+        var target = e.detail && e.detail.target;
+        var modal = target && target.id === 'modal-container' && target.querySelector('.rule-modal[data-rule-dom-id]');
+        if (modal) ruleModalLastId = modal.getAttribute('data-rule-dom-id');
+    });
+    window.tideShowRuleAfterAction = function(info) {
+        if (!info || !info.url) return;
+        var known = ruleModalNavSnapshot.some(function(entry) { return entry.id === info.dom_id; });
+        if (!known && ruleModalLastId) {
+            for (var i = 0; i < ruleModalNavSnapshot.length; i++) {
+                if (ruleModalNavSnapshot[i].id === ruleModalLastId) {
+                    ruleModalNavSnapshot[i] = { id: info.dom_id, url: info.url };
+                    break;
+                }
+            }
+        }
+        htmx.ajax('GET', info.url, { target: '#modal-container', swap: 'innerHTML' });
+    };
+    function ruleWindowFrom(response) {
+        try { return JSON.parse(response.headers.get('X-Tide-Rule-Window') || 'null'); } catch (_) { return null; }
+    }
+    window.tideRuleWindowFrom = ruleWindowFrom;
+
     document.addEventListener('click', function(e) {
         var btn = e.target.closest && e.target.closest('[data-rm-nav]');
         if (btn && !btn.disabled) openAdjacentRule(btn.getAttribute('data-rm-nav'));
@@ -1057,6 +1089,155 @@ console.debug('TIDE app.js loading...');
         section.scrollIntoView({ block: 'nearest' });
     }, true);
 
+    // ── Dashboard layout editor (pages/core/dashboard.html?edit=mine|client) ──
+    // Each [data-dash-card] in the editing grid moves by its handle (drag it, or the arrow keys on
+    // it) or its ← → buttons, gets narrower or wider in twelfths of the page, and is removed with ×.
+    // Add copies a <template data-dash-template>; a section shows at most once. Save posts the whole
+    // layout as JSON (the server checks it). Leaving with unsaved changes asks first.
+    var DASH_WIDTHS = [3, 4, 6, 8, 9, 12];
+    var DASH_WIDTH_LABELS = { 3: '¼', 4: '⅓', 6: '½', 8: '⅔', 9: '¾', 12: 'Full' };
+    var dashDirty = false, dashDragging = null;
+    function dashGrid() { return document.querySelector('[data-dash-grid].is-editing'); }
+    function dashCards(grid) { return Array.prototype.slice.call(grid.querySelectorAll(':scope > [data-dash-card]')); }
+    function dashRefresh() {
+        var grid = dashGrid();
+        if (!grid) return;
+        var cards = dashCards(grid), present = {};
+        cards.forEach(function(c, i) {
+            present[c.getAttribute('data-type')] = true;
+            var w = +c.getAttribute('data-w');
+            c.querySelector('[data-dash-step="-1"]').disabled = i === 0;
+            c.querySelector('[data-dash-step="1"]').disabled = i === cards.length - 1;
+            c.querySelector('[data-dash-width="-1"]').disabled = w <= DASH_WIDTHS[0];
+            c.querySelector('[data-dash-width="1"]').disabled = w >= DASH_WIDTHS[DASH_WIDTHS.length - 1];
+            c.querySelector('[data-dash-width-label]').textContent = DASH_WIDTH_LABELS[w] || w;
+        });
+        document.querySelectorAll('[data-dash-add]').forEach(function(b) {
+            var t = b.getAttribute('data-dash-add');
+            b.disabled = t !== 'title' && t !== 'text' && !!present[t];
+        });
+    }
+    function dashChanged() { dashDirty = true; dashRefresh(); }
+    function dashInit() { dashDirty = false; dashRefresh(); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', dashInit);
+    else dashInit();
+    document.addEventListener('htmx:afterSettle', function(e) { if (e.detail.target && e.detail.target.querySelector('[data-dash-grid]')) dashInit(); });
+
+    function dashMove(card, dir) {
+        var grid = card.parentElement, cards = dashCards(grid), j = cards.indexOf(card) + dir;
+        if (j < 0 || j >= cards.length) return;
+        if (dir < 0) grid.insertBefore(card, cards[j]); else grid.insertBefore(cards[j], card);
+        dashChanged();
+        card.scrollIntoView({ block: 'nearest' });
+    }
+    function dashResize(card, dir) {
+        var w = +card.getAttribute('data-w'), i = DASH_WIDTHS.indexOf(w);
+        var next = DASH_WIDTHS[Math.max(0, Math.min(DASH_WIDTHS.length - 1, (i < 0 ? DASH_WIDTHS.length - 1 : i) + dir))];
+        card.classList.remove('dash-w-' + w);
+        card.classList.add('dash-w-' + next);
+        card.setAttribute('data-w', next);
+        dashChanged();
+    }
+    function dashFocus(card) {
+        var el = card && (card.querySelector('[data-dash-text]') || card.querySelector('[data-dash-drag]'));
+        if (el) el.focus({ preventScroll: true });
+    }
+    document.addEventListener('click', function(e) {
+        var t = e.target.closest && e.target.closest('[data-dash-step], [data-dash-width], [data-dash-remove], [data-dash-add]');
+        if (!t || t.disabled || !dashGrid()) return;
+        if (t.hasAttribute('data-dash-add')) {
+            var tpl = document.querySelector('template[data-dash-template="' + t.getAttribute('data-dash-add') + '"]');
+            if (!tpl) return;
+            var grid = dashGrid();
+            grid.appendChild(tpl.content.cloneNode(true));
+            var added = dashCards(grid).pop();
+            dashChanged();
+            added.scrollIntoView({ block: 'nearest' });
+            dashFocus(added);
+            return;
+        }
+        var card = t.closest('[data-dash-card]');
+        if (t.hasAttribute('data-dash-step')) { dashMove(card, +t.getAttribute('data-dash-step')); t.focus({ preventScroll: true }); }
+        else if (t.hasAttribute('data-dash-width')) { dashResize(card, +t.getAttribute('data-dash-width')); t.focus({ preventScroll: true }); }
+        else {
+            var after = card.nextElementSibling || card.previousElementSibling;
+            card.remove();
+            dashChanged();
+            if (after && after.hasAttribute('data-dash-card')) dashFocus(after);
+        }
+    });
+    document.addEventListener('keydown', function(e) {
+        var handle = e.target.closest && e.target.closest('[data-dash-drag]');
+        var dir = handle && { ArrowUp: -1, ArrowLeft: -1, ArrowDown: 1, ArrowRight: 1 }[e.key];
+        if (!dir) return;
+        e.preventDefault();
+        dashMove(handle.closest('[data-dash-card]'), dir);
+        handle.focus({ preventScroll: true });
+    });
+    document.addEventListener('input', function(e) {
+        if (e.target.closest && e.target.closest('[data-dash-text]')) dashDirty = true;
+    });
+
+    // Drag: the card follows the pointer, landing before or after the card under it (beside it, or
+    // above or below a full-width one).
+    document.addEventListener('dragstart', function(e) {
+        var handle = e.target.closest && e.target.closest('[data-dash-drag]');
+        if (!handle) return;
+        dashDragging = handle.closest('[data-dash-card]');
+        dashDragging.classList.add('is-dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try {
+            e.dataTransfer.setData('text/plain', dashDragging.getAttribute('data-type'));
+            e.dataTransfer.setDragImage(dashDragging, 24, 16);
+        } catch (_) { /* older browsers: default drag image */ }
+    });
+    document.addEventListener('dragover', function(e) {
+        if (!dashDragging) return;
+        var grid = e.target.closest && e.target.closest('[data-dash-grid]');
+        if (grid !== dashDragging.parentElement) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        var over = e.target.closest('[data-dash-card]');
+        if (!over) {
+            var last = dashCards(grid).pop();
+            if (last && last !== dashDragging && e.clientY > last.getBoundingClientRect().bottom) grid.appendChild(dashDragging);
+            return;
+        }
+        if (over === dashDragging) return;
+        var r = over.getBoundingClientRect(), wide = r.width > grid.getBoundingClientRect().width * 0.9;
+        var after = wide ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+        var ref = after ? over.nextElementSibling : over;
+        if (ref !== dashDragging) grid.insertBefore(dashDragging, ref);
+    });
+    document.addEventListener('drop', function(e) { if (dashDragging) e.preventDefault(); });
+    document.addEventListener('dragend', function() {
+        if (!dashDragging) return;
+        dashDragging.classList.remove('is-dragging');
+        dashDragging = null;
+        dashChanged();
+    });
+
+    document.addEventListener('submit', function(e) {
+        var form = e.target.closest && e.target.closest('[data-dash-save]');
+        if (!form) return;
+        form.querySelector('[data-dash-layout-field]').value = JSON.stringify(dashCards(dashGrid()).map(function(c) {
+            var card = { type: c.getAttribute('data-type'), w: +c.getAttribute('data-w') }, text = c.querySelector('[data-dash-text]');
+            if (text) card.text = text.value;
+            return card;
+        }));
+    }, true);
+    document.addEventListener('htmx:beforeOnLoad', function(e) {
+        if (e.detail.elt && e.detail.elt.matches && e.detail.elt.matches('[data-dash-save]') && e.detail.xhr.status < 300) dashDirty = false;
+    });
+    document.addEventListener('htmx:beforeRequest', function(e) {
+        if (!dashDirty || !dashGrid() || !e.detail.boosted || (e.detail.elt.closest && e.detail.elt.closest('[data-dash-cancel]'))) return;
+        if (window.confirm('Leave without saving your Dashboard layout?')) dashDirty = false;
+        else e.preventDefault();
+    });
+    window.addEventListener('beforeunload', function(e) {
+        if (dashDirty && dashGrid()) { e.preventDefault(); e.returnValue = ''; }
+    });
+
     // Section open/closed
     function readRuleModalFolds() { return readPref('tide.ruleModalFolds', {}) || {}; }
     document.addEventListener('toggle', function(e) {
@@ -1298,14 +1479,7 @@ console.debug('TIDE app.js loading...');
      * Execute page-specific initializers
      */
     function executePageInitializers() {
-        // Check for Sigma page initializer
-        const yamlTextarea = document.getElementById('yaml-editor');
-        if (yamlTextarea && typeof window.initSigmaPage === 'function') {
-            setTimeout(function() {
-                window.initSigmaPage(0);
-            }, 50);
-        }
-        
+        // Page scripts (app/static/js/pages/*.js) start themselves through TIDE.page (actions.js).
         // Re-highlight any code blocks (Prism.js)
         if (typeof Prism !== 'undefined') {
             setTimeout(function() { Prism.highlightAll(); }, 100);
@@ -1339,6 +1513,17 @@ console.debug('TIDE app.js loading...');
         document.addEventListener('htmx:responseError', function(event) {
             console.error('HTMX Response Error:', event.detail);
             showToast('An error occurred. Please try again.', 'error');
+        });
+
+        // Stale page / network errors: a lost connection says so; a 401 or 403 that slipped
+        // through without HX-Redirect goes to sign-in; any other failure says which.
+        document.addEventListener('htmx:sendError', function() {
+            showToast('Connection lost — please refresh the page.', 'error');
+        });
+        document.addEventListener('htmx:responseError', function(evt) {
+            var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
+            if (status === 401 || status === 403) window.location.href = '/login';
+            else showToast('Request failed (HTTP ' + status + '). Try refreshing.', 'error');
         });
 
         // Handle HTMX request timeout
@@ -1470,7 +1655,7 @@ console.debug('TIDE app.js loading...');
             overlay.setAttribute('data-tide-confirm', '');
             var danger = opts.danger !== false;
             overlay.innerHTML =
-                '<div name="Confirm Modal" class="modal-content modal-sm" role="alertdialog" aria-modal="true" onclick="event.stopPropagation()">' +
+                '<div name="Confirm Modal" class="modal-content modal-sm" role="alertdialog" aria-modal="true" data-stop-click>' +
                 '<h2 class="modal-section-title">' + (opts.title || 'Are you sure?') + '</h2>' +
                 '<div class="text-secondary mb-md" data-confirm-body>' + (opts.body || '') + '</div>' +
                 '<div class="modal-actions">' +
@@ -1509,6 +1694,12 @@ console.debug('TIDE app.js loading...');
     // Rule modal > Actions > Move: confirm dialog, then POST to the promotion API.
     // Copying (delete_source off) keeps the source live and links the two rows; ticking it
     // is a true move (today's promote/demote), same one action either way.
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text == null ? '' : String(text);
+        return div.innerHTML.replace(/"/g, '&quot;');
+    }
+
     window.showMoveDialog = function (ruleId, ruleName, siemId, space, deleteSourceDefault, targets) {
         var host = document.getElementById('modal-container');
         if (!host) return;
@@ -1516,12 +1707,12 @@ console.debug('TIDE app.js loading...');
         overlay.className = 'modal-overlay';
         overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
         var options = (targets || []).map(function (t) {
-            return '<option value="' + t.siem_id + '|' + t.space + '">' + (t.name || t.label) + '</option>';
+            return '<option value="' + escapeHtml(t.siem_id + '|' + t.space) + '">' + escapeHtml(t.name || t.label) + '</option>';
         }).join('');
         overlay.innerHTML =
-            '<div name="Move Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
+            '<div name="Move Rule Modal" class="modal-content modal-sm" data-stop-click>' +
             '<h2 class="modal-section-title">Move rule</h2>' +
-            '<p class="text-secondary mb-md">Move <strong>' + ruleName + '</strong> to another linked destination.</p>' +
+            '<p class="text-secondary mb-md">Move <strong>' + escapeHtml(ruleName) + '</strong> to another linked destination.</p>' +
             '<label class="form-label" style="font-size:0.78rem;">Target</label>' +
             '<select name="target_scope" class="form-input mb-md" data-move-target>' + options + '</select>' +
             '<label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:1rem;">' +
@@ -1555,13 +1746,16 @@ console.debug('TIDE app.js loading...');
             body.set('delete_source', overlay.querySelector('[data-move-delete]').checked ? 'true' : 'false');
             var url = '/api/promotion/' + encodeURIComponent(ruleId) + '/move?siem_id=' + encodeURIComponent(siemId) + '&space=' + encodeURIComponent(space);
             fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
-                .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html }; }); })
+                .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html, show: window.tideRuleWindowFrom(r) }; }); })
                 .then(function (res) {
                     if (res.ok) {
+                        // The rule window stays open (#62) -- on the moved copy, or on this rule after a
+                        // copy -- and the list behind refreshes where it is, instead of reloading the page.
                         var toasts = document.getElementById('toast-container');
                         if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
-                        document.querySelectorAll('#modal-container .modal-overlay').forEach(function (o) { o.remove(); });
-                        setTimeout(function () { window.location.reload(); }, 1200);
+                        overlay.remove();
+                        if (window.htmx) htmx.trigger(document.body, 'refreshRules');
+                        window.tideShowRuleAfterAction(res.show);
                     } else {
                         // The body is the server's toast markup; read its text so the reason
                         // shows in the dialog rather than behind it.
@@ -1594,7 +1788,7 @@ console.debug('TIDE app.js loading...');
         overlay.className = 'modal-overlay';
         overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
         overlay.innerHTML =
-            '<div name="Delete Rule Modal" class="modal-content modal-sm" onclick="event.stopPropagation()">' +
+            '<div name="Delete Rule Modal" class="modal-content modal-sm" data-stop-click>' +
             '<h2 class="modal-section-title">Delete rule</h2>' +
             '<p class="text-secondary mb-md">Remove <strong>' + esc(ruleName) + '</strong> from TIDE.' +
             (deprecated ? '' : ' If it is still in Elastic, the next sync brings it back unless you delete it there too.') + '</p>' +
@@ -1734,8 +1928,17 @@ console.debug('TIDE app.js loading...');
         fetch('/api/promotion/' + encodeURIComponent(root.dataset.ruleId) + '/merge?' + qs, {
             method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
         })
-            .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html }; }); })
+            .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html, show: window.tideRuleWindowFrom(r) }; }); })
             .then(function (res) {
+                if (res.ok && res.show) {
+                    // The window reopens on the copy that received the merge (#62), in the same place in
+                    // prev / next; the result shows as a toast.
+                    var toasts = document.getElementById('toast-container');
+                    if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
+                    if (window.htmx) htmx.trigger(document.body, 'refreshRules');
+                    window.tideShowRuleAfterAction(res.show);
+                    return;
+                }
                 var host = document.getElementById('modal-container');
                 if (host) host.innerHTML = res.html;
                 if (window.htmx && host) htmx.process(host);

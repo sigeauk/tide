@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Dashboard | TIDE{% endblock %}
 
@@ -7,213 +7,86 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header" style="display: flex; align-items: flex-start; justify-content: space-between;">
+{% set client_name = active_client.name if active_client else 'this client' %}
+<div class="page-header">
     <div>
         <h1 class="page-title-hero">Dashboard</h1>
         <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
     </div>
-    <div style="display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0;">
-        <div id="sync-status"></div>
-        <button name="Sync Elastic" type="button" class="btn btn-primary btn-sm"
-                hx-post="/api/sync/elastic"
-                hx-target="#sync-status"
-                hx-swap="outerHTML">
-            {{ icon('refresh-cw', '14') }}
-            Sync Elastic
-        </button>
-    </div>
-</div>
-
-<!-- ═══ Rule Health Section ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('shield-check', '20') }} Rule Health</h2>
-    <div class="metrics-grid">
-        {% set metrics = rule_metrics %}
-        {% include "partials/metrics_row.html" %}
-    </div>
-</div>
-
-<!-- ═══ Promotion Section ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('circle-arrow-up', '20') }} Promotion</h2>
-    <div class="metrics-grid">
-        {% set metrics = promotion_metrics %}
-        {% include "partials/promotion_metrics.html" %}
-    </div>
-</div>
-
-<!-- ═══ Threat Landscape Section ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('target', '20') }} Threat Landscape</h2>
-    <div class="metrics-grid">
-        {% set metrics = threat_metrics %}
-        {% include "partials/threat_metrics.html" %}
-    </div>
-</div>
-
-<!-- ═══ Baselines Section ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('shield', '20') }} Baselines</h2>
-    <div class="metrics-grid">
-        {% if baselines_overview or (baselines_rollup and baselines_rollup.baselines) %}
-        <div class="metric-card">
-            <p class="metric-value">{{ baselines_overview | length }}</p>
-            <p class="metric-label">Templates</p>
-            <p class="metric-sub">{{ icon_text('clipboard-list','Baseline templates','14') }}</p>
-        </div>
-        <div class="metric-card">
-            {% set ns_tactics = namespace(total=0) %}
-            {% for bl in baselines_overview %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
-            <p class="metric-value">{{ ns_tactics.total }}</p>
-            <p class="metric-label">Techniques Defined</p>
-            <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
-        </div>
-        {# Coverage lives on each system's own baselines, not on the templates they came from. #}
-        {% set ru = baselines_rollup or {'baselines': 0, 'rules_mapped': 0, 'red': 0, 'green': 0} %}
-        <div class="metric-card">
-            <p class="metric-value">{{ ru.baselines }}</p>
-            <p class="metric-label">System Baselines</p>
-            <p class="metric-sub">{{ icon_text('layers','Baselines on systems','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'success' if ru.rules_mapped > 0 else '' }}">{{ ru.rules_mapped }}</p>
-            <p class="metric-label">Rules Mapped</p>
-            <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'danger' if ru.red > 0 else 'success' }}">{{ ru.red }}</p>
-            <p class="metric-label">Uncovered</p>
-            <p class="metric-sub">{{ icon_text('alert-triangle','System baselines with gaps','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'success' if ru.green > 0 else '' }}">{{ ru.green }}</p>
-            <p class="metric-label">Fully Covered</p>
-            <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
-        </div>
-        {% else %}
-        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
-            <p class="metric-value" style="font-size:1rem;">—</p>
-            <p class="metric-label">No baseline data</p>
-            <p class="metric-sub"><a name="Go to Baselines →" href="/baselines">Go to Baselines →</a></p>
-        </div>
+    {% if can_edit and not editing %}
+    <div class="flex gap-sm items-center flex-wrap">
+        {% if layout_source == 'user' %}
+        <span class="status-pill status-info" title="You are seeing your own layout, not {{ client_name }}'s">Your layout</span>
         {% endif %}
-    </div>
-</div>
-
-<!-- ═══ Connected Services ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('settings', '20') }} Connected Services</h2>
-    <div class="metrics-grid">
-        {% if client_siems %}
-        {% for siem in client_siems %}
-        <div class="integration-card">
-            <div class="integration-card-name">{{ siem.label }} &middot; {{ siem.name }}</div>
-            <div class="integration-card-url">{{ siem.kibana_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if siem.is_active else 'inactive' }}">{{ 'Connected' if siem.is_active else 'Inactive' }}</span>
-        </div>
-        {% endfor %}
-        {% else %}
-        <div class="integration-card">
-            <div class="integration-card-name">Elasticsearch</div>
-            <div class="integration-card-url">No SIEM linked to this client</div>
-            <span class="integration-card-status status-inactive">Not configured</span>
-        </div>
-        {% endif %}
-
-        <div class="integration-card">
-            <div class="integration-card-name">OpenCTI</div>
-            <div class="integration-card-url">{{ env.opencti_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">GitLab</div>
-            <div class="integration-card-url">{{ env.gitlab_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">Logging</div>
-            <div class="integration-card-url">Rule log export to SIEM</div>
-            <span class="integration-card-status status-{{ 'active' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'inactive' }}">{{ 'Enabled' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'Disabled' }}</span>
+        <div class="rh-more" data-more>
+            <button name="Customise Dashboard" type="button" class="btn btn-secondary btn-sm" data-more-toggle
+                    aria-haspopup="menu" aria-expanded="false">{{ icon('layout', '14') }} Customise</button>
+            <div class="rh-more__menu" role="menu" hidden>
+                <a name="Edit My Layout" role="menuitem" class="rh-more__item" href="/dashboard?edit=mine"
+                   title="Arrange the Dashboard for yourself only">{{ icon('user', '14') }}<span>Edit my layout</span></a>
+                <a name="Edit Client Layout" role="menuitem" class="rh-more__item" href="/dashboard?edit=client"
+                   title="Arrange the Dashboard for everyone on {{ client_name }} who hasn't made their own">{{ icon('users', '14') }}<span>Edit the layout for {{ client_name }}</span></a>
+                {% if stored_layouts %}<div class="rh-more__sep" role="separator"></div>{% endif %}
+                {% if 'user' in stored_layouts %}
+                <button name="Reset My Layout" type="button" role="menuitem" class="rh-more__item"
+                        hx-post="/api/dashboard/layout/reset" hx-vals='{"scope": "mine"}'
+                        hx-confirm="Remove your own layout? You will see the layout for {{ client_name }}.">{{ icon('rotate-ccw', '14') }}<span>Reset my layout</span></button>
+                {% endif %}
+                {% if 'client' in stored_layouts %}
+                <button name="Reset Client Layout" type="button" role="menuitem" class="rh-more__item"
+                        hx-post="/api/dashboard/layout/reset" hx-vals='{"scope": "client"}'
+                        hx-confirm="Put the layout for {{ client_name }} back to TIDE's default? Anyone with their own layout keeps it.">{{ icon('rotate-ccw', '14') }}<span>Reset the layout for {{ client_name }}</span></button>
+                {% endif %}
+            </div>
         </div>
     </div>
+    {% endif %}
 </div>
 
-<!-- ═══ Repositories ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('github', '20') }} Repositories</h2>
-    <div class="metrics-grid">
-        <div class="integration-card">
-            <div class="integration-card-name">MITRE Enterprise ATT&amp;CK</div>
-            <div class="integration-card-url" title="{{ env.mitre_source }}">{{ env.mitre_source | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.mitre_enterprise else 'inactive' }}">{{ 'Active' if repo_status.mitre_enterprise else 'Missing' }}</span>
+{% if editing %}
+<div class="dash-editbar" data-dash-editbar>
+    <div class="dash-editbar__text">
+        <strong>{{ 'Editing your own layout' if editing == 'mine' else 'Editing the layout for everyone on ' ~ client_name }}</strong>
+        <span class="dash-editbar__hint">Drag {{ icon('move', '11') }} or use the arrow keys to move a card; {{ icon('minus-circle', '11') }} {{ icon('plus-circle', '11') }} change its width. Empty titles and text blocks aren't kept.</span>
+    </div>
+    <div class="dash-editbar__actions">
+        <div class="rh-more" data-more>
+            <button name="Add Card" type="button" class="btn btn-secondary btn-sm" data-more-toggle
+                    aria-haspopup="menu" aria-expanded="false">{{ icon('plus', '14') }} Add</button>
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Add Title" type="button" role="menuitem" class="rh-more__item" data-dash-add="title">{{ icon('hash', '14') }}<span>Title</span></button>
+                <button name="Add Text Block" type="button" role="menuitem" class="rh-more__item" data-dash-add="text">{{ icon('file-text', '14') }}<span>Text block</span></button>
+                <div class="rh-more__sep" role="separator"></div>
+                {% for kind, section in section_cards.items() %}
+                <button name="Add {{ section[0] }}" type="button" role="menuitem" class="rh-more__item" data-dash-add="{{ kind }}">{{ icon(section[1], '14') }}<span>{{ section[0] }}</span></button>
+                {% endfor %}
+            </div>
         </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">MITRE Mobile ATT&amp;CK</div>
-            <div class="integration-card-url" title="{{ env.mitre_mobile_source }}">{{ env.mitre_mobile_source | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.mitre_mobile else 'inactive' }}">{{ 'Active' if repo_status.mitre_mobile else 'Missing' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">MITRE ICS ATT&amp;CK</div>
-            <div class="integration-card-url" title="{{ env.mitre_ics_source }}">{{ env.mitre_ics_source | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.mitre_ics else 'inactive' }}">{{ 'Active' if repo_status.mitre_ics else 'Missing' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">MITRE PRE-ATT&amp;CK</div>
-            <div class="integration-card-url" title="{{ env.mitre_pre_source }}">{{ env.mitre_pre_source | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.mitre_pre else 'inactive' }}">{{ 'Active' if repo_status.mitre_pre else 'Missing' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">Sigma Rules</div>
-            <div class="integration-card-url" title="{{ env.sigma_repo_url }}">{{ env.sigma_repo_url | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.sigma else 'inactive' }}">{{ 'Cloned' if repo_status.sigma else 'Not Found' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">Elastic Detection Rules</div>
-            <div class="integration-card-url" title="{{ env.elastic_repo_url }}">{{ env.elastic_repo_url | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if repo_status.elastic_detection else 'inactive' }}">{{ 'Cloned' if repo_status.elastic_detection else 'Not Found' }}</span>
-        </div>
+        <form class="dash-editbar__form" hx-post="/api/dashboard/layout" data-dash-save>
+            <input type="hidden" name="scope" value="{{ editing }}">
+            <input type="hidden" name="layout" value="" data-dash-layout-field>
+            <a name="Cancel Layout" class="btn btn-secondary btn-sm" href="/dashboard" data-dash-cancel>Cancel</a>
+            <button name="Save Layout" type="submit" class="btn btn-primary btn-sm">{{ icon('save', '14') }} Save layout</button>
+        </form>
     </div>
 </div>
+{% endif %}
 
-<!-- ═══ Asset Inventory ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('server', '20') }} Asset Inventory</h2>
-    <div class="metrics-grid">
-        {% if inventory_stats %}
-        {% set stats = inventory_stats %}
-        {% include "partials/inventory_metrics.html" %}
-        {% else %}
-        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
-            <p class="metric-value" style="font-size:1rem;">—</p>
-            <p class="metric-label">No inventory data</p>
-            <p class="metric-sub"><a name="Go to Systems →" href="/systems">Go to Systems →</a></p>
-        </div>
-        {% endif %}
-    </div>
+<div class="dash-grid{{ ' is-editing' if editing else '' }}" data-dash-grid>
+    {% for card in cards %}{% include "partials/dashboard_card.html" %}{% endfor %}
 </div>
-
-<!-- ═══ CVE Overview ═══ -->
-<div class="overview-section">
-    <h2>{{ icon('shield-alert', '20') }} CVE Overview</h2>
-    <div class="metrics-grid">
-        {% if cve_stats %}
-        {% set stats = cve_stats %}
-        {% include "partials/cve_metrics.html" %}
-        {% else %}
-        <div class="metric-card" style="grid-column:1/-1;text-align:center;color:var(--color-muted);">
-            <p class="metric-value" style="font-size:1rem;">—</p>
-            <p class="metric-label">No CVE data</p>
-            <p class="metric-sub"><a name="Import CVE →" href="/cve-overview">Import CVE →</a></p>
-        </div>
-        {% endif %}
-    </div>
+{% if not cards and not editing %}
+<div class="empty-state-text dash-empty">
+    Nothing is on this Dashboard yet.{% if can_edit %} Use <strong>Customise</strong> to add cards.{% endif %}
 </div>
+{% endif %}
 
+{% if editing %}
+{# What Add puts on the page: a copy of one of these. #}
+{% for kind in ['title', 'text'] + (section_cards | list) %}
+<template data-dash-template="{{ kind }}">
+    {% with card = {'type': kind, 'w': 6 if kind == 'text' else 12, 'text': ''} %}{% include "partials/dashboard_card.html" %}{% endwith %}
+</template>
+{% endfor %}
+{% endif %}
 {% endblock %}

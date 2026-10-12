@@ -174,7 +174,11 @@ async def auth_callback(
     
     if not tokens:
         return HTMLResponse("<h1>Failed to exchange authorization code</h1>", status_code=400)
-    
+
+    # The one place an SSO sign-in is recorded (provisions a first-time user, sets last_login);
+    # later requests with the cookie only read the user.
+    auth.get_user_from_token(tokens["access_token"], login=True)
+
     # Set tokens in cookies
     response = RedirectResponse(url=state or "/", status_code=302)
     
@@ -218,6 +222,16 @@ async def logout(
     """
     use_secure = settings.app_url.startswith("https://")
     had_keycloak = request.cookies.get("access_token") is not None
+
+    # End this user's local sessions, not just this browser's cookie: a copy of the cookie would
+    # otherwise keep working until it expired (#30).
+    signed_out = auth.session_user_id(request.cookies.get("session_token") or "")
+    if signed_out:
+        try:
+            from app.services.database import get_database_service
+            get_database_service().end_user_sessions(signed_out)
+        except Exception as exc:  # pragma: no cover - signing out must never fail
+            logger.warning(f"Could not end the sessions of {signed_out} at sign-out: {exc}")
     
     if had_keycloak:
         post_logout_uri = f"{settings.app_url}/login?logout=1"

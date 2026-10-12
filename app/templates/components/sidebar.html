@@ -45,7 +45,7 @@ Children are indented, slightly muted, icon-free.
         <!-- ── Risk & Baselines ── -->
         {% if not user or user.can_read('page:cve_overview') or user.can_read('page:baselines') %}
         <div class="nav-group collapsed" id="nav-group-risk">
-            <button name="Risks" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-risk')" data-tooltip="Risk &amp; Baselines">
+            <button name="Risks" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-risk" data-tooltip="Risk &amp; Baselines">
                 {{ icon('triangle-alert', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Risks</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -68,7 +68,7 @@ Children are indented, slightly muted, icon-free.
         <!-- ── Rules ── -->
         {% if not user or user.can_read('page:rules') or user.can_read('page:sigma') %}
         <div class="nav-group collapsed" id="nav-group-rules">
-            <button name="Rules" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-rules')" data-tooltip="Rules">
+            <button name="Rules" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-rules" data-tooltip="Rules">
                 {{ icon('shield-check', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Rules</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -91,7 +91,7 @@ Children are indented, slightly muted, icon-free.
         <!-- ── Threats ── -->
         {% if not user or user.can_read('page:threats') or user.can_read('page:heatmap') %}
         <div class="nav-group collapsed" id="nav-group-threats">
-            <button name="Threats" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-threats')" data-tooltip="Threats">
+            <button name="Threats" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-threats" data-tooltip="Threats">
                 {{ icon('target', '18', 'nav-icon-svg') }}
                 <span class="nav-label">Threats</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -114,7 +114,7 @@ Children are indented, slightly muted, icon-free.
         <!-- ── MITRE ── -->
         {% if not user or user.can_read('page:threats') %}
         <div class="nav-group collapsed" id="nav-group-mitre">
-            <button name="MITRE" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-mitre')" data-tooltip="MITRE">
+            <button name="MITRE" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-mitre" data-tooltip="MITRE">
                 {{ icon('ampersand', '18', 'nav-icon-svg') }}
                 <span class="nav-label">MITRE</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -148,7 +148,7 @@ Children are indented, slightly muted, icon-free.
         <!-- ── CTI ── -->
         {% if not user or user.can_read('page:cti') or user.can_read('page:cti_indicators') or user.can_read('page:cti_actors') or user.can_read('page:cti_reports') %}
         <div class="nav-group collapsed" id="nav-group-cti">
-            <button name="CTI" class="nav-item nav-group__trigger" onclick="toggleNavGroup('nav-group-cti')" data-tooltip="CTI">
+            <button name="CTI" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-cti" data-tooltip="CTI">
                 {{ icon('eye', '18', 'nav-icon-svg') }}
                 <span class="nav-label">CTI</span>
                 <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -183,6 +183,12 @@ Children are indented, slightly muted, icon-free.
             <span class="nav-label">Management</span>
         </a>
         {% endif %}
+        {% if user and (user.is_superadmin or user.is_support()) %}
+        <a name="Diagnostics" href="/diagnostics" class="nav-item {% if active_page == 'diagnostics' %}active{% endif %}" data-tooltip="Diagnostics">
+            {{ icon('activity', '18', 'nav-icon-svg') }}
+            <span class="nav-label">Diagnostics</span>
+        </a>
+        {% endif %}
         {% if not user or user.can_read('page:settings') %}
         <a name="Settings" href="/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}" data-tooltip="Settings">
             <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -194,14 +200,14 @@ Children are indented, slightly muted, icon-free.
         
         {% if user %}
         <div class="user-menu-container">
-            <button  name="Toggle User Menu" class="nav-item user-info" data-tooltip="{{ user.username or 'Guest' }}" onclick="toggleUserMenu(event)">
+            <button  name="Toggle User Menu" class="nav-item user-info" data-tooltip="{{ user.username or 'Guest' }}" data-click="nav.userMenu">
                 <span class="user-avatar">{{ user.username[0] | upper if user.username else '?' }}</span>
                 <span class="nav-label user-name">{{ user.username or 'Guest' }}</span>
             </button>
             
             <!-- User Menu Dropdown -->
             <div class="user-menu" id="user-menu">
-                <button name="Dark Mode" class="user-menu-item" onclick="toggleTheme()">
+                <button name="Dark Mode" class="user-menu-item" data-click="nav.theme">
                     <svg viewBox="0 0 24 24" id="theme-icon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                     <span id="theme-label">Dark Mode</span>
                 </button>
@@ -222,7 +228,7 @@ Children are indented, slightly muted, icon-free.
         {% endif %}
         
         <!-- Sidebar Expand/Collapse Toggle -->
-        <button name="Expand" class="nav-item sidebar-toggle" id="sidebar-toggle" data-tooltip="Expand" onclick="toggleSidebar()">
+        <button name="Expand" class="nav-item sidebar-toggle" id="sidebar-toggle" data-tooltip="Expand" data-click="nav.sidebar">
             <svg class="nav-icon-svg toggle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m9 18 6-6-6-6"/>
             </svg>

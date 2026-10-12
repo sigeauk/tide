@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 _TICK_SECONDS = 60
 
 _task: Optional[asyncio.Task] = None
+_last_tick: Optional[datetime] = None        # when the loop last checked for due connectors (UTC)
+_last_tick_error: Optional[str] = None
 _stop_event: Optional[asyncio.Event] = None
 
 
@@ -62,6 +64,20 @@ def start() -> None:
     _task = asyncio.create_task(_loop(_stop_event), name="cti-scheduler")
     logger.info("CTI connector auto-sync scheduler started (tick=%ds)",
                 _TICK_SECONDS)
+
+
+def status() -> dict:
+    """``{running, last_tick, error}``: whether the loop is alive (started and not finished, so a
+    loop that died is reported), when it last checked for due connectors (UTC), and why it isn't
+    running or its last check failed."""
+    running = _task is not None and not _task.done()
+    error = _last_tick_error
+    if _task is None:
+        error = "not started"
+    elif _task.done() and not _task.cancelled():
+        exc = _task.exception()
+        error = f"stopped: {exc}" if exc else "stopped"
+    return {"running": running, "last_tick": _last_tick, "error": error}
 
 
 async def stop() -> None:
@@ -95,14 +111,18 @@ async def _loop(stop_event: asyncio.Event) -> None:
     except asyncio.TimeoutError:
         pass
 
+    global _last_tick, _last_tick_error
     while not stop_event.is_set():
         try:
             await asyncio.to_thread(_tick_once)
-        except Exception:
+            _last_tick_error = None
+        except Exception as exc:
             # Never let a bad tick kill the scheduler — log and try
             # again next cycle. The job registry has its own per-job
             # error handling.
             logger.exception("CTI scheduler tick raised")
+            _last_tick_error = str(exc)[:300]
+        _last_tick = datetime.utcnow()
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=_TICK_SECONDS)
         except asyncio.TimeoutError:
@@ -223,6 +243,7 @@ def _tick_once() -> None:
             runner=_runner,
             label=connector.get("label") or connector.get("vendor") or connector_id,
             on_success=_on_success,
+            scope={"connector_id": connector_id},
         )
 
 

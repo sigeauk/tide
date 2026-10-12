@@ -1,11 +1,11 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {# In edit mode, Close/Cancel return to the Rule modal instead of dismissing everything. #}
 {% set back_url = ("/api/rules/" ~ rule.rule_id ~ "/history-modal?space=" ~ (space | urlencode) ~ (("&siem_id=" ~ (siem_id | urlencode)) if siem_id else "")) if (mode == "edit" and rule) else "" %}
-<div   name="Dismiss Rule Form Modal" class="modal-overlay" onclick="if(event.target === this) this.remove()">
+<div   name="Dismiss Rule Form Modal" class="modal-overlay" data-click="backdrop.remove">
   <div class="modal-content rule-modal rule-form-modal" role="dialog" aria-modal="true" aria-labelledby="rf-title">
     <header class="rm-header">
       {% if back_url %}
-      <button name="Back to rule" type="button" class="rm-iconbtn rm-iconbtn--boxed" onclick='htmx.ajax("GET", {{ back_url | tojson }}, {target: "#modal-container", swap: "innerHTML"})' title="Back to rule" aria-label="Back to rule">{{ icon('chevron-left', '16') }}</button>
+      <button name="Back to rule" type="button" class="rm-iconbtn rm-iconbtn--boxed" data-click="modal.load" data-url="{{ back_url }}" title="Back to rule" aria-label="Back to rule">{{ icon('chevron-left', '16') }}</button>
       {% endif %}
       <div class="rm-header__main">
         <h2 class="rm-title" id="rf-title">
@@ -14,14 +14,14 @@
         {% if mode == 'edit' and rule %}<div class="rm-header__badges"><span class="rm-header__meta">{{ rule.name }}</span></div>{% endif %}
       </div>
       <div class="rm-header__tools">
-        <button name="✕" type="button" class="rm-close" {% if back_url %}onclick='htmx.ajax("GET", {{ back_url | tojson }}, {target: "#modal-container", swap: "innerHTML"})'{% else %}onclick="this.closest('.modal-overlay').remove()"{% endif %} title="{{ 'Back to rule' if back_url else 'Close' }}" aria-label="{{ 'Back to rule' if back_url else 'Close' }}">{{ icon('x', '18') }}</button>
+        <button name="✕" type="button" class="rm-close" {% if back_url %}data-click="modal.load" data-url="{{ back_url }}"{% else %}data-click="modal.remove"{% endif %} title="{{ 'Back to rule' if back_url else 'Close' }}" aria-label="{{ 'Back to rule' if back_url else 'Close' }}">{{ icon('x', '18') }}</button>
       </div>
     </header>
     <div class="rm-form-body">
 
-    <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form">
+    <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form" data-mode="{{ mode }}">
       <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
-      <div class="rule-accordion-stack" style="display:flex; flex-direction:column; gap:0.75rem;">
+      <div class="rule-accordion-stack flex flex-col gap-ms">
         <details class="rule-accordion" open>
           <summary>Create Rule</summary>
           <div class="rule-accordion-panel">
@@ -69,7 +69,7 @@
             </div>
             <div class="form-section">
               <label for="rule-query">Query *</label>
-              <textarea class="rule-form-textarea" id="rule-query" name="query" required rows="6" style="font-family: monospace;">{{ form_values.query }}</textarea>
+              <textarea class="rule-form-textarea mono" id="rule-query" name="query" required rows="6">{{ form_values.query }}</textarea>
             </div>
           </div>
         </details>
@@ -111,8 +111,9 @@
             <div class="form-section">
               <label>MITRE ATT&CK Techniques</label>
               <input type="hidden" id="rule-mitre-values" name="mitre_ids" value="{{ form_values.mitre_ids | join(', ') }}">
-              <div id="mitre-builder" style="display:flex; flex-direction:column; gap:0.6rem;"></div>
-              <button name="Mitre Add Btn" type="button" class="btn btn-secondary btn-sm" id="mitre-add-btn" style="margin-top:0.4rem;">{{ icon_text('plus-circle', 'Add technique', '14') }}</button>
+              <div id="mitre-builder" class="flex flex-col gap-sm"></div>
+              <script type="application/json" data-technique-groups>{{ technique_groups | tojson }}</script>
+              <button name="Mitre Add Btn" type="button" class="btn btn-secondary btn-sm mt-sm" id="mitre-add-btn">{{ icon_text('plus-circle', 'Add technique', '14') }}</button>
               <div class="rule-help">Choose a tactic first, then a technique. Add multiple pairs as needed.</div>
               {% if selected_tactics %}
                 <div class="rule-chip-row" aria-label="Selected MITRE tactics">
@@ -179,16 +180,16 @@
             {{ icon_text('plus-circle', submit_label, '14') }}
           {% endif %}
         </button>
-        <button name="Cancel" type="button" class="btn btn-secondary" {% if back_url %}onclick='htmx.ajax("GET", {{ back_url | tojson }}, {target: "#modal-container", swap: "innerHTML"})'{% else %}onclick="this.closest('.modal-overlay').remove()"{% endif %}>Cancel</button>
+        <button name="Cancel" type="button" class="btn btn-secondary" {% if back_url %}data-click="modal.load" data-url="{{ back_url }}"{% else %}data-click="modal.remove"{% endif %}>Cancel</button>
       </div>
     </form>
     {% if mode == 'edit' %}
       {# The edit form is for editing. Sync and Delete are actions on the rule, so they live
          with the rule window's other actions; merging is Add link + Compare there too. #}
       {% if rule.deprecated %}
-      <div class="form-section" style="margin-top:0.75rem;">
+      <div class="form-section mt-ms">
         <label for="replacement-scope">Recreate in</label>
-        <div style="display:flex; gap:0.5rem;">
+        <div class="flex gap-sm">
           <select class="rule-form-select" id="replacement-scope" name="replacement_scope">
             {% for s in scope_options %}
               <option value="{{ s.siem_id }}|{{ s.space }}">{{ s.label }} - {{ s.space }}</option>
@@ -202,197 +203,9 @@
         </div>
       </div>
       {% endif %}
-      <div id="rule-action-result" class="rule-help" style="margin-top:0.5rem;"></div>
+      <div id="rule-action-result" class="rule-help mt-sm"></div>
     {% endif %}
     </div>
   </div>
 </div>
 
-<script>
-(function() {
-  const builder = document.getElementById('mitre-builder');
-  const addBtn = document.getElementById('mitre-add-btn');
-  const hidden = document.getElementById('rule-mitre-values');
-  if (!builder || !addBtn || !hidden) return;
-
-  const groups = {{ technique_groups | tojson }};
-  const selectedIds = (hidden.value || '').split(',').map(function(v) { return v.trim().toUpperCase(); }).filter(Boolean);
-
-  function createOption(value, text, selected) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = text;
-    if (selected) option.selected = true;
-    return option;
-  }
-
-  function updateTechniqueSelect(tacticSelect, techniqueSelect, selectedTechnique) {
-    const selectedTactic = tacticSelect.value;
-    while (techniqueSelect.firstChild) techniqueSelect.removeChild(techniqueSelect.firstChild);
-    techniqueSelect.appendChild(createOption('', 'Select a technique...', false));
-    if (!selectedTactic) return;
-
-    const group = groups.find(function(item) { return item.tactic === selectedTactic; });
-    if (!group) return;
-    group.options.forEach(function(opt) {
-      techniqueSelect.appendChild(createOption(opt.id, opt.id + ' - ' + opt.name, opt.id === selectedTechnique));
-    });
-  }
-
-  function syncHidden() {
-    const values = Array.from(builder.querySelectorAll('select[data-role="technique"]'))
-      .map(function(select) { return (select.value || '').trim().toUpperCase(); })
-      .filter(Boolean);
-    hidden.value = values.join(', ');
-  }
-
-  function addRow(initialTechnique) {
-    const row = document.createElement('div');
-    row.style.display = 'grid';
-    row.style.gridTemplateColumns = 'minmax(0, 1fr) minmax(0, 1fr) auto';
-    row.style.gap = '0.5rem';
-    row.style.marginBottom = '0.2rem';
-
-    const tacticSelect = document.createElement('select');
-    tacticSelect.className = 'rule-form-select';
-    tacticSelect.setAttribute('data-role', 'tactic');
-    tacticSelect.appendChild(createOption('', 'Select a tactic...', true));
-    groups.forEach(function(group) {
-      tacticSelect.appendChild(createOption(group.tactic, group.tactic, false));
-    });
-
-    const techniqueSelect = document.createElement('select');
-    techniqueSelect.className = 'rule-form-select';
-    techniqueSelect.setAttribute('data-role', 'technique');
-    techniqueSelect.appendChild(createOption('', 'Select a technique...', true));
-
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'btn btn-secondary btn-sm';
-    removeBtn.textContent = 'Remove';
-
-    row.appendChild(tacticSelect);
-    row.appendChild(techniqueSelect);
-    row.appendChild(removeBtn);
-    builder.appendChild(row);
-
-    if (initialTechnique) {
-      let matchedTactic = '';
-      groups.forEach(function(group) {
-        if (group.options.some(function(opt) { return opt.id === initialTechnique; })) {
-          matchedTactic = group.tactic;
-        }
-      });
-      if (matchedTactic) {
-        tacticSelect.value = matchedTactic;
-        updateTechniqueSelect(tacticSelect, techniqueSelect, initialTechnique);
-      }
-    }
-
-    tacticSelect.addEventListener('change', function() {
-      updateTechniqueSelect(tacticSelect, techniqueSelect, '');
-      syncHidden();
-    });
-    techniqueSelect.addEventListener('change', syncHidden);
-    removeBtn.addEventListener('click', function() {
-      row.remove();
-      syncHidden();
-      if (!builder.children.length) addRow('');
-    });
-
-    syncHidden();
-  }
-
-  if (selectedIds.length) {
-    selectedIds.forEach(function(id) { addRow(id); });
-  } else {
-    addRow('');
-  }
-
-  addBtn.addEventListener('click', function() { addRow(''); });
-})();
-
-(function() {
-  var scopeSelect = document.getElementById('rule-scope-pair');
-  var indexInput = document.getElementById('rule-index');
-  var reasonInput = document.getElementById('rule-reason');
-  var popup = document.getElementById('rule-form-popup');
-  var form = document.querySelector('.rule-create-form');
-  if (!form) return;
-
-  function updateDefaultIndex() {
-    if (!scopeSelect || !indexInput) return;
-    var selected = scopeSelect.options[scopeSelect.selectedIndex];
-    if (!selected) return;
-    var defaultIndex = (selected.getAttribute('data-default-index') || '').trim();
-    if (!defaultIndex) return;
-    // Only prefill untouched/empty values so explicit operator edits win.
-    if (!indexInput.value.trim()) {
-      indexInput.value = defaultIndex;
-    }
-  }
-
-  if (scopeSelect) {
-    scopeSelect.addEventListener('change', function() {
-      updateDefaultIndex();
-    });
-    if ("{{ mode }}" === "create") {
-      updateDefaultIndex();
-    }
-  }
-
-  function showPopup(message) {
-    if (!popup) return;
-    popup.textContent = message;
-    popup.style.display = 'inline-flex';
-  }
-
-  function hidePopup() {
-    if (!popup) return;
-    popup.style.display = 'none';
-    popup.textContent = '';
-  }
-
-  if (reasonInput) {
-    reasonInput.addEventListener('input', hidePopup);
-  }
-
-  function normalizeReason() {
-    if (!reasonInput) return '';
-    reasonInput.value = (reasonInput.value || '').trim();
-    return reasonInput.value;
-  }
-
-  function enforceEditReason() {
-    if ("{{ mode }}" !== "edit") return true;
-    var value = normalizeReason();
-    if (value) return true;
-    var about = Array.from(document.querySelectorAll('.rule-accordion > summary')).find(function(summary) {
-      return (summary.textContent || '').trim().toLowerCase() === 'about rule';
-    });
-    if (about && about.parentElement && !about.parentElement.open) {
-      about.parentElement.open = true;
-    }
-    if (reasonInput) {
-      reasonInput.focus();
-    }
-    showPopup('Reason for Change is required before saving.');
-    return false;
-  }
-
-  form.addEventListener('submit', function(evt) {
-    hidePopup();
-    if (!enforceEditReason()) {
-      evt.preventDefault();
-      evt.stopPropagation();
-    }
-  });
-
-  form.addEventListener('htmx:beforeRequest', function(evt) {
-    hidePopup();
-    if (!enforceEditReason()) {
-      evt.preventDefault();
-    }
-  });
-})();
-</script>

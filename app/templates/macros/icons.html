@@ -145,5 +145,5 @@
 
 {# Icon with text - for buttons and labels #}
 {% macro icon_text(name, text, size="16", class="", gap="0.35rem") %}
-<span style="display: inline-flex; align-items: center; gap: {{ gap }};">{{ icon(name, size, class) }} {{ text }}</span>
+<span class="icon-text"{% if gap != "0.35rem" %} style="--gap: {{ gap }}"{% endif %}>{{ icon(name, size, class) }} {{ text }}</span>
 {% endmacro %}

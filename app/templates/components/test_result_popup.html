@@ -1,10 +1,10 @@
 {% from "macros/icons.html" import icon, icon_text %}
 <!-- Test Rule Result Popup -->
-<div  name="Test Results: ... Close" class="modal-overlay" onclick="this.remove()">
-    <div  name="Test Results: ... Close" class="modal-content modal-sm" onclick="event.stopPropagation()" style="max-width: 700px;">
+<div  name="Test Results: ... Close" class="modal-overlay" data-click="el.remove">
+    <div  name="Test Results: ... Close" class="modal-content modal-sm modal-700" data-stop-click>
         <div class="modal-header">
             <h2 class="modal-title">Test Results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
-            <button  name="Close Modal" class="btn btn-secondary btn-sm" onclick="this.closest('.modal-overlay').remove()">
+            <button  name="Close Modal" class="btn btn-secondary btn-sm" data-click="modal.remove">
                 {{ icon('x','12') }} Close
             </button>
         </div>
@@ -12,19 +12,19 @@
         {% if error %}
         <div class="alert alert-danger mb-md">
             <p>{{ icon_text('triangle-alert', 'Preview Error', '16', 'text-danger') }}</p>
-            <p style="font-size: 0.85rem; margin-top: 0.5rem;">{{ error }}</p>
+            <p class="fs-base mt-sm">{{ error }}</p>
         </div>
         {% else %}
         <!-- Hit Count -->
         <div class="modal-section">
-            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
-                <div class="metric-compact" style="min-width: 120px;">
-                    <div class="metric-compact-value {% if hit_count > 0 %}text-success{% else %}text-warning{% endif %}" style="font-size: 2rem;">
+            <div class="flex items-center gap-md mb-md">
+                <div class="metric-compact test-result-hits">
+                    <div class="metric-compact-value {% if hit_count > 0 %}text-success{% else %}text-warning{% endif %} test-result-hits__value">
                         {{ hit_count }}
                     </div>
                     <div class="metric-compact-label">Documents Matched</div>
                 </div>
-                <div style="font-size: 0.85rem; color: var(--color-text-muted);">
+                <div class="fs-base text-muted">
                     <p>Query language: <strong>{{ rule.language }}</strong></p>
                     <p>Space: <strong>{{ space_labels.get(rule.space, rule.space | capitalize) }}</strong></p>
                     <p>Time range: <strong>Last {{ lookback | default('24h') }}</strong></p>
@@ -36,18 +36,18 @@
         {% if search_ms %}
         <div class="modal-section">
             <h3 class="modal-section-subtitle">Search time</h3>
-            <p style="margin:0 0 0.4rem;">
-                <strong style="font-size:1.25rem;">{{ '{:,}'.format(search_ms) }} ms</strong>
-                <span class="text-muted" style="font-size:0.8rem;">
+            <p class="mt-0 mx-0 mb-sm">
+                <strong class="fs-xl">{{ '{:,}'.format(search_ms) }} ms</strong>
+                <span class="text-muted fs-md">
                     &nbsp;for this run over the last {{ lookback | default('24h') }}{% if search_ms_source == 'request' %} (timed from the request; Kibana reported no duration){% endif %}.
                     A scheduled run covers a shorter window, so it is usually quicker.
                 </span>
             </p>
-            <p class="text-muted" style="font-size:0.8rem;margin:0 0 0.6rem;">
+            <p class="text-muted fs-md mt-0 mx-0 mb-sm">
                 {% if recorded_count %}Recorded for this rule: median {{ '{:,}'.format(recorded_median) }} ms over {{ recorded_count }} run{{ '' if recorded_count == 1 else 's' }}.
                 {% else %}No search time is recorded for this rule yet, so it is not scored on search time.{% endif %}
             </p>
-            <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+            <div class="flex gap-sm flex-wrap">
                 <button name="Use As Search Time" type="button" class="btn btn-primary btn-sm"
                         title="Make this the rule's only search time"
                         hx-post="/api/rules/{{ rule.rule_id }}/search-time?space={{ rule_space | urlencode }}{% if siem_id %}&siem_id={{ siem_id | urlencode }}{% endif %}"
@@ -82,9 +82,9 @@
                     <tbody>
                         {% for sample in samples %}
                         <tr>
-                            <td style="white-space: nowrap; font-size: 0.8rem;">{{ sample.timestamp }}</td>
+                            <td class="nowrap fs-md">{{ sample.timestamp }}</td>
                             <td>{{ sample.host }}</td>
-                            <td style="font-size: 0.8rem; max-width: 300px; overflow: hidden; text-overflow: ellipsis;">{{ sample.message }}</td>
+                            <td class="test-result-msg">{{ sample.message }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>

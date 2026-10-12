@@ -72,7 +72,7 @@ from app.inventory_engine import (
     get_baseline_snapshots, delete_baseline_snapshot,
 )
 from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS, PlaybookStep
-from app.services.database import get_database_service
+from app.services.database import get_database_service, rule_json_keys
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["inventory"])
@@ -840,9 +840,8 @@ async def api_upload_mitre_mapping(
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return HTMLResponse(
-        f"<div class='alert alert-success' style='margin-top:0.5rem;'>"
-        f"Mapping updated: {count} entries saved. Reloading page to apply…"
-        f"<script>setTimeout(()=>window.location.reload(),1500)</script></div>"
+        f"<div class='alert alert-success mt-sm' data-reload-after='1500'>"
+        f"Mapping updated: {count} entries saved. Reloading page to apply…</div>"
     )
 
 
@@ -1013,7 +1012,7 @@ def api_generate_baselines_form(
     """Return the Generate Baselines modal HTML with dynamic tech checkboxes."""
     system = get_system(system_id, client_id=client_id)
     if not system:
-        return HTMLResponse("<p style='color:var(--color-danger)'>System not found.</p>")
+        return HTMLResponse("<p class='text-danger'>System not found.</p>")
 
     catalog = _sigma_tech_catalog()
     total = sum(item["count"] for items in catalog.values() for item in items)
@@ -1254,6 +1253,51 @@ def api_create_baseline(
     return resp
 
 
+@router.post("/api/baselines/from-mitre/{kind}/{object_id}", response_class=HTMLResponse)
+def api_create_baseline_from_mitre(
+    request: Request, kind: str, object_id: str, user: RequireUser, client_id: ActiveClient,
+    baseline_name: str = Form(""), description: str = Form(""), src: str = Form("enterprise"),
+):
+    """A new template with one technique per technique the ATT&CK group, software or campaign
+    uses, each described by ATT&CK's procedure text for it. The Baselines page opens on it."""
+    from app.inventory_engine import generate_baseline_from_actor
+    from app.services import mitre_catalog as catalog
+
+    spec = catalog.KINDS.get(kind)
+    if kind not in catalog.BASELINE_KINDS or not spec:
+        raise HTTPException(status_code=404, detail="A baseline can be made from a group, software or campaign.")
+    db = get_database_service()
+    _, detail = catalog.resolve_detail(db, spec.detail_kind, object_id, catalog.resolve_source(src)[0])
+    techniques = [t for t in (detail or {}).get("techniques") or [] if t.get("id")]
+    if not techniques:
+        raise HTTPException(status_code=404, detail=f"No ATT&CK techniques for {object_id}.")
+
+    uses = {}
+    for t in techniques:
+        tid, use = t["id"].strip().upper(), (t.get("use") or "").strip()
+        if use and use not in uses.get(tid, []):
+            uses.setdefault(tid, []).append(use)
+    label = f"{detail['name']} ({detail['id']})"
+    baseline = generate_baseline_from_actor(
+        actor_name=detail["name"],
+        ttps=[t["id"] for t in techniques],
+        technique_tactic_map=db.get_technique_map(),
+        technique_name_map=db.get_technique_names(),
+        technique_description_map={tid: "\n\n".join(v) for tid, v in uses.items()},
+        baseline_name=baseline_name,
+        description=description.strip() or f"From the ATT&CK {spec.singular.lower()} {label}: "
+                                            f"{len({t['id'].upper() for t in techniques})} techniques.",
+        client_id=client_id,
+    )
+    logger.info("Baseline %s created from ATT&CK %s %s by %s", baseline.id, spec.detail_kind, detail["id"], user.username)
+    url = f"/baselines?baseline_id={quote(baseline.id)}&group=baseline"
+    if request.headers.get("HX-Request") == "true":
+        resp = HTMLResponse("")
+        resp.headers["HX-Redirect"] = url
+        return resp
+    return RedirectResponse(url=url, status_code=303)
+
+
 def _decode_rule_raw_data(raw_data):
     if isinstance(raw_data, dict):
         return raw_data
@@ -1416,6 +1460,7 @@ async def import_baseline_json(
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1437,12 +1482,14 @@ async def import_baseline_json(
                     score, quality_score, meta_score, score_mapping, score_field_type,
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
-                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?)
+                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
+                    kibana_rule_id, rule_language
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
+                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [
@@ -1456,7 +1503,7 @@ async def import_baseline_json(
                     source.get("score_tactics") or 0, source.get("score_techniques") or 0,
                     source.get("score_author") or 0, source.get("score_highlights") or 0,
                     source.get("last_updated"), source.get("mitre_ids") or [], raw_data,
-                    client_id, original_id,
+                    client_id, original_id, *rule_json_keys(raw_data),
                 ],
             )
     for original_id, source_siem_id, source_space in logical_sources:
@@ -1603,6 +1650,7 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
     imported_ids = {}
     logical_sources = []
     with db.get_connection() as conn:
+        db._ensure_rule_key_columns(conn)   # imported rules fill kibana_rule_id / rule_language
         for source in source_rules:
             original_id = str(source.get("rule_id") or source.get("source_rule_id") or "").strip()
             if not original_id:
@@ -1622,12 +1670,14 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
                     score, quality_score, meta_score, score_mapping, score_field_type,
                     score_search_time, score_language, score_note, score_override,
                     score_tactics, score_techniques, score_author, score_highlights,
-                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?)
+                    last_updated, mitre_ids, raw_data, client_id, deprecated, source_rule_id,
+                    kibana_rule_id, rule_language
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, true, ?, ?, ?)
                 ON CONFLICT (rule_id, siem_id, space) DO UPDATE SET
                     name = EXCLUDED.name, severity = EXCLUDED.severity,
                     author = EXCLUDED.author, enabled = EXCLUDED.enabled,
                     raw_data = EXCLUDED.raw_data, mitre_ids = EXCLUDED.mitre_ids,
+                    kibana_rule_id = EXCLUDED.kibana_rule_id, rule_language = EXCLUDED.rule_language,
                     deprecated = true, source_rule_id = EXCLUDED.source_rule_id
                 """,
                 [
@@ -1641,7 +1691,7 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
                     source.get("score_tactics") or 0, source.get("score_techniques") or 0,
                     source.get("score_author") or 0, source.get("score_highlights") or 0,
                     source.get("last_updated"), source.get("mitre_ids") or [], raw_data,
-                    client_id, original_id,
+                    client_id, original_id, *rule_json_keys(raw_data),
                 ],
             )
     for original_id, source_siem_id, source_space in logical_sources:
@@ -1889,9 +1939,8 @@ async def api_import_baseline(
         pb = create_playbook(name.strip(), description.strip(), client_id=client_id)
         start_idx = 1
 
-    from app.models.inventory import MITRE_TACTICS
-    tactic_lookup = {t.lower(): t for t in MITRE_TACTICS}
-    tactic_order = {t.lower(): i for i, t in enumerate(MITRE_TACTICS)}
+    from app.attack_tactics import tactic_name
+    from app.inventory_engine import tactic_sort_key
 
     # Parse all valid rows first
     parsed_rows = []
@@ -1914,13 +1963,13 @@ async def api_import_baseline(
             technique_id = title
         technique_id = normalize_technique_id(technique_id)
 
-        # Normalise tactic name to canonical casing
-        tactic_val = tactic_lookup.get(raw_tactic.lower(), raw_tactic) if raw_tactic else ""
+        # The ATT&CK name of the tactic it names ("defense_evasion", "TA0112"); anything else as typed
+        tactic_val = (tactic_name(raw_tactic) or raw_tactic) if raw_tactic else ""
 
         parsed_rows.append((title, technique_id, tactic_val, desc))
 
     # Sort by kill chain phase order so step_numbers follow MITRE ordering
-    parsed_rows.sort(key=lambda r: tactic_order.get(r[2].lower(), 999))
+    parsed_rows.sort(key=lambda r: tactic_sort_key(r[2] or "Other"))
 
     imported = 0
     for idx, (title, technique_id, tactic_val, desc) in enumerate(parsed_rows, start=start_idx):
@@ -3414,7 +3463,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
 
     lines += [
         "---",
-        f"*{classification} — Report generated by TIDE — Threat Intelligence Detection Engineering*",
+        f"*{classification} — Report generated by TIDE — Threat Informed Detection Engine*",
     ]
     return "\n".join(lines)
 
@@ -3507,7 +3556,7 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
 
     lines += [
         "---",
-        f"*{classification} — Report generated by TIDE — Threat Intelligence Detection Engineering*",
+        f"*{classification} — Report generated by TIDE — Threat Informed Detection Engine*",
     ]
     return "\n".join(lines)
 
@@ -3558,6 +3607,6 @@ def _generate_baseline_markdown(data: dict, classification: str) -> str:
 
     lines += [
         "---",
-        f"*{classification} — Report generated by TIDE — Threat Intelligence Detection Engineering*",
+        f"*{classification} — Report generated by TIDE — Threat Informed Detection Engine*",
     ]
     return "\n".join(lines)

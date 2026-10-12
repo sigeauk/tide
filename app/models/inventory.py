@@ -321,12 +321,9 @@ class PlatformCreate(BaseModel):
 # Assurance Baselines (Threat Playbooks)
 # ---------------------------------------------------------------------------
 
-MITRE_TACTICS = [
-    "Reconnaissance", "Resource Development", "Initial Access", "Execution",
-    "Persistence", "Privilege Escalation", "Defense Evasion", "Credential Access",
-    "Discovery", "Lateral Movement", "Collection", "Command and Control",
-    "Exfiltration", "Impact", "Other",
-]
+# ATT&CK's tactics in kill-chain order (app/attack_tactics.py), then Other.
+from app.attack_tactics import ORDER as _ATTACK_ORDER
+MITRE_TACTICS = _ATTACK_ORDER + ["Other"]
 
 
 # Aliases kept for backward compat with DB column names

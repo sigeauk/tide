@@ -9,12 +9,11 @@
     {% endif %}
 {% endfor %}
 
-<div style="margin-bottom:0.75rem;display:flex;align-items:center;justify-content:space-between;">
-    <span style="font-size:0.85rem;color:var(--color-text-muted);">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} across {{ ns_groups.names | length }} baseline{{ 's' if ns_groups.names | length != 1 }}</span>
-    <div style="display:flex;gap:0.5rem;align-items:center;">
-        <input name="Audit Search" id="audit-search" type="text" class="form-input" placeholder="Search label, baseline…"
-               style="font-size:0.8rem;padding:0.3rem 0.6rem;max-width:200px;"
-               oninput="filterAuditGroups(this.value)">
+<div class="mb-ms flex items-center justify-between">
+    <span class="fs-base text-muted">{{ snapshots | length }} snapshot{{ 's' if snapshots | length != 1 }} across {{ ns_groups.names | length }} baseline{{ 's' if ns_groups.names | length != 1 }}</span>
+    <div class="flex items-center gap-sm">
+        <input name="Audit Search" id="audit-search" type="text" class="form-input audit-select" placeholder="Search label, baseline…"
+               data-input="audit.filter">
     </div>
 </div>
 
@@ -23,61 +22,59 @@
 {% set bl_snaps = snapshots | sort(attribute='captured_at', reverse=true) | selectattr('baseline_name', 'equalto', bl_name) | list %}
 {% set latest = bl_snaps[0] %}
 
-<div class="card audit-group" data-baseline="{{ bl_name | lower }}" style="padding:0;margin-bottom:0.75rem;overflow:hidden;">
+<div class="card audit-group p-0 mb-ms overflow-hidden" data-baseline="{{ bl_name | lower }}">
     {# --- Collapsed header: baseline name + most recent snapshot stats --- #}
-    <div  name="snapshot" style="display:flex;align-items:center;justify-content:space-between;padding:0.75rem 1rem;cursor:pointer;"
-         onclick="var b=document.getElementById('audit-grp-{{ loop.index }}');var c=document.getElementById('audit-chev-{{ loop.index }}');if(b.style.display==='none'){b.style.display='flex';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
-        <div style="display:flex;align-items:center;gap:0.5rem;flex:1;min-width:0;">
+    <div  name="snapshot" class="flex items-center justify-between py-ms px-md cursor-pointer"
+         data-click="section.toggle" data-body="audit-grp-{{ loop.index }}" data-chev="audit-chev-{{ loop.index }}" data-display="flex">
+        <div class="flex items-center gap-sm grow min-w-0">
             {{ icon('clipboard-list','14') }}
-            <span style="font-weight:600;font-size:0.9rem;">{{ bl_name }}</span>
-            <span style="font-size:0.72rem;color:var(--color-text-muted);">{{ bl_snaps | length }} snapshot{{ 's' if bl_snaps | length != 1 }}</span>
+            <span class="fw-600 fs-base">{{ bl_name }}</span>
+            <span class="fs-xs text-muted">{{ bl_snaps | length }} snapshot{{ 's' if bl_snaps | length != 1 }}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+        <div class="flex items-center gap-ms shrink-0">
             {# Latest snapshot score + counts #}
-            <span class="badge {% if latest.score_percentage >= 75 %}badge-success{% elif latest.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %}"
-                  style="font-size:0.72rem;">{{ latest.score_percentage | round | int }}%</span>
-            <span style="font-size:0.72rem;display:flex;align-items:center;gap:0.5rem;">
-                <span style="color:var(--color-success);font-weight:600;" title="Covered">{{ icon('shield-check','11') }} {{ latest.count_green }}</span>
-                <span style="color:var(--color-warning);font-weight:600;" title="Gap">{{ icon('alert-triangle','11') }} {{ latest.count_amber }}</span>
-                <span style="color:var(--color-danger);font-weight:600;" title="Missing">{{ icon('x','11') }} {{ latest.count_red }}</span>
-                <span style="color:var(--color-muted);font-weight:600;" title="N/A">{{ icon('minus-circle','11') }} {{ latest.count_grey }}</span>
+            <span class="badge {% if latest.score_percentage >= 75 %}badge-success{% elif latest.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %} audit-score">{{ latest.score_percentage | round | int }}%</span>
+            <span class="fs-xs flex items-center gap-sm">
+                <span class="text-success fw-600" title="Covered">{{ icon('shield-check','11') }} {{ latest.count_green }}</span>
+                <span class="text-warning fw-600" title="Gap">{{ icon('alert-triangle','11') }} {{ latest.count_amber }}</span>
+                <span class="text-danger fw-600" title="Missing">{{ icon('x','11') }} {{ latest.count_red }}</span>
+                <span class="text-muted fw-600" title="N/A">{{ icon('minus-circle','11') }} {{ latest.count_grey }}</span>
             </span>
-            <span id="audit-chev-{{ loop.index }}" style="color:var(--color-text-muted);transition:transform 0.2s;transform:rotate(0deg);display:flex;">{{ icon('chevron-right', '16') }}</span>
+            <span id="audit-chev-{{ loop.index }}" class="audit-chev" style="transform:rotate(0deg);">{{ icon('chevron-right', '16') }}</span>
         </div>
     </div>
 
     {# --- Expanded body: snapshot cards --- #}
-    <div id="audit-grp-{{ loop.index }}" style="display:none;flex-direction:column;gap:0.5rem;padding:0 0.75rem 0.75rem;">
+    <div id="audit-grp-{{ loop.index }}" class="flex-col gap-sm pt-0 px-ms pb-ms" style="display:none">
         {% for snap in bl_snaps %}
         <div class="tech-card tech-card--{% if snap.score_percentage >= 75 %}green{% elif snap.score_percentage >= 50 %}amber{% else %}red{% endif %}" data-search="{{ snap.label or '' }} {{ snap.captured_by or '' }}">
-            <div class="tech-card__body" style="flex:1;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-family:monospace;font-size:0.75rem;color:var(--color-text-muted);">
+            <div class="tech-card__body grow">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="mono fs-sm text-muted">
                         {{ snap.captured_at.strftime('%Y-%m-%d %H:%M') if snap.captured_at else '—' }}
                     </span>
                     {% if snap.label %}
                     <span class="badge badge-primary badge--xs">{{ snap.label }}</span>
                     {% endif %}
                     {% if snap.captured_by %}
-                    <span style="font-size:0.72rem;color:var(--color-text-muted);">by {{ snap.captured_by }}</span>
+                    <span class="fs-xs text-muted">by {{ snap.captured_by }}</span>
                     {% endif %}
                 </div>
             </div>
-            <div class="tech-card__rollups" style="flex-direction:row;align-items:center;gap:0.75rem;">
-                <span class="badge {% if snap.score_percentage >= 75 %}badge-success{% elif snap.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %}"
-                      style="font-size:0.72rem;">{{ snap.score_percentage | round | int }}%</span>
-                <span style="font-size:0.72rem;display:flex;align-items:center;gap:0.4rem;">
-                    <span style="color:var(--color-success);font-weight:600;">{{ snap.count_green }}</span>
-                    <span style="color:var(--color-warning);font-weight:600;">{{ snap.count_amber }}</span>
-                    <span style="color:var(--color-danger);font-weight:600;">{{ snap.count_red }}</span>
-                    <span style="color:var(--color-muted);font-weight:600;">{{ snap.count_grey }}</span>
+            <div class="tech-card__rollups flex-row items-center gap-ms">
+                <span class="badge {% if snap.score_percentage >= 75 %}badge-success{% elif snap.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %} audit-score">{{ snap.score_percentage | round | int }}%</span>
+                <span class="fs-xs flex items-center gap-sm">
+                    <span class="text-success fw-600">{{ snap.count_green }}</span>
+                    <span class="text-warning fw-600">{{ snap.count_amber }}</span>
+                    <span class="text-danger fw-600">{{ snap.count_red }}</span>
+                    <span class="text-muted fw-600">{{ snap.count_grey }}</span>
                 </span>
-                <button name="Delete Snapshots" class="btn btn-danger btn-sm"
+                <button name="Delete Snapshots" class="btn btn-danger btn-sm fs-2xs py-2xs px-sm"
                         hx-delete="/api/baselines/snapshots/{{ snap.id }}?system_id={{ system_id }}"
                         hx-target="#audit-history-content"
                         hx-swap="innerHTML"
                         hx-confirm="Delete this snapshot?"
-                        style="font-size:0.65rem;padding:0.15rem 0.4rem;">
+                       >
                     {{ icon('trash-2','10') }}
                 </button>
             </div>
@@ -87,25 +84,11 @@
 </div>
 {% endfor %}
 
-<script>
-function filterAuditGroups(q) {
-    q = q.toLowerCase();
-    document.querySelectorAll('.audit-group').forEach(function(grp) {
-        var match = grp.dataset.baseline.indexOf(q) >= 0;
-        if (!match) {
-            grp.querySelectorAll('.tech-card').forEach(function(card) {
-                if (card.dataset.search && card.dataset.search.toLowerCase().indexOf(q) >= 0) match = true;
-            });
-        }
-        grp.style.display = match ? '' : 'none';
-    });
-}
-</script>
 
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-muted);">
-    <div style="font-size:2rem;margin-bottom:0.5rem;">{{ icon('camera','32') }}</div>
-    <p style="font-size:0.9rem;margin-bottom:0.25rem;">No audit snapshots yet</p>
-    <p style="font-size:0.8rem;">Take a snapshot from the Baselines tab to freeze coverage metrics for auditing.</p>
+<div class="text-center p-xl text-muted">
+    <div class="audit-empty-icon">{{ icon('camera','32') }}</div>
+    <p class="fs-base mb-xs">No audit snapshots yet</p>
+    <p class="text-sm">Take a snapshot from the Baselines tab to freeze coverage metrics for auditing.</p>
 </div>
 {% endif %}

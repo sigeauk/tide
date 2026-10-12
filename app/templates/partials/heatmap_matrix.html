@@ -9,7 +9,7 @@
 </div>
 
 {% if data.tactics %}
-<div class="matrix-container" style="grid-template-columns: repeat({{ data.tactics | length }}, minmax(120px, 1fr));">
+<div class="matrix-container matrix-container--cols" style="--cols: {{ data.tactics | length }}">
     {% for tactic in data.tactics %}
     <div class="tactic-column">
         <div class="tactic-header">{{ tactic | upper }}</div>
@@ -33,7 +33,7 @@
     {% endfor %}
 </div>
 
-<!-- Legend -->
+{% if not system_view %}{# A system's heatmap: its page shows the RAG + grey legend. #}
 <div class="heatmap-legend">
     <div class="legend-item">
         <div class="ttp-card status-gap legend-swatch">GAP</div>
@@ -48,6 +48,7 @@
         <span class="legend-label">Defense in Depth</span>
     </div>
 </div>
+{% endif %}
 
 {% else %}
 <div class="empty-state">

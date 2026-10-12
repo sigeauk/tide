@@ -8,17 +8,16 @@
 <div id="cve-mitre-section">
 
 {% if techniques %}
-<div class="mitre-pills-wrap" style="gap:0.5rem;margin-bottom:1rem;">
+<div class="mitre-pills-wrap gap-sm mb-md">
     {% for t in techniques %}
-    <div style="display:inline-flex;align-items:center;gap:0.3rem;vertical-align:middle;">
+    <div class="cve-mitre-pills">
         {{ mitre_pill(t.technique_id, covered=t.has_detection, rule_count=t.rule_count) }}
         {# Allow removal only for manually added overrides — we offer a remove button for all #}
-        <button name="Delete Techniques" class="btn btn-danger btn-sm"
+        <button name="Delete Techniques" class="btn btn-danger btn-sm cve-mitre-x"
                 hx-delete="/api/inventory/cve/{{ cve_id }}/techniques/{{ t.technique_id }}"
                 hx-target="#cve-mitre-section"
                 hx-swap="outerHTML"
                 hx-confirm="Remove {{ t.technique_id }} from this CVE?"
-                style="padding:0.15rem 0.35rem;font-size:0.65rem;line-height:1;border-radius:3px;"
                 title="Remove technique">
             {{ icon('x', '10') }}
         </button>
@@ -26,28 +25,27 @@
     {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:2rem 1rem;color:var(--color-text-muted);">
+<div class="text-center py-xl px-md text-muted">
     {{ icon('crosshair', '32') }}
-    <p style="margin-top:0.75rem;font-size:0.88rem;">No ATT&amp;CK technique mappings for this CVE.</p>
+    <p class="mt-ms fs-base">No ATT&amp;CK technique mappings for this CVE.</p>
 </div>
 {% endif %}
 
 <!-- Add Technique Form -->
-<div style="margin-top:0.75rem;display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;border-top:1px solid var(--color-border-muted);padding-top:0.75rem;">
-    <span style="font-size:0.75rem;color:var(--color-text-muted);font-weight:600;">Add Technique:</span>
-    <form name="Submit Techniques" style="display:flex;gap:0.4rem;align-items:center;"
+<div class="cve-mitre-add">
+    <span class="fs-sm text-muted fw-600">Add Technique:</span>
+    <form name="Submit Techniques" class="flex gap-sm items-center"
           hx-post="/api/inventory/cve/{{ cve_id }}/techniques"
           hx-target="#cve-mitre-section"
           hx-swap="outerHTML"
           hx-on::after-request="this.reset();">
-        <input class="form-input"
+        <input class="form-input cve-mitre-input"
                name="technique_id"
                placeholder="e.g. T1566.001"
-               style="font-size:0.78rem;padding:0.25rem 0.5rem;width:160px;"
                pattern="T\d{4}(\.\d{3})?"
                title="MITRE technique ID, e.g. T1566 or T1566.001"
                required>
-        <button name="Add" type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;">
+        <button name="Add" type="submit" class="btn btn-primary btn-sm fs-sm">
             {{ icon('plus', '12') }} Add
         </button>
     </form>

@@ -1,0 +1,15 @@
+{#
+  A client's "Allow diagnostic fixes" switch (clients.diagnostic_fixes, off by default). A super
+  admin can turn it on or off; anyone else sees its state. Context: c (client), on, full.
+#}
+<span class="diag-fix-switch" id="fix-switch-{{ c.id }}">
+    {% if full %}
+    <label class="toggle-switch toggle-sm" title="Let Diagnostics fixes change {{ c.name }}'s data (super admins and its Support users)">
+        <input type="checkbox" name="on" value="1"{% if on %} checked{% endif %}
+               hx-post="/api/diagnostics/clients/{{ c.id }}/fixes" hx-trigger="change"
+               hx-target="#fix-switch-{{ c.id }}" hx-swap="outerHTML">
+        <span class="toggle-slider"></span>
+    </label>
+    {% endif %}
+    <span class="status-pill status-{{ 'warning' if on else 'muted' }}">Fixes {{ 'allowed' if on else 'off' }}</span>
+</span>

@@ -4,24 +4,24 @@
 {% from "macros/icons.html" import icon %}
 
 {% if classifications %}
-<div style="display:flex;flex-direction:column;gap:0.4rem;">
+<div class="flex flex-col gap-sm">
     {% for clf in classifications %}
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:0.4rem 0.6rem;background:var(--color-bg-layer-2);border-radius:var(--radius-sm);border:1px solid var(--color-border);">
-        <div style="display:flex;align-items:center;gap:0.5rem;">
-            <span class="u-bg-dyn" style="display:inline-block;width:14px;height:14px;border-radius:3px;--u-bg-color:{{ clf.color }};flex-shrink:0"></span>
-            <span style="font-size:0.85rem;font-weight:600;">{{ clf.name }}</span>
+    <div class="classification-row">
+        <div class="flex items-center gap-sm">
+            <span class="u-bg-dyn clf-swatch" style="--u-bg-color:{{ clf.color }}"></span>
+            <span class="fs-base fw-600">{{ clf.name }}</span>
         </div>
-        <button name="Delete Classifications" class="btn btn-danger btn-sm"
+        <button name="Delete Classifications" class="btn btn-danger btn-sm py-2xs px-sm fs-xs"
                 hx-delete="/api/inventory/classifications/{{ clf.id }}"
                 hx-target="#clf-list"
                 hx-swap="innerHTML"
                 hx-confirm="Delete classification '{{ clf.name }}'? Systems using it will be unclassified."
-                style="padding:0.15rem 0.4rem;font-size:0.7rem;">
+               >
             {{ icon('trash-2', '11') }}
         </button>
     </div>
     {% endfor %}
 </div>
 {% else %}
-<p style="font-size:0.85rem;color:var(--color-muted);text-align:center;padding:1rem 0;">No classifications defined.</p>
+<p class="fs-base text-muted text-center py-md px-0">No classifications defined.</p>
 {% endif %}

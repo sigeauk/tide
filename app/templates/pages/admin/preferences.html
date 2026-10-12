@@ -31,11 +31,11 @@
                     <span class="preference-desc">Choose between light and dark mode</span>
                 </div>
                 <div class="theme-toggle-group">
-                    <button name="Dark" class="theme-btn" id="theme-dark" onclick="setTheme('dark')">
+                    <button name="Dark" class="theme-btn" id="theme-dark" data-click="prefs.theme" data-theme="dark">
                         <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                         Dark
                     </button>
-                    <button name="Light" class="theme-btn" id="theme-light" onclick="setTheme('light')">
+                    <button name="Light" class="theme-btn" id="theme-light" data-click="prefs.theme" data-theme="light">
                         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
                         Light
                     </button>
@@ -48,7 +48,7 @@
                     <span class="preference-desc">Customize the primary accent hue (0-360)</span>
                 </div>
                 <div class="hue-picker">
-                    <input name="240" type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" oninput="previewHue(this.value)">
+                    <input name="240" type="range" min="0" max="360" value="240" id="hue-slider" class="hue-slider" data-input="prefs.hue">
                     <span class="hue-value" id="hue-value">240</span>
                 </div>
             </div>
@@ -72,7 +72,7 @@
                     <span class="preference-desc">Show toast notifications on sync completion</span>
                 </div>
                 <label class="toggle-switch">
-                    <input name="Notify Sync" type="checkbox" id="notify-sync" checked onchange="savePref('notify-sync', this.checked)">
+                    <input name="Notify Sync" type="checkbox" id="notify-sync" checked data-change="prefs.save" data-pref="notify-sync">
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -83,7 +83,7 @@
                     <span class="preference-desc">Alert when rules need revalidation</span>
                 </div>
                 <label class="toggle-switch">
-                    <input name="Notify Validation" type="checkbox" id="notify-validation" checked onchange="savePref('notify-validation', this.checked)">
+                    <input name="Notify Validation" type="checkbox" id="notify-validation" checked data-change="prefs.save" data-pref="notify-validation">
                     <span class="toggle-slider"></span>
                 </label>
             </div>
@@ -108,7 +108,7 @@
                     <span class="preference-label">Cards Per Row</span>
                     <span class="preference-desc">Default grid layout for rule cards</span>
                 </div>
-                <select name="2 Cards 3 Cards 4 Cards" class="form-select" id="cards-per-row" onchange="savePref('cards-per-row', this.value)">
+                <select name="2 Cards 3 Cards 4 Cards" class="form-select" id="cards-per-row" data-change="prefs.save" data-pref="cards-per-row">
                     <option value="2">2 Cards</option>
                     <option value="3" selected>3 Cards</option>
                     <option value="4">4 Cards</option>
@@ -120,7 +120,7 @@
                     <span class="preference-label">Default Page Size</span>
                     <span class="preference-desc">Items shown per page</span>
                 </div>
-                <select name="12 24 48" class="form-select" id="page-size" onchange="savePref('page-size', this.value)">
+                <select name="12 24 48" class="form-select" id="page-size" data-change="prefs.save" data-pref="page-size">
                     <option value="12">12</option>
                     <option value="24" selected>24</option>
                     <option value="48">48</option>
@@ -130,72 +130,4 @@
     </div>
 </div>
 
-<script>
-// Theme management
-window.setTheme = function(theme) {
-    if (theme === 'light') {
-        document.body.classList.add('light');
-    } else {
-        document.body.classList.remove('light');
-    }
-    localStorage.setItem('theme', theme);
-    updateThemeButtons(theme);
-};
-
-function updateThemeButtons(theme) {
-    const darkBtn = document.getElementById('theme-dark');
-    const lightBtn = document.getElementById('theme-light');
-    if (darkBtn) darkBtn.classList.toggle('active', theme === 'dark');
-    if (lightBtn) lightBtn.classList.toggle('active', theme === 'light');
-}
-
-// Hue preview
-window.previewHue = function(value) {
-    document.getElementById('hue-value').textContent = value;
-    document.documentElement.style.setProperty('--brand-hue', value);
-    localStorage.setItem('brand-hue', value);
-};
-
-// Save preference
-window.savePref = function(key, value) {
-    localStorage.setItem('pref-' + key, value);
-    showToast('Preference saved', 'success');
-};
-
-// Initialize preferences page
-(function initPreferencesPage() {
-    // Check if page elements exist
-    const hueSlider = document.getElementById('hue-slider');
-    if (!hueSlider) return;
-    
-    // Theme
-    const theme = localStorage.getItem('theme') || 'dark';
-    updateThemeButtons(theme);
-    
-    // Hue
-    const hue = localStorage.getItem('brand-hue') || '240';
-    hueSlider.value = hue;
-    const hueValue = document.getElementById('hue-value');
-    if (hueValue) hueValue.textContent = hue;
-    
-    // Other prefs
-    ['notify-sync', 'notify-validation'].forEach(key => {
-        const val = localStorage.getItem('pref-' + key);
-        const el = document.getElementById(key);
-        if (val !== null && el) {
-            el.checked = val === 'true';
-        }
-    });
-    
-    ['cards-per-row', 'page-size'].forEach(key => {
-        const val = localStorage.getItem('pref-' + key);
-        const el = document.getElementById(key);
-        if (val && el) {
-            el.value = val;
-        }
-    });
-    
-    console.log('Preferences page initialized');
-})();
-</script>
 {% endblock %}

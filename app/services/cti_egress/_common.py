@@ -213,6 +213,9 @@ def _resolve_siem(siem_id: str) -> Optional[Dict[str, Any]]:
         ).fetchone()
     if not row:
         return None
+    from app.services.credentials import reveal_or_none
+    row = list(row)
+    row[4] = reveal_or_none(row[4])
     return {
         "id": row[0], "label": row[1],
         "elasticsearch_url": row[2], "kibana_url": row[3],

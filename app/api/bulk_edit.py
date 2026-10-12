@@ -231,7 +231,8 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
     # (a moved or linked rule). The edit form resolves it the same way.
     payload = rule.raw_data if isinstance(rule.raw_data, dict) else {}
     kibana_rule_id = str(payload.get("rule_id") or payload.get("id") or rule.rule_id)
-    ok, message = fn(kibana_rule_id, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"))
+    ok, message = fn(kibana_rule_id, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+                     on_recreated=db.kibana_recreate_hook(client_id, rule_id, siem_id, space, username, user_id))
     if not ok:
         return 400, str(message), rule.name
     _set_enabled_locally(db, rule_id, siem_id, space, turn_on)

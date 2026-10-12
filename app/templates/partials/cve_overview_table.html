@@ -10,58 +10,56 @@
 {% if cves %}
 
 {# ── Toolbar: system filter + sort controls ─────────────────────────────── #}
-<div style="display:flex;gap:0.75rem;align-items:center;flex-wrap:wrap;padding:0.75rem 1rem;border-bottom:var(--border-card);">
+<div class="cve-toolbar">
     {% if systems %}
-    <div class="filter-multi" style="position:relative;">
-        <button name="All Systems ▾" class="form-input" style="max-width:220px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
-                onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
-            {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span style="margin-left:auto;">▾</span>
+    <div class="filter-multi relative">
+        <button name="All Systems ▾" class="form-input cve-filter-btn"
+                data-click="el.toggleNextHidden" type="button">
+            {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span class="ml-auto">▾</span>
         </button>
-        <div class="filter-multi__dropdown hidden u-bg-surface" id="sys-filter-dropdown"
-             style="position:absolute;top:100%;left:0;z-index:50;border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:200px;box-shadow:var(--shadow);margin-top:0.25rem">
+        <div class="filter-multi__dropdown hidden u-bg-surface cve-filter-menu" id="sys-filter-dropdown">
             {% for s in systems %}
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;white-space:nowrap;">
-                <input   name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" onchange="filterCveCards()" checked> {{ s.name }}
+            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer nowrap">
+                <input   name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter" checked> {{ s.name }}
             </label>
             {% endfor %}
-            <hr style="margin:0.3rem 0;border-color:var(--color-border);">
-            <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
-                <a name="c.checked=true);filterCveCards();&quot;>All" href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
-                <a name="c.checked=false);filterCveCards();&quot;>None" href="#" onclick="event.preventDefault();document.querySelectorAll('.sys-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+            <hr class="cve-filter-sep">
+            <div class="flex gap-sm fs-sm">
+                <a name="All Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="true">All</a>
+                <a name="No Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="false">None</a>
             </div>
         </div>
     </div>
     {% endif %}
 
-    <div class="filter-multi" style="position:relative;">
-        <button name="All Coverage ▾" class="form-input" style="max-width:200px;font-size:0.82rem;text-align:left;cursor:pointer;display:flex;align-items:center;gap:0.3rem;"
-                onclick="this.nextElementSibling.classList.toggle('hidden')" type="button">
-            {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span style="margin-left:auto;">▾</span>
+    <div class="filter-multi relative">
+        <button name="All Coverage ▾" class="form-input cve-filter-btn cve-filter-btn--narrow"
+                data-click="el.toggleNextHidden" type="button">
+            {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span class="ml-auto">▾</span>
         </button>
-        <div class="filter-multi__dropdown hidden u-bg-surface" id="cov-filter-dropdown"
-             style="position:absolute;top:100%;left:0;z-index:50;border:var(--border-card);border-radius:var(--radius-lg);padding:0.5rem;min-width:180px;box-shadow:var(--shadow);margin-top:0.25rem">
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input name="detected" type="checkbox" class="cov-filter-cb" value="detected" onchange="filterCveCards()" checked> Has Rules
+        <div class="filter-multi__dropdown hidden u-bg-surface cve-filter-menu cve-filter-menu--narrow" id="cov-filter-dropdown">
+            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
+                <input name="detected" type="checkbox" class="cov-filter-cb" value="detected" data-change="cves.filter" checked> Has Rules
             </label>
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input name="nocover" type="checkbox" class="cov-filter-cb" value="nocover" onchange="filterCveCards()" checked> No Rules
+            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
+                <input name="nocover" type="checkbox" class="cov-filter-cb" value="nocover" data-change="cves.filter" checked> No Rules
             </label>
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input name="available" type="checkbox" class="cov-filter-cb" value="available" onchange="filterCveCards()" checked> Available
+            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
+                <input name="available" type="checkbox" class="cov-filter-cb" value="available" data-change="cves.filter" checked> Available
             </label>
-            <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.82rem;padding:0.2rem 0;cursor:pointer;">
-                <input name="unaffected" type="checkbox" class="cov-filter-cb" value="unaffected" onchange="filterCveCards()" checked> Unaffected
+            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
+                <input name="unaffected" type="checkbox" class="cov-filter-cb" value="unaffected" data-change="cves.filter" checked> Unaffected
             </label>
-            <hr style="margin:0.3rem 0;border-color:var(--color-border);">
-            <div style="display:flex;gap:0.5rem;font-size:0.75rem;">
-                <a name="c.checked=true);filterCveCards();&quot;>All" href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=true);filterCveCards();">All</a>
-                <a name="c.checked=false);filterCveCards();&quot;>None" href="#" onclick="event.preventDefault();document.querySelectorAll('.cov-filter-cb').forEach(c=>c.checked=false);filterCveCards();">None</a>
+            <hr class="cve-filter-sep">
+            <div class="flex gap-sm fs-sm">
+                <a name="All Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="true">All</a>
+                <a name="No Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="false">None</a>
             </div>
         </div>
     </div>
 
-    <select  name="CVE Sort Selector" id="sort-field" class="form-input" style="max-width:160px;font-size:0.82rem;"
-            onchange="sortCveCards()">
+    <select  name="CVE Sort Selector" id="sort-field" class="form-input cve-sort-select"
+            data-change="cves.sort">
         <option value="cve_id">Sort: CVE ID</option>
         <option value="name">Sort: Vulnerability</option>
         <option value="vendor">Sort: Vendor</option>
@@ -70,18 +68,18 @@
         <option value="matched">Sort: Matched first</option>
     </select>
 
-    <button name="▼" id="sort-dir-btn" class="btn btn-secondary btn-sm" onclick="toggleSortDir()" title="Toggle sort direction">
+    <button name="▼" id="sort-dir-btn" class="btn btn-secondary btn-sm" data-click="cves.sortDir" title="Toggle sort direction">
         <span id="sort-dir-icon">▼</span>
     </button>
 
-    <span style="font-size:0.8rem;color:var(--color-text-muted);margin-left:auto;">
+    <span class="fs-md text-muted ml-auto">
         <span id="cve-visible-count">{{ cves | length }}</span> / {{ cves | length }} entries
         &nbsp;·&nbsp; {{ matched_count }} matched
     </span>
 </div>
 
 {# ── CVE card list ─────────────────────────────────────────────────────── #}
-<div class="cve-list" id="cve-card-list" style="padding:0.75rem 1rem;">
+<div class="cve-list py-ms px-md" id="cve-card-list">
 {% for cve in cves %}
 {% set matched = cve.affected_hosts | length > 0 %}
 {% set has_rules = cve.detections | length > 0 %}
@@ -140,7 +138,7 @@
             {{ cve.cve_id }}
         </a>
         {% if cve.known_ransomware %}
-        <span class="badge badge-danger" style="font-size:0.65rem;padding:0.1rem 0.4rem;">
+        <span class="badge badge-danger fs-2xs py-2xs px-sm">
             {{ icon('zap','10') }} Ransomware
         </span>
         {% endif %}
@@ -167,15 +165,15 @@
             {% set ns_sys = namespace(ids=[]) %}
             {% for h in cve.affected_hosts %}{% if h.system_id not in ns_sys.ids %}{% set ns_sys.ids = ns_sys.ids + [h.system_id] %}{% endif %}{% endfor %}
             {% if coverage_status == 'detected' %}
-            <span class="status-pill u-bg-green-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-success);border:1px solid rgba(34,197,94,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill status-chip status-chip--success" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% elif coverage_status == 'partial' %}
-            <span class="status-pill u-bg-yellow-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill status-chip status-chip--warning" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% else %}
-            <span class="status-pill u-bg-red-10" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-danger);border:1px solid rgba(220,38,38,.25)" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
+            <span class="status-pill status-chip status-chip--danger" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
                 {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% endif %}
@@ -185,15 +183,15 @@
         {# Detection badge #}
         <div class="cve-card-item__badges">
             {% if coverage_status == 'detected' %}
-                <span class="status-pill u-bg-green-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-success);border:1px solid rgba(34,197,94,.3)" title="All hosts monitored">
+                <span class="status-pill status-chip status-chip--success" title="All hosts monitored">
                     {{ icon('shield','10') }} Monitored
                 </span>
             {% elif coverage_status == 'partial' %}
-                <span class="status-pill u-bg-yellow-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-warning);border:1px solid rgba(234,179,8,.3)" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
+                <span class="status-pill status-chip status-chip--warning" title="{{ cve.detections | length }} rule{{ 's' if cve.detections | length != 1 }} — partial coverage">
                     {{ icon('shield','10') }} Partial
                 </span>
             {% elif matched %}
-                <span class="status-pill u-bg-red-12" style="font-size:0.7rem;padding:0.12rem 0.5rem;color:var(--color-danger);border-color:rgba(220,38,38,.3)" title="No detection rules recorded">
+                <span class="status-pill status-chip status-chip--danger" title="No detection rules recorded">
                     {{ icon('shield-off','10') }} No Rules
                 </span>
             {% endif %}
@@ -203,114 +201,11 @@
 {% endfor %}
 </div>
 
-<script>
-(function(){
-  let sortAsc = false;
-  let sortField = 'cve_id';
-
-  function getCards() {
-    return Array.from(document.querySelectorAll('#cve-card-list .cve-card-item'));
-  }
-
-  // Close filter dropdowns when clicking outside
-  document.addEventListener('click', function(e) {
-    document.querySelectorAll('.filter-multi__dropdown').forEach(function(dd) {
-      if (!dd.classList.contains('hidden') && !dd.parentElement.contains(e.target)) {
-        dd.classList.add('hidden');
-      }
-    });
-  });
-
-  window.filterCveCards = function() {
-    const q = (document.getElementById('kev-search')?.value || '').toLowerCase();
-    const matchedOnly = document.getElementById('filter-matched')?.checked;
-
-    // Multi-select system filter
-    const sysCbs = document.querySelectorAll('.sys-filter-cb');
-    const selectedSys = Array.from(sysCbs).filter(c => c.checked).map(c => c.value);
-    const allSysChecked = selectedSys.length === sysCbs.length;
-
-    // Multi-select coverage filter
-    const covCbs = document.querySelectorAll('.cov-filter-cb');
-    const selectedCov = Array.from(covCbs).filter(c => c.checked).map(c => c.value);
-    const allCovChecked = selectedCov.length === covCbs.length;
-
-    // Update labels
-    const sysLabel = document.getElementById('sys-filter-label');
-    if (sysLabel) sysLabel.textContent = allSysChecked ? 'All Systems' : selectedSys.length + ' System' + (selectedSys.length !== 1 ? 's' : '');
-    const covLabel = document.getElementById('cov-filter-label');
-    if (covLabel) covLabel.textContent = allCovChecked ? 'All Coverage' : selectedCov.length + ' Selected';
-
-    let visible = 0;
-    getCards().forEach(card => {
-      const text = card.textContent.toLowerCase();
-      const isMatched = card.dataset.matched === '1';
-      const systems = card.dataset.systems || '';
-      const coverage = card.dataset.coverage || '';
-
-      // System filter: card matches if any of its systems is in the checked set
-      const cardSystems = systems ? systems.split(',') : [];
-      const showSys = allSysChecked || (cardSystems.length === 0 && allSysChecked) || cardSystems.some(s => selectedSys.includes(s));
-
-      // Coverage filter
-      const showCov = allCovChecked || selectedCov.includes(coverage);
-
-      const show = text.includes(q) && (!matchedOnly || isMatched) && showSys && showCov;
-      card.style.display = show ? '' : 'none';
-      if (show) visible++;
-    });
-    const countEl = document.getElementById('cve-visible-count');
-    if (countEl) countEl.textContent = visible;
-  };
-
-  // Alias for the main page filterTable function
-  window.filterTable = window.filterCveCards;
-
-  window.sortCveCards = function() {
-    sortField = document.getElementById('sort-field')?.value || 'cve_id';
-    const list = document.getElementById('cve-card-list');
-    if (!list) return;
-    const cards = getCards();
-    cards.sort((a, b) => {
-      let va = '', vb = '';
-      if (sortField === 'matched') {
-        va = a.dataset.matched; vb = b.dataset.matched;
-        // matched first → reverse for asc
-        const cmp = vb.localeCompare(va);
-        return sortAsc ? cmp : -cmp;
-      }
-      const field = {cve_id:'cveId', name:'name', vendor:'vendor', date_added:'dateAdded', due_date:'dueDate'}[sortField] || 'cveId';
-      const key = field.replace(/([A-Z])/g, m => '-'+m.toLowerCase());
-      va = (a.dataset[field] || a.dataset[sortField.replace(/_/g,'-')] || a.dataset[sortField] || '');
-      vb = (b.dataset[field] || b.dataset[sortField.replace(/_/g,'-')] || b.dataset[sortField] || '');
-      const cmp = va.localeCompare(vb, undefined, {numeric:true, sensitivity:'base'});
-      return sortAsc ? cmp : -cmp;
-    });
-    cards.forEach(c => list.appendChild(c));
-  };
-
-  window.toggleSortDir = function() {
-    sortAsc = !sortAsc;
-    const icon = document.getElementById('sort-dir-icon');
-    if (icon) icon.textContent = sortAsc ? '▼' : '▲';
-    window.sortCveCards();
-  };
-
-  // Set initial sort dropdown to CVE ID and direction icon
-  const sortSel = document.getElementById('sort-field');
-  if (sortSel) sortSel.value = 'cve_id';
-  const dirIcon = document.getElementById('sort-dir-icon');
-  if (dirIcon) dirIcon.textContent = '▲';
-
-  // Initial sort: CVE ID newest (descending)
-  window.sortCveCards();
-})();
-</script>
 
 {% else %}
-<div class="empty-output" style="padding:3rem 1rem;">
+<div class="empty-output empty-output--roomy">
     {{ icon('shield-check','48') }}
-    <p style="margin-top:1rem;">No CISA CVE data loaded.</p>
+    <p class="mt-md">No CISA CVE data loaded.</p>
     <p class="text-sm">Use <strong>Import CVE</strong> above to load the catalogue.</p>
 </div>
 {% endif %}

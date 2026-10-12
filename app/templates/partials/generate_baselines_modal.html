@@ -1,10 +1,10 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/tech_icons.html" import tech_icon, bucket_icon %}
-<div  name="Generate Detection Baselines" class="modal-content" onclick="event.stopPropagation()">
+<div  name="Generate Detection Baselines" class="modal-content" data-stop-click>
     <div class="modal-header">
         <h3 class="modal-title modal-title--accent">{{ icon('zap','16') }} Generate Detection Baselines</h3>
         <button   name="Close Modal" class="modal-x"
-                onclick="document.getElementById('generate-baselines-modal').style.display='none'">&#x2715;</button>
+                data-click="el.hide" data-target="generate-baselines-modal">&#x2715;</button>
     </div>
     <p class="modal-intro">
         Select the technologies in your environment. TIDE will generate modular detection baselines
@@ -63,7 +63,7 @@
                 Scanning rules…
             </span>
             <button name="Cancel" type="button" class="btn btn-secondary"
-                    onclick="document.getElementById('generate-baselines-modal').style.display='none'">Cancel</button>
+                    data-click="el.hide" data-target="generate-baselines-modal">Cancel</button>
             <button name="Preview" type="submit" class="btn btn-primary" {% if not catalog %}disabled{% endif %}>
                 {{ icon('search','14') }} Preview
             </button>

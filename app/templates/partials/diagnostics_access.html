@@ -1,0 +1,78 @@
+{#
+  Diagnostics → Access (super admins only; app.services.diagnostic_access): who holds Platform Admin
+  and who holds Support on each client, and the form to grant or revoke either by username.
+  Context: h (holders), clients, actions, me (the super admin's id), result ({ok, message}) or none.
+#}
+{% from "macros/icons.html" import icon %}
+<div id="diag-access">
+    <div class="diag-access__lists">
+        <div>
+            <h3 class="diag-access__title">Platform Admin <span class="text-muted">· {{ h.admins | length }}</span></h3>
+            <div class="diag-table-wrap"><table class="diag-table">
+                <thead><tr><th>User</th><th>Sign-in</th><th></th></tr></thead>
+                <tbody>
+                {% for a in h.admins %}
+                <tr>
+                    <td>{{ a.username }}{% if not a.active %} <span class="status-pill status-muted">Deactivated</span>{% endif %}</td>
+                    <td>{{ a.provider }}</td>
+                    <td class="diag-nowrap">
+                        {% if a.id == me %}<span class="text-muted">You</span>
+                        {% else %}
+                        <button name="Revoke Platform Admin" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/diagnostics/access" hx-vals='{"action": "revoke_admin", "username": {{ a.username | tojson }}}'
+                                hx-target="#diag-access" hx-swap="outerHTML" hx-disabled-elt="this"
+                                hx-confirm="Revoke Platform Admin from {{ a.username }}?">Revoke</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+        </div>
+        <div>
+            <h3 class="diag-access__title">Support <span class="text-muted">· {{ h.support | length }}</span></h3>
+            {% if h.support %}
+            <div class="diag-table-wrap"><table class="diag-table">
+                <thead><tr><th>User</th><th>Client</th><th></th></tr></thead>
+                <tbody>
+                {% for s in h.support %}
+                <tr>
+                    <td>{{ s.username }}{% if not s.active %} <span class="status-pill status-muted">Deactivated</span>{% endif %}</td>
+                    <td>{{ s.client }}</td>
+                    <td class="diag-nowrap">
+                        <button name="Revoke Support" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/diagnostics/access"
+                                hx-vals='{"action": "revoke_support", "username": {{ s.username | tojson }}, "client": {{ s.client_id | tojson }}}'
+                                hx-target="#diag-access" hx-swap="outerHTML" hx-disabled-elt="this"
+                                hx-confirm="Revoke Support on {{ s.client }} from {{ s.username }}?">Revoke</button>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+            {% else %}
+            <p class="text-muted">Nobody has Support on any client.</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <form class="diag-access__form" hx-post="/api/diagnostics/access" hx-target="#diag-access" hx-swap="outerHTML"
+          hx-disabled-elt="find button">
+        <select name="action" class="form-input form-select" aria-label="What to change"
+                data-change="ui.accessAction">
+            {% for key, label in actions.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+        </select>
+        <input type="text" name="username" class="form-input" placeholder="Username" aria-label="Username"
+               required autocomplete="off">
+        <select name="client" class="form-input form-select" aria-label="Client" hidden>
+            {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+        </select>
+        <button name="Change Access" type="submit" class="btn btn-primary">{{ icon('key', '14') }} Apply</button>
+    </form>
+
+    {% if result %}
+    <p class="diag-access__result diag-access__result--{{ 'ok' if result.ok else 'refused' }}" role="{{ 'status' if result.ok else 'alert' }}">
+        {{ icon('check-circle' if result.ok else 'alert-triangle', '14') }} {{ result.message }}
+    </p>
+    {% endif %}
+</div>

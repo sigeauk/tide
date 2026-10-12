@@ -6,14 +6,14 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+<div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">
             Threat Landscape
         </h1>
         <p class="page-subtitle">Maps known threat actor TTPs directly against active SIEM detection rules.</p>
     </div>
-    <div style="display:flex;align-items:center;gap:0.6rem;flex-shrink:0;">
+    <div class="flex items-center gap-sm shrink-0">
         <button name="Submit Sync"
             class="btn btn-primary"
             hx-post="/api/threats/sync"
@@ -26,7 +26,7 @@
 
 <!-- Metrics Row -->
 {% if metrics_error %}
-<div class="alert alert-warning" style="margin-bottom: 1rem;">
+<div class="alert alert-warning mb-md">
     {{ metrics_error }}
 </div>
 {% endif %}
@@ -120,55 +120,42 @@
 
 <!-- ── Generate Baseline Modal (per actor) ─────────────────────────── -->
 <div id="actor-baseline-overlay"
-     class="u-bg-rgb-0-0-0-65" style="display:none; position:fixed; inset:0;
-            z-index:1000; align-items:center; justify-content:center">
-    <div class="u-bg-surface" style="border:1px solid var(--border-color,#30363d);
-                border-radius:0.75rem; padding:1.75rem; width:420px; max-width:90vw;
-                box-shadow:0 20px 60px rgba(0,0,0,0.6)">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
-            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:0.4rem;">
+     class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-sm modal-420">
+        <div class="modal-header">
+            <h3 class="modal-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
                     <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                 </svg>
                 Create Assurance Baseline
             </h3>
-            <button name="Close Actor Baseline Modal" onclick="closeActorBaselineModal()"
-                    class="u-bg-none" style="border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
-                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem"
+            <button name="Close Actor Baseline Modal" data-click="threats.baselineClose"
+                    type="button" class="modal-x"
                     title="Close">&#x2715;</button>
         </div>
 
         <form   name="Generate Baseline Form" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <input type="hidden" id="actor-bl-actors" name="actor_names" value="">
             <input type="hidden" id="actor-bl-group-ids" name="actor_group_ids" value="">
-            <div style="margin-bottom:1rem;">
-                <label style="display:block; font-size:0.75rem; font-weight:600;
-                              color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                              letter-spacing:0.05em; margin-bottom:0.4rem;">
+            <div class="mb-md">
+                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                     Baseline Name
                 </label>
                 <input id="actor-bl-name" name="baseline_name" required
-                       class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                              border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                              box-sizing:border-box">
+                       class="form-input">
             </div>
-            <div style="margin-bottom:1.5rem;">
-                <label style="display:block; font-size:0.75rem; font-weight:600;
-                              color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                              letter-spacing:0.05em; margin-bottom:0.4rem;">
+            <div class="mb-lg">
+                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                     Description (optional)
                 </label>
                 <textarea id="actor-bl-desc" name="description" rows="3"
                           placeholder="Brief description…"
-                          class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                                 border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                                 resize:vertical; box-sizing:border-box"></textarea>
+                          class="form-input"></textarea>
             </div>
-            <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
-                <button name="Cancel" type="button" onclick="closeActorBaselineModal()" class="btn btn-secondary"
-                        style="font-size:0.85rem; padding:0.45rem 1rem;">Cancel</button>
-                <button name="Generate Baseline" type="submit" class="btn btn-primary"
-                        style="font-size:0.85rem; padding:0.45rem 1.25rem;">Generate Baseline</button>
+            <div class="flex gap-ms justify-end">
+                <button name="Cancel" type="button" data-click="threats.baselineClose" class="btn btn-secondary fs-base py-sm px-md"
+                       >Cancel</button>
+                <button name="Generate Baseline" type="submit" class="btn btn-primary">Generate Baseline</button>
             </div>
         </form>
     </div>
@@ -176,39 +163,3 @@
 
 {% endblock %}
 
-{% block scripts %}
-<script>
-    function openActorBaselineModal(actorName, groupId) {
-        document.getElementById('actor-bl-actors').value = actorName;
-        document.getElementById('actor-bl-group-ids').value = groupId || '';
-        document.getElementById('actor-bl-name').value = actorName + ' Baseline';
-        document.getElementById('actor-bl-desc').value = '';
-        document.getElementById('actor-baseline-overlay').style.display = 'flex';
-    }
-    function closeActorBaselineModal() {
-        document.getElementById('actor-baseline-overlay').style.display = 'none';
-    }
-    document.addEventListener('click', function(e) {
-        var overlay = document.getElementById('actor-baseline-overlay');
-        if (overlay && e.target === overlay) closeActorBaselineModal();
-    });
-
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'threats-grid') {
-            htmx.ajax('GET', '/api/threats/metrics', {target: '#metrics-container', swap: 'innerHTML'});
-        }
-    });
-    
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'toast-container') {
-            const toasts = event.detail.target.querySelectorAll('.toast');
-            toasts.forEach(function(toast) {
-                setTimeout(function() {
-                    toast.style.opacity = '0';
-                    setTimeout(function() { toast.remove(); }, 300);
-                }, 5000);
-            });
-        }
-    });
-</script>
-{% endblock %}

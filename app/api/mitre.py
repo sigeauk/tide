@@ -46,6 +46,8 @@ def mitre_window(kind: str, object_id: str, request: Request, db: DbDep, user: C
         **spec.window_context(db, client_id, detail, covered, counts),
         **catalog.source_context(found_src),
     }
+    if kind in catalog.BASELINE_KINDS and (user is None or user.can_write("page:baselines")):
+        ctx["baseline_from"] = len({(t.get("id") or "").upper() for t in detail.get("techniques") or [] if t.get("id")})
     return request.app.state.templates.TemplateResponse(request, "components/mitre_window.html", ctx)
 
 

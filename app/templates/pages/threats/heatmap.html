@@ -5,19 +5,18 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+<div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">
             Coverage Heatmap
         </h1>
         <p class="page-subtitle">Visualize your detection coverage against adversary techniques used by tracked threat actors.</p>
     </div>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;justify-content:flex-end;align-items:center;flex-shrink:0;">
+    <div class="flex gap-sm flex-wrap justify-end items-center shrink-0">
         <button name="Export Report"
-            class="btn btn-secondary btn-sm"
-            onclick="openExportModal()"
-            title="Export threat report for selected actors"
-            style="display:flex; align-items:center; gap:0.375rem; height:38px;">
+            class="btn btn-secondary btn-sm heatmap-toggle"
+            data-click="heatmap.exportOpen"
+            title="Export threat report for selected actors">
             <svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                 <polyline points="7 10 12 15 17 10"/>
@@ -25,16 +24,17 @@
             </svg>
             Export Report
         </button>
+        {% if not user or user.can_write('page:baselines') %}
         <button name="Create Baseline"
-            class="btn btn-primary btn-sm"
-            onclick="openBaselineGenerateModal()"
-            title="Generate an Assurance Baseline from selected actors"
-            style="display:flex; align-items:center; gap:0.375rem; height:38px;">
+            class="btn btn-primary btn-sm heatmap-toggle"
+            data-click="heatmap.baselineOpen"
+            title="Generate an Assurance Baseline from selected actors">
             <svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
             </svg>
             Create Baseline
         </button>
+        {% endif %}
     </div>
 </div>
 
@@ -44,31 +44,31 @@
 <!-- Filters Bar -->
 <div class="filters-bar">
     <!-- Technique Search -->
-    <div class="filter-group grow" style="min-width: 200px; max-width: 300px;">
+    <div class="filter-group grow filter-group--md">
         <input name="Technique Search" 
             type="text" 
             id="technique-search"
             class="form-input" 
             placeholder="T1059, Command, Execution..."
-            oninput="filterHeatmapTechniques(this.value)">
+            data-input="heatmap.filterTechniques">
     </div>
     
     <!-- Actor Search -->
-    <div class="filter-group grow" style="min-width: 200px; max-width: 300px;">
+    <div class="filter-group grow filter-group--md">
         <label class="form-label">Search Actors</label>
         <input name="Actor Search" 
             type="text" 
             id="actor-search"
             class="form-input" 
             placeholder="Name or alias..."
-            oninput="filterActorCheckboxes(this.value)">
+            data-input="heatmap.filterActors">
     </div>
     
     <!-- Actor Selection Dropdown -->
-    <div class="filter-group grow" style="min-width: 250px; max-width: 350px;">
+    <div class="filter-group grow filter-group--lg">
         <label class="form-label">Select Adversaries</label>
         <div class="actor-select-container" id="actor-select-container">
-            <div  name="Choose threat actors..." class="actor-select-trigger" onclick="toggleActorDropdown()">
+            <div  name="Choose threat actors..." class="actor-select-trigger" data-click="heatmap.actorMenu">
                 <span class="actor-select-text" id="actor-select-text">Choose threat actors...</span>
                 <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="m6 9 6 6 6-6"/>
@@ -82,7 +82,7 @@
                             type="checkbox" 
                             name="actors" 
                             value="{{ actor.name }}"
-                            onchange="updateActorSelection(); triggerHeatmapUpdate();">
+                            data-change="heatmap.actorPicked">
                         <span class="actor-checkbox-label">{{ actor.name }}</span>
                         <span class="actor-checkbox-count">{{ actor.ttp_count }} TTPs</span>
                     </label>
@@ -95,12 +95,12 @@
     <!-- Options -->
     <div class="filter-group">
         <label class="form-label">Options</label>
-        <label class="actor-checkbox-item" style="padding: 0.5rem 0;">
+        <label class="actor-checkbox-item py-sm px-0">
             <input
                 type="checkbox"
                 name="show_defense"
                 id="show-defense-checkbox"
-                onchange="triggerHeatmapUpdate();">
+                data-change="heatmap.redraw">
             <span>Show Defense in Depth</span>
         </label>
     </div>
@@ -109,7 +109,7 @@
     <div class="filter-group">
         <label class="form-label">Source</label>
         <div class="actor-select-container" id="source-select-container">
-            <div  name="All sources" class="actor-select-trigger" onclick="toggleSourceDropdown()">
+            <div  name="All sources" class="actor-select-trigger" data-click="heatmap.sourceMenu">
                 <span class="actor-select-text" id="source-select-text">All sources</span>
                 <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="m6 9 6 6 6-6"/>
@@ -123,7 +123,7 @@
                             type="checkbox"
                             name="source_filter"
                             value="{{ raw }}"
-                            onchange="updateSourceSelection(); triggerHeatmapUpdate();">
+                            data-change="heatmap.sourcePicked">
                         <span class="actor-checkbox-label">{{ label }}</span>
                     </label>
                     {% endfor %}
@@ -134,194 +134,6 @@
 
 </div>
 
-<script>
-function toggleActorDropdown() {
-    const container = document.getElementById('actor-select-container');
-    const dropdown = document.getElementById('actor-dropdown');
-    const isOpen = container.classList.toggle('open');
-    // Toggle inline style for reliability
-    dropdown.style.display = isOpen ? 'flex' : 'none';
-}
-
-// Close dropdowns when clicking outside
-document.addEventListener('click', function(e) {
-    const actorContainer = document.getElementById('actor-select-container');
-    const actorDropdown = document.getElementById('actor-dropdown');
-    if (actorContainer && !actorContainer.contains(e.target)) {
-        actorContainer.classList.remove('open');
-        if (actorDropdown) actorDropdown.style.display = 'none';
-    }
-    const sourceContainer = document.getElementById('source-select-container');
-    const sourceDropdown = document.getElementById('source-dropdown');
-    if (sourceContainer && !sourceContainer.contains(e.target)) {
-        sourceContainer.classList.remove('open');
-        if (sourceDropdown) sourceDropdown.style.display = 'none';
-    }
-});
-
-function filterActorCheckboxes(query) {
-    const lowerQuery = query.toLowerCase();
-    const items = document.querySelectorAll('.actor-checkbox-item');
-    items.forEach(item => {
-        const name = item.dataset.name || '';
-        const aliases = item.dataset.aliases || '';
-        const matches = name.includes(lowerQuery) || aliases.includes(lowerQuery);
-        item.style.display = matches ? 'flex' : 'none';
-    });
-}
-
-function updateActorSelection() {
-    const checked = document.querySelectorAll('input[name="actors"]:checked');
-    const textEl = document.getElementById('actor-select-text');
-    
-    if (checked.length === 0) {
-        textEl.textContent = 'Choose threat actors...';
-        textEl.classList.remove('has-selection');
-    } else if (checked.length === 1) {
-        textEl.textContent = checked[0].value;
-        textEl.classList.add('has-selection');
-    } else {
-        textEl.textContent = `${checked.length} actors selected`;
-        textEl.classList.add('has-selection');
-    }
-}
-
-function triggerHeatmapUpdate() {
-    const checked = document.querySelectorAll('input[name="actors"]:checked');
-    const showDefense = document.getElementById('show-defense-checkbox').checked;
-    const sourceChecked = document.querySelectorAll('input[name="source_filter"]:checked');
-    
-    const actors = Array.from(checked).map(cb => cb.value);
-    const params = new URLSearchParams();
-    actors.forEach(a => params.append('actors', a));
-    if (showDefense) params.append('show_defense', 'on');
-    sourceChecked.forEach(cb => params.append('source_filter', cb.value));
-    
-    htmx.ajax('GET', '/api/heatmap/matrix?' + params.toString(), {
-        target: '#heatmap-container',
-        swap: 'innerHTML'
-    });
-}
-
-function toggleSourceDropdown() {
-    const container = document.getElementById('source-select-container');
-    const dropdown = document.getElementById('source-dropdown');
-    const isOpen = container.classList.toggle('open');
-    dropdown.style.display = isOpen ? 'flex' : 'none';
-}
-
-function updateSourceSelection() {
-    const checked = document.querySelectorAll('input[name="source_filter"]:checked');
-    const textEl = document.getElementById('source-select-text');
-    if (checked.length === 0) {
-        textEl.textContent = 'All sources';
-        textEl.classList.remove('has-selection');
-    } else if (checked.length === 1) {
-        textEl.textContent = checked[0].value;
-        textEl.classList.add('has-selection');
-    } else {
-        textEl.textContent = `${checked.length} sources`;
-        textEl.classList.add('has-selection');
-    }
-}
-
-// Filter techniques in the heatmap matrix by search query
-function filterHeatmapTechniques(query) {
-    const lowerQuery = query.toLowerCase().trim();
-    const cells = document.querySelectorAll('.ttp-card');
-    
-    cells.forEach(cell => {
-        if (!lowerQuery) {
-            // Show all cells when search is empty
-            cell.style.opacity = '1';
-            cell.style.transform = '';
-            cell.style.zIndex = '';
-            cell.style.boxShadow = '';
-            return;
-        }
-        
-        const techId = (cell.dataset.techId || '').toLowerCase();
-        const techName = (cell.dataset.techName || '').toLowerCase();
-        const title = (cell.getAttribute('title') || '').toLowerCase();
-        
-        const matches = techId.includes(lowerQuery) || 
-                       techName.includes(lowerQuery) || 
-                       title.includes(lowerQuery);
-        
-        if (matches) {
-            cell.style.opacity = '1';
-            cell.style.transform = 'scale(1.08)';
-            cell.style.zIndex = '10';
-            cell.style.boxShadow = '0 0 8px var(--color-primary)';
-        } else {
-            cell.style.opacity = '0.2';
-            cell.style.transform = '';
-            cell.style.zIndex = '';
-            cell.style.boxShadow = '';
-        }
-    });
-}
-
-/**
- * Open the export options modal. Validates actor selection first.
- */
-function openExportModal() {
-    const checked = document.querySelectorAll('input[name="actors"]:checked');
-    if (checked.length === 0) {
-        alert('Select at least one threat actor before exporting a report.');
-        return;
-    }
-    document.getElementById('export-modal-overlay').style.display = 'flex';
-}
-
-function closeExportModal() {
-    document.getElementById('export-modal-overlay').style.display = 'none';
-}
-
-function confirmExport() {
-    const checked        = document.querySelectorAll('input[name="actors"]:checked');
-    const showDefense    = document.getElementById('show-defense-checkbox').checked;
-    const format         = document.getElementById('modal-format').value;
-    const classification = document.getElementById('modal-classification').value;
-    const audienceLevel  = document.getElementById('modal-audience').value;
-
-    const params = new URLSearchParams();
-    params.set('format', format);
-    params.set('classification', classification);
-    params.set('audience_level', audienceLevel);
-    Array.from(checked).forEach(cb => params.append('actors', cb.value));
-    if (showDefense) params.set('show_defense', 'true');
-
-    closeExportModal();
-    window.location.href = '/api/heatmap/export?' + params.toString();
-}
-
-// Close modal on overlay click
-document.addEventListener('click', function(e) {
-    const overlay = document.getElementById('export-modal-overlay');
-    if (overlay && e.target === overlay) closeExportModal();
-    const baselineOverlay = document.getElementById('baseline-gen-overlay');
-    if (baselineOverlay && e.target === baselineOverlay) closeBaselineGenerateModal();
-});
-
-function openBaselineGenerateModal() {
-    const checked = document.querySelectorAll('input[name="actors"]:checked');
-    if (checked.length === 0) {
-        alert('Select at least one threat actor to generate a baseline.');
-        return;
-    }
-    const names = Array.from(checked).map(cb => cb.value);
-    document.getElementById('baseline-gen-actors').value = names.join(', ');
-    const defaultName = names.length === 1 ? names[0] + ' Baseline' : names.length + ' Actors Baseline';
-    document.getElementById('baseline-gen-name').value = defaultName;
-    document.getElementById('baseline-gen-desc').value = '';
-    document.getElementById('baseline-gen-overlay').style.display = 'flex';
-}
-
-function closeBaselineGenerateModal() {
-    document.getElementById('baseline-gen-overlay').style.display = 'none';
-}
-</script>
 
 
 <div class="divider"></div>
@@ -336,50 +148,38 @@ function closeBaselineGenerateModal() {
 
 <!-- ── Export Options Modal ─────────────────────────────────────────────── -->
 <div id="export-modal-overlay"
-     class="u-bg-rgb-0-0-0-65" style="display:none; position:fixed; inset:0;
-            z-index:1000; align-items:center; justify-content:center">
-    <div class="u-bg-surface" style="border:1px solid var(--border-color,#30363d);
-                border-radius:0.75rem; padding:1.75rem; width:360px; max-width:90vw;
-                box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+     class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-sm modal-360">
 
         <!-- Header -->
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
-            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
+        <div class="modal-header">
+            <h3 class="modal-title">
                 Export Threat Report
             </h3>
-            <button name="Close Export Modal" onclick="closeExportModal()"
-                    class="u-bg-none" style="border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
-                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem"
+            <button name="Close Export Modal" data-click="heatmap.exportClose"
+                    type="button" class="modal-x"
                     title="Close">&#x2715;</button>
         </div>
 
         <!-- Format -->
-        <div style="margin-bottom:1rem;">
-            <label style="display:block; font-size:0.75rem; font-weight:600;
-                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+        <div class="mb-md">
+            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                 Format
             </label>
             <select name="PDF Markdown" id="modal-format"
-                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                           cursor:pointer">
+                    class="form-input">
                 <option value="pdf">PDF</option>
                 <option value="markdown">Markdown</option>
             </select>
         </div>
 
         <!-- Classification -->
-        <div style="margin-bottom:1rem;">
-            <label style="display:block; font-size:0.75rem; font-weight:600;
-                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+        <div class="mb-md">
+            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                 Classification
             </label>
             <select name="Modal Classification" id="modal-classification"
-                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                           cursor:pointer">
+                    class="form-input">
                 {% for clf in classification_options %}
                 <option value="{{ clf }}">{{ clf }}</option>
                 {% endfor %}
@@ -387,29 +187,24 @@ function closeBaselineGenerateModal() {
         </div>
 
         <!-- Audience -->
-        <div style="margin-bottom:1.5rem;">
-            <label style="display:block; font-size:0.75rem; font-weight:600;
-                          color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                          letter-spacing:0.05em; margin-bottom:0.4rem;">
+        <div class="mb-lg">
+            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                 Audience
             </label>
             <select name="Executive / CISO Technical / Engineer" id="modal-audience"
-                    class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                           border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                           cursor:pointer">
+                    class="form-input">
                 <option value="executive">Executive / CISO</option>
                 <option value="technical">Technical / Engineer</option>
             </select>
         </div>
 
         <!-- Actions -->
-        <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
-            <button name="Cancel" onclick="closeExportModal()" class="btn btn-secondary"
-                    style="font-size:0.85rem; padding:0.45rem 1rem;">
+        <div class="flex gap-ms justify-end">
+            <button name="Cancel" data-click="heatmap.exportClose" class="btn btn-secondary fs-base py-sm px-md"
+                   >
                 Cancel
             </button>
-            <button name="Download" onclick="confirmExport()" class="btn btn-primary"
-                    style="font-size:0.85rem; padding:0.45rem 1.25rem;">
+            <button name="Download" data-click="heatmap.exportConfirm" class="btn btn-primary">
                 Download
             </button>
         </div>
@@ -418,73 +213,56 @@ function closeBaselineGenerateModal() {
 
 <!-- ── Generate Baseline Modal ──────────────────────────────────────── -->
 <div id="baseline-gen-overlay"
-     class="u-bg-rgb-0-0-0-65" style="display:none; position:fixed; inset:0;
-            z-index:1000; align-items:center; justify-content:center">
-    <div class="u-bg-surface" style="border:1px solid var(--border-color,#30363d);
-                border-radius:0.75rem; padding:1.75rem; width:420px; max-width:90vw;
-                box-shadow:0 20px 60px rgba(0,0,0,0.6)">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1.25rem;">
-            <h3 style="font-size:1rem; font-weight:600; color:var(--text-primary,#e6edf3); margin:0;">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:0.4rem;">
+     class="modal-overlay" style="display:none;">
+    <div class="modal-content modal-sm modal-420">
+        <div class="modal-header">
+            <h3 class="modal-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
                     <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                 </svg>
                 Create Assurance Baseline
             </h3>
-            <button name="Close Baseline Generate Modal" onclick="closeBaselineGenerateModal()"
-                    class="u-bg-none" style="border:none; cursor:pointer; color:var(--text-secondary,#8b949e);
-                           font-size:1.25rem; line-height:1; padding:0.1rem 0.3rem; border-radius:0.25rem"
+            <button name="Close Baseline Generate Modal" data-click="heatmap.baselineClose"
+                    type="button" class="modal-x"
                     title="Close">&#x2715;</button>
         </div>
 
         <form   name="Generate Baseline Modal" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <!-- Selected actors (hidden, shown as readonly) -->
-            <div style="margin-bottom:1rem;">
-                <label style="display:block; font-size:0.75rem; font-weight:600;
-                              color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                              letter-spacing:0.05em; margin-bottom:0.4rem;">
+            <div class="mb-md">
+                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                     Selected Actor(s)
                 </label>
                 <input id="baseline-gen-actors" name="actor_names" readonly
-                       class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                              border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-secondary,#8b949e);
-                              cursor:default; box-sizing:border-box">
+                       class="form-input">
             </div>
 
             <!-- Baseline Name -->
-            <div style="margin-bottom:1rem;">
-                <label style="display:block; font-size:0.75rem; font-weight:600;
-                              color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                              letter-spacing:0.05em; margin-bottom:0.4rem;">
+            <div class="mb-md">
+                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                     Baseline Name
                 </label>
                 <input id="baseline-gen-name" name="baseline_name" required
                        placeholder="e.g. APT28 Baseline"
-                       class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                              border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                              box-sizing:border-box">
+                       class="form-input">
             </div>
 
             <!-- Description -->
-            <div style="margin-bottom:1.5rem;">
-                <label style="display:block; font-size:0.75rem; font-weight:600;
-                              color:var(--text-secondary,#8b949e); text-transform:uppercase;
-                              letter-spacing:0.05em; margin-bottom:0.4rem;">
+            <div class="mb-lg">
+                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
                     Description (optional)
                 </label>
                 <textarea id="baseline-gen-desc" name="description" rows="3"
                           placeholder="Brief description of this baseline…"
-                          class="u-bg-action" style="width:100%; font-size:0.85rem; padding:0.45rem 0.65rem;
-                                 border-radius:0.375rem; border:1px solid var(--border-color,#30363d); color:var(--text-primary,#e6edf3);
-                                 resize:vertical; box-sizing:border-box"></textarea>
+                          class="form-input"></textarea>
             </div>
 
-            <div style="display:flex; gap:0.75rem; justify-content:flex-end;">
-                <button name="Cancel" type="button" onclick="closeBaselineGenerateModal()" class="btn btn-secondary"
-                        style="font-size:0.85rem; padding:0.45rem 1rem;">
+            <div class="flex gap-ms justify-end">
+                <button name="Cancel" type="button" data-click="heatmap.baselineClose" class="btn btn-secondary fs-base py-sm px-md"
+                       >
                     Cancel
                 </button>
-                <button name="Generate Baseline" type="submit" class="btn btn-primary"
-                        style="font-size:0.85rem; padding:0.45rem 1.25rem;">
+                <button name="Generate Baseline" type="submit" class="btn btn-primary">
                     Generate Baseline
                 </button>
             </div>

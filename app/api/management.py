@@ -8,14 +8,19 @@ import logging
 import threading
 import uuid as _uuid
 from html import escape as _esc
+
+from jinja2.utils import htmlsafe_json_dumps
 from typing import Optional
 
 import requests as http_requests
 from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
-from app.api.deps import DbDep, RequireAdmin, RequireSuperadmin, ActiveClient
+from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
+                          can_manage_user, require_client_member, require_manageable_user)
 from app.services import tls
+from app.services.log_context import audit_admin
+from app.services.database import SUPPORT_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -217,17 +222,7 @@ def _filter_users_for_admin(db, user, users):
 @router.get("/tab/users", response_class=HTMLResponse)
 def tab_users(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
     """Users tab partial for the management hub."""
-    users = _filter_users_for_admin(db, user, db.get_all_users())
-    all_roles = db.get_all_roles()
-    for u in users:
-        u["_roles"] = db.get_user_roles(u["id"], client_id=client_id)
-        u["_client_ids"] = db.get_user_client_ids(u["id"])
-    if user.is_superadmin:
-        clients = db.list_clients()
-    else:
-        allowed = set(db.get_user_client_ids(user.id))
-        clients = [c for c in db.list_clients() if c["id"] in allowed]
-    return _render_users_tab(users, all_roles, clients, current_user=user)
+    return _refresh_users_tab(db, user=user, client_id=client_id)
 
 
 def _refresh_users_tab(db, user=None, client_id: Optional[str] = None) -> str:
@@ -239,9 +234,11 @@ def _refresh_users_tab(db, user=None, client_id: Optional[str] = None) -> str:
     for u in users:
         u["_roles"] = db.get_user_roles(u["id"], client_id=client_id)
         u["_client_ids"] = db.get_user_client_ids(u["id"])
+        u["_manage"] = user is None or can_manage_user(db, user, u)
     if user is not None and not user.is_superadmin:
-        allowed = set(db.get_user_client_ids(user.id))
-        clients = [c for c in db.list_clients() if c["id"] in allowed]
+        # A client admin's checklist offers only the clients they administer.
+        mine = admin_client_ids(user)
+        clients = [c for c in db.list_clients() if c["id"] in mine]
     else:
         clients = db.list_clients()
     return _render_users_tab(users, all_roles, clients, current_user=user)
@@ -287,6 +284,7 @@ async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin, clie
     uid = db.create_user(username=username, email=email, full_name=full_name,
                          password_hash=pw_hash, auth_provider="local")
     db.assign_user_to_client(uid, client_id, is_default=True)
+    audit_admin("user_create", user, target_id=uid, target_username=username, client=client_id, roles=[])
 
     html = _refresh_users_tab(db, user=user, client_id=client_id)
     return HTMLResponse(
@@ -298,52 +296,49 @@ async def mgmt_create_user(request: Request, db: DbDep, user: RequireAdmin, clie
 @router.post("/users/{user_id}/roles", response_class=HTMLResponse)
 async def mgmt_update_user_roles(request: Request, user_id: str, db: DbDep,
                                   user: RequireAdmin, client_id: ActiveClient):
-    """Update roles for a user in the *active* client only."""
-    # Tenant admins can only mutate users that share their admin tenants.
-    if not user.is_superadmin:
-        target_clients = set(db.get_user_client_ids(user_id))
-        admin_clients = {
-            cid for cid, roles in (user.client_roles or {}).items()
-            if any(r.upper() == "ADMIN" for r in roles)
-        }
-        if not (target_clients & admin_clients):
-            return HTMLResponse(
-                '<div hx-swap-oob="afterbegin:#toast-container">'
-                '<div class="toast toast-warning">You do not administer any tenant this user belongs to.</div></div>',
-                status_code=200,
-            )
-        if client_id not in admin_clients:
-            return HTMLResponse(
-                '<div hx-swap-oob="afterbegin:#toast-container">'
-                '<div class="toast toast-warning">You can only edit roles for the tenant you administer.</div></div>',
-                status_code=200,
-            )
+    """Update roles for a user in the *active* client only (which RequireAdmin makes one the
+    caller administers); the user must be on it."""
+    require_client_member(db, user, user_id, client_id)
     form = await request.form()
     roles = form.getlist("roles")
-    db.set_user_roles(user_id, roles, client_id=client_id)
+    db.set_user_roles(user_id, roles, client_id=client_id, grant_support=user.is_superadmin)
+    audit_admin("role_change", user, target_id=user_id, client=client_id,
+                roles=db.get_user_roles(user_id, client_id=client_id))
     return HTMLResponse(_refresh_users_tab(db, user=user, client_id=client_id))
 
 
 @router.post("/users/{user_id}/toggle-active", response_class=HTMLResponse)
 def mgmt_toggle_user_active(request: Request, user_id: str, db: DbDep,
                              user: RequireAdmin, client_id: ActiveClient):
-    """Toggle user active status from the management hub."""
-    db_user = db.get_user_by_id(user_id)
-    if db_user:
-        db.update_user(user_id, is_active=not db_user.get("is_active", True))
+    """Toggle user active status from the management hub (deps.can_manage_user). Not your own."""
+    if user_id == user.id:
+        return HTMLResponse(
+            '<div hx-swap-oob="afterbegin:#toast-container">'
+            '<div class="toast toast-warning">You cannot deactivate your own account.</div></div>'
+            + _refresh_users_tab(db, user=user, client_id=client_id)
+        )
+    db_user = require_manageable_user(db, user, user_id)
+    now_active = not db_user.get("is_active", True)
+    db.update_user(user_id, is_active=now_active)
+    if not now_active:
+        db.end_user_sessions(user_id)   # reactivating means signing in again (#30)
+    audit_admin("user_activate" if now_active else "user_deactivate", user, target_id=user_id,
+                target_username=db_user.get("username"))
     return HTMLResponse(_refresh_users_tab(db, user=user, client_id=client_id))
 
 
 @router.delete("/users/{user_id}", response_class=HTMLResponse)
 def mgmt_delete_user(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Delete a user from the management hub."""
+    """Delete a user from the management hub (deps.can_manage_user)."""
     if user_id == user.id:
         return HTMLResponse(
             '<div hx-swap-oob="afterbegin:#toast-container">'
             '<div class="toast toast-warning">You cannot delete your own account.</div></div>'
         )
+    target = require_manageable_user(db, user, user_id)
     db.delete_user(user_id)
-    return HTMLResponse(_refresh_users_tab(db))
+    audit_admin("user_delete", user, target_id=user_id, target_username=target.get("username"))
+    return HTMLResponse(_refresh_users_tab(db, user=user))
 
 
 @router.post("/users/{user_id}/superadmin", response_class=HTMLResponse)
@@ -397,7 +392,7 @@ def tab_permissions(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.get("/tab/threat-intel", response_class=HTMLResponse)
-def tab_threat_intel(request: Request, db: DbDep, user: RequireAdmin):
+def tab_threat_intel(request: Request, db: DbDep, user: RequireSuperadmin):
     """Retired in 5.0.0 — see Management → Connectors instead.
 
     Kept only so a legacy bookmark / HTMX poll renders a stable
@@ -405,17 +400,16 @@ def tab_threat_intel(request: Request, db: DbDep, user: RequireAdmin):
     underlying ``opencti_inventory`` table.
     """
     return HTMLResponse(
-        '<div class="text-secondary" style="padding:1rem;">'
+        '<div class="text-secondary p-md">'
         'Threat Intel (legacy OpenCTI GraphQL) was retired in 5.0.0. '
         'Add OpenCTI as an <code>opencti_taxii</code> connector under '
-        '<a href="/management#mgmt-sub-connectors" '
-        'style="color:var(--color-primary);">Management → Connectors</a> '
+        '<a href="/management#mgmt-sub-connectors" class="text-primary">Management → Connectors</a> '
         'instead.</div>'
     )
 
 
 @router.get("/tab/gitlab", response_class=HTMLResponse)
-def tab_gitlab(request: Request, db: DbDep, user: RequireAdmin):
+def tab_gitlab(request: Request, db: DbDep, user: RequireSuperadmin):
     """GitLab tab partial for the management hub."""
     instances = db.list_gitlab_inventory()
     for i in instances:
@@ -424,7 +418,7 @@ def tab_gitlab(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.get("/tab/keycloak", response_class=HTMLResponse)
-def tab_keycloak(request: Request, db: DbDep, user: RequireAdmin):
+def tab_keycloak(request: Request, db: DbDep, user: RequireSuperadmin):
     """Keycloak tab partial for the management hub."""
     instances = db.list_keycloak_inventory()
     return HTMLResponse(_render_keycloak_tab(instances))
@@ -435,7 +429,7 @@ def tab_keycloak(request: Request, db: DbDep, user: RequireAdmin):
 # ---------------------------------------------------------------------------
 
 @router.post("/keycloak/test-connection", response_class=HTMLResponse)
-async def test_keycloak_connection(request: Request, db: DbDep, user: RequireAdmin):
+async def test_keycloak_connection(request: Request, db: DbDep, user: RequireSuperadmin):
     """Test connectivity to a Keycloak instance via its OIDC discovery endpoint."""
     form = await request.form()
     kc_id = str(form.get("keycloak_id", "")).strip()
@@ -480,7 +474,7 @@ async def test_keycloak_connection(request: Request, db: DbDep, user: RequireAdm
 
 
 @router.post("/keycloak", response_class=HTMLResponse)
-async def create_keycloak(request: Request, db: DbDep, user: RequireAdmin):
+async def create_keycloak(request: Request, db: DbDep, user: RequireSuperadmin):
     """Create a Keycloak instance in the centralized inventory."""
     form = await request.form()
     label = str(form.get("label", "")).strip()
@@ -509,7 +503,7 @@ async def create_keycloak(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.put("/keycloak/{keycloak_id}", response_class=HTMLResponse)
-async def update_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireAdmin):
+async def update_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireSuperadmin):
     """Update a Keycloak instance."""
     form = await request.form()
     updates = {}
@@ -538,7 +532,7 @@ async def update_keycloak(request: Request, keycloak_id: str, db: DbDep, user: R
 
 
 @router.delete("/keycloak/{keycloak_id}", response_class=HTMLResponse)
-def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireAdmin):
+def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireSuperadmin):
     """Delete a Keycloak instance from the inventory."""
     ok = db.delete_keycloak_inventory_item(keycloak_id)
     if not ok:
@@ -659,7 +653,7 @@ def _render_client_cti_egress_partial(client_id: str, db,
 
 @router.get("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
 def list_cti_egress_targets(request: Request, client_id: str,
-                            db: DbDep, user: RequireAdmin):
+                            db: DbDep, user: ClientAdmin):
     """Render the CTI egress targets section for ``client_id``.
 
     Returns the same partial used inside the client detail page, so HTMX
@@ -675,7 +669,7 @@ def list_cti_egress_targets(request: Request, client_id: str,
 
 @router.post("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
 async def create_cti_egress_target(request: Request, client_id: str,
-                                   db: DbDep, user: RequireAdmin):
+                                   db: DbDep, user: ClientAdmin):
     """Create a CTI egress target for ``client_id``."""
     from app.services import cti_database
 
@@ -751,7 +745,7 @@ async def create_cti_egress_target(request: Request, client_id: str,
             response_class=HTMLResponse)
 async def update_cti_egress_target(request: Request, client_id: str,
                                    target_id: str, db: DbDep,
-                                   user: RequireAdmin):
+                                   user: ClientAdmin):
     """Patch a CTI egress target. Only supplied form fields are updated."""
     from app.services import cti_database
 
@@ -810,7 +804,7 @@ async def update_cti_egress_target(request: Request, client_id: str,
 @router.delete("/clients/{client_id}/cti-egress/{target_id}",
                response_class=HTMLResponse)
 def delete_cti_egress_target(request: Request, client_id: str, target_id: str,
-                             db: DbDep, user: RequireAdmin):
+                             db: DbDep, user: ClientAdmin):
     """Delete a CTI egress target."""
     from app.services import cti_database
 
@@ -837,7 +831,7 @@ def delete_cti_egress_target(request: Request, client_id: str, target_id: str,
 @router.post("/clients/{client_id}/cti-egress/{target_id}/run",
              response_class=HTMLResponse)
 def run_cti_egress_target(request: Request, client_id: str, target_id: str,
-                          db: DbDep, user: RequireAdmin):
+                          db: DbDep, user: ClientAdmin):
     """Trigger an immediate export of indicators to one egress target.
 
     Returns an HTML badge summarising the result (read / batches /
@@ -880,6 +874,7 @@ def run_cti_egress_target(request: Request, client_id: str, target_id: str,
     errors = summary.get("errors", [])
     cls = "badge-success" if not errors and not fails else "badge-warning"
     err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
+    err_title = f' title="{_esc("; ".join(str(e) for e in errors[:5]))}"' if errors else ""
     fail_suffix = f" &middot; {fails} failed" if fails else ""
     logger.info(
         f"CTI egress run: client={client_id} target={target_id} "
@@ -887,7 +882,7 @@ def run_cti_egress_target(request: Request, client_id: str, target_id: str,
         f"hist={hist} dup={dup} fails={fails}"
     )
     return HTMLResponse(
-        f'<span class="badge {cls}">'
+        f'<span class="badge {cls}"{err_title}>'
         f"{read} read &middot; {batches} batch(es) &middot; "
         f"{latest} latest &middot; {hist} hist (+{dup} dup)"
         f"{fail_suffix}{err_suffix}</span>"
@@ -899,7 +894,7 @@ def run_cti_egress_target(request: Request, client_id: str, target_id: str,
 # ---------------------------------------------------------------------------
 
 @router.post("/gitlab", response_class=HTMLResponse)
-async def create_gitlab(request: Request, db: DbDep, user: RequireAdmin):
+async def create_gitlab(request: Request, db: DbDep, user: RequireSuperadmin):
     """Create a GitLab instance in the centralized inventory."""
     form = await request.form()
     label = str(form.get("label", "")).strip()
@@ -928,7 +923,7 @@ async def create_gitlab(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.put("/gitlab/{gitlab_id}", response_class=HTMLResponse)
-async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireAdmin):
+async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireSuperadmin):
     """Update a GitLab instance."""
     form = await request.form()
     updates = {}
@@ -954,7 +949,7 @@ async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: Requi
 
 
 @router.delete("/gitlab/{gitlab_id}", response_class=HTMLResponse)
-def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireAdmin):
+def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireSuperadmin):
     """Delete a GitLab instance from the inventory."""
     ok = db.delete_gitlab_inventory_item(gitlab_id)
     if not ok:
@@ -975,7 +970,7 @@ def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireAdmi
 
 
 @router.post("/clients/{client_id}/gitlab", response_class=HTMLResponse)
-async def link_gitlab_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def link_gitlab_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Link a GitLab instance to a client."""
     form = await request.form()
     gitlab_id = str(form.get("gitlab_id", "")).strip()
@@ -995,7 +990,7 @@ async def link_gitlab_to_client(request: Request, client_id: str, db: DbDep, use
 
 @router.delete("/clients/{client_id}/gitlab/{gitlab_id}", response_class=HTMLResponse)
 def unlink_gitlab_from_client(request: Request, client_id: str, gitlab_id: str,
-                              db: DbDep, user: RequireAdmin):
+                              db: DbDep, user: ClientAdmin):
     """Unlink a GitLab instance from a client."""
     db.unlink_client_gitlab(client_id, gitlab_id)
     logger.info(f"GitLab {gitlab_id} unlinked from client {client_id} by {user.username}")
@@ -1141,18 +1136,16 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
             sc_str += f" · {chk['elapsed_ms'] / 1000:.1f}s"
         body = chk.get("body_excerpt")
         body_html = (
-            f'<div style="font-family:var(--font-mono,monospace);font-size:0.75rem;'
-            f'color:var(--color-text-secondary);margin-left:1.5rem;'
-            f'word-break:break-all;">{_esc(body)}</div>'
+            f'<div class="test-check__body">{_esc(body)}</div>'
         ) if body else ""
         rows.append(
-            f'<div style="padding:0.4rem 0;border-top:1px solid var(--color-border);">'
-            f'<div style="display:flex;gap:0.5rem;align-items:center;">'
-            f'<span class="status-pill {cls}" style="min-width:1.25rem;text-align:center;">{icon}</span>'
+            f'<div class="test-check">'
+            f'<div class="flex items-center gap-sm">'
+            f'<span class="status-pill {cls} test-check__icon">{icon}</span>'
             f'<strong>{_esc(chk["name"])}</strong>'
-            f'<code style="font-size:0.75rem;color:var(--color-text-secondary);">{_esc(chk["endpoint"])}{sc_str}</code>'
+            f'<code class="form-hint">{_esc(chk["endpoint"])}{sc_str}</code>'
             f'</div>'
-            f'<div style="margin-left:1.5rem;font-size:0.8125rem;">{_esc(chk["detail"])}</div>'
+            f'<div class="test-check__detail">{_esc(chk["detail"])}</div>'
             f'{body_html}'
             f'</div>'
         )
@@ -1160,14 +1153,12 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
     overall_label = "All checks passed" if result.get("ok") else "One or more checks failed"
     spaces = result.get("spaces") or []
     spaces_hint = (
-        f'<div style="margin-top:0.5rem;font-size:0.8125rem;color:var(--color-text-secondary);">'
+        f'<div class="mt-sm fs-md text-secondary">'
         f'Discovered spaces: <code>{_esc(", ".join(spaces))}</code></div>'
     ) if spaces else ""
     return (
-        f'<div id="{panel_id}" hx-swap-oob="true" '
-        f'style="margin-top:0.75rem;padding:0.75rem;border:1px solid var(--color-border);'
-        f'border-radius:0.375rem;background:var(--color-bg-subtle);">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+        f'<div id="{panel_id}" hx-swap-oob="true" class="test-panel">'
+        f'<div class="flex items-center justify-between">'
         f'<strong>Test Connection result</strong>'
         f'<span class="status-pill {overall_cls}">{overall_label}</span>'
         f'</div>'
@@ -1366,7 +1357,7 @@ def _run_inventory_test(kind: str, item: dict, linked_spaces=None) -> tuple[bool
         return False, f"Unknown integration kind '{kind}'"
     except Exception as exc:  # pragma: no cover - network errors
         logger.warning(f"{kind} card test-connection error: {exc}")
-        return False, str(exc)[:140]
+        return False, tls.describe_error(exc) or str(exc)[:140]
 
 
 def _fetch_inventory_item(db, kind: str, item_id: str) -> dict | None:
@@ -1387,7 +1378,8 @@ def _fetch_inventory_item(db, kind: str, item_id: str) -> dict | None:
             ).fetchone()
             if not row:
                 return None
-            return dict(zip(cols, row))
+            from app.services.credentials import reveal_fields
+            return reveal_fields(dict(zip(cols, row)), "api_token_enc", "token_enc", "client_secret_enc")
     except Exception as exc:
         logger.warning(f"Could not fetch {kind} item {item_id}: {exc}")
         return None
@@ -1398,7 +1390,7 @@ async def test_inventory_card(
     kind: str,
     item_id: str,
     db: DbDep,
-    user: RequireAdmin,
+    user: RequireSuperadmin,
 ):
     """Run a live connection test against a stored inventory item and persist
     the result. Returns the refreshed status pill HTML for HTMX swap.
@@ -1590,7 +1582,7 @@ async def update_siem_logging(
 # ---------------------------------------------------------------------------
 
 @router.post("/clients/{client_id}/siems", response_class=HTMLResponse)
-async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def link_siem_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Link one SIEM+space destination to a client, under a name the operator chooses."""
     form = await request.form()
     siem_id = str(form.get("siem_id", "")).strip()
@@ -1667,7 +1659,7 @@ async def update_client_siem_default_index(
     client_id: str,
     siem_id: str,
     db: DbDep,
-    user: RequireAdmin,
+    user: ClientAdmin,
 ):
     """Persist a default index pattern for one linked (client, siem, space) destination."""
     form = await request.form()
@@ -1696,7 +1688,7 @@ async def rename_client_siem(
     client_id: str,
     siem_id: str,
     db: DbDep,
-    user: RequireAdmin,
+    user: ClientAdmin,
 ):
     """Rename a linked SIEM+space destination without unlinking it.
 
@@ -1725,7 +1717,7 @@ async def edit_client_siem_destination(
     client_id: str,
     siem_id: str,
     db: DbDep,
-    user: RequireAdmin,
+    user: ClientAdmin,
 ):
     """Update a linked destination's name, colour and default index together -- the rule
     window's "..." edit menu. Same non-effect on rules/scores/validation as rename or the
@@ -1756,7 +1748,7 @@ async def edit_client_siem_destination(
 
 @router.delete("/clients/{client_id}/siems/{siem_id}", response_class=HTMLResponse)
 def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
-                            db: DbDep, user: RequireAdmin):
+                            db: DbDep, user: ClientAdmin):
     """Unlink a SIEM from a client.
 
     Ghost-rule prevention (4.1.16): after the ``client_siem_map`` row(s) are
@@ -1853,7 +1845,7 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
 # ---------------------------------------------------------------------------
 
 @router.post("/clients/{client_id}/systems", response_class=HTMLResponse)
-async def assign_system_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def assign_system_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Assign an existing system to a client."""
     from app.inventory_engine import assign_system_to_client as _assign
     form = await request.form()
@@ -1872,7 +1864,7 @@ async def assign_system_to_client(request: Request, client_id: str, db: DbDep, u
 
 @router.delete("/clients/{client_id}/systems/{system_id}", response_class=HTMLResponse)
 def remove_system_from_client(request: Request, client_id: str, system_id: str,
-                              db: DbDep, user: RequireAdmin):
+                              db: DbDep, user: ClientAdmin):
     """Remove a system from a client (reassign to default)."""
     from app.inventory_engine import unassign_system_from_client as _unassign
     default_cid = db.get_default_client_id()
@@ -1887,46 +1879,46 @@ def remove_system_from_client(request: Request, client_id: str, system_id: str,
 
 @router.get("/clients/{client_id}/move-check", response_class=HTMLResponse)
 def system_move_check(request: Request, client_id: str,
-                      db: DbDep, user: RequireAdmin):
+                      db: DbDep, user: ClientAdmin):
     """Pre-flight check for moving a system. Returns dependency summary HTML."""
     from html import escape
     from app.inventory_engine import move_system_check
     system_id = request.query_params.get("system_id", "").strip()
     target_client_id = request.query_params.get("target_client_id", "").strip()
     if not target_client_id or not system_id:
-        return HTMLResponse('<p style="color:var(--color-muted);padding:0.5rem;">Select a target client above.</p>')
+        return HTMLResponse('<p class="text-muted p-sm">Select a target client above.</p>')
+    if not user.is_admin(target_client_id):
+        return HTMLResponse('<p class="text-muted p-sm">You must be an admin of both clients to move a system between them.</p>', status_code=403)
 
     target_client = db.get_client(target_client_id)
     if not target_client:
-        return HTMLResponse('<p style="color:var(--color-danger);padding:0.5rem;">Target client not found.</p>')
+        return HTMLResponse('<p class="text-danger p-sm">Target client not found.</p>')
 
     check = move_system_check(system_id, client_id, target_client_id)
     if not check:
-        return HTMLResponse('<p style="color:var(--color-danger);padding:0.5rem;">System not found.</p>')
+        return HTMLResponse('<p class="text-danger p-sm">System not found.</p>')
 
     # Build dependency summary HTML
-    html_parts = ['<div style="display:flex;flex-direction:column;gap:0.75rem;">']
+    html_parts = ['<div class="stack gap-ms">']
 
     # SIEM compatibility warning
     if not check["siem_compatible"]:
         html_parts.append(
-            '<div class="alert alert-warning" style="padding:0.75rem;border-radius:var(--radius-md);'
-            'background:var(--color-warning-bg, rgba(245,158,11,0.12));border-left:3px solid var(--color-warning);">'
+            '<div class="callout callout--warning">'
             '<strong>&#x26A0; SIEM Mismatch:</strong> The target client uses different SIEM spaces. '
             f'<strong>{check["applied_detections_count"]}</strong> applied detection(s) will be <strong>reset</strong> '
             'to prevent ghost detections from an inaccessible SIEM.</div>'
         )
     else:
         html_parts.append(
-            '<div style="padding:0.5rem;border-radius:var(--radius-md);'
-            'background:var(--color-success-bg, rgba(34,197,94,0.12));border-left:3px solid var(--color-success);">'
+            '<div class="callout callout--success">'
             f'&#x2705; <strong>SIEM Compatible</strong> — shared spaces: {", ".join(check["shared_spaces"]) or "none"}. '
             'Rule coverage will persist.</div>'
         )
 
     # Assets summary
     html_parts.append(
-        f'<div style="font-size:0.875rem;color:var(--color-text-muted);">'
+        f'<div class="fs-base text-muted">'
         f'<strong>{check["host_count"]}</strong> device(s) and '
         f'<strong>{check["software_count"]}</strong> package(s) will move with the system.</div>'
     )
@@ -1935,7 +1927,7 @@ def system_move_check(request: Request, client_id: str,
     if check["baselines"]:
         bl_list = ", ".join(escape(b["name"]) for b in check["baselines"])
         html_parts.append(
-            f'<div style="font-size:0.875rem;"><strong>{len(check["baselines"])}</strong> '
+            f'<div class="fs-base"><strong>{len(check["baselines"])}</strong> '
             f'baseline(s) will move with the system: {bl_list}</div>'
         )
 
@@ -1945,7 +1937,7 @@ def system_move_check(request: Request, client_id: str,
 
 @router.post("/clients/{client_id}/move-system", response_class=HTMLResponse)
 async def move_system(request: Request, client_id: str,
-                      db: DbDep, user: RequireAdmin):
+                      db: DbDep, user: ClientAdmin):
     """Kick off an async move and return an HTMX polling snippet."""
     from app.inventory_engine import move_system_to_client
     form = await request.form()
@@ -1957,6 +1949,8 @@ async def move_system(request: Request, client_id: str,
 
     if not target_client_id or target_client_id == client_id:
         return _render_client_systems_partial(client_id, db, toast="Invalid target client.")
+    if not user.is_admin(target_client_id):
+        return _render_client_systems_partial(client_id, db, toast="You must be an admin of both clients to move a system between them.")
 
     target_client = db.get_client(target_client_id)
     if not target_client:
@@ -2000,7 +1994,7 @@ async def move_system(request: Request, client_id: str,
         f'<div id="move-progress" '
         f'hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
         f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
-        f'<div style="display:flex;align-items:center;gap:0.75rem;padding:2rem;justify-content:center;">'
+        f'<div class="loading-row">'
         f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
         f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
         f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
@@ -2017,7 +2011,7 @@ def move_status(task_id: str, client_id: str = "", db: DbDep = None):
     """Poll endpoint for async move progress. Returns updated systems partial when done."""
     task = _move_tasks.get(task_id)
     if not task:
-        return HTMLResponse('<p style="color:var(--color-danger);">Unknown move task.</p>')
+        return HTMLResponse('<p class="req">Unknown move task.</p>')
 
     if task["status"] == "running":
         # Still in progress — re-render the spinner (HTMX will poll again)
@@ -2025,7 +2019,7 @@ def move_status(task_id: str, client_id: str = "", db: DbDep = None):
             f'<div id="move-progress" '
             f'hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
             f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
-            f'<div style="display:flex;align-items:center;gap:0.75rem;padding:2rem;justify-content:center;">'
+            f'<div class="loading-row">'
             f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
             f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
             f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
@@ -2052,7 +2046,7 @@ def move_status(task_id: str, client_id: str = "", db: DbDep = None):
 # ---------------------------------------------------------------------------
 
 @router.post("/clients/{client_id}/baselines", response_class=HTMLResponse)
-async def assign_baseline_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def assign_baseline_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Assign an existing baseline to a client."""
     from app.inventory_engine import assign_baseline_to_client as _assign
     form = await request.form()
@@ -2069,7 +2063,7 @@ async def assign_baseline_to_client(request: Request, client_id: str, db: DbDep,
 
 @router.delete("/clients/{client_id}/baselines/{baseline_id}", response_class=HTMLResponse)
 def remove_baseline_from_client(request: Request, client_id: str, baseline_id: str,
-                                db: DbDep, user: RequireAdmin):
+                                db: DbDep, user: ClientAdmin):
     """Remove a baseline from a client (reassign to default)."""
     from app.inventory_engine import unassign_baseline_from_client as _unassign
     default_cid = db.get_default_client_id()
@@ -2084,7 +2078,7 @@ def remove_baseline_from_client(request: Request, client_id: str, baseline_id: s
 
 @router.get("/clients/{client_id}/clone-baseline/baselines", response_class=HTMLResponse)
 def clone_baseline_source_options(request: Request, client_id: str,
-                                  db: DbDep, user: RequireAdmin):
+                                  db: DbDep, user: ClientAdmin):
     """Return <option> elements for baselines available in a given source
     tenant.  Called by the clone modal when the user picks a source client."""
     source_client_id = request.query_params.get("source_client_id", "").strip()
@@ -2109,7 +2103,7 @@ def clone_baseline_source_options(request: Request, client_id: str,
 
 @router.post("/clients/{client_id}/clone-baseline", response_class=HTMLResponse)
 async def clone_baseline(request: Request, client_id: str,
-                         db: DbDep, user: RequireAdmin):
+                         db: DbDep, user: ClientAdmin):
     """Clone a baseline from another tenant into this client's database."""
     from app.inventory_engine import clone_baseline_cross_tenant
     form = await request.form()
@@ -2142,12 +2136,17 @@ async def clone_baseline(request: Request, client_id: str,
 
 @router.get("/clients/{client_id}/move-from/systems", response_class=HTMLResponse)
 def move_from_systems(request: Request, client_id: str,
-                      db: DbDep, user: RequireAdmin):
+                      db: DbDep, user: ClientAdmin):
     """Return <option> elements for systems in the selected source client."""
     source_client_id = request.query_params.get("source_client_id", "").strip()
     if not source_client_id:
         return HTMLResponse(
             '<option value="" disabled selected>Select a source client first&hellip;</option>'
+        )
+    if not user.is_admin(source_client_id):
+        return HTMLResponse(
+            '<option value="" disabled selected>You must be an admin of that client too&hellip;</option>',
+            status_code=403,
         )
     from app.inventory_engine import list_systems
     from app.services.tenant_manager import tenant_context_for
@@ -2166,7 +2165,7 @@ def move_from_systems(request: Request, client_id: str,
 
 @router.post("/clients/{client_id}/move-from", response_class=HTMLResponse)
 async def move_from(request: Request, client_id: str,
-                    db: DbDep, user: RequireAdmin):
+                    db: DbDep, user: ClientAdmin):
     """Move a system FROM source client INTO this client (async)."""
     from app.inventory_engine import move_system_to_client
     form = await request.form()
@@ -2175,6 +2174,8 @@ async def move_from(request: Request, client_id: str,
 
     if not source_client_id or not system_id:
         return _render_client_systems_partial(client_id, db, toast="Missing source or system.")
+    if not user.is_admin(source_client_id):
+        return _render_client_systems_partial(client_id, db, toast="You must be an admin of both clients to move a system between them.")
 
     source_client = db.get_client(source_client_id)
     if not source_client:
@@ -2212,7 +2213,7 @@ async def move_from(request: Request, client_id: str,
     return HTMLResponse(
         f'<div hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
         f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
-        f'<div style="display:flex;align-items:center;gap:0.75rem;padding:2rem;justify-content:center;">'
+        f'<div class="loading-row">'
         f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
         f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
         f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
@@ -2237,7 +2238,7 @@ async def move_from(request: Request, client_id: str,
 @router.post("/clients/{client_id}/validation-thresholds",
              response_class=HTMLResponse)
 async def update_validation_thresholds(
-    request: Request, client_id: str, db: DbDep, user: RequireAdmin
+    request: Request, client_id: str, db: DbDep, user: ClientAdmin
 ):
     """Update the per-tenant amber/expired validation week thresholds.
 
@@ -2365,12 +2366,12 @@ def _rescore_message(result: dict, prefix: str) -> str:
 
 
 @router.get("/clients/{client_id}/scoring", response_class=HTMLResponse)
-def client_scoring_section(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+def client_scoring_section(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     return _render_client_scoring(request, db, client_id)
 
 
 @router.post("/clients/{client_id}/scoring", response_class=HTMLResponse)
-async def save_client_scoring(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def save_client_scoring(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Save this client's points per scoring check and re-score its rules from the stored per-check results."""
     from starlette.concurrency import run_in_threadpool
     from app import scoring
@@ -2387,7 +2388,7 @@ async def save_client_scoring(request: Request, client_id: str, db: DbDep, user:
 
 
 @router.post("/clients/{client_id}/scoring/reset", response_class=HTMLResponse)
-async def reset_client_scoring(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+async def reset_client_scoring(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     from starlette.concurrency import run_in_threadpool
     from app import scoring
 
@@ -2402,36 +2403,46 @@ async def reset_client_scoring(request: Request, client_id: str, db: DbDep, user
 # ---------------------------------------------------------------------------
 
 @router.post("/clients/{client_id}/users", response_class=HTMLResponse)
-async def assign_user_to_client(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
-    """Assign a user to a client, optionally with a tenant-scoped role."""
+async def assign_user_to_client(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
+    """Assign a user to a client, optionally with tenant-scoped roles (several allowed). A super admin
+    picks the user from a list; a client admin types their exact username, so users on other clients
+    aren't listed to them."""
     form = await request.form()
-    user_id = str(form.get("user_id", "")).strip()
-    role_name = str(form.get("role", "")).strip()
-    if not user_id:
-        return HTMLResponse("")
+    username = str(form.get("username", "")).strip()
+    picked = str(form.get("user_id", "")).strip()
+    target = db.get_user_by_username(username) if username else (db.get_user_by_id(picked) if picked else None)
+    roles = [r for r in form.getlist("roles") if r]
+    if not target:
+        return _render_client_users_partial(
+            client_id, db, viewer=user, toast_level="warning",
+            toast=f"There is no user named '{username}'." if username else "Choose a user.")
+    user_id = target["id"]
     db.assign_user_to_client(user_id, client_id)
-    if role_name:
-        db.set_user_roles(user_id, [role_name], client_id=client_id)
+    if roles:
+        db.set_user_roles(user_id, roles, client_id=client_id, grant_support=user.is_superadmin)
+    audit_admin("client_membership", user, target_id=user_id, added=[client_id], removed=[],
+                roles=db.get_user_roles(user_id, client_id=client_id))
     logger.info(
         f"User {user_id} assigned to client {client_id} "
-        f"(role={role_name or 'none'}) by {user.username}"
+        f"(roles={', '.join(roles) or 'none'}) by {user.username}"
     )
-    return _render_client_users_partial(client_id, db, toast="User assigned.")
+    return _render_client_users_partial(client_id, db, toast="User assigned.", viewer=user)
 
 
 @router.put("/clients/{client_id}/users/{user_id}/role", response_class=HTMLResponse)
 async def update_client_user_role(request: Request, client_id: str, user_id: str,
-                                  db: DbDep, user: RequireAdmin):
-    """Replace the user's role for THIS tenant only. Empty role clears it."""
+                                  db: DbDep, user: ClientAdmin):
+    """Replace the user's roles for THIS tenant only: the ticked ones (several allowed, none
+    clears them). Only a super admin changes SUPPORT; anyone else leaves it as it was."""
+    require_client_member(db, user, user_id, client_id)
     form = await request.form()
-    role_name = str(form.get("role", "")).strip()
-    db.set_user_roles(user_id, [role_name] if role_name else [], client_id=client_id)
-    logger.info(
-        f"User {user_id} role on client {client_id} set to '{role_name or 'none'}' by {user.username}"
-    )
+    roles = [r for r in form.getlist("roles") if r]
+    db.set_user_roles(user_id, roles, client_id=client_id, grant_support=user.is_superadmin)
+    now = db.get_user_roles(user_id, client_id=client_id)
+    logger.info(f"User {user_id} roles on client {client_id} set to {now or 'none'} by {user.username}")
+    audit_admin("role_change", user, target_id=user_id, client=client_id, roles=now)
     return _render_client_users_partial(
-        client_id, db,
-        toast=f"Role updated to {role_name or 'none'}.",
+        client_id, db, toast=f"Roles: {', '.join(now) or 'none'}.", viewer=user,
     )
 
 
@@ -2440,14 +2451,14 @@ async def update_client_user_role(request: Request, client_id: str, user_id: str
 # ---------------------------------------------------------------------------
 
 @router.get("/clients/{client_id}/permissions", response_class=HTMLResponse)
-def get_client_permissions(request: Request, client_id: str, db: DbDep, user: RequireAdmin):
+def get_client_permissions(request: Request, client_id: str, db: DbDep, user: ClientAdmin):
     """Render the per-tenant Role Templates matrix for this client."""
     return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
 
 
 @router.post("/clients/{client_id}/permissions", response_class=HTMLResponse)
 async def update_client_permission(request: Request, client_id: str,
-                                    db: DbDep, user: RequireAdmin):
+                                    db: DbDep, user: ClientAdmin):
     """Toggle a single role\u00d7resource permission scoped to this tenant."""
     form = await request.form()
     role_id = str(form.get("role_id", "")).strip()
@@ -2458,12 +2469,12 @@ async def update_client_permission(request: Request, client_id: str,
     if not role_id or not resource or access not in ("read", "write"):
         return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
 
-    # ADMIN role always has full access \u2014 do not let it be edited away.
+    # ADMIN always has full access and SUPPORT only Diagnostics: neither can be edited here.
     with db.get_shared_connection() as conn:
         admin_check = conn.execute(
             "SELECT name FROM roles WHERE id = ?", [role_id]
         ).fetchone()
-        if admin_check and admin_check[0] == "ADMIN":
+        if admin_check and admin_check[0] in ("ADMIN", SUPPORT_ROLE):
             return HTMLResponse(_render_permissions_tab(db, client_id=client_id))
         row = conn.execute(
             "SELECT can_read, can_write FROM role_permissions "
@@ -2477,6 +2488,8 @@ async def update_client_permission(request: Request, client_id: str,
         db.set_permission(role_id, resource, new_val, cur_write, client_id=client_id)
     else:
         db.set_permission(role_id, resource, cur_read, new_val, client_id=client_id)
+    audit_admin("permission_change", user, role=admin_check[0] if admin_check else role_id, resource=resource,
+                access=access, on=new_val, client=client_id)
     logger.info(
         f"Permission {role_id}/{resource}/{access}={new_val} on client "
         f"{client_id} by {user.username}"
@@ -2486,11 +2499,12 @@ async def update_client_permission(request: Request, client_id: str,
 
 @router.delete("/clients/{client_id}/users/{user_id}", response_class=HTMLResponse)
 def remove_user_from_client_detail(request: Request, client_id: str, user_id: str,
-                                   db: DbDep, user: RequireAdmin):
+                                   db: DbDep, user: ClientAdmin):
     """Remove a user from a client."""
     db.remove_user_from_client(user_id, client_id)
     logger.info(f"User {user_id} removed from client {client_id} by {user.username}")
-    return _render_client_users_partial(client_id, db, toast="User removed.")
+    audit_admin("client_membership", user, target_id=user_id, added=[], removed=[client_id])
+    return _render_client_users_partial(client_id, db, toast="User removed.", viewer=user)
 
 
 # ---------------------------------------------------------------------------
@@ -2499,12 +2513,16 @@ def remove_user_from_client_detail(request: Request, client_id: str, user_id: st
 
 @router.post("/users/{user_id}/clients", response_class=HTMLResponse)
 async def update_user_clients(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Update the client assignments for a user via checklist."""
+    """Update the client assignments for a user via checklist. A client admin adds and removes
+    users on the clients they administer only; the user's other clients stay as they are."""
     form = await request.form()
     selected_client_ids = form.getlist("client_ids")
 
     current_ids = set(db.get_user_client_ids(user_id))
     new_ids = set(selected_client_ids)
+    if not user.is_superadmin:
+        mine = admin_client_ids(user)
+        new_ids = (current_ids - mine) | (new_ids & mine)
 
     # Remove unselected
     for cid in current_ids - new_ids:
@@ -2514,14 +2532,11 @@ async def update_user_clients(request: Request, user_id: str, db: DbDep, user: R
         db.assign_user_to_client(user_id, cid)
 
     logger.info(f"User {user_id} client assignments updated by {user.username}: {list(new_ids)}")
+    if new_ids != current_ids:
+        audit_admin("client_membership", user, target_id=user_id, added=sorted(new_ids - current_ids),
+                    removed=sorted(current_ids - new_ids))
 
-    users = db.get_all_users()
-    all_roles = db.get_all_roles()
-    for u in users:
-        u["_roles"] = db.get_user_roles(u["id"])
-        u["_client_ids"] = db.get_user_client_ids(u["id"])
-    clients = db.list_clients()
-    return HTMLResponse(_render_users_tab(users, all_roles, clients, current_user=user))
+    return HTMLResponse(_refresh_users_tab(db, user=user))
 
 
 # ---------------------------------------------------------------------------
@@ -2607,7 +2622,7 @@ def _tenant_chips_html(clients: list, *, all_tenants: bool = False) -> str:
         )
     if not clients:
         return (
-            '<span class="text-secondary" style="font-size:0.8125rem;">'
+            '<span class="text-secondary fs-md">'
             'No clients linked</span>'
         )
     seen: set[str] = set()
@@ -2672,7 +2687,7 @@ def _render_clients_tab(clients: list) -> str:
         siem_pills = " ".join(
             f'<span class="badge badge-muted">{escape(cs["label"])}</span>'
             for cs in client_siems
-        ) or '<span class="text-secondary" style="font-size:0.8rem;">No SIEMs linked</span>'
+        ) or '<span class="text-secondary text-sm">No SIEMs linked</span>'
 
         cards += f'''
         <div class="system-card">
@@ -2688,7 +2703,7 @@ def _render_clients_tab(clients: list) -> str:
                 <span class="system-card__classification">{slug_esc}</span>
             </div>
             {"<p class='system-card__desc'>" + desc_esc + "</p>" if desc_esc else ""}
-            <div class="system-card__footer" style="flex-wrap:wrap;">
+            <div class="system-card__footer flex-wrap">
                 <span class="system-card__stat">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
                     {siem_count} SIEM{"s" if siem_count != 1 else ""}
@@ -2712,18 +2727,18 @@ def _render_clients_tab(clients: list) -> str:
     empty = ""
     if not clients:
         empty = '''
-        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+        <div class="empty-output mgmt-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/>
                 <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
             </svg>
-            <p style="margin-top:1rem;color:var(--color-text-muted);">No clients configured yet.</p>
+            <p class="mt-md text-muted">No clients configured yet.</p>
         </div>'''
 
     return f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <span class="text-secondary">{count} client{"s" if count != 1 else ""} configured</span>
-        <button class="btn btn-primary" onclick="showCreateClientModal()">
+        <button class="btn btn-primary" data-click="clients.create">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Client
@@ -2787,16 +2802,8 @@ def _siem_logging_block_html(s: dict) -> str:
         f"_siem_logging_block_html({sid}) discovered_spaces={discovered_spaces} "
         f"saved={sorted(selected_spaces)}"
     )
-    # Build the union: discovered \u222a already-saved selections, preserving
-    # discovery order then adding anything missing alphabetically.
-    ordered: list[str] = []
-    seen: set[str] = set()
-    for sp in discovered_spaces:
-        if sp and sp not in seen:
-            ordered.append(sp); seen.add(sp)
-    for sp in sorted(selected_spaces):
-        if sp not in seen:
-            ordered.append(sp); seen.add(sp)
+    # Every space found or already saved, A-Z (discovery comes back in no fixed order).
+    ordered: list[str] = sorted({sp for sp in discovered_spaces if sp} | selected_spaces, key=str.lower)
 
     # Build a compact single-line picker that opens a checkbox panel on click.
     # Native <select multiple> takes too much vertical space and forces
@@ -2805,9 +2812,8 @@ def _siem_logging_block_html(s: dict) -> str:
     # them up via form.getlist("target_space").
     if not ordered:
         space_picker = (
-            '<input type="text" name="target_space" class="form-input" '
+            '<input type="text" name="target_space" class="form-input form-input--compact" '
             f'value="{escape(raw_target)}" placeholder="space-a, space-b" '
-            'style="font-size:0.8rem;padding:0.25rem 0.4rem;" '
             'title="Comma-separated Kibana space names. Leave blank to log every space.">'
         )
     else:
@@ -2821,31 +2827,21 @@ def _siem_logging_block_html(s: dict) -> str:
         checkbox_rows = []
         for sp in ordered:
             checked = " checked" if sp in selected_spaces else ""
-            tag = f' <span style="opacity:0.6;">({escape(space_names[sp])})</span>' if sp in space_names else ""
+            tag = f' <span class="space-picker__name">({escape(space_names[sp])})</span>' if sp in space_names else ""
             checkbox_rows.append(
-                '<label style="display:flex;align-items:center;gap:0.4rem;'
-                'padding:0.2rem 0.5rem;cursor:pointer;font-size:0.8rem;">'
+                '<label class="space-picker__row">'
                 f'<input type="checkbox" name="target_space" value="{escape(sp)}"{checked}>'
                 f'<span>{escape(sp)}</span>'
                 '</label>'
             )
         space_picker = (
-            '<details class="space-picker" style="position:relative;">'
-            '<summary style="list-style:none;cursor:pointer;'
-            'background:var(--color-bg-input, #0d1117);'
-            'border:1px solid var(--color-border, #30363d);'
-            'border-radius:4px;padding:0.25rem 0.5rem;font-size:0.8rem;'
-            'display:flex;align-items:center;justify-content:space-between;gap:0.4rem;" '
+            '<details class="space-picker">'
+            '<summary class="space-picker__summary" '
             f'title="Click to pick one or more spaces. Empty selection = log every space.">'
             f'<span>{escape(summary_text)}</span>'
-            '<span style="opacity:0.6;font-size:0.7rem;">&#9662;</span>'
+            '<span class="space-picker__caret">&#9662;</span>'
             '</summary>'
-            '<div style="position:absolute;z-index:50;margin-top:0.2rem;'
-            'min-width:100%;max-height:220px;overflow:auto;'
-            'background:var(--color-bg-elevated, #161b22);'
-            'border:1px solid var(--color-border, #30363d);'
-            'border-radius:4px;padding:0.25rem 0;'
-            'box-shadow:0 4px 12px rgba(0,0,0,0.4);">'
+            '<div class="space-picker__menu">'
             + "".join(checkbox_rows)
             + '</div></details>'
         )
@@ -2864,34 +2860,32 @@ def _siem_logging_block_html(s: dict) -> str:
     dest_hint = f"/app/data/log/rules/{escape(safe_label)}/&lt;YYYY-MM-DD&gt;-&lt;space&gt;-rules.log"
 
     return f'''
-            <details class="mgmt-subsection" style="margin:0.5rem 0 0;">
-                <summary class="mgmt-subsection__summary" style="padding:0.45rem 0.6rem;">
+            <details class="mgmt-subsection mgmt-subsection--nested">
+                <summary class="mgmt-subsection__summary">
                     <span class="mgmt-subsection__title">Rule Logging</span>
                     <span class="mgmt-subsection__hint">{summary_pill}</span>
                 </summary>
-                <div class="mgmt-subsection__body" style="padding:0.6rem;">
+                <div class="mgmt-subsection__body">
                     <form hx-post="/api/management/siems/{sid}/logging"
-                          hx-target="#mgmt-sub-siems" hx-swap="innerHTML"
-                          style="display:grid;grid-template-columns:auto 1fr;gap:0.4rem 0.6rem;align-items:center;font-size:0.8125rem;">
-                        <label style="display:flex;align-items:center;gap:0.4rem;">
+                          hx-target="#mgmt-sub-siems" hx-swap="innerHTML" class="logging-form">
+                        <label class="flex items-center gap-sm">
                             <input type="checkbox" name="enabled" value="on" {"checked" if enabled else ""}>
                             <span>Enabled</span>
                         </label>
-                        <span class="text-secondary" style="font-size:0.75rem;">Toggle daily rule-score export for this SIEM.</span>
+                        <span class="text-secondary fs-sm">Toggle daily rule-score export for this SIEM.</span>
                         <span class="text-secondary">Target space(s)</span>
                         {space_picker}
                         <span class="text-secondary">Schedule (HH:MM)</span>
-                        <input type="time" name="schedule" class="form-input" value="{escape(schedule)}"
-                               style="font-size:0.8rem;padding:0.25rem 0.4rem;width:130px;">
+                        <input type="time" name="schedule" class="form-input form-input--compact logging-form__time" value="{escape(schedule)}">
                         <span class="text-secondary">Retention (days)</span>
                         <input type="number" name="retention_days" min="1" max="365" value="{int(retention)}"
-                               class="form-input" style="font-size:0.8rem;padding:0.25rem 0.4rem;width:80px;">
+                               class="form-input form-input--compact logging-form__days">
                         <span class="text-secondary">Logs</span>
-                        <div style="font-size:0.75rem;line-height:1.3;">
-                            <span style="opacity:0.75;">written to</span>
-                            <code style="background:transparent;padding:0;font-size:0.75rem;color:var(--color-accent, #58a6ff);">{dest_hint}</code>
+                        <div class="logging-form__dest">
+                            <span class="logging-form__dest-label">written to</span>
+                            <code class="logging-form__path">{dest_hint}</code>
                         </div>
-                        <div style="grid-column:1 / -1;display:flex;gap:0.4rem;justify-content:flex-end;margin-top:0.3rem;">
+                        <div class="span-all flex justify-end gap-sm mt-xs">
                             <button type="submit" class="btn btn-primary btn-sm">Save</button>
                         </div>
                     </form>
@@ -2916,17 +2910,19 @@ def _render_siems_tab(siems: list) -> str:
         logging_block = _siem_logging_block_html(s)
 
         cards += f'''
-        <div class="system-card" style="display:flex;flex-direction:column;">
-            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">{lbl_esc}</span>
+        <div class="system-card stack">
+            <div class="system-card__title flex items-center justify-between">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="fw-600">{lbl_esc}</span>
                     <span class="badge badge-muted">{stype_esc}</span>
                     {status_pill}
                 </div>
-                <div style="display:flex;gap:0.25rem;">
+                <div class="flex gap-xs">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editSiem('{sid}', '{lbl_esc}', '{stype_esc}', '{escape(s.get("elasticsearch_url") or "")}', '{escape(s.get("kibana_url") or "")}', {'true' if s.get('tls_verify') else 'false'})"
+                            data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}"
+                            data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}"
+                            data-tls-verify="{'true' if s.get('tls_verify') else 'false'}"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -2942,25 +2938,25 @@ def _render_siems_tab(siems: list) -> str:
                     </button>
                 </div>
             </div>
-            <div class="system-card__desc" style="margin-top:0.5rem;">
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+            <div class="system-card__desc mt-sm">
+                <div class="kv-grid">
                     <span class="text-secondary">Elasticsearch</span>
-                    <span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{es_url}</span>
+                    <span class="mono-ellipsis">{es_url}</span>
                     <span class="text-secondary">Kibana</span>
-                    <span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{kb_url}</span>
+                    <span class="mono-ellipsis">{kb_url}</span>
                 </div>
             </div>
             {logging_block}
             <div id="siem-test-result-{sid}"></div>
-            <div class="system-card__footer" style="margin-top:auto;padding-top:0.75rem;flex-wrap:wrap;">
+            <div class="system-card__footer card-footer-wrap">
                 {tenant_chips}
             </div>
         </div>'''
 
     return f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <span class="text-secondary">{count} SIEM{"s" if count != 1 else ""} in inventory</span>
-        <button class="btn btn-primary" onclick="showCreateSiemModal()">
+        <button class="btn btn-primary" data-click="mgmt.siemNew">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New SIEM
@@ -2972,9 +2968,12 @@ def _render_siems_tab(siems: list) -> str:
 
 def _siem_empty_state() -> str:
     return '''
-    <div style="text-align:center;padding:2rem;color:var(--color-text-secondary);">
+    <div class="loading-note loading-note--center">
         <p>No SIEMs configured yet. Create one to get started.</p>
     </div>'''
+
+
+NO_MANAGE_TITLE = "Only a super admin can change a Platform Admin or a user who is also on a client you don&#39;t administer"
 
 
 def _render_users_tab(users: list, all_roles: list, clients: list,
@@ -2988,7 +2987,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
     cross-tenant powers). 4.1.6.
     """
     if not users:
-        return '<p class="text-muted" style="font-size:0.85rem;">No users found.</p>'
+        return '<p class="text-muted fs-base">No users found.</p>'
 
     show_super = bool(current_user and getattr(current_user, "is_superadmin", False))
     self_id = getattr(current_user, "id", None) if current_user else None
@@ -3004,6 +3003,9 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
             source_badge = '<span class="badge badge-secondary">Local</span>'
 
         active_checked = "checked" if u.get("is_active") else ""
+        manage = u.get("_manage", True)
+        manage_title = "" if manage else ' title="%s"' % NO_MANAGE_TITLE
+        manage_disabled = "" if manage else " disabled"
         last_login = str(u["last_login"])[:19] if u.get("last_login") else "Never"
 
         # Client assignment checklist
@@ -3013,7 +3015,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
         for cl in clients:
             checked = "checked" if cl["id"] in user_client_ids else ""
             client_checkboxes += (
-                f'<label class="role-checkbox" style="display:block;margin:0.25rem 0;">'
+                f'<label class="role-checkbox block my-xs">'
                 f'<input type="checkbox" name="client_ids" value="{cl["id"]}" {checked}> '
                 f'{cl["name"]}</label>'
             )
@@ -3045,9 +3047,9 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
             <td>{u['username']}</td>
             <td>{u.get('email') or '-'}</td>
             <td>{source_badge}</td>
-            <td>
+            <td{manage_title}>
                 <label class="toggle-switch toggle-sm">
-                    <input type="checkbox" {active_checked}
+                    <input type="checkbox" {active_checked}{manage_disabled}
                            hx-post="/api/management/users/{u['id']}/toggle-active"
                            hx-target="#management-content"
                            hx-swap="innerHTML"
@@ -3059,16 +3061,15 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
             <td>{last_login}</td>
             <td>
                 <details class="mgmt-client-details">
-                    <summary class="btn btn-sm btn-secondary" style="cursor:pointer;">
+                    <summary class="btn btn-sm btn-secondary cursor-pointer">
                         Clients ({client_count})
                     </summary>
                     <form class="mgmt-client-checklist"
                           hx-post="/api/management/users/{u['id']}/clients"
                           hx-target="#management-content"
-                          hx-swap="innerHTML"
-                          style="padding:0.75rem;background:var(--color-bg-base);border-radius:var(--radius-sm);margin-top:0.5rem;">
+                          hx-swap="innerHTML">
                         {client_checkboxes}
-                        <button type="submit" class="btn btn-sm btn-primary" style="margin-top:0.5rem;">Save</button>
+                        <button type="submit" class="btn btn-sm btn-primary mt-sm">Save</button>
                     </form>
                 </details>
             </td>
@@ -3082,30 +3083,30 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
         </tr>'''
 
     add_form = '''
-    <details class="add-user-details" style="margin-bottom:1.5rem;">
-        <summary class="btn btn-secondary btn-sm" style="cursor:pointer;">+ Add Local User</summary>
-        <p class="text-secondary" style="font-size:0.78rem;margin:0.5rem 0 0;">
+    <details class="add-user-details mb-lg">
+        <summary class="btn btn-secondary btn-sm cursor-pointer">+ Add Local User</summary>
+        <p class="text-secondary fs-sm m-0 mt-sm">
             Roles are assigned per-tenant from the Client Detail page after creation.
         </p>
         <form hx-post="/api/management/users" hx-target="#management-content" hx-swap="innerHTML"
-              style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;padding:1rem;background:var(--color-bg-base);border-radius:var(--radius-md);">
+              class="inset-form">
             <div>
-                <label class="form-label" style="font-size:0.8rem;">Username *</label>
+                <label class="form-label text-sm">Username *</label>
                 <input type="text" name="new_username" class="form-input" required placeholder="username" autocomplete="off">
             </div>
             <div>
-                <label class="form-label" style="font-size:0.8rem;">Email</label>
+                <label class="form-label text-sm">Email</label>
                 <input type="email" name="new_email" class="form-input" placeholder="user@example.com">
             </div>
             <div>
-                <label class="form-label" style="font-size:0.8rem;">Full Name</label>
+                <label class="form-label text-sm">Full Name</label>
                 <input type="text" name="new_full_name" class="form-input" placeholder="Full Name">
             </div>
             <div>
-                <label class="form-label" style="font-size:0.8rem;">Password *</label>
+                <label class="form-label text-sm">Password *</label>
                 <input type="password" name="new_password" class="form-input" required minlength="8" placeholder="Min 8 chars" autocomplete="new-password">
             </div>
-            <div style="grid-column:1/-1;">
+            <div class="span-all">
                 <button type="submit" class="btn btn-primary btn-sm">Create User</button>
             </div>
         </form>
@@ -3131,7 +3132,8 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
     POSTs to the per-client endpoint. With ``client_id=None`` the legacy
     global view is rendered (kept for back-compat with stale bookmarks).
     """
-    roles = [r for r in db.get_all_roles() if r["name"] != "ADMIN"]
+    # ADMIN always has full access; SUPPORT only ever opens Diagnostics and is managed by super admins.
+    roles = [r for r in db.get_all_roles() if r["name"] not in ("ADMIN", SUPPORT_ROLE)]
     resources = db.get_all_resources()
     matrix = db.get_permissions_matrix(client_id=client_id)
 
@@ -3144,7 +3146,7 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
         }
 
     if not roles or not resources:
-        return '<p class="text-muted" style="font-size:0.85rem;">No permissions configured.</p>'
+        return '<p class="text-muted fs-base">No permissions configured.</p>'
 
     page_resources = sorted([r for r in resources if r.startswith("page:")])
     tab_resources = [r for r in resources if r.startswith("tab:")]
@@ -3169,8 +3171,8 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
 
     def _type_badge(res):
         if res.startswith("page:"):
-            return '<span class="badge badge-info" style="font-size:0.65rem;">Page</span>'
-        return '<span class="badge badge-secondary" style="font-size:0.65rem;">Tab</span>'
+            return '<span class="badge badge-info fs-2xs">Page</span>'
+        return '<span class="badge badge-secondary fs-2xs">Tab</span>'
 
     def _rows(resource_list):
         html = ""
@@ -3181,8 +3183,8 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
                 role_id = role["id"]
                 r_chk = "checked" if perm["can_read"] else ""
                 w_chk = "checked" if perm["can_write"] else ""
-                html += f'''<td style="text-align:center;">
-                    <div style="display:flex;gap:0.5rem;justify-content:center;align-items:center;">
+                html += f'''<td class="text-center">
+                    <div class="flex items-center justify-center gap-sm">
                         <label class="role-checkbox" title="Read">
                             <input type="checkbox" name="perm" {r_chk}
                                 hx-post="{post_url}"
@@ -3202,28 +3204,29 @@ def _render_permissions_tab(db, client_id: Optional[str] = None) -> str:
             html += '</tr>'
         return html
 
-    role_headers = "".join(f'<th style="text-align:center;">{r["name"]}</th>' for r in roles)
+    role_headers = "".join(f'<th class="text-center">{r["name"]}</th>' for r in roles)
 
     blurb = (
         "Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) "
-        "each page and settings tab <em>for this tenant</em>. The ADMIN role always has full access "
-        "and is not shown below. Changes take effect on next login."
+        "each page and settings tab <em>for this tenant</em>. ADMIN always has full access, and SUPPORT "
+        "only opens Diagnostics (super admins grant it), so neither is shown below. Changes take effect on next login."
         if client_id else
         "Control which roles can <strong>Read</strong> (view) or <strong>Write</strong> (modify) each page and settings tab. "
-        "The ADMIN role always has full access and is not shown below. Changes take effect on next login."
+        "ADMIN always has full access, and SUPPORT only opens Diagnostics (super admins grant it), so neither "
+        "is shown below. Changes take effect on next login."
     )
 
     return f'''
-    <p style="font-size:0.8rem;color:var(--color-text-secondary);margin:0 0 1rem 0;">
+    <p class="text-sm text-secondary m-0 mb-md">
         {blurb}
     </p>
     <div id="{target_id}">
         <table class="mapping-table">
             <thead><tr><th>Resource</th>{role_headers}</tr></thead>
             <tbody>
-                <tr><td colspan="{len(roles) + 1}" style="font-weight:600;background:var(--color-bg-elevated);padding:0.5rem;">Pages</td></tr>
+                <tr><td colspan="{len(roles) + 1}" class="table-group-row">Pages</td></tr>
                 {_rows(page_resources)}
-                <tr><td colspan="{len(roles) + 1}" style="font-weight:600;background:var(--color-bg-elevated);padding:0.5rem;">Settings Tabs</td></tr>
+                <tr><td colspan="{len(roles) + 1}" class="table-group-row">Settings Tabs</td></tr>
                 {_rows(tab_resources)}
             </tbody>
         </table>
@@ -3264,18 +3267,18 @@ def _render_threat_intel_tab(instances: list) -> str:
             )
 
         cards += f'''
-        <div class="system-card" style="display:flex;flex-direction:column;">
-            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">{lbl_esc}</span>
+        <div class="system-card stack">
+            <div class="system-card__title flex items-center justify-between">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="fw-600">{lbl_esc}</span>
                     {kind_badge}
                     {status_pill}
                 </div>
-                <div style="display:flex;gap:0.25rem;">
+                <div class="flex gap-xs">
                     {sync_cti_btn}
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editOpenCTI('{iid}', '{lbl_esc}', '{url_esc}', '{escape(kind)}')"
+                            data-click="mgmt.openctiEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-kind="{escape(kind)}"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3291,16 +3294,16 @@ def _render_threat_intel_tab(instances: list) -> str:
                     </button>
                 </div>
             </div>
-            <div class="system-card__desc" style="margin-top:0.5rem;">
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+            <div class="system-card__desc mt-sm">
+                <div class="kv-grid">
                     <span class="text-secondary">URL</span>
-                    <span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{url_esc}">{url_esc}</span>
+                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
                     <span class="text-secondary">Token</span>
-                    <span class="text-secondary" style="font-size:0.75rem;">{'&#x2713; configured' if i.get('token_enc') else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{'&#x2713; configured' if i.get('token_set') else '&#x2717; not set'}</span>
                 </div>
-                <div id="opencti-cti-status-{iid}" style="margin-top:0.5rem;font-size:0.8125rem;"></div>
+                <div id="opencti-cti-status-{iid}" class="mt-sm fs-md"></div>
             </div>
-            <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
+            <div class="system-card__footer card-footer-wrap">
                 {tenant_chips}
             </div>
         </div>'''
@@ -3308,16 +3311,16 @@ def _render_threat_intel_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+        <div class="empty-output mgmt-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
-            <p style="margin-top:1rem;color:var(--color-text-muted);">No Threat Intel sources configured yet.</p>
+            <p class="mt-md text-muted">No Threat Intel sources configured yet.</p>
         </div>'''
 
     return f'''
-    <div class="info-box info-box--warning" style="margin-bottom:1rem;font-size:0.85rem;display:flex;align-items:flex-start;gap:0.5rem;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;margin-top:0.15rem;">
+    <div class="info-box info-box--warning mb-md fs-base flex items-start gap-sm">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
             <path d="M12 9v4"/><path d="M12 17h.01"/>
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
         </svg>
@@ -3325,9 +3328,9 @@ def _render_threat_intel_tab(instances: list) -> str:
             <strong>Deprecated.</strong> Manage OpenCTI sources on the new <strong>Connectors</strong> tab below — it covers OpenCTI, Mandiant, CrowdStrike and any vendor added in future releases under one consistent surface. Existing instances were copied over automatically; this tab is kept for one release and will be removed in <code>5.0.0</code>.
         </div>
     </div>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <span class="text-secondary">{count} OpenCTI instance{"s" if count != 1 else ""} configured</span>
-        <button class="btn btn-primary" onclick="showCreateOpenCTIModal()">
+        <button class="btn btn-primary" data-click="mgmt.openctiNew">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New OpenCTI
@@ -3352,16 +3355,17 @@ def _render_gitlab_tab(instances: list) -> str:
         test_btn = _test_button_html("gitlab", iid, f"gitlab-status-{iid}")
 
         cards += f'''
-        <div class="system-card" style="display:flex;flex-direction:column;">
-            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">{lbl_esc}</span>
+        <div class="system-card stack">
+            <div class="system-card__title flex items-center justify-between">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="fw-600">{lbl_esc}</span>
                     {status_pill}
                 </div>
-                <div style="display:flex;gap:0.25rem;">
+                <div class="flex gap-xs">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editGitLab('{iid}', '{lbl_esc}', '{url_esc}', '{grp_esc}', {'true' if i.get('tls_verify') else 'false'})"
+                            data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-group="{grp_esc}"
+                            data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3377,17 +3381,17 @@ def _render_gitlab_tab(instances: list) -> str:
                     </button>
                 </div>
             </div>
-            <div class="system-card__desc" style="margin-top:0.5rem;">
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+            <div class="system-card__desc mt-sm">
+                <div class="kv-grid">
                     <span class="text-secondary">URL</span>
-                    <span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{url_esc}">{url_esc}</span>
+                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
                     <span class="text-secondary">Group</span>
-                    <span style="font-family:var(--font-mono,monospace);font-size:0.8rem;">{grp_esc}</span>
+                    <span class="mono text-sm">{grp_esc}</span>
                     <span class="text-secondary">Token</span>
-                    <span class="text-secondary" style="font-size:0.75rem;">{'&#x2713; configured' if i.get('token_enc') else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{'&#x2713; configured' if i.get('token_set') else '&#x2717; not set'}</span>
                 </div>
             </div>
-            <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
+            <div class="system-card__footer card-footer-wrap">
                 {tenant_chips}
             </div>
         </div>'''
@@ -3395,30 +3399,28 @@ def _render_gitlab_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+        <div class="empty-output mgmt-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="m22 16.92-.02.02-2.71 1.6a1 1 0 0 1-1.02-.06l-2.09-1.41a1 1 0 0 0-1.16.08L13 19"/>
                 <path d="M22 22H2"/><path d="M2 12 12 2l10 10"/>
             </svg>
-            <p style="margin-top:1rem;color:var(--color-text-muted);">No GitLab instances configured yet.</p>
-            <p style="color:var(--color-text-muted);font-size:0.85rem;margin-top:0.5rem;">GitLab integration is reserved for future report publishing workflows.</p>
+            <p class="mt-md text-muted">No GitLab instances configured yet.</p>
+            <p class="text-muted fs-base mt-sm">GitLab integration is reserved for future report publishing workflows.</p>
         </div>'''
 
     return f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <div>
             <span class="text-secondary">{count} GitLab instance{"s" if count != 1 else ""} configured</span>
-            <span class="badge badge-secondary" style="margin-left:0.5rem;font-size:0.7rem;">Planned</span>
+            <span class="badge badge-secondary badge--xs ml-sm">Planned</span>
         </div>
-        <button class="btn btn-primary" onclick="showCreateGitLabModal()">
+        <button class="btn btn-primary" data-click="mgmt.gitlabNew">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New GitLab
         </button>
     </div>
-    <div style="padding:0.75rem 1rem;background:var(--color-bg-elevated);border-radius:var(--radius-md);
-                border-left:3px solid var(--color-primary);margin-bottom:1.25rem;font-size:0.85rem;
-                color:var(--color-text-secondary);">
+    <div class="callout">
         GitLab integration will allow TIDE to push generated reports to a configured repository.
         Register your instance now and it will be available when the feature ships.
     </div>
@@ -3443,16 +3445,17 @@ def _render_keycloak_tab(instances: list) -> str:
         test_btn = _test_button_html("keycloak", iid, f"keycloak-status-{iid}")
 
         cards += f'''
-        <div class="system-card" style="display:flex;flex-direction:column;">
-            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">{lbl_esc}</span>
+        <div class="system-card stack">
+            <div class="system-card__title flex items-center justify-between">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="fw-600">{lbl_esc}</span>
                     {status_pill}
                 </div>
-                <div style="display:flex;gap:0.25rem;">
+                <div class="flex gap-xs">
                     {test_btn}
                     <button class="btn btn-ghost btn-sm"
-                            onclick="editKeycloak('{iid}', '{lbl_esc}', '{url_esc}', '{realm_esc}', {'true' if i.get('tls_verify') else 'false'})"
+                            data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-realm="{realm_esc}"
+                            data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
                             title="Edit">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                             <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
@@ -3468,19 +3471,19 @@ def _render_keycloak_tab(instances: list) -> str:
                     </button>
                 </div>
             </div>
-            <div class="system-card__desc" style="margin-top:0.5rem;">
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+            <div class="system-card__desc mt-sm">
+                <div class="kv-grid">
                     <span class="text-secondary">URL</span>
-                    <span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{url_esc}">{url_esc}</span>
+                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
                     <span class="text-secondary">Realm</span>
-                    <span style="font-family:var(--font-mono,monospace);font-size:0.8rem;">{realm_esc}</span>
+                    <span class="mono text-sm">{realm_esc}</span>
                     <span class="text-secondary">Client ID</span>
-                    <span class="text-secondary" style="font-size:0.75rem;">{'&#x2713; configured' if has_client_id else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{'&#x2713; configured' if has_client_id else '&#x2717; not set'}</span>
                     <span class="text-secondary">Secret</span>
-                    <span class="text-secondary" style="font-size:0.75rem;">{'&#x2713; configured' if has_secret else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{'&#x2713; configured' if has_secret else '&#x2717; not set'}</span>
                 </div>
             </div>
-            <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
+            <div class="system-card__footer card-footer-wrap">
                 {tenant_chips}
             </div>
         </div>'''
@@ -3488,19 +3491,19 @@ def _render_keycloak_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+        <div class="empty-output mgmt-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            <p style="margin-top:1rem;color:var(--color-text-muted);">No Keycloak instances configured yet.</p>
-            <p style="color:var(--color-text-muted);font-size:0.85rem;margin-top:0.5rem;">Register Keycloak to centralise SSO configuration across clients.</p>
+            <p class="mt-md text-muted">No Keycloak instances configured yet.</p>
+            <p class="text-muted fs-base mt-sm">Register Keycloak to centralise SSO configuration across clients.</p>
         </div>'''
 
     return f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <span class="text-secondary">{count} Keycloak instance{"s" if count != 1 else ""} configured</span>
-        <button class="btn btn-primary" onclick="showCreateKeycloakModal()">
+        <button class="btn btn-primary" data-click="mgmt.keycloakNew">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Keycloak
@@ -3753,7 +3756,8 @@ def _render_client_connectors_partial(client_id: str, db, toast: str = None) -> 
     return HTMLResponse(f"{html}{toast_html}")
 
 
-def _render_client_users_partial(client_id: str, db, toast: str = None) -> HTMLResponse:
+def _render_client_users_partial(client_id: str, db, toast: str = None, viewer=None,
+                                 toast_level: str = "success") -> HTMLResponse:
     """Re-render the client users section using Jinja2 partial."""
     from html import escape
     import os
@@ -3763,11 +3767,11 @@ def _render_client_users_partial(client_id: str, db, toast: str = None) -> HTMLR
     client_users = db.get_client_users(client_id)
     all_users = db.get_all_users()
     all_roles = db.get_all_roles()
-    # Decorate each assigned user with their current role for THIS tenant so
-    # the template can pre-select the dropdown without doing N queries itself.
+    # Decorate each assigned user with their roles for THIS tenant (several allowed) so
+    # the template can tick them without doing N queries itself.
     for u in client_users:
         roles = db.get_user_roles(u["id"], client_id=client_id)
-        u["_current_role"] = roles[0] if roles else ""
+        u["_roles"] = roles
     assigned_ids = {u["id"] for u in client_users}
     available_users = [u for u in all_users if u["id"] not in assigned_ids]
 
@@ -3777,14 +3781,14 @@ def _render_client_users_partial(client_id: str, db, toast: str = None) -> HTMLR
     html = template.render(
         client=client, client_users=client_users,
         available_users=available_users,
-        all_roles=all_roles,
+        all_roles=all_roles, viewer=viewer,
     )
 
     toast_html = ""
     if toast:
         toast_html = (
             f'<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-success">{escape(toast)}</div></div>'
+            f'<div class="toast toast-{toast_level}">{escape(toast)}</div></div>'
         )
 
     return HTMLResponse(f"{html}{toast_html}")
@@ -3832,33 +3836,33 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
     # Rebuild the edit-systems-modal OOB
     sys_list_items = ""
     for s in client_systems:
-        cls_badge = f' <span class="badge badge-muted" style="font-size:0.6rem;">{escape(s.classification)}</span>' if s.classification else ""
+        cls_badge = f' <span class="badge badge-muted fs-2xs">{escape(s.classification)}</span>' if s.classification else ""
         sys_list_items += (
-            f'<div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">'
+            f'<div class="list-row">'
             f'<span>{escape(s.name)}{cls_badge}</span>'
-            f'<div style="display:flex;gap:0.25rem;">'
-            f'<button class="btn btn-ghost btn-sm" onclick="document.getElementById(\'edit-systems-modal\').style.display=\'none\';openMoveSystemModal(\'{s.id}\', \'{escape(s.name)}\')" style="padding:0.15rem 0.35rem;font-size:0.75rem;">'
+            f'<div class="flex gap-xs">'
+            f'<button class="btn btn-ghost btn-sm btn-xs" data-click="clientDetail.moveSystem" data-id="{s.id}" data-name="{escape(s.name)}">'
             f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg> Move</button>'
-            f'<button class="btn btn-ghost btn-sm text-danger" hx-delete="/api/management/clients/{client_id}/systems/{s.id}" hx-target="#client-systems-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(s.name)}\' from this client?" style="padding:0.15rem 0.35rem;font-size:0.75rem;">'
+            f'<button class="btn btn-ghost btn-sm btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/systems/{s.id}" hx-target="#client-systems-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(s.name)}\' from this client?">'
             f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Remove</button>'
             f'</div></div>'
         )
 
-    modal_body = '<div style="display:flex;flex-direction:column;gap:1rem;">'
+    modal_body = '<div class="stack gap-md">'
     if client_systems:
-        modal_body += f'<div><label class="form-label">Current Systems</label><div style="display:flex;flex-direction:column;gap:0.35rem;">{sys_list_items}</div></div>'
+        modal_body += f'<div><label class="form-label">Current Systems</label><div class="stack gap-xs">{sys_list_items}</div></div>'
     if available_systems:
         modal_body += (
-            f'<hr style="border:none;border-top:1px solid var(--color-border);margin:0;">'
-            f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:0.75rem;" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
+            f'<hr class="divider-line">'
+            f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
             f'<label class="form-label">Add System</label>'
             f'<select name="system_id" class="form-input" required><option value="" disabled selected>Select a system&hellip;</option>{sys_options}</select>'
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add System</button></form>'
         )
     if all_clients:
         modal_body += (
-            f'<hr style="border:none;border-top:1px solid var(--color-border);margin:0;">'
-            f'<form hx-post="/api/management/clients/{client_id}/move-from" hx-target="#client-systems-section" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:0.75rem;" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
+            f'<hr class="divider-line">'
+            f'<form hx-post="/api/management/clients/{client_id}/move-from" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
             f'<label class="form-label">Move from Another Client</label>'
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/move-from/systems" hx-target="#edit-move-from-system-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
@@ -3866,17 +3870,17 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg> Move Here</button></form>'
         )
     modal_body += (
-        f'<div style="display:flex;justify-content:flex-end;">'
-        f'<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'edit-systems-modal\').style.display=\'none\'">Close</button></div></div>'
+        f'<div class="flex justify-end">'
+        f'<button type="button" class="btn btn-secondary btn-sm" data-click="el.hide" data-target="edit-systems-modal">Close</button></div></div>'
     )
 
     edit_modal_oob = (
         f'<div id="edit-systems-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
-        f'onclick="if(event.target===this) this.style.display=\'none\'">'
+        f'data-click="backdrop.hide">'
         f'<div class="modal-content modal-sm"><div class="modal-header">'
         f'<h3 class="modal-title">Manage Systems — {escape(client["name"])}</h3>'
-        f'<button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;" '
-        f'onclick="document.getElementById(\'edit-systems-modal\').style.display=\'none\'">&#x2715;</button></div>'
+        f'<button type="button" class="modal-x" aria-label="Close" '
+        f'data-click="el.hide" data-target="edit-systems-modal">&#x2715;</button></div>'
         f'{modal_body}</div></div>'
     )
 
@@ -3926,9 +3930,9 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
     bl_list_items = ""
     for b in client_baselines:
         bl_list_items += (
-            f'<div style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;background:var(--color-bg-surface);border-radius:var(--radius-sm);font-size:0.85rem;">'
+            f'<div class="list-row">'
             f'<span>{escape(b.name)}</span>'
-            f'<button class="btn btn-ghost btn-sm text-danger" hx-delete="/api/management/clients/{client_id}/baselines/{b.id}" hx-target="#client-baselines-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(b.name)}\' from this client?" style="padding:0.15rem 0.35rem;font-size:0.75rem;">'
+            f'<button class="btn btn-ghost btn-sm btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/baselines/{b.id}" hx-target="#client-baselines-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(b.name)}\' from this client?">'
             f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Remove</button></div>'
         )
 
@@ -3941,21 +3945,21 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
         for c in other_clients
     )
 
-    modal_body = '<div style="display:flex;flex-direction:column;gap:1rem;">'
+    modal_body = '<div class="stack gap-md">'
     if client_baselines:
-        modal_body += f'<div><label class="form-label">Current Baselines</label><div style="display:flex;flex-direction:column;gap:0.35rem;">{bl_list_items}</div></div>'
+        modal_body += f'<div><label class="form-label">Current Baselines</label><div class="stack gap-xs">{bl_list_items}</div></div>'
     if available_baselines:
         modal_body += (
-            f'<hr style="border:none;border-top:1px solid var(--color-border);margin:0;">'
-            f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:0.75rem;" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
+            f'<hr class="divider-line">'
+            f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
             f'<label class="form-label">Add Baseline</label>'
             f'<select name="baseline_id" class="form-input" required><option value="" disabled selected>Select a baseline&hellip;</option>{bl_options}</select>'
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add Baseline</button></form>'
         )
     if other_clients:
         modal_body += (
-            f'<hr style="border:none;border-top:1px solid var(--color-border);margin:0;">'
-            f'<form hx-post="/api/management/clients/{client_id}/clone-baseline" hx-target="#client-baselines-section" hx-swap="innerHTML" style="display:flex;flex-direction:column;gap:0.75rem;" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
+            f'<hr class="divider-line">'
+            f'<form hx-post="/api/management/clients/{client_id}/clone-baseline" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
             f'<label class="form-label">Clone from Another Client</label>'
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/clone-baseline/baselines" hx-target="#edit-clone-baseline-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
@@ -3963,17 +3967,17 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg> Clone Baseline</button></form>'
         )
     modal_body += (
-        f'<div style="display:flex;justify-content:flex-end;">'
-        f'<button type="button" class="btn btn-secondary btn-sm" onclick="document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">Close</button></div></div>'
+        f'<div class="flex justify-end">'
+        f'<button type="button" class="btn btn-secondary btn-sm" data-click="el.hide" data-target="edit-baselines-modal">Close</button></div></div>'
     )
 
     edit_modal_oob = (
         f'<div id="edit-baselines-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
-        f'onclick="if(event.target===this) this.style.display=\'none\'">'
+        f'data-click="backdrop.hide">'
         f'<div class="modal-content modal-sm"><div class="modal-header">'
         f'<h3 class="modal-title">Manage Baselines — {escape(client["name"])}</h3>'
-        f'<button style="background:none;border:none;cursor:pointer;color:var(--color-muted);font-size:1.3rem;line-height:1;" '
-        f'onclick="document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">&#x2715;</button></div>'
+        f'<button type="button" class="modal-x" aria-label="Close" '
+        f'data-click="el.hide" data-target="edit-baselines-modal">&#x2715;</button></div>'
         f'{modal_body}</div></div>'
     )
 
@@ -4225,7 +4229,7 @@ def _check_query(conn, sql: str) -> None:
 def _render_query_results(rows, cols, elapsed_ms, truncated):
     if not rows:
         return (
-            f'<div class="text-secondary" style="padding:0.75rem;">'
+            f'<div class="text-secondary p-ms">'
             f'No rows. ({elapsed_ms} ms)</div>'
         )
     head = "".join(f"<th>{_esc(c)}</th>" for c in cols)
@@ -4244,15 +4248,14 @@ def _render_query_results(rows, cols, elapsed_ms, truncated):
     note = ""
     if truncated:
         note = (
-            f'<div class="text-secondary" style="padding:0.5rem 0;font-size:0.8rem;">'
+            f'<div class="text-secondary text-sm py-sm">'
             f'Truncated to {_QUERY_MAX_ROWS} rows.</div>'
         )
     return (
-        f'<div class="text-secondary" style="font-size:0.8rem;margin:0 0 0.5rem;">'
+        f'<div class="text-secondary text-sm m-0 mb-sm">'
         f'{len(rows)} row(s) - {elapsed_ms} ms</div>'
-        f'<div style="overflow:auto;max-height:60vh;border:var(--border-card);'
-        f'border-radius:var(--radius-sm);">'
-        f'<table class="data-table" style="width:100%;font-size:0.8rem;">'
+        f'<div class="table-scroll">'
+        f'<table class="data-table w-full text-sm">'
         f'<thead><tr>{head}</tr></thead><tbody>{"".join(body_rows)}</tbody></table>'
         f'</div>{note}'
     )
@@ -4296,12 +4299,11 @@ def _render_query_tab(
     if custom:
         preset_options += f'<optgroup label="Saved">{_opts(custom)}</optgroup>'
 
-    import json as _json_q
-    presets_json = _json_q.dumps({p["id"]: p for p in presets})
+    presets_json = htmlsafe_json_dumps({p["id"]: p for p in presets})
     is_custom_selected = selected_preset.startswith("custom:")
     return f"""
 <div id="mgmt-query-root">
-<div class="text-secondary" style="font-size:0.85rem;margin:0 0 1rem;max-width:80ch;">
+<div class="text-secondary section-intro">
   Read-only DuckDB query manager. Save reusable SQL snippets, run them against
   shared or tenant DuckDB targets, and delete saved templates when obsolete.
   Only <code>SELECT / WITH / SHOW / DESCRIBE /
@@ -4314,31 +4316,31 @@ def _render_query_tab(
       hx-post="/api/management/query/exec"
       hx-target="#mgmt-query-results"
       hx-swap="innerHTML"
-      style="display:flex;flex-direction:column;gap:0.5rem;">
-  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:flex-end;">
-    <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
-      <span class="form-label" style="margin:0;">Database</span>
+      class="stack gap-sm">
+  <div class="flex items-end gap-sm flex-wrap">
+    <label class="field-col">
+      <span class="form-label m-0">Database</span>
             <select id="mgmt-query-target" name="target" class="form-input" required>{target_options}</select>
     </label>
-    <label style="display:flex;flex-direction:column;gap:0.25rem;flex:1;min-width:240px;">
-      <span class="form-label" style="margin:0;">Predefined query</span>
+    <label class="field-col">
+      <span class="form-label m-0">Predefined query</span>
             <select id="mgmt-query-preset" name="preset_id" class="form-input"
-              onchange="mgmtQueryApplyPreset(this.value)">{preset_options}</select>
+              data-change="mgmt.queryPreset">{preset_options}</select>
     </label>
   </div>
-    <label style="display:flex;flex-direction:column;gap:0.25rem;max-width:520px;">
-        <span class="form-label" style="margin:0;">Template name</span>
+    <label class="stack gap-xs field-narrow">
+        <span class="form-label m-0">Template name</span>
         <input id="mgmt-query-name" name="query_name" type="text" class="form-input"
                      maxlength="120" placeholder="e.g. Recent failed syncs"
                      value="{_esc(query_name)}">
     </label>
-  <label style="display:flex;flex-direction:column;gap:0.25rem;">
-    <span class="form-label" style="margin:0;">SQL</span>
-    <textarea id="mgmt-query-sql" name="sql" class="form-input" rows="6" required
+  <label class="stack gap-xs">
+    <span class="form-label m-0">SQL</span>
+    <textarea id="mgmt-query-sql" name="sql" class="form-input mono text-sm" rows="6" required
               placeholder="SELECT * FROM clients LIMIT 10"
-                            style="font-family:var(--font-mono,monospace);font-size:0.8rem;">{_esc(sql_value)}</textarea>
+                           >{_esc(sql_value)}</textarea>
   </label>
-  <div style="display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+  <div class="flex items-center gap-sm flex-wrap">
     <button type="submit" class="btn btn-primary btn-sm">Run query</button>
         <button type="button" class="btn btn-secondary btn-sm"
                         hx-post="/api/management/query/save"
@@ -4352,49 +4354,14 @@ def _render_query_tab(
                         hx-swap="outerHTML"
                         {"" if is_custom_selected else "disabled"}>Delete</button>
     <button type="button" class="btn btn-secondary btn-sm"
-            onclick="document.getElementById('mgmt-query-sql').value='';
-                                         document.getElementById('mgmt-query-name').value='';
-                     document.getElementById('mgmt-query-results').innerHTML='';
-                                         document.getElementById('mgmt-query-preset').value='';
-                                         if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }};">Add / New</button>
-    <span class="text-secondary" style="font-size:0.75rem;">
+            data-click="mgmt.queryNew">Add / New</button>
+    <span class="text-secondary fs-sm">
       Read-only - {_QUERY_MAX_ROWS}-row cap
     </span>
   </div>
 </form>
-<div id="mgmt-query-results" style="margin-top:1rem;"></div>
-<script>
-(function(){{
-  window.__MGMT_QUERY_PRESETS = {presets_json};
-    window.mgmtQueryUpdateActions = function(){{
-        var sel = document.getElementById('mgmt-query-preset');
-        var del = document.getElementById('mgmt-query-delete');
-        if(!sel || !del){{ return; }}
-        del.disabled = !(sel.value && sel.value.indexOf('custom:') === 0);
-    }};
-  window.mgmtQueryApplyPreset = function(id){{
-        var targetEl = document.getElementById('mgmt-query-target');
-        var sqlEl = document.getElementById('mgmt-query-sql');
-        var nameEl = document.getElementById('mgmt-query-name');
-        if(!id){{
-            if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
-            return;
-        }}
-    var p = window.__MGMT_QUERY_PRESETS[id];
-        if(!p){{
-            if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
-            return;
-        }}
-        if(sqlEl){{ sqlEl.value = p.sql || ''; }}
-        if(targetEl && p.target){{ targetEl.value = p.target; }}
-        if(nameEl && (p.kind || '') === 'custom'){{
-            nameEl.value = p.name || p.label || '';
-        }}
-        if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
-  }};
-    if(window.mgmtQueryUpdateActions){{ window.mgmtQueryUpdateActions(); }}
-}})();
-</script>
+<div id="mgmt-query-results" class="mt-md"></div>
+<script type="application/json" id="mgmt-query-presets">{presets_json}</script>
 </div>
 """
 
@@ -4618,16 +4585,16 @@ def _render_vendor_fields_html(vendor, current_cfg: dict | None = None) -> str:
         key = spec.key
         name = f"cfg_{key}"
         label = _esc(spec.label or key)
-        required = ' <span style="color:var(--color-danger)">*</span>' if spec.required else ""
+        required = ' <span class="req">*</span>' if spec.required else ""
         help_html = (
-            f'<span class="text-secondary" style="font-size:0.75rem;">{_esc(spec.help)}</span>'
+            f'<span class="text-secondary fs-sm">{_esc(spec.help)}</span>'
             if spec.help else ""
         )
         existing = current_cfg.get(key)
         if spec.type == "bool":
             checked = "checked" if (existing if existing is not None else spec.default) else ""
             field = (
-                f'<label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">'
+                f'<label class="check-label">'
                 f'<input type="checkbox" name="{name}" {checked}> {label}</label>'
             )
             rows.append(f'<div>{field}{help_html}</div>')
@@ -4671,7 +4638,7 @@ def _render_vendor_fields_html(vendor, current_cfg: dict | None = None) -> str:
             f'{field}{help_html}</div>'
         )
     if not rows:
-        return '<div class="text-secondary" style="font-size:0.8125rem;">This vendor has no configuration fields.</div>'
+        return '<div class="text-secondary fs-md">This vendor has no configuration fields.</div>'
     return "".join(rows)
 
 
@@ -4735,7 +4702,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
                     summary_pairs.append((spec.label, _e(str(v))))
         summary_html = "".join(
             f'<span class="text-secondary">{_e(k)}</span>'
-            f'<span style="font-family:var(--font-mono,monospace);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{_e(str(v))}">{v}</span>'
+            f'<span class="mono-ellipsis" title="{_e(str(v))}">{v}</span>'
             for k, v in summary_pairs
         )
         # Test connection button — mirrors the SIEM card layout. The
@@ -4753,7 +4720,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
         )
         edit_btn = (
             f'<button class="btn btn-ghost btn-sm" '
-            f'onclick="editConnector(\'{cid}\')" title="Edit">'
+            f'data-click="mgmt.connectorEdit" data-id="{cid}" title="Edit">'
             f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
             f'<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
         )
@@ -4768,26 +4735,26 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
             f'<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
         )
         cards += f'''
-        <div class="system-card" style="display:flex;flex-direction:column;">
-            <div class="system-card__title" style="display:flex;align-items:center;justify-content:space-between;">
-                <div style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;">
-                    <span style="font-weight:600;">{lbl_esc}</span>
+        <div class="system-card stack">
+            <div class="system-card__title flex items-center justify-between">
+                <div class="flex items-center gap-sm flex-wrap">
+                    <span class="fw-600">{lbl_esc}</span>
                     {vendor_badge}
                     {status_pill}
                     {auto_chip}
                 </div>
-                <div style="display:flex;gap:0.25rem;">
+                <div class="flex gap-xs">
                     {test_btn}
                     {edit_btn}
                     {del_btn}
                 </div>
             </div>
-            <div class="system-card__desc" style="margin-top:0.5rem;">
-                <div style="display:grid;grid-template-columns:auto 1fr;gap:0.25rem 0.75rem;font-size:0.8125rem;">
+            <div class="system-card__desc mt-sm">
+                <div class="kv-grid">
                     {summary_html}
                 </div>
             </div>
-            <div class="system-card__footer" style="flex-wrap:wrap;margin-top:auto;padding-top:0.75rem;">
+            <div class="system-card__footer card-footer-wrap">
                 {tenant_chips}
             </div>
         </div>'''
@@ -4795,19 +4762,18 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
     empty = ""
     if not connectors:
         empty = '''
-        <div class="empty-output" style="padding:4rem 2rem;text-align:center;">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:0.3;">
+        <div class="empty-output mgmt-empty">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
             </svg>
-            <p style="margin-top:1rem;color:var(--color-text-muted);">No connectors configured yet.</p>
+            <p class="mt-md text-muted">No connectors configured yet.</p>
         </div>'''
 
-    # Embed vendor list + connector rows for the modal JS to consume.
-    vendors_payload = _cn_json.dumps([
+    # Vendors and connector rows for the dialogs (management.js reads #connector-data).
+    connector_payload = htmlsafe_json_dumps({"vendors": [
         {"name": v.name, "label": v.label} for v in vendors
-    ])
-    rows_payload = _cn_json.dumps([
+    ], "rows": [
         {
             "id": c["id"],
             "vendor": c.get("vendor"),
@@ -4816,18 +4782,18 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
             "sync_interval_minutes": c.get("sync_interval_minutes"),
             "config": c.get("config") or {},
         } for c in connectors
-    ])
+    ]})
 
     return f'''
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.5rem;">
+    <div class="mgmt-tab-head">
         <span class="text-secondary">{count} connector{"s" if count != 1 else ""} configured &middot; {len(vendors)} vendor{"s" if len(vendors) != 1 else ""} available</span>
-        <div style="display:flex;gap:0.5rem;">
-            <button class="btn btn-secondary" onclick="showImportConnectorModal()" title="Import a connector from JSON exported elsewhere">
+        <div class="flex gap-sm">
+            <button class="btn btn-secondary" data-click="mgmt.importOpen" title="Import a connector from JSON exported elsewhere">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Import
             </button>
-            <button class="btn btn-primary" onclick="showCreateConnectorModal()">
+            <button class="btn btn-primary" data-click="mgmt.connectorNew">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 New Connector
@@ -4836,10 +4802,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
     </div>
     <div class="systems-grid">{cards}</div>
     {empty}
-    <script>
-        window._connectorVendors = {vendors_payload};
-        window._connectorRows = {rows_payload};
-    </script>'''
+    <script type="application/json" id="connector-data">{connector_payload}</script>'''
 
 
 def _connectors_tab_response(db) -> HTMLResponse:
@@ -4917,13 +4880,13 @@ def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> 
 
 
 @router.get("/tab/connectors", response_class=HTMLResponse)
-def tab_connectors(request: Request, db: DbDep, user: RequireAdmin):
+def tab_connectors(request: Request, db: DbDep, user: RequireSuperadmin):
     """Connectors tab partial for the management hub."""
     return _connectors_tab_response(db)
 
 
 @router.get("/connectors/vendor-fields/{vendor_name}", response_class=HTMLResponse)
-def connector_vendor_fields(vendor_name: str, user: RequireAdmin):
+def connector_vendor_fields(vendor_name: str, user: RequireSuperadmin):
     """Return the FieldSpec form-fragment for the chosen vendor.
 
     Fired by the vendor ``<select onchange>`` in the connector modal so the
@@ -4940,7 +4903,7 @@ def connector_vendor_fields(vendor_name: str, user: RequireAdmin):
 
 
 @router.post("/connectors", response_class=HTMLResponse)
-async def create_connector(request: Request, db: DbDep, user: RequireAdmin):
+async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin):
     """Create a new connector. Vendor + label + per-vendor cfg required."""
     from app.services.cti_connectors import get as get_vendor
     form = await request.form()
@@ -4987,7 +4950,7 @@ async def create_connector(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.post("/connectors/import", response_class=HTMLResponse)
-async def import_connectors(request: Request, db: DbDep, user: RequireAdmin):
+async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin):
     """Bulk-create connectors from a pasted JSON payload.
 
     Accepts either a single connector object or ``{"connectors": [...]}``.
@@ -5073,7 +5036,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireAdmin):
     )
     if errors and not created_ids:
         return HTMLResponse(
-            '<div class="alert alert-error"><strong>Import failed.</strong><ul style="margin:0.5rem 0 0 1rem;">'
+            '<div class="alert alert-error"><strong>Import failed.</strong><ul class="list-indent">'
             + "".join(f"<li>{_esc(e)}</li>" for e in errors)
             + "</ul></div>",
             status_code=400,
@@ -5085,12 +5048,12 @@ async def import_connectors(request: Request, db: DbDep, user: RequireAdmin):
         db.list_clients(),
     )
     banner = (
-        f'<div class="alert alert-success" style="margin-bottom:1rem;">Imported {len(created_ids)} connector(s).</div>'
+        f'<div class="alert alert-success mb-md">Imported {len(created_ids)} connector(s).</div>'
     )
     if errors:
         banner += (
-            '<div class="alert alert-warning" style="margin-bottom:1rem;"><strong>Some entries skipped:</strong>'
-            '<ul style="margin:0.5rem 0 0 1rem;">'
+            '<div class="alert alert-warning mb-md"><strong>Some entries skipped:</strong>'
+            '<ul class="list-indent">'
             + "".join(f"<li>{_esc(e)}</li>" for e in errors)
             + "</ul></div>"
         )
@@ -5098,7 +5061,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireAdmin):
 
 
 @router.put("/connectors/{connector_id}", response_class=HTMLResponse)
-async def update_connector(request: Request, connector_id: str, db: DbDep, user: RequireAdmin):
+async def update_connector(request: Request, connector_id: str, db: DbDep, user: RequireSuperadmin):
     """Update generic + vendor-specific fields on an existing connector."""
     from app.services.cti_connectors import get as get_vendor
     existing = db.get_cti_connector(connector_id)
@@ -5141,7 +5104,7 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
 
 
 @router.delete("/connectors/{connector_id}", response_class=HTMLResponse)
-def delete_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+def delete_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
     """Delete a connector and all its client links."""
     existing = db.get_cti_connector(connector_id)
     if not existing:
@@ -5159,7 +5122,7 @@ def delete_connector(connector_id: str, db: DbDep, user: RequireAdmin):
 
 
 @router.post("/connectors/{connector_id}/test", response_class=HTMLResponse)
-def test_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+def test_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
     """Run a lightweight connectivity probe and persist the result.
 
     Every supported vendor wires a ``tester=`` callable on its
@@ -5235,7 +5198,7 @@ def test_connector(connector_id: str, db: DbDep, user: RequireAdmin):
 
 
 @router.post("/connectors/{connector_id}/sync", response_class=HTMLResponse)
-def sync_connector(connector_id: str, db: DbDep, user: RequireAdmin):
+def sync_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
     """Kick off a background sync job and return the polling badge.
 
     The pre-5.0.x synchronous implementation held the worker thread
@@ -5310,6 +5273,8 @@ def sync_connector(connector_id: str, db: DbDep, user: RequireAdmin):
         kind="connector",
         runner=_runner,
         label=connector.get("label") or connector.get("vendor") or connector_id,
+        actor=user.username,
+        scope={"connector_id": connector_id},
     )
     # Inline polling fragment — re-uses the same render shape as the
     # /cti/sync/jobs/{id} endpoint so the badge swap is identical.
@@ -5323,7 +5288,7 @@ def sync_connector(connector_id: str, db: DbDep, user: RequireAdmin):
 
 
 @router.get("/connectors/sync/jobs/{job_id}", response_class=HTMLResponse)
-def sync_connector_job_status(job_id: str, user: RequireAdmin):
+def sync_connector_job_status(job_id: str, user: RequireSuperadmin):
     """HTMX polling target for a connector sync job."""
     from app.services import cti_jobs
     job = cti_jobs.get(job_id)
@@ -5361,17 +5326,19 @@ def sync_connector_job_status(job_id: str, user: RequireAdmin):
     reports = summary.get("reports", 0)
     rels = summary.get("relationships", 0)
     err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
+    # The errors themselves on hover: the same text the run's record (sync_history) and log hold.
+    err_title = f' title="{_esc("; ".join(str(e) for e in errors[:5]))}"' if errors else ""
     badge_msg = (
         f"{tenants} tenant(s) &middot; +{new} new / ~{merged} merged / ?{review} review"
         f" &middot; {actors} actors / {reports} reports / {rels} links{err_suffix}"
     )
     return HTMLResponse(
-        f'<span id="{target_id}" class="badge {cls}">{badge_msg}</span>'
+        f'<span id="{target_id}" class="badge {cls}"{err_title}>{badge_msg}</span>'
     )
 
 
 @router.post("/clients/{client_id}/connectors/{connector_id}", response_class=HTMLResponse)
-def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user: RequireAdmin):
+def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user: ClientAdmin):
     """Link a connector to a client (positional path variant)."""
     try:
         db.link_cti_connector_client(connector_id, client_id)
@@ -5387,7 +5354,7 @@ def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user:
 
 @router.post("/clients/{client_id}/connectors", response_class=HTMLResponse)
 async def add_connector_to_client(request: Request, client_id: str,
-                                  db: DbDep, user: RequireAdmin):
+                                  db: DbDep, user: ClientAdmin):
     """Link a connector via form body (mirrors the SIEM/OpenCTI add pattern).
 
     Used by the per-tenant ``Linked Connectors`` modal on the client
@@ -5414,7 +5381,7 @@ async def add_connector_to_client(request: Request, client_id: str,
 
 
 @router.delete("/clients/{client_id}/connectors/{connector_id}", response_class=HTMLResponse)
-def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, user: RequireAdmin):
+def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, user: ClientAdmin):
     """Unlink a connector from a client."""
     try:
         db.unlink_cti_connector_client(connector_id, client_id)
@@ -5442,42 +5409,41 @@ def tab_data_transfer(request: Request, db: DbDep, user: RequireSuperadmin):
         f'<option value="{_esc(c["id"])}">{_esc(c["name"])}</option>' for c in db.list_clients()
     )
     return HTMLResponse(f"""
-<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(20rem,1fr));gap:1rem;">
-  <div class="card" style="padding:1rem;">
-    <h4 style="margin:0 0 0.5rem;">Export</h4>
-    <p class="text-secondary" style="font-size:0.85rem;margin-top:0;">
+<div class="auto-grid">
+  <div class="card p-md">
+    <h4 class="m-0 mb-sm">Export</h4>
+    <p class="text-secondary fs-base mt-0">
       Rules with their metadata, validation and history, baselines with their rule mappings, systems and
       related data for one tenant, as a JSON file. No credentials, threat-actor data or SIEM connections.</p>
-    <form method="get" action="/api/management/export-data" hx-boost="false" style="display:flex;flex-direction:column;gap:0.6rem;">
+    <form method="get" action="/api/management/export-data" hx-boost="false" class="stack gap-ms">
       <label>Tenant <select name="tenant" class="form-input" required>{options}</select></label>
-      <label style="display:flex;gap:0.5rem;align-items:center;">
+      <label class="flex items-center gap-sm">
         <input type="checkbox" name="include_users" value="true">
         Include users, tenant roles and permissions (no passwords or Keycloak IDs)</label>
       <button class="btn btn-primary" type="submit">Download export</button>
     </form>
   </div>
-  <div class="card" style="padding:1rem;">
-    <h4 style="margin:0 0 0.5rem;">Import</h4>
-    <p class="text-secondary" style="font-size:0.85rem;margin-top:0;">
+  <div class="card p-md">
+    <h4 class="m-0 mb-sm">Import</h4>
+    <p class="text-secondary fs-base mt-0">
       Merges an export into the chosen tenant. Existing rows are kept and nothing is deleted. Tables
       without a key (score history) are only filled when empty. Run a SIEM sync afterwards.
       Imported local users have no password and must be given one; SSO users link by username or email at
       first login.</p>
     <form hx-post="/api/management/import-data" hx-encoding="multipart/form-data"
           hx-target="#data-transfer-result" hx-swap="innerHTML"
-          style="display:flex;flex-direction:column;gap:0.6rem;">
+          class="stack gap-ms">
       <label>Into tenant
-        <select name="tenant" class="form-input" required
-                onchange="document.getElementById('data-new-client').style.display = this.value === '__new__' ? '' : 'none'">
+        <select name="tenant" class="form-input" required data-change="mgmt.importTenant">
           {options}<option value="__new__">+ Create a new client&hellip;</option></select></label>
       <label id="data-new-client" style="display:none;">New client name
         <input type="text" name="new_name" class="form-input" maxlength="80" placeholder="e.g. Acme Corp"></label>
       <label>Export file <input type="file" name="file" accept=".json,application/json" class="form-input" required></label>
-      <label style="display:flex;gap:0.5rem;align-items:center;">
+      <label class="flex items-center gap-sm">
         <input type="checkbox" name="include_users" value="true"> Also import users (if present in the file)</label>
       <button class="btn btn-secondary" type="submit">Import</button>
     </form>
-    <div id="data-transfer-result" style="margin-top:0.75rem;"></div>
+    <div id="data-transfer-result" class="mt-ms"></div>
   </div>
 </div>""")
 

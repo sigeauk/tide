@@ -1,0 +1,21 @@
+{#
+  Dashboard layout editor controls (pages/core/dashboard.html, partials/dashboard_card.html).
+  app.js moves cards (drag the handle, the arrows, or the arrow keys on the handle), changes their
+  width, removes them, and on Save posts the whole layout to /api/dashboard/layout.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro card_tools(label, w) -%}
+{% set WIDTH_LABELS = {3: '¼', 4: '⅓', 6: '½', 8: '⅔', 9: '¾', 12: 'Full'} %}
+<div class="dash-tools" data-dash-tools>
+    <button type="button" class="rm-drag dash-tools__drag" data-dash-drag draggable="true"
+            title="Move {{ label }}: drag it, or use the arrow keys" aria-label="Move {{ label }} (arrow keys move it earlier or later)">{{ icon('move', '14') }}</button>
+    <button type="button" class="rm-move__btn" data-dash-step="-1" title="Move earlier" aria-label="Move {{ label }} earlier">{{ icon('arrow-left', '13') }}</button>
+    <button type="button" class="rm-move__btn" data-dash-step="1" title="Move later" aria-label="Move {{ label }} later">{{ icon('arrow-right', '13') }}</button>
+    <span class="dash-tools__sep" aria-hidden="true"></span>
+    <button type="button" class="rm-move__btn" data-dash-width="-1" title="Narrower" aria-label="Make {{ label }} narrower">{{ icon('minus-circle', '13') }}</button>
+    <span class="dash-tools__width" data-dash-width-label title="Width">{{ WIDTH_LABELS.get(w, w) }}</span>
+    <button type="button" class="rm-move__btn" data-dash-width="1" title="Wider" aria-label="Make {{ label }} wider">{{ icon('plus-circle', '13') }}</button>
+    <button type="button" class="rm-x" data-dash-remove title="Remove {{ label }}" aria-label="Remove {{ label }}">{{ icon('x', '13') }}</button>
+</div>
+{%- endmacro %}

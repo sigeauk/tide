@@ -11,18 +11,10 @@
 {% if nessus_inserted is defined %}
 <div class="toast toast-success" style="display:none"
      data-toast="Nessus import: {{ nessus_inserted }} records added."></div>
-<script>
-  (function(){
-    const el = document.querySelector('[data-toast]');
-    if(!el) return;
-    const msg = el.dataset.toast;
-    if(msg && window.showToast) showToast(msg, 'success');
-  })();
-</script>
 {% if nessus_warnings %}
-<div class="u-bg-warning-bg" style="border:1px solid var(--color-warning,#e6a817);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem;font-size:0.82rem">
+<div class="u-bg-warning-bg sw-warning">
     {{ icon('triangle-alert', '14') }} {{ nessus_warnings | length }} import warning(s):
-    <ul style="margin:0.25rem 0 0 1.2rem;padding:0;">
+    <ul class="sw-warning__list">
         {% for w in nessus_warnings[:5] %}<li>{{ w }}</li>{% endfor %}
         {% if nessus_warnings | length > 5 %}<li>… and {{ nessus_warnings | length - 5 }} more</li>{% endif %}
     </ul>
@@ -33,36 +25,35 @@
 {% set vuln_products = vulns | map(attribute='matched_software') | sum(start=[]) | map('lower') | list %}
 
 {% if software %}
-<table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+<table class="sw-table">
     <thead>
-        <tr style="border-bottom:1px solid var(--color-border);text-align:left;">
-            <th style="padding:0.4rem 0.5rem;">Name</th>
-            <th style="padding:0.4rem 0.5rem;">Version</th>
-            <th style="padding:0.4rem 0.5rem;">Vendor</th>
-            <th style="padding:0.4rem 0.5rem;">Source</th>
-            <th style="padding:0.4rem 0.5rem;"></th>
+        <tr class="sw-table__head">
+            <th class="py-sm px-sm">Name</th>
+            <th class="py-sm px-sm">Version</th>
+            <th class="py-sm px-sm">Vendor</th>
+            <th class="py-sm px-sm">Source</th>
+            <th class="py-sm px-sm"></th>
         </tr>
     </thead>
     <tbody>
     {% for sw in software %}
     {% set is_vuln = sw.name | lower in vuln_products %}
-    <tr{% if is_vuln %} class="u-bg-danger-05"{% endif %} style="border-bottom:1px solid var(--color-border-subtle,rgba(0,0,0,.06))">
-        <td style="padding:0.4rem 0.5rem;font-weight:500;">
+    <tr class="sw-table__row{% if is_vuln %} u-bg-danger-05{% endif %}">
+        <td class="py-sm px-sm fw-500">
             {{ sw.name }}
             {% if is_vuln %}
-            <span class="badge badge-danger" style="margin-left:0.4rem;font-size:0.7rem;">CVE</span>
+            <span class="badge badge-danger ml-sm fs-xs">CVE</span>
             {% endif %}
         </td>
-        <td style="padding:0.4rem 0.5rem;color:var(--color-muted);">{{ sw.version or '—' }}</td>
-        <td style="padding:0.4rem 0.5rem;color:var(--color-muted);">{{ sw.vendor or '—' }}</td>
-        <td style="padding:0.4rem 0.5rem;">
+        <td class="py-sm px-sm text-muted">{{ sw.version or '—' }}</td>
+        <td class="py-sm px-sm text-muted">{{ sw.vendor or '—' }}</td>
+        <td class="py-sm px-sm">
             <span class="badge badge-{% if sw.source == 'nessus' %}info{% elif sw.source == 'opencti' %}purple{% else %}default{% endif %}">
                 {{ sw.source }}
             </span>
         </td>
-        <td style="padding:0.4rem 0.5rem;text-align:right;">
-            <button name="Delete Software" class="btn btn-ghost btn-sm"
-                    style="color:var(--color-danger);padding:0.2rem 0.4rem;"
+        <td class="py-sm px-sm text-right">
+            <button name="Delete Software" class="btn btn-ghost btn-sm text-danger py-xs px-sm"
                     hx-delete="/api/inventory/software/{{ sw.id }}?system_id={{ system_id }}"
                     hx-confirm="Remove '{{ sw.name }}'?"
                     hx-target="#software-section"
@@ -75,9 +66,9 @@
     </tbody>
 </table>
 {% else %}
-<div style="text-align:center;padding:2rem;color:var(--color-muted);font-size:0.9rem;">
+<div class="text-center p-xl text-muted fs-base">
     {{ icon('package', '36') }}
-    <p style="margin-top:0.5rem;">No packages recorded yet.</p>
-    <p style="font-size:0.82rem;">Add manually or upload a Nessus file.</p>
+    <p class="mt-sm">No packages recorded yet.</p>
+    <p class="fs-md">Add manually or upload a Nessus file.</p>
 </div>
 {% endif %}

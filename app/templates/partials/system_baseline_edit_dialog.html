@@ -18,7 +18,7 @@
             <label class="form-label" for="sys-bl-edit-desc">Description</label>
             <textarea id="sys-bl-edit-desc" name="description" class="form-input" rows="3">{{ baseline.description }}</textarea>
             <div class="modal-actions">
-                <button name="Remove Baseline" type="button" class="btn btn-danger" style="margin-right:auto;"
+                <button name="Remove Baseline" type="button" class="btn btn-danger mr-auto"
                         hx-delete="/api/baselines/{{ baseline.id }}/apply/{{ system.id }}"
                         hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
                         hx-confirm="Remove {{ baseline.name }} from {{ system.name }}? Its techniques, rule mappings, known gaps and history are deleted. Templates and other systems are not affected.">

@@ -4,11 +4,12 @@
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, layout_menu, remove_btn, tag %}
 {#
   Rule modal — opened by clicking a rule card / table row.
-    header : score ring · name · state/severity badges | prev/next · sections menu · close
+    header : score ring · name · destination/state/severity badges · validation date |
+             Validate · Edit · "…" (every other action) · sections · prev/next · close
     left   : recent activity (edits/validations) · score-over-time chart · covers (each opens its baseline technique)
-    centre : about (description, facts, tags) · logic · investigation guide ·
-             references · field mappings · score breakdown (bars)
-    right  : actions · MITRE techniques (pill: side panel; name: the MITRE technique window) · rule id · linked
+    centre : about (description, risk score, language, indexes, tags) · last run (run + schedule, test) ·
+             logic · investigation guide · references · field mappings · score breakdown (bars)
+    right  : MITRE techniques (pill: side panel; name: the MITRE technique window) · rule id · linked
   That is the default arrangement: every section (data-section) can be dragged to any column
   or hidden from the header menu, and collapsible ones (data-fold) opened or closed; all of it
   is remembered per browser (app.js, tide.ruleWindowLayout). Prev/next walk the list the modal
@@ -36,24 +37,100 @@
                 <h2 class="rm-title" id="rm-title">{{ rule.name }}</h2>
                 <div class="rm-header__badges">
                     <span class="status-pill {% if is_on %}status-enabled{% else %}status-disabled{% endif %}"
-                          title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ scope_label }}">
-                        {{ icon('shield-check', '12') }} {{ scope_label }} · {{ 'Enabled' if is_on else 'Disabled' }}
-                    </span>
+                          title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ scope_label }}">{{ scope_label }} · {{ 'Enabled' if is_on else 'Disabled' }}</span>
                     {{ state_badge(lifecycle_state, lifecycle_title | default("")) }}
                     <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
+                    {% if rule.validation_date %}
+                    {% set val_title = 'Validated ' ~ rule.validation_date.strftime('%Y-%m-%d %H:%M')
+                                       ~ (' by ' ~ rule.validated_by if rule.validated_by else '')
+                                       ~ {'expired': ' · expired', 'amber': ' · due for validation'}.get(val_status, '') %}
+                    {% endif %}
+                    <span class="status-pill status-{{ val_class }} rm-valdate{% if just_validated %} rm-validated--flash{% endif %}" role="status"
+                          title="{{ val_title if rule.validation_date else 'Never validated' }}">{{ rule.validation_date.strftime('%Y-%m-%d') if rule.validation_date else 'N/A' }}</span>
                     <span class="rm-header__meta">{{ icon('user', '12') }} {{ rule.author | default('-') }}</span>
                 </div>
             </div>
 
             <div class="rm-header__tools">
+                <div class="rm-header__actions">
+                    <button name="Validate Rule" class="btn btn-primary btn-sm"
+                            hx-post="/api/rules/{{ rule.rule_id }}/validate?{{ scope_qs }}"
+                            hx-target="#modal-container" hx-swap="innerHTML"
+                            hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
+                        <span class="btn-text">Validate</span>
+                        <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
+                    </button>
+                    <button name="Open Edit Form" class="btn btn-secondary btn-sm"
+                            hx-get="/api/rules/{{ rule.rule_id }}/edit-form?{{ scope_qs }}"
+                            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">Edit</button>
+                    {# Every other action. Sync and Restore re-render this window; the "…" button spins meanwhile. #}
+                    <div class="rh-more rm-overflow" data-more>
+                        <button name="More Actions" type="button" class="rm-iconbtn rm-iconbtn--boxed" data-more-toggle
+                                aria-haspopup="menu" aria-expanded="false" title="More actions" aria-label="More actions">
+                            <span class="rm-overflow__idle">{{ icon('more-horizontal', '16') }}</span>
+                            <span class="rm-overflow__busy">{{ icon('loader', '16', 'spin') }}</span>
+                        </button>
+                        <div class="rh-more__menu" role="menu" hidden>
+                            <button name="Sync Rule" type="button" role="menuitem" class="rh-more__item"
+                                    title="Re-check just this rule against its SIEM: pull it, refresh its index mappings and re-score it"
+                                    hx-post="/api/rules/{{ rule.rule_id }}/sync?{{ scope_qs }}"
+                                    hx-target="#modal-container" hx-swap="innerHTML" hx-indicator="closest .rm-overflow"
+                                    hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
+                                {{ icon('refresh-cw', '14') }}<span>Sync this rule</span>
+                            </button>
+                            {% if move_targets %}
+                            <button name="Move" type="button" role="menuitem" class="rh-more__item"
+                                    title="Move or copy this rule to another linked destination"
+                                    data-click="rule.move" data-rule-id="{{ rule.rule_id }}" data-rule-name="{{ rule.name }}" data-siem-id="{{ siem_id | default('') }}"
+                                    data-space="{{ space }}" data-delete-default="{{ 'true' if delete_source_default else 'false' }}" data-targets="{{ move_targets | tojson | forceescape }}">
+                                {{ icon('arrow-right-left', '14') }}<span>Move</span>
+                            </button>
+                            {% endif %}
+                            {% if linked_rules | rejectattr('missing') | list %}
+                            <button name="Compare Rule Versions" type="button" role="menuitem" class="rh-more__item"
+                                    title="Compare this rule with a linked rule, and merge one onto the other from there"
+                                    hx-get="/api/promotion/{{ rule.rule_id }}/diff?{{ scope_qs }}"
+                                    hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                                {{ icon('git-branch', '14') }}<span>Compare</span>
+                            </button>
+                            {% endif %}
+                            {% if rule.deprecated %}
+                            <button name="Restore Rule" type="button" role="menuitem" class="rh-more__item"
+                                    title="Recreate this rule in its SIEM (disabled) and make it active again"
+                                    hx-post="/api/promotion/{{ rule.rule_id }}/restore?{{ scope_qs }}"
+                                    hx-target="body" hx-swap="beforeend" hx-include="unset" hx-indicator="closest .rm-overflow"
+                                    hx-confirm="Recreate this rule in its SIEM? It is restored disabled, so nothing starts alerting until you enable it.">
+                                {{ icon('rotate-ccw', '14') }}<span>Restore</span>
+                            </button>
+                            {% endif %}
+                            {% if kibana_rule_url %}
+                            <a name="Open in Kibana" role="menuitem" class="rh-more__item" href="{{ kibana_rule_url }}" target="_blank" rel="noopener noreferrer"
+                               data-kibana-link title="Open in Kibana ({{ scope_label }})">
+                                {{ icon('external-link', '14') }}<span>View in Kibana</span>
+                            </a>
+                            {% endif %}
+                            <div class="rh-more__sep" role="separator"></div>
+                            <button name="Delete Rule" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                                    title="Delete this rule from TIDE, and optionally from {{ scope_label }} in Elastic"
+                                    data-click="rule.delete" data-rule-id="{{ rule.rule_id }}" data-rule-name="{{ rule.name }}" data-siem-id="{{ siem_id | default('') }}"
+                                    data-space="{{ space }}" data-dest-name="{{ scope_label }}" data-deprecated="{{ 'true' if rule.deprecated else 'false' }}">
+                                {{ icon('trash-2', '14') }}<span>Delete rule</span>
+                            </button>
+                        </div>
+                    </div>
+                    {{ layout_menu() }}
+                </div>
                 <div class="rm-nav" role="group" aria-label="Browse rules">
                     <button name="Previous Rule" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous rule (←)" aria-label="Previous rule" disabled>{{ icon('chevron-left', '16') }}</button>
                     <button name="Next Rule" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next rule (→)" aria-label="Next rule" disabled>{{ icon('chevron-right', '16') }}</button>
                 </div>
-                {{ layout_menu() }}
                 <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
             </div>
         </header>
+
+        {% if flash %}
+        <p class="rm-note rm-note--info rm-flash" role="status">{{ flash }}</p>
+        {% endif %}
 
         <div class="rm-body">
 
@@ -234,16 +311,12 @@
 
             {# ───────── CENTRE: about + logic + folds ───────── #}
             <section class="rm-col rm-col--logic" data-col="centre" aria-label="Centre column">
-                {% if details.description or details.tags or details.interval or details.indexes %}
                 <details class="rm-fold rm-fold--about" open data-fold="about" data-section="about" data-section-label="About this rule">
                     <summary><span>About this rule</span>{{ drag_ctl('About this rule') }}</summary>
                     <div class="rm-about">
                     {% if details.description %}<p class="rm-desc">{{ details.description }}</p>{% endif %}
                     <dl class="rm-facts">
-                        {% if details.interval %}<div><dt>Runs every</dt><dd>{{ details.interval }}</dd></div>{% endif %}
-                        {% if details.lookback %}<div><dt>Looks back</dt><dd>{{ details.lookback | replace('now-', '') }}</dd></div>{% endif %}
                         {% if details.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ details.risk_score }}</dd></div>{% endif %}
-                        {% if details.max_signals %}<div><dt>Max alerts</dt><dd>{{ details.max_signals }}</dd></div>{% endif %}
                         <div><dt>Language</dt><dd>{{ rule.language | default('kuery') }}</dd></div>
                     </dl>
                     {% if details.indexes %}
@@ -262,7 +335,43 @@
                     {% endif %}
                     </div>
                 </details>
-                {% endif %}
+
+                {# The rule's last run in Kibana, as of TIDE's last sync of it (#63), beside how it is
+                   scheduled to run. Per destination, so Compare leaves it out. #}
+                <details class="rm-fold" open data-fold="lastrun" data-section="lastrun" data-section-label="Last run">
+                    <summary><span>Last run{% if last_run %} <span class="status-pill status-{{ last_run.tone }}"
+                        title="As Kibana reported it at TIDE's last sync of this rule{% if last_run.synced_at %} ({{ last_run.synced_at.strftime('%Y-%m-%d %H:%M') }}){% endif %}">{{ last_run.label }}</span>{% endif %}</span>{{ drag_ctl('Last run') }}</summary>
+                    <div class="rm-about">
+                    {% if not last_run %}<p class="rm-run-none">Kibana has no run for this rule{% if not rule.enabled %}: it is disabled{% endif %}.</p>{% endif %}
+                    {# One row: the run's metrics, then how the rule is scheduled to run. #}
+                    <dl class="rm-facts rm-runfacts">
+                        {% if last_run %}
+                        {% if last_run.when %}<div><dt>Ran</dt><dd title="{{ last_run.when }}">{{ last_run.when.strftime('%Y-%m-%d %H:%M UTC') }}</dd></div>{% endif %}
+                        {% if last_run.search_ms is not none %}<div><dt>Search</dt><dd>{{ '%.0f' | format(last_run.search_ms) }} ms</dd></div>{% endif %}
+                        {% if last_run.indexing_ms is not none %}<div><dt>Writing alerts</dt><dd>{{ '%.0f' | format(last_run.indexing_ms) }} ms</dd></div>{% endif %}
+                        {% if last_run.gap_s %}<div><dt>Gap</dt><dd class="text-warning" title="Time between runs that this run didn't cover: events in it weren't checked">{{ last_run.gap }} not covered</dd></div>{% endif %}
+                        {% endif %}
+                        {% if details.interval %}<div><dt>Runs every</dt><dd>{{ details.interval }}</dd></div>{% endif %}
+                        {% if details.lookback %}<div><dt>Looks back</dt><dd>{{ details.lookback | replace('now-', '') }}</dd></div>{% endif %}
+                        {% if details.max_signals %}<div><dt>Max alerts</dt><dd>{{ details.max_signals }}</dd></div>{% endif %}
+                    </dl>
+                    {# A succeeded run's message only repeats its badge; a warning or failure says why. #}
+                    {% if last_run and last_run.message and last_run.tone != 'success' %}<pre class="rm-run-message{% if last_run.tone == 'danger' %} rm-run-message--failed{% endif %}">{{ last_run.message }}</pre>{% endif %}
+                    <div class="rm-test">
+                        <label for="rm-test-lookback" class="rm-label">Test against last</label>
+                        <select id="rm-test-lookback" name="test-lookback" class="form-input form-select">
+                            <option value="1h">1h</option>
+                            <option value="6h">6h</option>
+                            <option value="24h" selected>24h</option>
+                            <option value="7d">7d</option>
+                            <option value="30d">30d</option>
+                        </select>
+                        <button name="Test Rule" class="btn btn-secondary btn-sm"
+                                hx-post="/api/rules/{{ rule.rule_id }}/test?{{ scope_qs }}"
+                                hx-target="body" hx-swap="beforeend" hx-include="#rm-test-lookback">Test</button>
+                    </div>
+                    </div>
+                </details>
 
                 <div class="rm-panel rm-panel--logic" data-fold="logic" data-section="logic" data-section-label="Rule logic">
                     <div class="rm-panel__head">
@@ -296,9 +405,24 @@
                 </details>
                 {% endif %}
 
-                {% if rule.field_mappings %}
+                {% if rule.field_mappings or index_patterns %}
                 <details class="rm-fold" open data-fold="mappings" data-section="mappings" data-section-label="Field mappings">
                     <summary><span>Field mappings <span class="rm-fold__count">{{ rule.field_mappings | length }}</span></span>{{ drag_ctl('Field mappings') }}</summary>
+                    {% if index_patterns %}
+                    {# Whether each index pattern matches any index at all (#63), before which fields they have. #}
+                    <ul class="rm-index-list" aria-label="Index patterns">
+                        {% for ip in index_patterns %}
+                        <li>
+                            <span class="rm-chip rm-chip--mono">{{ ip.pattern }}</span>
+                            {% if ip.state == 'found' %}<span class="status-pill status-success">Matches indices · {{ ip.fields }} fields</span>
+                            {% elif ip.state == 'no_index' %}<span class="status-pill status-danger" title="The SIEM has no index this pattern matches, so the rule searches nothing there">No matching index</span>
+                            {% else %}<span class="status-pill status-muted" title="Not checked yet: Sync this rule checks it">Not checked yet</span>{% endif %}
+                            {% if ip.error %}<span class="text-muted fs-xs" title="{{ ip.error }}">last re-check failed</span>{% endif %}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                    {% endif %}
+                    {% if rule.field_mappings %}
                     <div class="mapping-table-wrapper">
                         <table class="mapping-table">
                             <thead><tr><th>Index</th><th>Field</th><th class="text-center">Valid</th><th>Type</th></tr></thead>
@@ -318,6 +442,7 @@
                             </tbody>
                         </table>
                     </div>
+                    {% endif %}
                     {% if mapping_info and mapping_info.label %}
                     <p class="rm-mapping-age">Checked against the SIEM's index mappings {{ mapping_info.label }}{% if mapping_info.known < mapping_info.patterns %} · {{ mapping_info.patterns - mapping_info.known }} pattern(s) not checked yet{% endif %}. Use Sync this rule to re-check now.</p>
                     {% endif %}
@@ -343,7 +468,7 @@
                             <div class="rm-bar{% if not r.applicable %} rm-bar--na{% endif %}" title="{% if r.result %}{{ r.result }}&#10;&#10;{% endif %}{{ r.how }}" tabindex="0">
                                 <span class="rm-bar__label">{{ r.label }}</span>
                                 <span class="rm-bar__track"><span class="rm-bar__fill rm-bar__fill--{{ r.tone }} u-w" style="--w: {{ r.pct }}%"></span></span>
-                                <span class="rm-bar__value">{% if r.off %}off{% elif not r.applicable %}n/a{% else %}{{ r.value }}/{{ r.max }}{% endif %}</span>
+                                <span class="rm-bar__value rm-bar__value--{{ r.tone }}">{% if r.off %}off{% elif not r.applicable %}n/a{% else %}<b>{{ r.value }}</b><span class="rm-bar__max">/{{ r.max }}</span>{% endif %}</span>
                             </div>
                             {% endfor %}
                         </div>
@@ -352,108 +477,8 @@
                 </details>
             </section>
 
-            {# ───────── RIGHT: actions + MITRE ───────── #}
+            {# ───────── RIGHT: MITRE · rule id · linked ───────── #}
             <aside class="rm-col rm-col--actions" data-col="right" aria-label="Right column">
-                <div class="rm-panel" data-fold="actions" data-section="actions" data-section-label="Actions">
-                    <div class="rm-panel__head">
-                        {{ collapse_ctl('actions') }}
-                        <h3 class="rm-panel__title">Actions</h3>
-                        {{ drag_ctl('Actions') }}
-                    </div>
-                    <div class="rm-actions">
-                        <button name="Validate Rule" class="btn btn-primary"
-                                hx-post="/api/rules/{{ rule.rule_id }}/validate?{{ scope_qs }}"
-                                hx-target="#modal-container" hx-swap="innerHTML"
-                                hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
-                            <span class="btn-text">{{ icon_text('circle-check', 'Validate rule', '14') }}</span>
-                            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
-                        </button>
-                        <button name="Open Edit Form" class="btn btn-secondary"
-                                hx-get="/api/rules/{{ rule.rule_id }}/edit-form?{{ scope_qs }}"
-                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                            {{ icon_text('edit-2', 'Edit rule', '14') }}
-                        </button>
-                        <button name="Sync Rule" class="btn btn-secondary"
-                                title="Re-check just this rule against its SIEM: pull it, refresh its index mappings and re-score it"
-                                hx-post="/api/rules/{{ rule.rule_id }}/sync?{{ scope_qs }}"
-                                hx-target="#modal-container" hx-swap="innerHTML"
-                                hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
-                            <span class="btn-text">{{ icon_text('refresh-cw', 'Sync this rule', '14') }}</span>
-                            <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
-                        </button>
-                        {% if move_targets %}
-                        <button name="Move" type="button" class="btn btn-secondary"
-                                title="Move or copy this rule to another linked destination"
-                                onclick='showMoveDialog({{ rule.rule_id | tojson | forceescape }}, {{ rule.name | tojson | forceescape }}, {{ siem_id | default("") | tojson | forceescape }}, {{ space | tojson | forceescape }}, {{ "true" if delete_source_default else "false" }}, {{ move_targets | tojson | forceescape }})'>
-                            {{ icon_text('arrow-right-left', 'Move', '14') }}
-                        </button>
-                        {% endif %}
-                        {% set _real_links = linked_rules | rejectattr('missing') | list %}
-                        {% if _real_links %}
-                        <button name="Compare Rule Versions" type="button" class="btn btn-secondary"
-                                title="Compare this rule with a linked rule, and merge one onto the other from there"
-                                hx-get="/api/promotion/{{ rule.rule_id }}/diff?{{ scope_qs }}"
-                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
-                            {{ icon_text('git-branch', 'Compare', '14') }}
-                        </button>
-                        {% endif %}
-                        {% if rule.deprecated %}
-                        <button name="Restore Rule" type="button" class="btn btn-secondary"
-                                title="Recreate this rule in its SIEM (disabled) and make it active again"
-                                hx-post="/api/promotion/{{ rule.rule_id }}/restore?{{ scope_qs }}"
-                                hx-target="body" hx-swap="beforeend" hx-include="unset"
-                                hx-confirm="Recreate this rule in its SIEM? It is restored disabled, so nothing starts alerting until you enable it.">
-                            {{ icon_text('refresh-cw', 'Restore', '14') }}
-                        </button>
-                        {% endif %}
-                        {% if kibana_rule_url %}
-                        <a name="Open in Kibana" class="btn btn-secondary" href="{{ kibana_rule_url }}" target="_blank" rel="noopener noreferrer"
-                           data-kibana-link title="Open in Kibana ({{ scope_label }})">
-                            {{ icon_text('external-link', 'View in Kibana', '14') }}
-                        </a>
-                        {% endif %}
-                        <button name="Delete Rule" type="button" class="btn btn-danger"
-                                title="Delete this rule from TIDE, and optionally from {{ scope_label }} in Elastic"
-                                onclick='showDeleteRuleDialog({{ rule.rule_id | tojson | forceescape }}, {{ rule.name | tojson | forceescape }}, {{ siem_id | default("") | tojson | forceescape }}, {{ space | tojson | forceescape }}, {{ scope_label | tojson | forceescape }}, {{ "true" if rule.deprecated else "false" }})'>
-                            {{ icon_text('trash-2', 'Delete rule', '14') }}
-                        </button>
-                    </div>
-
-                    {% if flash %}
-                    <p class="rm-note rm-note--info rm-flash" role="status">{{ flash }}</p>
-                    {% endif %}
-
-                    <div class="rm-test">
-                        <label for="rm-test-lookback" class="rm-label">Test against last</label>
-                        <div class="rm-test__row">
-                            <select id="rm-test-lookback" name="test-lookback" class="form-input form-select">
-                                <option value="1h">1h</option>
-                                <option value="6h">6h</option>
-                                <option value="24h" selected>24h</option>
-                                <option value="7d">7d</option>
-                                <option value="30d">30d</option>
-                            </select>
-                            <button name="Test Rule" class="btn btn-secondary"
-                                    hx-post="/api/rules/{{ rule.rule_id }}/test?{{ scope_qs }}"
-                                    hx-target="body" hx-swap="beforeend" hx-include="#rm-test-lookback">
-                                {{ icon_text('zap', 'Test', '14') }}
-                            </button>
-                        </div>
-                    </div>
-
-                    <p class="rm-validated text-{{ val_class }}{% if just_validated %} rm-validated--flash{% endif %}" role="status">
-                        {{ icon('circle-check', '12') }}
-                        {% if just_validated %}
-                            Validated just now{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}
-                        {% elif rule.validation_date %}
-                            Validated {{ rule.validation_date.strftime('%Y-%m-%d %H:%M') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}
-                            {% if val_status == 'expired' %}· expired{% elif val_status == 'amber' %}· due soon{% endif %}
-                        {% else %}
-                            Never validated
-                        {% endif %}
-                    </p>
-                </div>
-
                 <div class="rm-panel" data-fold="mitre" data-section="mitre" data-section-label="MITRE ATT&amp;CK">
                     <div class="rm-panel__head">
                         {{ collapse_ctl('MITRE ATT&amp;CK') }}
@@ -523,7 +548,7 @@
                     <form class="rm-add-link" hx-post="/api/rules/{{ rule.rule_id }}/links?{{ scope_qs }}"
                           hx-target="#modal-container" hx-swap="innerHTML">
                         <select name="target_scope" class="form-input" aria-label="Destination to link to"
-                                onchange="tideClearLinkTarget(this.form)">
+                                data-change="rule.linkScope">
                             {% for t in move_targets %}
                             <option value="{{ t.siem_id }}|{{ t.space }}">{{ t.name }}</option>
                             {% endfor %}
@@ -531,7 +556,7 @@
                         <div class="rm-add-link__name">
                             <input type="text" name="target_name" class="form-input" placeholder="Rule name to link…"
                                    required autocomplete="off" aria-label="Rule name to link"
-                                   oninput="this.form.target_rule_id.value = ''"
+                                   data-input="rule.linkName"
                                    hx-get="/api/rules/link-search" hx-trigger="keyup changed delay:300ms, focus"
                                    hx-include="closest form" hx-vals='{"exclude_rule_id": "{{ rule.rule_id }}", "exclude_siem_id": "{{ siem_id | default(rule.siem_id, true) }}", "exclude_space": "{{ space }}"}'
                                    hx-target="next .rm-add-link__results" hx-swap="outerHTML">

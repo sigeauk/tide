@@ -4,31 +4,33 @@
 {% block title %}CVE Overview — TIDE{% endblock %}
 
 {% block content %}
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;">
+<div class="page-header flex items-start justify-between flex-wrap gap-md">
     <div>
         <h1 class="page-title-hero">CVE Overview</h1>
         <p class="page-subtitle">All CISA CVE entries — matched entries shown first.</p>
     </div>
-    <div class="action-menu" style="flex-shrink:0;margin-left:auto;">
+    <div class="action-menu shrink-0 ml-auto">
         <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
             {{ icon('more-vertical', '14') }} Actions
         </button>
         <div class="action-menu__dropdown">
-            <label class="action-menu__item" for="cisa-kev-upload" style="cursor:pointer;margin:0;" title="Upload CISA KEV JSON file">
+            <label class="action-menu__item cursor-pointer m-0" for="cisa-kev-upload" title="Upload CISA KEV JSON file">
                 {{ icon('upload', '14') }} Import CVE
             </label>
-            <label class="action-menu__item" for="mitre-map-upload" style="cursor:pointer;margin:0;" title="Upload attack-to-cve.json mapping file">
+            <label class="action-menu__item cursor-pointer m-0" for="mitre-map-upload" title="Upload attack-to-cve.json mapping file">
                 {{ icon('globe', '14') }} Upload MITRE Map
             </label>
         </div>
-        <input name="Cisa Kev Upload" id="cisa-kev-upload" type="file" accept=".json" style="display:none">
-        <input name="Mitre Map Upload" id="mitre-map-upload" type="file" accept=".json" style="display:none">
-        <span id="upload-status" style="font-size:0.8rem;color:var(--color-muted);display:inline-flex;align-items:center;gap:0.35rem;"></span>
+        <input name="Cisa Kev Upload" id="cisa-kev-upload" type="file" accept=".json" style="display:none"
+               data-change="cves.upload" data-endpoint="/api/inventory/feed/cisa" data-target="cve-table-container" data-done="CVE data imported">
+        <input name="Mitre Map Upload" id="mitre-map-upload" type="file" accept=".json" style="display:none"
+               data-change="cves.upload" data-endpoint="/api/inventory/feed/mitre-mapping" data-target="upload-status" data-done="MITRE map updated">
+        <span id="upload-status" class="fs-md text-muted inline-flex items-center gap-xs"></span>
     </div>
 </div>
 
 <!-- Metric cards -->
-<div class="metrics-grid" style="margin-bottom:1.5rem;">
+<div class="metrics-grid mb-lg">
     <div class="metric-card">
         <p class="metric-value">{{ stats.total_kev }}</p>
         <p class="metric-label">Total CVEs</p>
@@ -62,12 +64,12 @@
 </div>
 
 <!-- Filter bar -->
-<div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center;">
+<div class="flex gap-ms mb-md flex-wrap items-center">
     <input name="Kev Search" id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
-           class="form-input" style="max-width:320px;font-size:0.85rem;"
-           oninput="filterTable(this.value)">
-    <label style="display:flex;align-items:center;gap:0.4rem;font-size:0.85rem;cursor:pointer;">
-        <input name="Filter Matched" type="checkbox" id="filter-matched" onchange="filterTable(document.getElementById('kev-search').value)">
+           class="form-input cve-upload-input"
+           data-input="cves.filter">
+    <label class="flex items-center gap-sm fs-base cursor-pointer">
+        <input name="Filter Matched" type="checkbox" id="filter-matched" data-change="cves.filter">
         Show matched only
     </label>
 </div>
@@ -83,48 +85,4 @@
     </div>
 </div>
 
-<script>
-function filterTable(q) {
-    // Delegates to card-based filter defined in the partial once loaded
-    if (window.filterCveCards) window.filterCveCards();
-}
-
-async function uploadFile(inputId, endpoint, targetId, successMsg) {
-    const inp = document.getElementById(inputId);
-    if (!inp || !inp.files.length) return;
-    const status = document.getElementById('upload-status');
-    if (status) status.innerHTML = '<span class="loading-state" style="flex-direction:row;padding:0;gap:0.5rem;"><span class="loading-spinner" style="width:14px;height:14px;"></span><span>Uploading…</span></span>';
-    const fd = new FormData();
-    fd.append('file', inp.files[0]);
-    inp.value = ''; // reset so same file can be re-selected
-    try {
-        const resp = await fetch(endpoint, { method: 'POST', body: fd });
-        if (resp.redirected || resp.status === 401) {
-            if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> Session expired — please reload the page.';
-            return;
-        }
-        const html = await resp.text();
-        if (resp.ok) {
-            const target = document.getElementById(targetId);
-            if (target) {
-                target.innerHTML = html;
-                htmx.process(target);
-            }
-            if (status) status.innerHTML = '<span style="color:var(--color-success);">&#10003;</span> ' + (successMsg || 'Done');
-            setTimeout(() => { if (status) status.innerHTML = ''; }, 4000);
-        } else {
-            if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> Error: ' + (resp.status);
-        }
-    } catch (err) {
-        if (status) status.innerHTML = '<span style="color:var(--color-danger);">&#10007;</span> ' + err.message;
-    }
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    document.getElementById('cisa-kev-upload').addEventListener('change', () =>
-        uploadFile('cisa-kev-upload', '/api/inventory/feed/cisa', 'cve-table-container', 'CVE data imported'));
-    document.getElementById('mitre-map-upload').addEventListener('change', () =>
-        uploadFile('mitre-map-upload', '/api/inventory/feed/mitre-mapping', 'upload-status', 'MITRE map updated'));
-});
-</script>
 {% endblock %}

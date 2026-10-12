@@ -12,57 +12,57 @@
 <div id="detection-section-inner">
 
 {% if detections %}
-<div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
+<div class="flex flex-col gap-sm mb-md">
   {% for det in detections %}
-  <div class="card u-bg-level-3" style="padding:0.65rem 0.85rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
-    <div style="flex:1;min-width:0;">
+  <div class="card u-bg-level-3 py-ms px-ms flex items-center gap-ms flex-wrap">
+    <div class="grow min-w-0">
       {% if det.note %}
-      <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ det.note }}">
+      <div class="fs-base fw-600 text-body overflow-hidden ellipsis nowrap" title="{{ det.note }}">
         {{ icon('file-code','13') }} {{ det.note }}
       </div>
       {% elif det.rule_ref %}
-      <div style="font-size:0.85rem;font-weight:600;color:var(--color-text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ det.rule_ref }}">
+      <div class="fs-base fw-600 text-body overflow-hidden ellipsis nowrap" title="{{ det.rule_ref }}">
         {{ icon('file-code','13') }} {{ det.rule_ref }}
       </div>
       {% endif %}
-      <div style="font-size:0.7rem;color:var(--color-text-muted);margin-top:0.2rem;">
+      <div class="fs-xs text-muted mt-xs">
         {{ det.source }}
       </div>
     </div>
-    <button name="Delete Detect" class="btn btn-danger btn-sm"
+    <button name="Delete Detect" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}"
             hx-target="#detection-section-inner"
             hx-swap="outerHTML"
             hx-confirm="Remove this detection entry?"
-            style="padding:0.2rem 0.4rem;font-size:0.7rem;">
+           >
       {{ icon('x','12') }}
     </button>
   </div>
   {% endfor %}
 </div>
 {% else %}
-<div style="text-align:center;padding:1.5rem 1rem;color:var(--color-text-muted);">
+<div class="text-center py-lg px-md text-muted">
   {{ icon('shield-off','28') }}
-  <p style="margin:0.5rem 0 0;font-size:0.85rem;">No detection rules recorded for this CVE.</p>
+  <p class="mt-sm mx-0 mb-0 fs-base">No detection rules recorded for this CVE.</p>
 </div>
 {% endif %}
 
 <!-- Add Detection Form -->
-<div style="border-top:1px solid var(--color-border-muted);padding-top:0.75rem;margin-top:0.5rem;">
+<div class="cve-detect-footer">
   <button name="Add Detection Rule" class="btn btn-sm btn-secondary" id="add-det-btn"
-          onclick="this.style.display='none';document.getElementById('add-det-form').style.display='flex';">
+          data-click="detection.addOpen">
     {{ icon('plus','14') }} Add Detection Rule
   </button>
-  <form name="Submit Detect" id="add-det-form" style="display:none;flex-direction:column;gap:0.5rem;margin-top:0.5rem;"
+  <form name="Submit Detect" id="add-det-form" class="flex-col gap-sm mt-sm"
         hx-post="/api/inventory/cve/{{ cve_id }}/detect"
         hx-target="#detection-section-inner"
         hx-swap="outerHTML"
-        hx-on::after-request="this.reset();document.getElementById('add-det-btn').style.display='inline-flex';">
+        hx-on::after-request="this.reset();document.getElementById('add-det-btn').style.display='inline-flex';" style="display:none">
 
     {# All SIEM rules dropdown #}
     {% if all_siem_rules %}
-    <select class="form-input" style="font-size:0.82rem;" id="siem-rule-select"
-            onchange="var f=this.closest('form'),v=this.value;if(v){f.querySelector('[name=rule_ref]').value=v;f.querySelector('[name=source]').value='siem';}else{f.querySelector('[name=source]').value='manual';}">
+    <select class="form-input fs-md" id="siem-rule-select"
+            data-change="detection.rulePicked">
       <option value="">— Select a SIEM rule —</option>
       {% if technique_rules %}
       <optgroup label="Mapped to this CVE">
@@ -77,14 +77,14 @@
     </select>
     {% endif %}
 
-    <input class="form-input" name="rule_ref" placeholder="Rule name / reference…" style="font-size:0.85rem;">
-    <input class="form-input" name="note" placeholder="Note (optional)…" style="font-size:0.85rem;">
+    <input class="form-input fs-base" name="rule_ref" placeholder="Rule name / reference…">
+    <input class="form-input fs-base" name="note" placeholder="Note (optional)…">
     <input type="hidden" name="source" value="manual">
 
-    <div style="display:flex;gap:0.5rem;">
+    <div class="flex gap-sm">
       <button name="Save" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','12') }} Save</button>
       <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
-              onclick="this.closest('form').style.display='none';document.getElementById('add-det-btn').style.display='inline-flex';">
+              data-click="detection.addCancel">
         Cancel
       </button>
     </div>

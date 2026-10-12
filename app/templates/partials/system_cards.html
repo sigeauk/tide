@@ -6,40 +6,32 @@
 
 {% if toast is defined %}
 <div class="toast toast-success" style="display:none" data-toast="{{ toast }}"></div>
-<script>
-  (function(){
-    const el = document.querySelector('[data-toast]');
-    if(!el) return;
-    const msg = el.dataset.toast;
-    if(msg && window.showToast) showToast(msg, 'success');
-  })();
-</script>
 {% endif %}
 
 {% if summaries %}
 <div class="cve-list">
     {% for summary in summaries %}
     {% set s = summary.system %}
-    <details class="cve-card-item cve-card-item--available system-cve-card"
+    <details class="cve-card-item cve-card-item--available system-cve-card block"
              data-name="{{ (s.name or '') | lower }}"
              data-description="{{ (s.description or '') | lower }}"
              data-classification="{{ (s.classification or '') | lower }}"
              data-risk="{{ summary.worst_status or 'green' }}"
              data-metrics="{{ summary.host_count }} {{ summary.vuln_count }} {{ summary.software_count }} {{ summary.baseline_count }}"
-             style="display:block;">
-        <summary style="cursor:pointer;list-style:none;">
-            <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:center;">
+            >
+        <summary class="cursor-pointer list-none">
+            <div class="row-grid">
                 <div class="cve-card-item__id cve-card-item__id--pill">
                     {% if s.classification %}
                     {% set clf_color = clf_colors.get(s.classification, '#6b7280') if clf_colors is defined and clf_colors else '#6b7280' %}
-                    <span class="system-card__classification u-bg-dyn-tint" style="--u-bg-color:{{ clf_color }};color:{{ clf_color }};border-color:{{ clf_color }}40">{{ s.classification }}</span>
+                    <span class="system-card__classification u-bg-dyn-tint clf-tinted clf-tinted--soft" style="--u-bg-color:{{ clf_color }}">{{ s.classification }}</span>
                     {% else %}
                     <span class="text-muted">Unclassified</span>
                     {% endif %}
                 </div>
                 <div class="cve-card-item__body">
-                    <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.35rem;flex-wrap:wrap;">
-                        <a name="Systems" href="/systems/{{ s.id }}" title="{{ s.name }}" onclick="event.stopPropagation();">{{ s.name }}</a>
+                    <div class="cve-card-item__name flex items-center gap-xs flex-wrap">
+                        <a name="Systems" href="/systems/{{ s.id }}" title="{{ s.name }}" data-stop-click>{{ s.name }}</a>
                     </div>
                 </div>
                 <div class="cve-card-item__right">
@@ -53,52 +45,48 @@
             </div>
         </summary>
 
-        <div class="md-content" style="margin-top:0.5rem;">{{ (s.description or 'No description available.') | md }}</div>
+        <div class="md-content mt-sm">{{ (s.description or 'No description available.') | md }}</div>
         {% if summary.baselines %}
-        <div class="cve-list" style="margin-top:0.75rem;">
+        <div class="cve-list mt-ms">
             {% for baseline in summary.baselines %}
-            <details class="cve-card-item cve-card-item--available" style="display:block;">
-                <summary style="cursor:pointer;list-style:none;">
-                    <div style="display:grid;grid-template-columns:minmax(90px, 120px) 1fr auto;gap:0.75rem;align-items:center;">
+            <details class="cve-card-item cve-card-item--available block">
+                <summary class="cursor-pointer list-none">
+                    <div class="row-grid row-grid--narrow">
                         <div class="cve-card-item__id">{{ baseline.coverage_pct }}%</div>
                         <div class="cve-card-item__body">
-                            <div class="cve-card-item__name"><a href="/systems/{{ s.id }}?baseline_id={{ baseline.playbook_id }}" onclick="event.stopPropagation();" title="Show {{ s.name }}'s {{ baseline.playbook_name }} techniques">{{ baseline.playbook_name }}</a></div>
+                            <div class="cve-card-item__name"><a href="/systems/{{ s.id }}?baseline_id={{ baseline.playbook_id }}" data-stop-click title="Show {{ s.name }}'s {{ baseline.playbook_name }} techniques">{{ baseline.playbook_name }}</a></div>
                         </div>
                         <div class="cve-card-item__right"><div class="cve-card-item__meta"><span>{{ baseline.covered_steps }}/{{ baseline.total_steps }}</span></div></div>
                     </div>
                 </summary>
-                <div class="md-content" style="margin-top:0.45rem;">{{ (baseline.playbook_description or 'No description available.') | md }}</div>
+                <div class="md-content mt-sm">{{ (baseline.playbook_description or 'No description available.') | md }}</div>
 
                                 {% if baseline.tactics %}
-                                {% set KILL_CHAIN = ["Reconnaissance","Resource Development","Initial Access","Execution",
-                                        "Persistence","Privilege Escalation","Defense Evasion","Credential Access",
-                                        "Discovery","Lateral Movement","Collection","Command and Control",
-                                        "Exfiltration","Impact","Other"] %}
                                 {% set ns_o = namespace(order=[]) %}
                                 {% for t in baseline.tactics %}
                                     {% set tac = t.tactic or "Other" %}
                                     {% if tac not in ns_o.order %}{% set ns_o.order = ns_o.order + [tac] %}{% endif %}
                                 {% endfor %}
                                 {% set ns_s = namespace(phases=[]) %}
-                                {% for kc in KILL_CHAIN %}
+                                {% for kc in attack_tactic_order %}
                                     {% if kc in ns_o.order %}{% set ns_s.phases = ns_s.phases + [kc] %}{% endif %}
                                 {% endfor %}
                                 {% for p in ns_o.order %}
                                     {% if p not in ns_s.phases %}{% set ns_s.phases = ns_s.phases + [p] %}{% endif %}
                                 {% endfor %}
 
-                                <div class="cve-list" style="margin-top:0.6rem;">
+                                <div class="cve-list mt-sm">
                                         {% for tactic in ns_s.phases %}
-                                        <details data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-tactic-{{ loop.index }}" style="display:block;">
-                                                <summary style="cursor:pointer;list-style:none;padding:0.2rem 0;">
-                                                        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
-                                                                <div style="font-size:0.84rem;font-weight:600;color:var(--color-text);">{{ tactic }}</div>
+                                        <details data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-tactic-{{ loop.index }}" class="block">
+                                                <summary class="cursor-pointer list-none py-xs px-0">
+                                                        <div class="flex items-center justify-between gap-ms">
+                                                                <div class="fs-md fw-600 text-body">{{ tactic }}</div>
                                                                 {% set ns_tc = namespace(count=0) %}
                                                                 {% for st in baseline.tactics %}{% if (st.tactic or "Other") == tactic %}{% set ns_tc.count = ns_tc.count + 1 %}{% endif %}{% endfor %}
-                                                                <div style="font-size:0.75rem;color:var(--color-text-muted);">{{ ns_tc.count }}</div>
+                                                                <div class="fs-sm text-muted">{{ ns_tc.count }}</div>
                                                         </div>
                                                 </summary>
-                                                <div class="cve-list" style="margin-top:0.3rem;">
+                                                <div class="cve-list mt-xs">
                                                         {% for step in baseline.tactics %}
                                                         {% if (step.tactic or "Other") == tactic %}
                                                         {% if step.status == 'green' %}
@@ -118,25 +106,25 @@
                                                         {% endif %}
                                                         {% set first_tid = step.display_technique_ids[0] if step.display_technique_ids else (step.technique_id or '') %}
                                                         {% set first_info = ns_cov.map.get(first_tid, {}) if first_tid else {} %}
-                                                        <details class="cve-card-item cve-card-item--available" data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-step-{{ step.step_id or loop.index }}" style="display:block;border-left-color:{{ step_color }};">
-                                                                <summary style="cursor:pointer;list-style:none;">
-                                                                        <div style="display:grid;grid-template-columns:minmax(120px, 170px) 1fr auto;gap:0.75rem;align-items:flex-start;">
-                                                                                <div class="cve-card-item__id cve-card-item__id--pill" style="display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:0.35rem;flex-wrap:nowrap;min-width:0;width:auto;white-space:nowrap;overflow:hidden;line-height:1;">
+                                                        <details class="cve-card-item cve-card-item--available step-card-edge" data-collapse-key="systems-list-{{ s.id }}-baseline-{{ baseline.playbook_id }}-step-{{ step.step_id or loop.index }}" style="--edge: {{ step_color }}">
+                                                                <summary class="cursor-pointer list-none">
+                                                                        <div class="row-grid row-grid--top">
+                                                                                <div class="cve-card-item__id cve-card-item__id--pill step-pill-row">
                                                                                         {% if first_tid %}
                                                                                         {% set tid_rule_count = first_info.get('rule_count', 0) %}
                                                                                         {{ mitre_pill(first_tid, neutral=true, clickable=true, size='sm') }}
                                                                                         {% if step.display_technique_ids and (step.display_technique_ids | length) > 1 %}
-                                                                                        <span class="text-muted" style="display:inline-flex;align-items:center;font-size:0.72rem;line-height:1;white-space:nowrap;transform:translateY(-1px);">+{{ (step.display_technique_ids | length) - 1 }}</span>
+                                                                                        <span class="text-muted step-pill-more">+{{ (step.display_technique_ids | length) - 1 }}</span>
                                                                                         {% endif %}
                                                                                         {% else %}
                                                                                         <span>{{ icon('crosshair','12') }} Technique</span>
                                                                                         {% endif %}
                                                                                 </div>
                                                                                 <div class="cve-card-item__body">
-                                                                                        <div class="cve-card-item__name" style="display:flex;align-items:center;gap:0.5rem;flex-wrap:nowrap;min-width:0;">
+                                                                                        <div class="cve-card-item__name flex items-center gap-sm flex-nowrap min-w-0">
                                                                                                 {% if step.step_id %}
                                                                                                 <button type="button" name="Open Technique" class="rm-item__open" title="Open this technique on {{ s.name }}"
-                                                                                                        onclick="event.preventDefault(); event.stopPropagation();"
+                                                                                                        data-click="event.prevent" data-stop-click
                                                                                                         hx-get="/api/systems/{{ s.id }}/steps/{{ step.step_id }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ step.title }}</button>
                                                                                                 {% else %}
                                                                                                 <span>{{ step.title }}</span>
@@ -148,7 +136,7 @@
                                                                                 </div>
                                                                         </div>
                                                                 </summary>
-                                                                <div class="md-content" style="margin-top:0.45rem;">{{ (step.description or 'No description available.') | md }}</div>
+                                                                <div class="md-content mt-sm">{{ (step.description or 'No description available.') | md }}</div>
                                                         </details>
                                                         {% endif %}
                                                         {% endfor %}
@@ -165,9 +153,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="empty-output" style="padding:4rem 2rem;">
+<div class="empty-output empty-output--hero">
     {{ icon('monitor', '48') }}
-    <p style="margin-top:1rem;font-size:1rem;">No systems yet.</p>
+    <p class="mt-md fs-lg">No systems yet.</p>
     <p class="text-sm">Click <strong>Add System</strong> to create your first enterprise system.</p>
 </div>
 {% endif %}

@@ -36,32 +36,32 @@
         <div class="cve-mini-card__badges">
 
             {% if has_det %}
-            <span class="status-pill status-enabled" style="font-size:0.69rem;padding:0.1rem 0.4rem;">
+            <span class="status-pill status-enabled fs-xs py-2xs px-sm">
                 {{ icon('shield-check', '10') }} {{ vuln.detections | length }} Rule{{ 's' if vuln.detections | length != 1 }}
             </span>
             {% set _det0 = vuln.detections[0] %}
             {% set _det0_label = _det0.note or _det0.rule_ref or '' %}
             {% if _det0_label %}
-            <span style="font-size:0.7rem;color:var(--color-text-muted);" title="{{ _det0_label }}">
+            <span class="fs-xs text-muted" title="{{ _det0_label }}">
                 {{ icon('link', '9') }} {{ _det0_label }}
             </span>
             {% endif %}
             {% else %}
-            <span class="status-pill status-disabled" style="font-size:0.69rem;padding:0.1rem 0.4rem;">
+            <span class="status-pill status-disabled fs-xs py-2xs px-sm">
                 {{ icon('shield-off', '10') }} No Cover
             </span>
             {% endif %}
 
             {% if vuln.known_ransomware %}
-            <span class="status-pill u-bg-warning-bg" style="font-size:0.69rem;padding:0.1rem 0.4rem;color:var(--color-warning-text);border-color:var(--color-warning)">
+            <span class="status-pill u-bg-warning-bg host-cve-ransom">
                 {{ icon('zap', '10') }} Ransomware
             </span>
             {% endif %}
 
             {% if vuln.matched_software %}
-            <span style="display:inline-flex;flex-wrap:wrap;gap:0.2rem;align-items:center;">
+            <span class="inline-flex flex-wrap gap-xs items-center">
                 {% for sw_name in vuln.matched_software %}
-                <span class="badge badge-neutral" style="font-size:0.67rem;padding:0.1rem 0.35rem;font-family:monospace;">{{ sw_name }}</span>
+                <span class="badge badge-neutral fs-2xs py-2xs px-xs mono">{{ sw_name }}</span>
                 {% endfor %}
             </span>
             {% endif %}
@@ -69,7 +69,7 @@
         </div>
     </div>
 
-    <div style="flex-shrink:0;font-size:0.7rem;color:var(--color-text-muted);text-align:right;white-space:nowrap;">
+    <div class="shrink-0 fs-xs text-muted text-right nowrap">
         {{ vuln.date_added }}
     </div>
 
@@ -78,8 +78,8 @@
 </div>
 
 {% else %}
-<div style="text-align:center;padding:3rem 1rem;color:var(--color-muted);">
+<div class="empty-centre">
     {{ icon('shield-check', '40') }}
-    <p style="margin-top:0.75rem;font-size:0.9rem;">No CISA CVE matches for <strong>{{ host.name }}</strong>.</p>
+    <p class="mt-ms fs-base">No CISA CVE matches for <strong>{{ host.name }}</strong>.</p>
 </div>
 {% endif %}

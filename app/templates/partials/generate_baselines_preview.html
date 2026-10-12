@@ -17,7 +17,7 @@
                    {% if not g.exists %}checked{% endif %}
                    {% if g.exists %}data-exists="1"{% endif %}
                    form="gen-baselines-form"
-                   onchange="!function(){var a=document.getElementById('gen-preview-area'),c=a.querySelectorAll('input[name=selected_baselines]:checked'),b=a.querySelector('.gen-btn-count');if(b)b.textContent=c.length}()">
+                   data-change="ui.genCount">
             <span class="gen-preview-row__name">
                 {{ g.name }}
                 {% if g.exists %}<span class="gen-preview-row__flag">exists</span>{% endif %}

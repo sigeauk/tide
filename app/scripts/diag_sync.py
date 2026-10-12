@@ -43,6 +43,8 @@ import os
 import sys
 import urllib3
 
+from app.services import tls
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -199,22 +201,28 @@ def _check_db() -> dict:
             except Exception:
                 pass
 
+            # tls_verify arrived in migration 79; older DBs don't verify.
+            tls_col = "tls_verify" if "tls_verify" in {
+                r[1] for r in c.execute("PRAGMA table_info('siem_inventory')").fetchall()
+            } else "false"
             rows = c.execute(
                 "SELECT id, label, kibana_url, elasticsearch_url, "
-                "api_token_enc, is_active FROM siem_inventory"
+                f"api_token_enc, is_active, coalesce({tls_col}, false) FROM siem_inventory"
             ).fetchall()
             info["siems"] = []
             if not rows:
                 print("  siem_inventory: <EMPTY> -- no SIEMs configured")
-            for sid, label, kurl, eurl, tok, active in rows:
-                print(f"  SIEM {sid[:8]} '{label}' active={active}")
+            from app.services.credentials import reveal_or_none
+            for sid, label, kurl, eurl, tok, active, tls_verify in rows:
+                tok = reveal_or_none(tok)
+                print(f"  SIEM {sid[:8]} '{label}' active={active} verify_tls={tls_verify}")
                 print(f"     kibana_url        = {kurl!r}")
                 print(f"     elasticsearch_url = {eurl!r}")
                 print(f"     api_token         = {_redact(tok)}")
                 info["siems"].append(
                     {"id": sid, "label": label, "kibana_url": kurl,
                      "elasticsearch_url": eurl, "api_token": tok,
-                     "is_active": active}
+                     "is_active": active, "tls_verify": bool(tls_verify)}
                 )
 
         if "clients" in tables:
@@ -286,6 +294,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
             s["kibana_url"],
             s["api_token"],
             s.get("id"),
+            tls.verify_arg(s.get("tls_verify")),
         ))
     # Env-var fallback (4.0.x)
     if env.get("ELASTIC_URL") and env.get("ELASTIC_API_KEY"):
@@ -294,6 +303,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
             env["ELASTIC_URL"],
             env["ELASTIC_API_KEY"],
             None,
+            False,
         ))
     if not targets:
         print("  no targets to test (no SIEMs in DB, no env vars). "
@@ -304,7 +314,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
     # Per-SIEM cache of {space_name: True} as discovered by /api/spaces/space
     real_spaces_per_siem: dict = {}
 
-    for label, url, token, siem_id in targets:
+    for label, url, token, siem_id, verify in targets:
         url = url.rstrip("/")
         # 4.1.14 Fix 15: route through /s/default/ to match the standardised
         # URL shape used by the production app (post-4.1.14). Hitting bare
@@ -323,7 +333,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                     "Authorization": f"ApiKey {token}",
                     "Content-Type": "application/json",
                 },
-                verify=False,
+                verify=verify,
                 timeout=15,
             )
             print(f"     HTTP {r.status_code}")
@@ -350,7 +360,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                                 "kbn-xsrf": "true",
                                 "Authorization": f"ApiKey {stripped}",
                             },
-                            verify=False, timeout=15,
+                            verify=verify, timeout=15,
                         )
                         if r2.status_code == 200:
                             print("     >>> RETRY WITH STRIPPED TOKEN -> HTTP 200.")
@@ -385,9 +395,9 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
             else:
                 print(f"     HTTP {r.status_code} -- unexpected.")
         except requests.exceptions.SSLError as e:
-            print(f"     SSL ERROR: {e}")
-            print("     fix: either deploy the CA into the container or "
-                  "set requests verify=False (TIDE already does this).")
+            print(f"     SSL ERROR: {tls.describe_error(e) or e}")
+            print("     fix: install the CA certificate (README, \"TLS certificates\") "
+                  "or untick Verify TLS certificate on this SIEM in Management.")
         except requests.exceptions.ConnectionError as e:
             print(f"     CONNECTION ERROR: {e}")
             print("     fix: check the container can reach the host:port. "
@@ -406,7 +416,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                     "Authorization": f"ApiKey {token}",
                     "Content-Type": "application/json",
                 },
-                verify=False,
+                verify=verify,
                 timeout=15,
             )
             if sp.status_code == 200:
@@ -459,7 +469,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                         "kbn-xsrf": "true",
                         "Authorization": f"ApiKey {siem['api_token']}",
                     },
-                    verify=False,
+                    verify=tls.verify_arg(siem.get("tls_verify")),
                     timeout=15,
                 )
                 tag = "OK" if r.status_code == 200 else f"HTTP {r.status_code}"
@@ -476,7 +486,7 @@ def _check_kibana(siems: list, env: dict, mappings: list = None) -> None:
                       f"space={space!r}  ERROR: {type(e).__name__}: {e}")
 
 
-# Canonical detection_rules columns expected in the TENANT DB (26 columns).
+# Canonical detection_rules columns expected in the TENANT DB (28 columns).
 # Mirrors _TENANT_DETECTION_RULES_COLUMNS in app/services/sync.py — keep in sync.
 _TENANT_DR_COLS = (
     "rule_id", "siem_id", "name", "severity", "author", "enabled", "space",
@@ -485,12 +495,12 @@ _TENANT_DR_COLS = (
     "score_language", "score_note", "score_override",
     "score_tactics", "score_techniques", "score_author", "score_highlights",
     "last_updated", "mitre_ids", "raw_data",
-    "client_id", "deprecated", "source_rule_id",
+    "client_id", "deprecated", "source_rule_id", "kibana_rule_id", "rule_language",
 )
 
 # Canonical detection_rules columns expected in the SHARED DB (23 columns —
 # no client_id; that column lives only on tenant copies).
-_SHARED_DR_COLS = tuple(c for c in _TENANT_DR_COLS if c != "client_id")
+_SHARED_DR_COLS = tuple(c for c in _TENANT_DR_COLS if c not in ("client_id", "kibana_rule_id", "rule_language"))
 
 
 def _check_dr_columns(conn, table_ref: str, canonical: tuple, label: str) -> list[str]:
@@ -803,7 +813,7 @@ def _check_elasticsearch(siems: list) -> None:
             r = requests.get(
                 f"{url}/_cluster/health",
                 headers=({"Authorization": f"ApiKey {token}"} if token else {}),
-                verify=False,
+                verify=tls.verify_arg(s.get("tls_verify")),
                 timeout=10,
             )
             print(f"     HTTP {r.status_code}")
@@ -1037,7 +1047,7 @@ def _check_live_sync_trace(info: dict) -> None:
                             "kbn-xsrf": "true",
                             "Authorization": f"ApiKey {token}",
                         },
-                        verify=False, timeout=15,
+                        verify=tls.verify_arg(siem.get("tls_verify")), timeout=15,
                     )
                     if r.status_code == 200:
                         try:
@@ -1056,7 +1066,7 @@ def _check_live_sync_trace(info: dict) -> None:
                             sp_r = _req.get(
                                 f"{kurl}/api/spaces/space",
                                 headers={"kbn-xsrf": "true", "Authorization": f"ApiKey {token}"},
-                                verify=False, timeout=10,
+                                verify=tls.verify_arg(siem.get("tls_verify")), timeout=10,
                             )
                             if sp_r.status_code == 200:
                                 real = sorted(s.get("id") for s in sp_r.json() if s.get("id"))
@@ -1680,7 +1690,7 @@ def _check_app_host() -> None:
         if str(getattr(st, "bootstrap_admin_password", "")) in ("TIDEadmin", "admin", ""):
             _warn("the bootstrap admin password is still the default; change it or remove the bootstrap admin")
         if not getattr(st, "ssl_verify", True):
-            _info("TLS verification for outbound calls is off (ssl_verify=false)")
+            _info("Keycloak sign-in does not verify TLS (SSL_VERIFY=false); integrations follow their own Verify TLS certificate box")
         print(f"  app url           : {getattr(st, 'app_url', '?')}")
     for key in ("TIDE_ISOLATION_STRICT", "TIDE_LOG_LEVEL", "TIDE_LOG_FILE"):
         if os.environ.get(key):

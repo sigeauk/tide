@@ -110,15 +110,19 @@ ISO_MAP = {
 }
 
 
+# Longest keyword first (the most specific wins), each compiled once. The substring test in
+# get_iso_code skips the regex for keywords a text can't contain: a page of actors used to run
+# tens of thousands of regex searches.
+_ISO_PATTERNS = [(k, re.compile(r'\b' + re.escape(k) + r'\b')) for k in sorted(ISO_MAP, key=len, reverse=True)]
+
+
 def get_iso_code(text: str) -> Optional[str]:
     """Get ISO country code from text (name, origin, description)."""
     if not text:
         return None
     text_search = str(text).upper()
-    sorted_keywords = sorted(ISO_MAP.keys(), key=len, reverse=True)
-    for keyword in sorted_keywords:
-        pattern = r'\b' + re.escape(keyword) + r'\b'
-        if re.search(pattern, text_search):
+    for keyword, pattern in _ISO_PATTERNS:
+        if keyword in text_search and pattern.search(text_search):
             return ISO_MAP[keyword]
     return None
 
@@ -305,6 +309,7 @@ def list_threats(
         "origin": origin or "",
         "source": source or "",
         "sort_by": sort_by,
+        "user": user,
     }
     return templates.TemplateResponse(request, "partials/threats_grid.html", context)
 
@@ -364,6 +369,7 @@ async def sync_threats(
         runner=lambda: run_mitre_sync(client_id),
         label="Threat Landscape",
         client_id=client_id,
+        actor=getattr(user, "username", None),
     )
 
     return HTMLResponse(
@@ -384,7 +390,7 @@ def sync_threats_job_status(job_id: str, user: RequireUser):
     job = cti_jobs.get(job_id)
     if job is None:
         return HTMLResponse(
-            '<div class="toast toast-warning" onclick="this.remove()">'
+            '<div class="toast toast-warning" data-click="el.remove">'
             'Threat sync job is no longer tracked. Please run Sync again.</div>'
         )
 
@@ -417,7 +423,7 @@ def sync_threats_job_status(job_id: str, user: RequireUser):
         headers["HX-Trigger"] = json.dumps({"refreshThreats": True})
 
     return HTMLResponse(
-        f'<div class="toast {toast_class}" onclick="this.remove()">'
+        f'<div class="toast {toast_class}" data-click="el.remove">'
         f'{_html.escape(msg)}'
         f'</div>',
         headers=headers,

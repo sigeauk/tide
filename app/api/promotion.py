@@ -15,8 +15,10 @@ from typing import Optional, Dict, Any
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, ActiveClient
 
+import json
 import logging
 
+from app.api.rules import rule_window
 from app.services.rule_diff import build_rule_diff
 
 logger = logging.getLogger(__name__)
@@ -109,7 +111,9 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
     Merging never switches a detection on or off -- whichever side is overwritten keeps its own
     enabled state.
 
-    Returns ``(status_code, message, refresh_scope)``; 200 means merged. ``refresh_scope`` is
+    Returns ``(status_code, message, refresh_scope, survivor)``; 200 means merged. ``survivor`` is
+    ``(rule_id, siem_id, space)`` of the copy to show afterwards: the one that received the merge,
+    or the other if that one was deleted. ``refresh_scope`` is
     ``(siem_id, space, rule_id)`` for whichever row TIDE should re-sync -- the one that was
     overwritten, or None if that same row was then deleted.
     """
@@ -118,16 +122,16 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
 
     link = _pick_link(db, rule_id, siem_id, space, target_rule_id, target_siem_id, target_space)
     if not link:
-        return 404, "This rule has no linked counterpart.", None
+        return 404, "This rule has no linked counterpart.", None, None
 
     source = (rule_id, siem_id, space)
     target = (link["rule_id"], link["siem_id"], link["space"])
     source_rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     target_rule = db.get_rule_by_id(link["rule_id"], link["space"], siem_id=link["siem_id"], client_id=client_id)
     if not source_rule:
-        return 404, "This rule no longer exists.", None
+        return 404, "This rule no longer exists.", None, None
     if not target_rule:
-        return 404, "The linked rule no longer exists.", None
+        return 404, "The linked rule no longer exists.", None, None
 
     if direction == "target_over_source":
         donor, dest, donor_rule, dest_rule = target, source, target_rule, source_rule
@@ -137,11 +141,11 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
     dest_id, dest_siem, dest_space = dest
 
     if not donor_rule.raw_data:
-        return 400, f'"{donor_rule.name}" has no stored content to merge from.', None
+        return 400, f'"{donor_rule.name}" has no stored content to merge from.', None, None
     siems = {s.get("id"): s for s in (db.get_client_siems(client_id) or [])}
     donor_siem_row, dest_siem_row = siems.get(donor_siem), siems.get(dest_siem)
     if not donor_siem_row or not dest_siem_row:
-        return 400, "Both destinations must still be linked to this client to merge.", None
+        return 400, "Both destinations must still be linked to this client to merge.", None, None
 
     payload = copy.deepcopy(donor_rule.raw_data)
     payload["enabled"] = bool((dest_rule.raw_data or {}).get("enabled", False))
@@ -155,13 +159,14 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
             target_kibana_url=dest_siem_row.get("kibana_url"),
             target_api_key=dest_siem_row.get("api_token_enc"),
             delete_source=False,
+            on_target_recreated=db.kibana_recreate_hook(client_id, dest_id, dest_siem, dest_space, username, user_id),
         )
     except Exception as exc:
         logger.exception("Merging '%s' onto '%s' failed", donor_rule.name, dest_rule.name)
-        return 500, f"Error: {exc}", None
+        return 500, f"Error: {exc}", None, None
     success, message = result[:2]
     if not success:
-        return 400, f"Could not merge: {message}", None
+        return 400, f"Could not merge: {message}", None, None
     db.record_rule_history(
         rule_id=dest_id, siem_id=dest_siem, space=dest_space, client_id=client_id,
         action="link_synced", actor_user_id=user_id, actor_name=username,
@@ -171,6 +176,7 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
 
     friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".'
     refresh_scope = (dest_siem, dest_space, dest_id)
+    survivor = dest
     to_delete = source if delete_which == "source" else (target if delete_which == "target" else None)
     if to_delete:
         # A real removal, unlike "Delete from TIDE" elsewhere in the app: the whole point of
@@ -194,9 +200,10 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
                 friendly += f' "{del_name}" was deleted from its SIEM and TIDE.'
                 if to_delete == dest:
                     refresh_scope = None  # nothing left there worth re-syncing
+                    survivor = donor
             else:
                 friendly += f' "{del_name}" was removed from its SIEM; its TIDE row was already gone.'
-    return 200, friendly, refresh_scope
+    return 200, friendly, refresh_scope, survivor
 
 
 @router.post("/{rule_id}/merge", response_class=HTMLResponse)
@@ -227,7 +234,7 @@ async def merge_linked_rule(
     if delete_which not in {"none", "source", "target"}:
         delete_which = "none"
     username = user.name or user.username if user else "Unknown"
-    status, message, refresh_scope = await _run_in_context(
+    status, message, refresh_scope, survivor = await _run_in_context(
         _merge_rule_sync, db, client_id, rule_id, siem_id, space, user.id, username, direction, delete_which,
         target_rule_id, target_siem_id, target_space,
     )
@@ -237,7 +244,11 @@ async def merge_linked_rule(
         from app.api.rules import sync_single_rule
         await _run_in_context(sync_single_rule, db, client_id, refresh_scope[2], refresh_scope[0], refresh_scope[1],
                               user.id, username)
-    return HTMLResponse(f'<div class="empty-state-text">{escape(message)}</div>')
+    # The rule window reopens on the copy that received the merge, or the one left if that was deleted (#62).
+    response = _toast("success", message, 200, trigger="refreshRules")
+    if survivor:
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(*survivor))
+    return response
 
 
 def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str):
@@ -277,7 +288,7 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     if kibana_rule_id and kibana_rule_id == rule_id:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
     elif saved_id and saved_id != rule_id:
-        db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space)
+        db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space, actor=username)
         effective_rule_id = saved_id
     else:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
@@ -315,7 +326,7 @@ async def restore_rule(
 def _toast(kind: str, message: str, status_code: int = 200, trigger: Optional[str] = None) -> HTMLResponse:
     from html import escape
     response = HTMLResponse(
-        f'<div class="toast toast-{kind}" onclick="this.remove()">{escape(message)}</div>',
+        f'<div class="toast toast-{kind}" data-click="el.remove">{escape(message)}</div>',
         status_code=status_code,
     )
     if trigger:
@@ -468,7 +479,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
         # A true move: baseline references follow the rule to its new home.
         db.remap_rule_references(
             rule_id, target_rule_id, client_id,
-            source_siem_id, source_space, target_siem_id, target_space,
+            source_siem_id, source_space, target_siem_id, target_space, actor=username,
         )
         friendly_message = f'Moved "{rule.name}" to {dest_name}.'
     else:
@@ -521,7 +532,7 @@ async def move_rule(
     delete_source = str(form.get("delete_source") or "").lower() in {"1", "true", "on", "yes"}
     validation_mode = str(form.get("validation") or "keep")
     username = user.name or user.username if user else "Unknown"
-    status, message, _name, _target_rule_id, _target_scope = await _run_in_context(
+    status, message, _name, target_rule_id, target_scope = await _run_in_context(
         _move_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space,
         target_siem_id, target_space, delete_source, validation_mode,
     )
@@ -529,4 +540,9 @@ async def move_rule(
     # to sync it again here.
     if status != 200:
         return _toast("danger", message, status)
-    return _toast("success", message, 200, trigger="refreshRules")
+    # The rule window stays open (#62): on the moved copy when the source is gone, else on this rule.
+    response = _toast("success", message, 200, trigger="refreshRules")
+    response.headers["X-Tide-Rule-Window"] = json.dumps(
+        rule_window(target_rule_id, *target_scope) if delete_source and target_scope
+        else rule_window(rule_id, siem_id, space))
+    return response

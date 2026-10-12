@@ -11,28 +11,27 @@
   {% set key = (siem_id | default('', true)) ~ '|' ~ (space | default('default', true)) %}
   {% set label = dest_names.get(key) if dest_names is defined else none %}
   {% set colour = dest_colors.get(key) if dest_colors is defined else none %}
-  <span class="status-pill" style="font-size:0.6rem;padding:0.05rem 0.35rem;{% if colour %}border-color:{{ colour }};color:{{ colour }};{% endif %}"
+  <span class="status-pill dest-pill-sm{% if colour %} dest-tinted{% endif %}"{% if colour %} style="--dest: {{ colour }}"{% endif %}
         title="Destination: {{ label or space or 'unknown' }}">
     {{ label or space or 'unknown' }}
   </span>
 {% endmacro %}
 
 {% if mapped_rules or all_rules %}
-<div style="max-height:280px;overflow-y:auto;">
+<div class="siem-rule-scroll">
     {% if mapped_rules %}
-    <div class="u-bg-green-06" style="padding:0.35rem 0.65rem;font-size:0.68rem;font-weight:700;color:var(--color-success);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--color-border-muted)">
+    <div class="u-bg-green-06 siem-rule-group">
         Carry this technique's ATT&amp;CK IDs
     </div>
     {% for rule in mapped_rules %}
-    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none"
-            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
-            onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
-        <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
+    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none siem-rule-opt"
+            data-click="step.pickRule" data-rule-id="{{ rule.rule_id }}" data-rule-name="{{ rule.name }}"
+            data-scope="{{ rule.siem_id | default('', true) }}|{{ rule.space | default('default', true) }}">
+        <div class="grow min-w-0">
+            <div class="fw-600 overflow-hidden ellipsis nowrap" title="{{ rule.name }}">
                 {{ rule.name }}
             </div>
-            <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+            <div class="flex items-center gap-xs mt-xs flex-wrap">
                 {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
                     {# A pill opens the side panel (closing this window), never picks the rule. #}
@@ -44,14 +43,14 @@
                     {% endif %}
                 {% endif %}
                 {% if rule.severity %}
-                <span class="severity-pill severity-{{ rule.severity.value | lower }}" style="font-size:0.6rem;margin-left:0.25rem;">
+                <span class="severity-pill severity-{{ rule.severity.value | lower }} fs-2xs ml-xs">
                     {{ rule.severity.value | upper }}
                 </span>
                 {% endif %}
                 {% if rule.enabled %}
-                <span style="font-size:0.55rem;color:var(--color-success);">● Enabled</span>
+                <span class="siem-rule-state">● Enabled</span>
                 {% else %}
-                <span style="font-size:0.55rem;color:var(--color-text-muted);">○ Disabled</span>
+                <span class="siem-rule-state siem-rule-state--off">○ Disabled</span>
                 {% endif %}
             </div>
         </div>
@@ -60,20 +59,19 @@
     {% endif %}
 
     {% if all_rules %}
-    <div class="u-bg-level-3" style="padding:0.35rem 0.65rem;font-size:0.68rem;font-weight:700;color:var(--color-text-muted);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--color-border-muted)">
+    <div class="u-bg-level-3 siem-rule-group siem-rule-group--muted">
         All SIEM Rules
     </div>
     {% for rule in all_rules %}
     {# The route leaves out only the exact (rule, destination) copies offered above. #}
-    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none"
-            style="display:flex;align-items:center;gap:0.5rem;width:100%;padding:0.5rem 0.65rem;border:none;color:var(--color-text);font-size:0.82rem;cursor:pointer;text-align:left;border-bottom:1px solid var(--color-border-muted)"
-            onmouseover="this.style.background='var(--color-surface-alt)'" onmouseout="this.style.background='none'"
-            onclick="selectSiemRule(this, '{{ rule.rule_id | e }}', '{{ rule.name | e }}', '{{ rule.siem_id | default('', true) | e }}|{{ rule.space | default('default', true) | e }}')">
-        <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="{{ rule.name }}">
+    <button name="Pick Rule" type="button" class="siem-rule-option u-bg-none siem-rule-opt"
+            data-click="step.pickRule" data-rule-id="{{ rule.rule_id }}" data-rule-name="{{ rule.name }}"
+            data-scope="{{ rule.siem_id | default('', true) }}|{{ rule.space | default('default', true) }}">
+        <div class="grow min-w-0">
+            <div class="fw-600 overflow-hidden ellipsis nowrap" title="{{ rule.name }}">
                 {{ rule.name }}
             </div>
-            <div style="display:flex;align-items:center;gap:0.3rem;margin-top:0.2rem;flex-wrap:wrap;">
+            <div class="flex items-center gap-xs mt-xs flex-wrap">
                 {{ dest_pill(rule.siem_id, rule.space) }}
                 {% if rule.mitre_ids %}
                     {# A pill opens the side panel (closing this window), never picks the rule. #}
@@ -85,14 +83,14 @@
                     {% endif %}
                 {% endif %}
                 {% if rule.severity %}
-                <span class="severity-pill severity-{{ rule.severity | lower }}" style="font-size:0.6rem;margin-left:0.25rem;">
+                <span class="severity-pill severity-{{ rule.severity | lower }} fs-2xs ml-xs">
                     {{ rule.severity | upper }}
                 </span>
                 {% endif %}
                 {% if rule.enabled %}
-                <span style="font-size:0.55rem;color:var(--color-success);">● Enabled</span>
+                <span class="siem-rule-state">● Enabled</span>
                 {% else %}
-                <span style="font-size:0.55rem;color:var(--color-text-muted);">○ Disabled</span>
+                <span class="siem-rule-state siem-rule-state--off">○ Disabled</span>
                 {% endif %}
             </div>
         </div>
@@ -101,11 +99,11 @@
     {% endif %}
 </div>
 {% elif query %}
-<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+<div class="p-md text-center text-muted fs-md">
     No SIEM rules found matching "{{ query }}"
 </div>
 {% else %}
-<div style="padding:1rem;text-align:center;color:var(--color-text-muted);font-size:0.82rem;">
+<div class="p-md text-center text-muted fs-md">
     No SIEM rules available.
 </div>
 {% endif %}

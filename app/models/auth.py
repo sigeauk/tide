@@ -162,6 +162,12 @@ class User(BaseModel):
                 return True
         return False
 
+    def is_support(self, client_id: Optional[str] = None) -> bool:
+        """Holds the SUPPORT role on this client (the active one by default): Diagnostics for that
+        client only. Unlike ADMIN it is never implied by another role, and super admins don't need it."""
+        client_id = client_id or self.active_client_id
+        return bool(client_id) and any(r.upper() == "SUPPORT" for r in self.client_roles.get(client_id, []))
+
     def has_role(self, role: str) -> bool:
         """Check if user has a specific role in the active tenant (case-insensitive)."""
         return role.upper() in [r.upper() for r in self.roles]

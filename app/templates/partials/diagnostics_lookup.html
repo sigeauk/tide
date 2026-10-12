@@ -1,0 +1,86 @@
+{#
+  Look-up results (GET /api/diagnostics/lookup): everything TIDE holds for the rules, users or
+  destinations matching the search, grouped by client. Names and spaces are shown exactly as
+  stored (app.services.diagnostics.reveal). Context: found.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro shown(r) -%}
+<code class="diag-reveal{% if r.odd %} diag-reveal--odd{% endif %}"
+      title="Exactly as stored.{% if r.odd %} It holds spaces at its ends or characters you cannot normally see.{% endif %}">{{ r.text }}</code>
+{%- if r.odd %} <span class="status-pill status-warning" title="Spaces at the start or end, doubled spaces, or invisible characters">{{ icon('alert-triangle', '11') }} Hidden characters</span>{% endif %}
+{%- endmacro %}
+
+{% macro when(v) %}{{ v.strftime('%Y-%m-%d %H:%M') if v else '—' }}{% endmacro %}
+
+{% macro sync(item) %}
+{% if item.reachable is none %}<span class="status-pill status-muted">Not checked yet</span>
+{% elif item.reachable %}<span class="status-pill status-success">Reachable</span>
+{% else %}<span class="status-pill status-danger">Unreachable</span>{% endif %}
+{% endmacro %}
+
+{% set nothing = not found.groups or (found.groups | map(attribute='entries') | sum(start=[]) | length) == 0 %}
+{% if found.q | length < 2 %}
+<p class="text-muted">Type at least two characters.</p>
+{% elif nothing %}
+<p class="text-muted">Nothing matches “{{ found.q }}”.</p>
+{% else %}
+<p class="text-muted diag-lookup__key">Names and spaces are shown exactly as stored: <code>·</code> is a space at the start or end
+(or a doubled space), <code>⍽</code> a non-breaking space, <code>⇥</code> a tab, <code>↵</code> a line break and <code>∅</code> an invisible character.</p>
+{% for g in found.groups %}
+<div class="diag-lookup__group">
+    {% if g.name %}<h3 class="diag-part__name">{{ icon('database', '14') }} {{ g.name }} <span class="text-muted">{{ g.entries | length }}</span></h3>{% endif %}
+    {% for it in g.entries %}
+    {% if it.error %}
+    <p class="text-secondary">Could not read this client: {{ it.error }}</p>
+    {% elif found.kind == 'rule' %}
+    <article class="diag-lookup__item">
+        <header class="diag-lookup__head">
+            {{ shown(it.name) }}
+            <span class="status-pill status-{{ 'success' if it.enabled else 'muted' }}">{{ 'Enabled' if it.enabled else 'Disabled' }}</span>
+            {% if it.deprecated %}<span class="status-pill status-warning">Deprecated</span>{% endif %}
+            {% if it.score is not none %}<span class="status-pill status-info">Score {{ it.score }}%</span>{% endif %}
+        </header>
+        <dl class="diag-facts">
+            <div><dt>Destination</dt><dd>{{ it.destination }} · space {{ shown(it.space) }}</dd></div>
+            <div><dt>Rule ID</dt><dd><code>{{ it.rule_id }}</code></dd></div>
+            <div><dt>Last change</dt><dd>{{ when(it.last_updated) }}</dd></div>
+            <div><dt>Linked to</dt><dd>{% if it.links %}<ul class="diag-facts__list">{% for l in it.links %}<li>{{ l }}</li>{% endfor %}</ul>{% else %}<span class="text-muted">Not linked</span>{% endif %}</dd></div>
+            <div><dt>Mapped to</dt><dd>{% if it.mapped %}<ul class="diag-facts__list">{% for m in it.mapped %}<li>{{ m }}</li>{% endfor %}</ul>{% else %}<span class="text-muted">No baseline technique</span>{% endif %}</dd></div>
+        </dl>
+    </article>
+    {% elif found.kind == 'user' %}
+    <article class="diag-lookup__item">
+        <header class="diag-lookup__head">
+            {{ shown(it.username) }}
+            {% if it.superadmin %}<span class="status-pill status-info">Platform Admin</span>{% endif %}
+            <span class="status-pill status-muted">{{ 'SSO' if it.provider == 'keycloak' else it.provider | capitalize }}</span>
+            {% if not it.active %}<span class="status-pill status-danger">Inactive</span>{% endif %}
+        </header>
+        <dl class="diag-facts">
+            <div><dt>Email</dt><dd>{{ it.email or '—' }}</dd></div>
+            <div><dt>Name</dt><dd>{{ it.full_name or '—' }}</dd></div>
+            <div><dt>Sign-in</dt><dd>{{ it.provider }}{% if it.sso_linked %} · linked to a Keycloak account{% endif %}</dd></div>
+            <div><dt>Last login</dt><dd>{{ when(it.last_login) }}</dd></div>
+            <div><dt>Created</dt><dd>{{ when(it.created_at) }}</dd></div>
+            <div><dt>Clients and roles</dt><dd>{% if it.clients %}<ul class="diag-facts__list">{% for c in it.clients %}<li>{{ c.name }}{% if c.default %} <span class="text-muted">(default)</span>{% endif %}: {{ c.roles | join(', ') if c.roles else 'no role' }}</li>{% endfor %}</ul>{% else %}<span class="text-muted">No client</span>{% endif %}</dd></div>
+        </dl>
+    </article>
+    {% else %}
+    <article class="diag-lookup__item">
+        <header class="diag-lookup__head">{{ shown(it.name) }} {{ sync(it) }}</header>
+        <dl class="diag-facts">
+            <div><dt>SIEM</dt><dd>{{ it.siem }} <code class="text-muted">{{ it.siem_id }}</code></dd></div>
+            <div><dt>Space</dt><dd>{{ shown(it.space) }}</dd></div>
+            <div><dt>Rules</dt><dd>{{ it.rules }}{% if it.deprecated %} <span class="text-muted">({{ it.deprecated }} deprecated)</span>{% endif %}</dd></div>
+            <div><dt>Last rule change</dt><dd>{{ when(it.last_rule_change) }}</dd></div>
+            <div><dt>Last sync check</dt><dd>{{ when(it.checked_at) }}{% if it.reason %} · {{ it.reason }}{% endif %}</dd></div>
+        </dl>
+    </article>
+    {% endif %}
+    {% endfor %}
+    {% if g.more %}<p class="text-muted">Showing the first {{ g.entries | length }}. Search for more of the name to narrow it down.</p>{% endif %}
+</div>
+{% endfor %}
+{% if found.kind == 'user' and found.more %}<p class="text-muted">Showing the first matches. Search for more of the name to narrow it down.</p>{% endif %}
+{% endif %}

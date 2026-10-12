@@ -994,6 +994,10 @@ GRID_PARAMS = {"q", "src", "sort", "dir", "group", "view", "page", "in_group", "
 for _spec in KINDS.values():
     assert not GRID_PARAMS & set(_spec.filters), f"{_spec.key}: filter named like a grid parameter"
 
+# The kinds a baseline can be made from (their window's Create baseline): the techniques of a
+# group, software or campaign are an adversary's. A mitigation's are what it mitigates.
+BASELINE_KINDS = ("groups", "software", "campaigns")
+
 
 def grid(db, spec: KindSpec, params: Dict[str, str], covered: set, counts: dict) -> Dict[str, Any]:
     """Filter, sort, then group or page a kind's items for partials/mitre_grid.html.

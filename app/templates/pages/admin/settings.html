@@ -9,13 +9,13 @@
     <p class="page-subtitle">
         Manage your profile, password and personal API keys.
         Tenant, SIEM, logging, Sigma asset and classification administration now live in
-        <a name="Management" href="/management" style="color:var(--color-primary);">Management</a>.
+        <a name="Management" href="/management" class="text-primary">Management</a>.
     </p>
 </div>
 
 <!-- Profile panel (API keys + local account controls) -->
 <div class="settings-panel active" id="tab-profile">
-    <div class="preferences-grid" style="grid-template-columns: 1fr;">
+    <div class="preferences-grid preferences-grid--single">
         <div class="preference-card">
             <div class="preference-header">
                 <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -26,11 +26,10 @@
             </div>
 
             {% if user and user.auth_provider == 'local' %}
-            <div class="preferences-grid" style="grid-template-columns: 1fr 1fr; gap: 1rem;">
-                <div class="overview-section" style="margin: 0;">
-                    <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Update Email</h4>
-                    <form name="Submit Email" hx-post="/api/settings/profile/email" hx-swap="none"
-                          style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
+            <div class="preferences-grid preferences-grid--two">
+                <div class="overview-section m-0">
+                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Update Email</h4>
+                    <form name="Submit Email" hx-post="/api/settings/profile/email" hx-swap="none" class="profile-form">
                         <input type="email" name="email" class="form-input" required
                                value="{{ user.email or '' }}" placeholder="name@example.com">
                         <div>
@@ -39,10 +38,9 @@
                     </form>
                 </div>
 
-                <div class="overview-section" style="margin: 0;">
-                    <h4 style="margin: 0 0 0.75rem 0; color: var(--color-primary);">Change Password</h4>
-                    <form name="Submit Password" hx-post="/api/settings/profile/password" hx-swap="none"
-                          style="display:flex; flex-direction:column; gap:0.55rem; max-width:420px;">
+                <div class="overview-section m-0">
+                    <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Change Password</h4>
+                    <form name="Submit Password" hx-post="/api/settings/profile/password" hx-swap="none" class="profile-form">
                         <input type="password" name="current_password" class="form-input" required minlength="8"
                                placeholder="Current password" autocomplete="current-password">
                         <input type="password" name="new_password" class="form-input" required minlength="8"
@@ -56,7 +54,7 @@
                 </div>
             </div>
             {% else %}
-            <div class="alert" style="margin-top:0.5rem; font-size:0.85rem;">
+            <div class="alert mt-sm fs-base">
                 Managed by SSO. Profile credentials are controlled by your identity provider.
             </div>
             {% endif %}
@@ -71,18 +69,18 @@
             </div>
             <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
 
-            <div class="alert" style="margin: 0.75rem 0 1rem 0; font-size: 0.84rem;">
+            <div class="alert mt-ms mr-0 mb-md ml-0 fs-md">
                 <p><strong>External Query API (HTTPS)</strong></p>
-                <p style="margin-top:0.35rem;">Query endpoint: <code>POST /api/external/query</code></p>
-                <p style="margin-top:0.2rem;">List tenants: <code>GET /api/external/clients</code></p>
-                <p style="margin-top:0.2rem;">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
-                <p style="margin-top:0.2rem;">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
-                <p style="margin-top:0.35rem; color:var(--color-text-muted);">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
+                <p class="mt-xs">Query endpoint: <code>POST /api/external/query</code></p>
+                <p class="mt-xs">List tenants: <code>GET /api/external/clients</code></p>
+                <p class="mt-xs">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
+                <p class="mt-xs">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
+                <p class="mt-xs text-muted">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
             </div>
 
-            <details style="margin: 0 0 1rem 0;">
-                <summary style="cursor:pointer; font-weight:600;">Security constraints</summary>
-                <ul style="margin:0.6rem 0 0 1rem; font-size:0.84rem; color:var(--color-text-muted);">
+            <details class="mt-0 mr-0 mb-md ml-0">
+                <summary class="cursor-pointer fw-600">Security constraints</summary>
+                <ul class="mt-sm mr-0 mb-0 ml-md fs-md text-muted">
                     <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
                     <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
                     <li>Maximum SQL length: <code>4000</code> characters</li>
@@ -92,36 +90,36 @@
                 </ul>
             </details>
 
-            <details style="margin: 0 0 1rem 0;">
-                <summary style="cursor:pointer; font-weight:600;">Common query tables</summary>
-                <div style="margin-top:0.6rem; font-size:0.84rem; color:var(--color-text-muted); line-height:1.5;">
+            <details class="mt-0 mr-0 mb-md ml-0">
+                <summary class="cursor-pointer fw-600">Common query tables</summary>
+                <div class="mt-sm fs-md text-muted leading-normal">
                     <p><code>detection_rules</code>, <code>threat_actors</code>, <code>mitre_techniques</code>, <code>systems</code>, <code>hosts</code>, <code>software_inventory</code>, <code>vuln_detections</code>, <code>applied_detections</code>, <code>blind_spots</code>, <code>playbooks</code>, <code>playbook_steps</code>, <code>step_techniques</code>, <code>step_detections</code>, <code>system_baselines</code>, <code>system_baseline_snapshots</code>, <code>classifications</code>, <code>app_settings</code></p>
                 </div>
             </details>
 
-            <details style="margin: 0 0 1rem 0;">
-                <summary style="cursor:pointer; font-weight:600;">cURL examples and responses</summary>
-                <div style="margin-top:0.6rem;">
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin-bottom:0.4rem;"><strong>List your tenants</strong></p>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s https://your-tide-host/api/external/clients \
+            <details class="mt-0 mr-0 mb-md ml-0">
+                <summary class="cursor-pointer fw-600">cURL examples and responses</summary>
+                <div class="mt-sm">
+                    <p class="fs-md text-muted mb-sm"><strong>List your tenants</strong></p>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s https://your-tide-host/api/external/clients \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE"</pre>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem; margin-top:0.5rem;">{"clients":[{"id":"1b650e71-...","name":"Primary Client","slug":"primary"}]}</pre>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"clients":[{"id":"1b650e71-...","name":"Primary Client","slug":"primary"}]}</pre>
 
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Count all rules (single tenant — client_id optional)</strong></p>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
+                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Count all rules (single tenant — client_id optional)</strong></p>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
   -d '{"sql":"SELECT COUNT(*) AS total_rules FROM detection_rules"}'</pre>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem; margin-top:0.5rem;">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
 
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Query a specific tenant</strong></p>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">curl -s -X POST https://your-tide-host/api/external/query \
+                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Query a specific tenant</strong></p>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
   -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 5", "client_id":"1b650e71-..."}'</pre>
 
-                    <p style="font-size:0.82rem; color:var(--color-text-muted); margin:0.7rem 0 0.4rem 0;"><strong>Error examples</strong></p>
-<pre style="background:var(--color-bg-secondary); padding:0.6rem; border-radius:var(--radius-sm); overflow:auto; font-size:0.78rem;">401: {"detail":"Invalid or missing API key."}
+                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Error examples</strong></p>
+<pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">401: {"detail":"Invalid or missing API key."}
 400: {"detail":"Only SELECT statements are allowed."}
 400: {"detail":"client_id is required when the API key owner has access to multiple tenants..."}
 403: {"detail":"API key does not have access to the requested tenant."}
@@ -132,9 +130,8 @@
             <!-- Create key form -->
             <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
                   hx-on::after-request="if(event.detail.successful){this.reset();}"
-                  style="display:flex;gap:0.5rem;align-items:center;margin:1rem 0;flex-wrap:wrap;">
-                <input type="text" name="api_key_label" class="form-input" placeholder="Key label (e.g. SIEM integration)" required
-                       style="min-width:220px;max-width:320px;font-size:0.85rem;">
+                  class="flex gap-sm items-center my-md mx-0 flex-wrap">
+                <input type="text" name="api_key_label" class="form-input api-key-label-input" placeholder="Key label (e.g. SIEM integration)" required>
                 <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
             </form>
 

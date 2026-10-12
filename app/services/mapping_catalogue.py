@@ -177,6 +177,22 @@ class MappingCatalogue:
             facts[field] = fact
         return facts, rows
 
+    def pattern_states(self, patterns: Iterable[str]) -> List[Dict[str, Any]]:
+        """For the Rule modal: does each of a rule's index patterns match any index, as of its last check?
+        ``state`` is "found" (it matched indices; ``fields`` is how many fields they have), "no_index"
+        (checked, and it matches no index) or "unknown" (not checked yet). Unknown is never reported as
+        missing. ``error`` is the last re-check's failure, if any (the previous result stands)."""
+        patterns = [p for p in dict.fromkeys(patterns) if p]
+        self._load([p for p in patterns if p not in self._entries])
+        out = []
+        for pattern in patterns:
+            entry = self._entries.get(pattern)
+            state = ("unknown" if entry is None else "no_index" if entry.status == NO_INDICES
+                     else "found" if entry.status == OK else "unknown")
+            out.append({"pattern": pattern, "state": state, "fields": len(entry.fields) if state == "found" else 0,
+                        "checked_at": entry.fetched_at if entry else None, "error": entry.last_error if entry else ""})
+        return out
+
     def describe(self, indices: Iterable[str]) -> Dict[str, Any]:
         """For the Rule modal: how fresh the mapping data behind a rule is."""
         self._load([i for i in indices if i and i not in self._entries])

@@ -37,8 +37,8 @@
 </details>
 {%- endmacro %}
 
-<div name="Dismiss Technique Panel" class="slide-panel-overlay" onclick="this.remove()">
-    <div name="Technique Detail Panel" class="slide-panel" onclick="event.stopPropagation()">
+<div name="Dismiss Technique Panel" class="slide-panel-overlay" data-click="el.remove">
+    <div name="Technique Detail Panel" class="slide-panel" data-stop-click>
         <div class="slide-panel-resize-handle" data-slide-panel-resize title="Resize panel" aria-hidden="true"></div>
         <div class="slide-panel-header">
             <div class="rm-header__main">
@@ -56,7 +56,7 @@
                     {% for p in platform_pills %}<span class="rm-chip" title="Platform">{{ p }}</span>{% endfor %}
                 </div>
             </div>
-            <button name="Close Technique Panel" class="btn-icon" onclick="this.closest('.slide-panel-overlay').remove()" title="Close" aria-label="Close">
+            <button name="Close Technique Panel" class="btn-icon" data-click="ui.closePanel" title="Close" aria-label="Close">
                 {{ icon('x', '20') }}
             </button>
         </div>

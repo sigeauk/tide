@@ -5,8 +5,8 @@ Manages physical database-per-tenant routing using Python contextvars.
 When a tenant context is active, DatabaseService.get_connection() returns
 a connection to the tenant's dedicated DuckDB file instead of the shared DB.
 
-Shared data (siem_inventory, client_siem_map) is synced from the shared DB into each
-tenant DB so that existing queries work without cross-DB ATTACH. ATT&CK / NIST / Sigma
+Each tenant DB holds a copy of its own destinations (client_siem_map) and the SIEMs they use
+(siem_inventory, without API keys), refreshed from the shared DB. ATT&CK / NIST / Sigma
 reference data is attached read-only from reference.duckdb (see reference_db.py).
 """
 
@@ -14,6 +14,7 @@ import contextvars
 import duckdb
 import logging
 import os
+import re
 from threading import Lock
 from typing import Dict, List, Optional
 
@@ -271,13 +272,8 @@ def create_tenant_db(
                 ):
                     try:
                         # CREATE OR REPLACE avoids column-count drift between
-                        # the shared schema and the tenant schema (these are
-                        # reference tables, owned by the shared DB, mirrored
-                        # into the tenant for ATTACH-free reads).
-                        shared_conn.execute(
-                            f"CREATE OR REPLACE TABLE {tenant_alias}.{table} AS "
-                            f"SELECT * FROM {table}"
-                        )
+                        # the shared schema and the tenant schema.
+                        shared_conn.execute(_mirror_sql(tenant_alias, table, client_id))
                     except Exception as e:
                         logger.warning(
                             f"Sync {table} into {db_filename} failed: {e}"
@@ -298,10 +294,7 @@ def create_tenant_db(
                     "siem_inventory", "client_siem_map",
                 ):
                     try:
-                        shared_conn.execute(
-                            f"CREATE OR REPLACE TABLE {tenant_alias}.{table} AS "
-                            f"SELECT * FROM {table}"
-                        )
+                        shared_conn.execute(_mirror_sql(tenant_alias, table, client_id))
                     except Exception as e:
                         logger.warning(
                             f"Sync {table} into {db_filename} failed: {e}"
@@ -424,6 +417,8 @@ def _create_tenant_schema(conn):
             client_id VARCHAR,
             deprecated BOOLEAN DEFAULT false,
             source_rule_id VARCHAR,
+            kibana_rule_id VARCHAR,     -- raw_data's rule_id ('' if none) and language, kept by every
+            rule_language VARCHAR,      -- writer so lists of rules needn't load the JSON
             PRIMARY KEY (rule_id, siem_id, space)
         )
     """)
@@ -738,21 +733,23 @@ def _create_tenant_schema(conn):
 
 # ── Shared data sync ────────────────────────────────────────────────
 
-def _sync_reference_tables(conn):
-    """Sync reference tables from an ATTACHed 'shared' DB into the tenant DB.
-    Caller must have already: ATTACH '...' AS shared (READ_ONLY)
+_CLIENT_ID = re.compile(r"^[A-Za-z0-9_-]+$")
 
-    4.1.5 — ``threat_actors`` is deliberately excluded. MITRE actors are
-    read directly from the shared DB by ``get_threat_actors``; the tenant's
-    own ``threat_actors`` table is reserved for that tenant's OpenCTI
-    instance(s) and must not be overwritten by this generic mirror."""
 
-    for table in ("siem_inventory", "client_siem_map"):
-        try:
-            conn.execute(f"DELETE FROM {table}")
-            conn.execute(f"INSERT INTO {table} SELECT * FROM shared.{table}")
-        except Exception as e:
-            logger.warning(f"Sync {table} failed: {e}")
+def _mirror_sql(alias: str, table: str, client_id: str) -> str:
+    """The statement that refreshes a client DB's copy of a shared reference table: only this
+    client's own destinations and the SIEMs they use, and never a SIEM's API key, which TIDE always
+    reads from the shared DB (#59). Run from the shared connection with the client DB attached."""
+    if not _CLIENT_ID.match(client_id or ""):
+        raise ValueError(f"unexpected client id {client_id!r}")
+    if table == "client_siem_map":
+        select = f"SELECT * FROM client_siem_map WHERE client_id = '{client_id}'"
+    elif table == "siem_inventory":
+        select = ("SELECT * REPLACE (CAST(NULL AS VARCHAR) AS api_token_enc) FROM siem_inventory "
+                  f"WHERE id IN (SELECT siem_id FROM client_siem_map WHERE client_id = '{client_id}')")
+    else:
+        raise ValueError(f"not a mirrored table: {table}")
+    return f"CREATE OR REPLACE TABLE {alias}.{table} AS {select}"
 
 
 def sync_shared_data(
@@ -807,11 +804,7 @@ def sync_shared_data(
                             "siem_inventory", "client_siem_map",
                         ):
                             try:
-                                shared_conn.execute(
-                                    f"CREATE OR REPLACE TABLE "
-                                    f"{tenant_alias}.{table} AS "
-                                    f"SELECT * FROM {table}"
-                                )
+                                shared_conn.execute(_mirror_sql(tenant_alias, table, cid))
                             except Exception as e:
                                 logger.warning(
                                     f"Sync {table} into {db_filename} failed: {e}"

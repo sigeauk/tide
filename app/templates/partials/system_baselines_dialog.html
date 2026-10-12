@@ -47,7 +47,7 @@
                     {% for pb in available %}<option value="{{ pb.id }}">{{ pb.name }}</option>{% endfor %}
                 </select>
                 <button name="Apply Baseline" type="button" class="btn btn-primary"
-                        onclick="htmx.ajax('POST', '/api/baselines/' + encodeURIComponent(document.getElementById('sys-bl-apply').value) + '/apply/{{ system_id }}?return=system-dialog', {target: '#modal-container', swap: 'innerHTML'})">
+                        data-click="ui.sysBaselineApply" data-system-id="{{ system_id }}">
                     {{ icon_text('plus', 'Apply', '13') }}
                 </button>
             </div>

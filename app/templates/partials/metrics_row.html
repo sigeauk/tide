@@ -14,7 +14,7 @@
         {% if has_states %}
             <span>Linked:{{ metrics.state_linked }}</span> <span>Deprecated:{{ metrics.state_deprecated }}</span>{% if metrics.state_offline %} <span>SIEM offline:{{ metrics.state_offline }}</span>{% endif %}
         {% elif scopes %}
-            {% for key, count in scopes[:3] %}<span style="display:block;">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }}: {{ count }}</span>{% endfor %}
+            {% for key, count in scopes[:3] %}<span class="block">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }}: {{ count }}</span>{% endfor %}
         {% else %}
             No spaces
         {% endif %}
@@ -93,7 +93,7 @@
 
 {# ── 6. Last Synced ── #}
 <div class="metric-card">
-    <p class="metric-value" style="font-size: 1.1rem;">
+    <p class="metric-value fs-title">
         {{ icon('refresh-cw', '24') }}
     </p>
     <p class="metric-label">Last Synced</p>

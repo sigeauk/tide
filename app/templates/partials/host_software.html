@@ -46,11 +46,11 @@
         <div class="sw-card__header">
             <span class="sw-card__name" title="{{ sw.name }}">{{ sw.name }}</span>
             {% if sw.name in ns_covered.names %}
-            <span class="badge badge-warning" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="CVE matched — detection in place">
+            <span class="badge badge-warning fs-xs py-2xs px-xs" title="CVE matched — detection in place">
                 {{ icon('shield-check', '10') }} Monitored
             </span>
             {% elif sw.name in matched_sw_names %}
-            <span class="badge badge-danger" style="font-size:0.68rem;padding:0.1rem 0.35rem;" title="Matched in CISA CVE">
+            <span class="badge badge-danger fs-xs py-2xs px-xs" title="Matched in CISA CVE">
                 {{ icon('bug', '10') }} CVE
             </span>
             {% endif %}
@@ -58,7 +58,7 @@
         </div>
         <div class="sw-card__meta">
             {% if sw.version %}
-            <span style="font-family:monospace;">v{{ sw.version }}</span>
+            <span class="mono">v{{ sw.version }}</span>
             {% endif %}
             {% if sw.vendor %}
             <span>{{ sw.vendor }}</span>
@@ -68,17 +68,17 @@
         <div class="sw-card__cpe" title="{{ sw.cpe }}">{{ sw.cpe }}</div>
         {% endif %}
         <div class="sw-card__actions">
-            <button  name="Close Modal" class="btn btn-secondary btn-sm"
-                    onclick="document.getElementById('sw-display-{{ sw.id }}').style.display='none';document.getElementById('sw-edit-{{ sw.id }}').style.display='flex';"
-                    style="padding:0.2rem 0.5rem;font-size:0.72rem;" title="Edit">
+            <button  name="Close Modal" class="btn btn-secondary btn-sm py-xs px-sm fs-xs"
+                    data-click="hosts.swEdit" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}"
+                    title="Edit">
                 {{ icon('edit-2', '11') }} Edit
             </button>
-            <button name="Delete Software" class="btn btn-danger btn-sm"
+            <button name="Delete Software" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
                     hx-delete="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"
                     hx-confirm="Remove '{{ sw.name }}'?"
                     hx-target="#software-section"
                     hx-swap="innerHTML"
-                    style="padding:0.2rem 0.5rem;font-size:0.72rem;" title="Delete">
+                    title="Delete">
                 {{ icon('trash-2', '11') }}
             </button>
         </div>
@@ -91,31 +91,28 @@
           hx-swap="innerHTML"
           hx-on::after-request="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
         <div>
-            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Name</label>
-            <input class="form-input" name="name" value="{{ sw.name }}" required
-                   style="min-width:130px;font-size:0.8rem;padding:0.25rem 0.45rem;">
+            <label class="fs-xs text-muted block mb-2xs">Name</label>
+            <input class="form-input sw-input sw-input--name" name="name" value="{{ sw.name }}" required>
         </div>
         <div>
-            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Version</label>
-            <input class="form-input" name="version" value="{{ sw.version or '' }}"
-                   style="width:90px;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="—">
+            <label class="fs-xs text-muted block mb-2xs">Version</label>
+            <input class="form-input sw-input sw-input--version" name="version" value="{{ sw.version or '' }}" placeholder="—">
         </div>
         <div>
-            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">Vendor</label>
-            <input class="form-input" name="vendor" value="{{ sw.vendor or '' }}"
-                   style="width:120px;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="—">
+            <label class="fs-xs text-muted block mb-2xs">Vendor</label>
+            <input class="form-input sw-input sw-input--vendor" name="vendor" value="{{ sw.vendor or '' }}" placeholder="—">
         </div>
-        <div style="flex:1;min-width:150px;">
-            <label style="font-size:0.7rem;color:var(--color-text-muted);display:block;margin-bottom:0.15rem;">CPE</label>
-            <input class="form-input" name="cpe" value="{{ sw.cpe or '' }}"
-                   style="width:100%;font-size:0.8rem;padding:0.25rem 0.45rem;" placeholder="cpe:2.3:a:…">
+        <div class="sw-input-grow">
+            <label class="fs-xs text-muted block mb-2xs">CPE</label>
+            <input class="form-input w-full fs-md py-xs px-sm" name="cpe" value="{{ sw.cpe or '' }}"
+                   placeholder="cpe:2.3:a:…">
         </div>
-        <div style="display:flex;gap:0.3rem;align-self:flex-end;">
-            <button name="Save" type="submit" class="btn btn-primary btn-sm" style="font-size:0.75rem;padding:0.25rem 0.5rem;">
+        <div class="flex gap-xs self-end">
+            <button name="Save" type="submit" class="btn btn-primary btn-sm fs-sm py-xs px-sm">
                 {{ icon('save', '11') }} Save
             </button>
-            <button name="Cancel" type="button" class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:0.25rem 0.5rem;"
-                    onclick="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm fs-sm py-xs px-sm"
+                    data-click="hosts.swCancel" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}">
                 Cancel
             </button>
         </div>
@@ -127,8 +124,8 @@
 </div>
 
 {% else %}
-<div style="text-align:center;padding:3rem 1rem;color:var(--color-text-muted);">
+<div class="empty-centre empty-centre--text-muted">
     {{ icon('package', '40') }}
-    <p style="margin-top:0.75rem;font-size:0.9rem;">No packages installed on this device.</p>
+    <p class="mt-ms fs-base">No packages installed on this device.</p>
 </div>
 {% endif %}

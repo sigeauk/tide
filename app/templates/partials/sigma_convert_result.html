@@ -2,7 +2,7 @@
 <!-- Sigma Convert Result Partial -->
 
 {% if success %}
-<div class="alert alert-success mb-sm" style="display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap;">
+<div class="alert alert-success mb-sm flex items-center justify-between gap-md flex-wrap">
     <div>
         <strong>Conversion ready.</strong>
         Rule modal opens with prefilled values.
@@ -21,36 +21,8 @@
 <!-- Store raw query for deployment (original NDJSON) -->
 <input name="Raw Query Store" type="hidden" id="raw-query-store" value="{{ raw_query | e }}">
 
-<script>
-// Auto-open the shared rule modal with the converted Sigma payload.
-(function() {
-    const prefill = {{ prefill_payload | default('') | tojson }};
-    if (prefill && window.htmx) {
-        window.setTimeout(function() {
-            htmx.ajax('GET', '/api/rules/create-form?prefill=' + prefill, {
-                target: '#modal-container',
-                swap: 'innerHTML'
-            });
-        }, 0);
-    }
-})();
-
-function downloadQuery() {
-    const original = document.getElementById('raw-query-store')?.value || '';
-    const blob = new Blob([original], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'sigma_query.ndjson';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-}
-
-// Expose globally
-window.downloadQuery = downloadQuery;
-</script>
+{# Opens the create-rule window with the converted rule (sigma.js). #}
+<div hidden data-sigma-prefill="{{ prefill_payload | default('') }}"></div>
 
 {% else %}
 <div class="alert alert-danger mb-sm">

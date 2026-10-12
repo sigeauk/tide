@@ -4,10 +4,15 @@ Handles reading/writing app settings, API key management, user management, and t
 """
 
 import logging
+from html import escape
+
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from app.api.deps import ActiveClient, DbDep, CurrentUser, RequireUser, RequireAdmin
+from app.api.deps import (ActiveClient, DbDep, CurrentUser, RequireUser, RequireAdmin, admin_client_ids, can_manage_user,
+                          require_client_member, require_manageable_user)
+from app.services.database import SUPPORT_ROLE
+from app.services.log_context import audit_admin
 
 logger = logging.getLogger(__name__)
 
@@ -120,23 +125,39 @@ def trigger_rule_log_export(request: Request, db: DbDep, user: CurrentUser, clie
 
 # ── External API Key management ──────────────────────────────────────────────
 
+def _may_manage_key(db, user, key: dict) -> bool:
+    """Whose API keys a user may see and revoke: a super admin every key; anyone else their own,
+    and those of users they may manage (deps.can_manage_user: every client of the owner is one
+    they administer, and the owner isn't a Platform Admin). Keys with no owner: super admins only."""
+    if user.is_superadmin:
+        return True
+    owner_id = key.get("created_by_user_id")
+    if not owner_id:
+        return False
+    if owner_id == user.id:
+        return True
+    owner = db.get_user_by_id(owner_id)
+    return bool(owner) and can_manage_user(db, user, owner)
+
+
 @router.get("/api-keys", response_class=HTMLResponse)
 def list_api_keys(request: Request, db: DbDep, user: RequireUser):
-    """Return the API key list as an HTML partial."""
-    is_admin = user.is_admin()
-    keys = db.list_api_keys() if is_admin else db.list_api_keys(created_by_user_id=user.id)
+    """Return the API key list as an HTML partial: the keys this user may manage (_may_manage_key)."""
+    is_admin = user.is_superadmin or bool(admin_client_ids(user))
+    keys = [k for k in db.list_api_keys() if _may_manage_key(db, user, k)] if is_admin \
+        else db.list_api_keys(created_by_user_id=user.id)
     if not keys:
-        return HTMLResponse('<p class="text-muted" style="font-size:0.85rem;">No API keys created yet.</p>')
+        return HTMLResponse('<p class="text-muted fs-base">No API keys created yet.</p>')
     rows = ""
     for k in keys:
         created = str(k["created_at"])[:19] if k["created_at"] else "-"
         used = str(k["last_used_at"])[:19] if k["last_used_at"] else "Never"
         short_hash = k["key_hash"][:12] + "…"
         owner = k.get("created_by_user_id") or "legacy"
-        owner_col = f"<td style=\"font-family:monospace;font-size:0.75rem;\">{owner}</td>" if is_admin else ""
+        owner_col = f"<td class=\"api-key-owner\">{escape(owner)}</td>" if is_admin else ""
         rows += f"""<tr>
-            <td>{k["label"]}</td>
-            <td style="font-family:monospace;font-size:0.8rem;">{short_hash}</td>
+            <td>{escape(k["label"] or "")}</td>
+            <td class="mono fs-md">{short_hash}</td>
             <td>{created}</td>
             <td>{used}</td>
             {owner_col}
@@ -164,13 +185,14 @@ async def create_api_key(request: Request, db: DbDep, user: RequireUser):
     if not label:
         label = "Untitled key"
     raw_key = db.create_api_key(label, created_by_user_id=user.id)
+    audit_admin("api_key_create", user, key_label=label)
     return HTMLResponse(f"""
     <div id="api-key-created-toast" hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">API key created — copy it now, it won't be shown again.</div>
     </div>
-    <div class="alert alert-success mb-md" style="font-size:0.85rem;">
+    <div class="alert alert-success mb-md fs-base">
         <strong>New API Key (copy now — shown only once):</strong><br>
-        <code style="display:block;margin-top:0.5rem;padding:0.5rem;background:var(--color-bg-secondary);border-radius:var(--radius-sm);word-break:break-all;user-select:all;">{raw_key}</code>
+        <code class="api-key-reveal">{raw_key}</code>
     </div>
     <div id="api-key-list" hx-get="/api/settings/api-keys" hx-trigger="load" hx-swap="innerHTML"></div>
     """)
@@ -183,16 +205,15 @@ def revoke_api_key(request: Request, key_hash: str, db: DbDep, user: RequireUser
     if not key:
         return list_api_keys(request, db, user)
 
-    owner_id = key.get("created_by_user_id")
-    can_revoke = user.is_admin() or (owner_id is not None and owner_id == user.id)
-    if not can_revoke:
+    if not _may_manage_key(db, user, key):
         return HTMLResponse("""
         <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">You can only revoke your own API keys unless you are an admin.</div>
+            <div class="toast toast-warning">You can revoke your own API keys, and those of users on clients you administer.</div>
         </div>
         """ + list_api_keys(request, db, user).body.decode())
 
     db.delete_api_key(key_hash)
+    audit_admin("api_key_revoke", user, key_label=key.get("label"), owner_id=key.get("created_by_user_id"))
     return list_api_keys(request, db, user)
 
 
@@ -233,7 +254,7 @@ async def update_profile_email(request: Request, db: DbDep, user: RequireUser):
     db.update_user(user.id, email=new_email)
     return HTMLResponse(f"""
     <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">Email updated to {new_email}.</div>
+        <div class="toast toast-success">Email updated to {escape(new_email)}.</div>
     </div>""")
 
 
@@ -286,16 +307,27 @@ async def update_profile_password(request: Request, db: DbDep, user: RequireUser
 
     pw_hash = bcrypt.hashpw(new_password.encode(), bcrypt.gensalt()).decode()
     db.update_user(user.id, password_hash=pw_hash, change_on_next_login=False)
-    return HTMLResponse("""
+    # A new password ends every other session (#30); this browser gets a fresh one and stays signed in.
+    db.end_user_sessions(user.id)
+    response = HTMLResponse("""
     <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">Password updated successfully.</div>
+        <div class="toast toast-success">Password updated. You've been signed out everywhere else.</div>
     </div>""")
+    if request.cookies.get("session_token"):
+        from app.config import get_settings
+        from app.services.auth import get_auth_service
+        response.set_cookie(key="session_token", value=get_auth_service().create_session_token(user.id),
+                            httponly=True, secure=get_settings().app_url.startswith("https://"),
+                            samesite="lax", max_age=86400)
+    return response
 
 
 # ── User Management (ADMIN only) ────────────────────────────────────────────
 
-def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
-    """Render a single user table row HTML."""
+def _render_user_row(u: dict, all_roles: list, user_roles: list, may_support: bool = False,
+                     manage: bool = True) -> str:
+    """Render a single user table row HTML. ``manage``: may the viewer reset, deactivate or delete this
+    user (deps.can_manage_user); when not, those controls are left out and the reason shown."""
     provider = (u.get("auth_provider") or "local").lower()
     if provider == "keycloak":
         source_badge = '<span class="badge badge-info">SSO</span>'
@@ -307,28 +339,49 @@ def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
     role_checkboxes = ""
     for r in all_roles:
         checked = "checked" if r["name"] in user_roles else ""
+        # Only a super admin grants or removes SUPPORT (set_user_roles enforces it too).
+        locked = r["name"] == "SUPPORT" and not may_support
         role_checkboxes += (
-            f'<label class="role-checkbox"><input type="checkbox" name="roles" '
-            f'value="{r["name"]}" {checked}> {r["name"]}</label> '
+            f'<label class="role-checkbox"{" title=\"Only a super admin can grant or remove Support\"" if locked else ""}>'
+            f'<input type="checkbox" name="roles" value="{r["name"]}" {checked}{" disabled" if locked else ""}> '
+            f'{r["name"]}</label> '
         )
     last_login = str(u["last_login"])[:19] if u.get("last_login") else "Never"
-    reset_controls = ""
     reset_controls = f'''
-        <form class="inline-role-form"
+        <form class="inline-role-form mt-sm flex flex-wrap gap-xs items-center"
               hx-post="/api/settings/users/{u['id']}/reset-password"
               hx-swap="none"
-              style="margin-top:0.45rem; display:flex; flex-wrap:wrap; gap:0.35rem; align-items:center;">
-            <input type="password" name="new_password" class="form-input" minlength="8" required
-                   placeholder="New password" style="max-width:180px; font-size:0.75rem;">
-            <label class="role-checkbox" style="font-size:0.72rem;">
+             >
+            <input type="password" name="new_password" class="form-input user-reset-input" minlength="8" required
+                   placeholder="New password">
+            <label class="role-checkbox fs-xs">
                 <input type="checkbox" name="change_on_next_login" checked> Require change next login
             </label>
             <button type="submit" class="btn btn-sm btn-secondary">Reset</button>
         </form>
     '''
+    if manage:
+        active_cell = f'''<label class="toggle-switch toggle-sm">
+                <input type="checkbox" {active_checked}
+                       hx-post="/api/settings/users/{u['id']}/toggle-active"
+                       hx-target="#user-list"
+                       hx-swap="innerHTML">
+                <span class="toggle-slider"></span>
+            </label>'''
+        actions_cell = f'''<button class="btn btn-danger btn-sm"
+                    hx-delete="/api/settings/users/{u['id']}"
+                    hx-target="#user-list"
+                    hx-swap="innerHTML"
+                    hx-confirm="Delete user {escape(u['username'])}?">Delete</button>
+            {reset_controls}'''
+    else:
+        active_cell = "Yes" if u.get("is_active") else "No"
+        actions_cell = (f'<span class="text-muted fs-sm">'
+                        f'{"A Platform Admin" if u.get("is_superadmin") else "Also on a client you don&#39;t administer"}: '
+                        f'only a super admin can reset, deactivate or delete them.</span>')
     return f"""<tr id="user-row-{u['id']}">
-        <td>{u['username']}</td>
-        <td>{u.get('email') or '-'}</td>
+        <td>{escape(u['username'])}</td>
+        <td>{escape(u.get('email') or '-')}</td>
         <td>{source_badge}</td>
         <td>
             <form class="inline-role-form"
@@ -339,37 +392,26 @@ def _render_user_row(u: dict, all_roles: list, user_roles: list) -> str:
                 <button type="submit" class="btn btn-sm btn-secondary">Save</button>
             </form>
         </td>
-        <td>
-            <label class="toggle-switch toggle-sm">
-                <input type="checkbox" {active_checked}
-                       hx-post="/api/settings/users/{u['id']}/toggle-active"
-                       hx-target="#user-list"
-                       hx-swap="innerHTML">
-                <span class="toggle-slider"></span>
-            </label>
-        </td>
+        <td>{active_cell}</td>
         <td>{last_login}</td>
-        <td>
-            <button class="btn btn-danger btn-sm"
-                    hx-delete="/api/settings/users/{u['id']}"
-                    hx-target="#user-list"
-                    hx-swap="innerHTML"
-                    hx-confirm="Delete user {u['username']}?">Delete</button>
-            {reset_controls}
-        </td>
+        <td>{actions_cell}</td>
     </tr>"""
 
 
-def _render_user_table(db, client_id: str) -> str:
-    """Render the users table with roles from the active client only."""
+def _render_user_table(db, client_id: str, viewer) -> str:
+    """Render the users table with roles from the active client only. A super admin sees every
+    user; a client admin sees the active client's users."""
     users = db.get_all_users()
+    if not viewer.is_superadmin:
+        members = {u["id"] for u in db.get_client_users(client_id)}
+        users = [u for u in users if u["id"] in members]
     all_roles = db.get_all_roles()
     if not users:
-        return '<p class="text-muted" style="font-size:0.85rem;">No users found.</p>'
+        return '<p class="text-muted fs-base">No users found.</p>'
     rows = ""
     for u in users:
         user_roles = db.get_user_roles(u["id"], client_id=client_id)
-        rows += _render_user_row(u, all_roles, user_roles)
+        rows += _render_user_row(u, all_roles, user_roles, viewer.is_superadmin, can_manage_user(db, viewer, u))
     return f"""
     <table class="mapping-table">
         <thead><tr>
@@ -383,7 +425,7 @@ def _render_user_table(db, client_id: str) -> str:
 @router.get("/users", response_class=HTMLResponse)
 def list_users(request: Request, db: DbDep, user: RequireAdmin, client_id: ActiveClient):
     """Return the users list as an HTML partial (ADMIN only)."""
-    return HTMLResponse(_render_user_table(db, client_id))
+    return HTMLResponse(_render_user_table(db, client_id, user))
 
 
 @router.post("/users", response_class=HTMLResponse)
@@ -422,12 +464,14 @@ async def create_user(request: Request, db: DbDep, user: RequireAdmin, client_id
                          password_hash=pw_hash, auth_provider="local")
     db.assign_user_to_client(uid, client_id, is_default=True)
     if roles:
-        db.set_user_roles(uid, roles, client_id=client_id)
+        db.set_user_roles(uid, roles, client_id=client_id, grant_support=user.is_superadmin)
+    audit_admin("user_create", user, target_id=uid, target_username=username, client=client_id,
+                roles=db.get_user_roles(uid, client_id=client_id))
 
-    html = _render_user_table(db, client_id)
+    html = _render_user_table(db, client_id, user)
     return HTMLResponse(f"""
     <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">User '{username}' created.</div>
+        <div class="toast toast-success">User '{escape(username)}' created.</div>
     </div>
     {html}""")
 
@@ -435,28 +479,41 @@ async def create_user(request: Request, db: DbDep, user: RequireAdmin, client_id
 @router.post("/users/{user_id}/roles", response_class=HTMLResponse)
 async def update_user_roles(request: Request, user_id: str, db: DbDep,
                             user: RequireAdmin, client_id: ActiveClient):
-    """Update roles for a user in the active client only (ADMIN only)."""
+    """Update roles for a user in the active client only (ADMIN only), who must be on that client."""
+    require_client_member(db, user, user_id, client_id)
     form = await request.form()
     roles = form.getlist("roles")
-    db.set_user_roles(user_id, roles, client_id=client_id)
-    return HTMLResponse(_render_user_table(db, client_id))
+    db.set_user_roles(user_id, roles, client_id=client_id, grant_support=user.is_superadmin)
+    audit_admin("role_change", user, target_id=user_id, client=client_id,
+                roles=db.get_user_roles(user_id, client_id=client_id))
+    return HTMLResponse(_render_user_table(db, client_id, user))
 
 
 @router.post("/users/{user_id}/toggle-active", response_class=HTMLResponse)
 def toggle_user_active(request: Request, user_id: str, db: DbDep,
                        user: RequireAdmin, client_id: ActiveClient):
-    """Toggle user active status (ADMIN only)."""
-    db_user = db.get_user_by_id(user_id)
-    if not db_user:
-        return HTMLResponse(_render_user_table(db, client_id))
+    """Toggle user active status (ADMIN only; deps.can_manage_user). Not your own account."""
+    if user_id == user.id:
+        return HTMLResponse("""
+        <div hx-swap-oob="afterbegin:#toast-container">
+            <div class="toast toast-warning">You cannot deactivate your own account.</div>
+        </div>""")
+    db_user = require_manageable_user(db, user, user_id)
     new_status = not db_user.get("is_active", True)
     db.update_user(user_id, is_active=new_status)
-    return HTMLResponse(_render_user_table(db, client_id))
+    if not new_status:
+        db.end_user_sessions(user_id)   # reactivating means signing in again (#30)
+    audit_admin("user_activate" if new_status else "user_deactivate", user, target_id=user_id,
+                target_username=db_user.get("username"))
+    return HTMLResponse(_render_user_table(db, client_id, user))
 
 
 @router.post("/users/{user_id}/reset-password", response_class=HTMLResponse)
 async def reset_user_password(request: Request, user_id: str, db: DbDep, user: RequireAdmin):
-    """Reset any user's local password (ADMIN only)."""
+    """Reset a user's local password: a super admin for anyone, a client admin only for users
+    whose every client they administer (deps.can_manage_user), never a Platform Admin."""
+    from app.services.log_context import audit_log
+    target_user = require_manageable_user(db, user, user_id)
     form = await request.form()
     new_password = str(form.get("new_password", ""))
     change_on_next_login = str(form.get("change_on_next_login", "on")).lower() in {"on", "true", "1"}
@@ -464,13 +521,6 @@ async def reset_user_password(request: Request, user_id: str, db: DbDep, user: R
         return HTMLResponse("""
         <div hx-swap-oob="afterbegin:#toast-container">
             <div class="toast toast-warning">Password must be at least 8 characters.</div>
-        </div>""")
-
-    target_user = db.get_user_by_id(user_id)
-    if not target_user:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">User not found.</div>
         </div>""")
 
     import bcrypt
@@ -484,6 +534,9 @@ async def reset_user_password(request: Request, user_id: str, db: DbDep, user: R
     if provider == "keycloak":
         update_fields["auth_provider"] = "hybrid"
     db.update_user(user_id, **update_fields)
+    db.end_user_sessions(user_id)   # a reset password ends the sessions the old one opened (#30)
+    audit_log("password_reset", actor_id=user.id, actor_username=user.username, target_id=user_id,
+              target_username=target_user.get("username"), change_on_next_login=change_on_next_login)
     status_text = "Password reset. User must change it at next login." if change_on_next_login else "Password reset successfully."
     return HTMLResponse(f"""
     <div hx-swap-oob="afterbegin:#toast-container">
@@ -494,22 +547,24 @@ async def reset_user_password(request: Request, user_id: str, db: DbDep, user: R
 @router.delete("/users/{user_id}", response_class=HTMLResponse)
 def delete_user(request: Request, user_id: str, db: DbDep,
                 user: RequireAdmin, client_id: ActiveClient):
-    """Delete a user (ADMIN only). Cannot delete yourself."""
+    """Delete a user (ADMIN only; deps.can_manage_user). Cannot delete yourself."""
     if user_id == user.id:
         return HTMLResponse("""
         <div hx-swap-oob="afterbegin:#toast-container">
             <div class="toast toast-warning">You cannot delete your own account.</div>
         </div>""")
+    target = require_manageable_user(db, user, user_id)
     db.delete_user(user_id)
-    return HTMLResponse(_render_user_table(db, client_id))
+    audit_admin("user_delete", user, target_id=user_id, target_username=target.get("username"))
+    return HTMLResponse(_render_user_table(db, client_id, user))
 
 
 # ── Permissions Management (ADMIN only) ─────────────────────────────────────
 
 def _render_permissions_table(db) -> str:
     """Render the full permissions matrix as an HTML table."""
-    # Exclude ADMIN – admins always have full access to prevent lockouts
-    roles = [r for r in db.get_all_roles() if r["name"] != "ADMIN"]
+    # Exclude ADMIN (always full access, to prevent lockouts) and SUPPORT (Diagnostics only; super admins manage it)
+    roles = [r for r in db.get_all_roles() if r["name"] not in ("ADMIN", SUPPORT_ROLE)]
     resources = db.get_all_resources()
     matrix = db.get_permissions_matrix()
 
@@ -523,7 +578,7 @@ def _render_permissions_table(db) -> str:
         }
 
     if not roles or not resources:
-        return '<p class="text-muted" style="font-size:0.85rem;">No permissions configured.</p>'
+        return '<p class="text-muted fs-base">No permissions configured.</p>'
 
     # Separate page and tab resources
     page_resources = sorted([r for r in resources if r.startswith("page:")])
@@ -548,8 +603,8 @@ def _render_permissions_table(db) -> str:
 
     def _resource_type_badge(res: str) -> str:
         if res.startswith("page:"):
-            return '<span class="badge badge-info" style="font-size:0.65rem;">Page</span>'
-        return '<span class="badge badge-secondary" style="font-size:0.65rem;">Tab</span>'
+            return '<span class="badge badge-info fs-2xs">Page</span>'
+        return '<span class="badge badge-secondary fs-2xs">Tab</span>'
 
     def _build_rows(resource_list: list) -> str:
         rows = ""
@@ -561,8 +616,8 @@ def _render_permissions_table(db) -> str:
                 role_id = role["id"]
                 r_checked = "checked" if perm["can_read"] else ""
                 w_checked = "checked" if perm["can_write"] else ""
-                rows += f'''<td style="text-align:center;">
-                    <div style="display:flex; gap:0.5rem; justify-content:center; align-items:center;">
+                rows += f'''<td class="text-center">
+                    <div class="flex gap-sm justify-center items-center">
                         <label class="role-checkbox" title="Read">
                             <input type="checkbox" name="perm" {r_checked}
                                 hx-post="/api/settings/permissions"
@@ -582,15 +637,15 @@ def _render_permissions_table(db) -> str:
             rows += '</tr>'
         return rows
 
-    role_headers = "".join(f'<th style="text-align:center;">{r["name"]}</th>' for r in roles)
+    role_headers = "".join(f'<th class="text-center">{r["name"]}</th>' for r in roles)
 
     html = f'''
     <table class="mapping-table">
         <thead><tr><th>Resource</th>{role_headers}</tr></thead>
         <tbody>
-            <tr><td colspan="{len(roles) + 1}" style="font-weight:600; background:var(--color-bg-elevated); padding:0.5rem;">Pages</td></tr>
+            <tr><td colspan="{len(roles) + 1}" class="role-matrix-group">Pages</td></tr>
             {_build_rows(page_resources)}
-            <tr><td colspan="{len(roles) + 1}" style="font-weight:600; background:var(--color-bg-elevated); padding:0.5rem;">Settings Tabs</td></tr>
+            <tr><td colspan="{len(roles) + 1}" class="role-matrix-group">Settings Tabs</td></tr>
             {_build_rows(tab_resources)}
         </tbody>
     </table>'''
@@ -620,7 +675,7 @@ async def update_permission(request: Request, db: DbDep, user: RequireAdmin):
         admin_check = conn.execute(
             "SELECT name FROM roles WHERE id = ?", [role_id]
         ).fetchone()
-    if admin_check and admin_check[0] == "ADMIN":
+    if admin_check and admin_check[0] in ("ADMIN", SUPPORT_ROLE):
         return HTMLResponse(_render_permissions_table(db))
 
     # Get current permission
@@ -639,6 +694,8 @@ async def update_permission(request: Request, db: DbDep, user: RequireAdmin):
         db.set_permission(role_id, resource, new_val, cur_write)
     else:
         db.set_permission(role_id, resource, cur_read, new_val)
+    audit_admin("permission_change", user, role=admin_check[0] if admin_check else role_id, resource=resource,
+                access=access, on=new_val, client=None)
 
     return HTMLResponse(_render_permissions_table(db))
 

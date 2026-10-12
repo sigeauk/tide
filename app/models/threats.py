@@ -24,24 +24,9 @@ class MITRETechnique(BaseModel):
     
     @property
     def tactic_display(self) -> str:
-        """Convert tactic slug to display name."""
-        mapping = {
-            "initial-access": "Initial Access",
-            "execution": "Execution",
-            "persistence": "Persistence",
-            "privilege-escalation": "Privilege Escalation",
-            "defense-evasion": "Defense Evasion",
-            "credential-access": "Credential Access",
-            "discovery": "Discovery",
-            "lateral-movement": "Lateral Movement",
-            "collection": "Collection",
-            "command-and-control": "Command and Control",
-            "exfiltration": "Exfiltration",
-            "impact": "Impact",
-            "reconnaissance": "Reconnaissance",
-            "resource-development": "Resource Development",
-        }
-        return mapping.get(self.tactic.lower(), self.tactic)
+        """The tactic's ATT&CK name (from its shortname), or the value as stored."""
+        from app.attack_tactics import tactic_name
+        return tactic_name(self.tactic) or self.tactic
 
 
 class ThreatActor(BaseModel):

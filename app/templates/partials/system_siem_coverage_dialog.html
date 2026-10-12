@@ -19,7 +19,7 @@
             {% for d in coverage_destinations %}
             <label class="sys-dialog__row">
                 <input type="checkbox" name="scope" value="{{ d.siem_id }}|{{ d.space }}" {% if d.counted %}checked{% endif %}>
-                <span class="status-pill"{% if d.color %} style="border-color:{{ d.color }};color:{{ d.color }};"{% endif %}>{{ d.name }}</span>
+                <span class="status-pill{% if d.color %} dest-tinted{% endif %}"{% if d.color %} style="--dest: {{ d.color }}"{% endif %}>{{ d.name }}</span>
                 <span class="text-muted">{{ d.space }}</span>
             </label>
             {% endfor %}

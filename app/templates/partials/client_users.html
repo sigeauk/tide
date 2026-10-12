@@ -1,15 +1,28 @@
 {# Partial: client_users.html
-   Context: client_users (list of user dicts, each with _current_role),
-            client (dict), available_users (list), all_roles (list of role dicts)
+   Context: client_users (list of user dicts, each with _roles: their roles on THIS client),
+            client (dict), available_users (list), all_roles (list of role dicts),
+            viewer or user (who is looking: only a super admin can change SUPPORT).
+   A user can hold several roles on a client (their permissions are the union).
 #}
 {% from "macros/icons.html" import icon %}
+{% set who = viewer if viewer is defined and viewer else user %}
+{% set may_support = who is defined and who and who.is_superadmin %}
+{% macro role_boxes(checked_roles, may_support) %}
+{% for r in all_roles %}
+{% set locked = r.name == 'SUPPORT' and not may_support %}
+<label class="role-checkbox client-role-box"
+       title="{{ 'Only a super admin can grant or remove Support' if locked else (r.description or r.name) }}">
+    <input type="checkbox" name="roles" value="{{ r.name }}"{% if r.name in checked_roles %} checked{% endif %}{% if locked %} disabled{% endif %}> {{ r.name | capitalize }}
+</label>
+{% endfor %}
+{% endmacro %}
 
-<div  name="Assigned Users Edit" class="client-section-toggle" onclick="var b=document.getElementById('users-body');var c=document.getElementById('users-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Assigned Users Edit" class="client-section-toggle" data-click="section.toggle" data-body="users-body" data-chev="users-chev">
     <span class="client-list-item__icon">{{ icon('users', '14') }}</span>
     <h2 class="client-section-toggle__title">Assigned Users</h2>
     <span class="badge badge-neutral badge--xs">{{ client_users | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
-        <button  name="Open Edit Users Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-users-modal').style.display='flex'">
+    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
+        <button  name="Open Edit Users Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-users-modal">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -22,7 +35,7 @@
     {% for u in client_users %}
     <div class="client-list-item client-list-item--{% if u.is_default %}info{% else %}active{% endif %}">
         <div class="client-list-item__body">
-            <span class="client-list-item__title" style="cursor:default;">{{ u.username }}</span>
+            <span class="client-list-item__title cursor-default">{{ u.username }}</span>
             {% if u.is_default %}
             <span class="badge badge-info badge--xs">Default</span>
             {% endif %}
@@ -33,29 +46,21 @@
             <span class="client-list-item__meta">{{ u.email }}</span>
             {% endif %}
             {% if all_roles is defined and all_roles %}
-            <span class="client-list-item__meta" style="display:inline-flex;align-items:center;gap:0.35rem;">
-                <span class="text-secondary" style="font-size:0.72rem;">Role:</span>
-                <select class="form-input"
-                        style="font-size:0.75rem;padding:0.15rem 0.35rem;height:auto;width:auto;"
-                        hx-put="/api/management/clients/{{ client.id }}/users/{{ u.id }}/role"
-                        hx-target="#client-users-section" hx-swap="innerHTML"
-                        hx-trigger="change"
-                        name="role">
-                    <option value=""{% if not u._current_role %} selected{% endif %}>— none —</option>
-                    {% for r in all_roles %}
-                    <option value="{{ r.name }}"{% if u._current_role == r.name %} selected{% endif %}>{{ r.name }}</option>
-                    {% endfor %}
-                </select>
-            </span>
+            <form class="client-list-item__meta client-roles" data-stop-click
+                  hx-put="/api/management/clients/{{ client.id }}/users/{{ u.id }}/role"
+                  hx-target="#client-users-section" hx-swap="innerHTML" hx-trigger="change">
+                <span class="text-secondary client-roles__label">Roles:</span>
+                {{ role_boxes(u._roles or [], may_support) }}
+            </form>
             {% endif %}
         </div>
-        <div  name="Remove" style="display:flex;align-items:center;gap:0.35rem;margin-left:auto;" onclick="event.stopPropagation();">
-            <button name="Remove" class="btn btn-ghost btn-sm text-danger"
+        <div  name="Remove" class="flex items-center gap-xs ml-auto" data-stop-click>
+            <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
                     hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
                     hx-target="#client-users-section" hx-swap="innerHTML"
                     hx-confirm="Remove '{{ u.username }}' from this client?"
                     title="Remove user from this client"
-                    style="padding:0.2rem 0.45rem;font-size:0.72rem;">
+                   >
                 {{ icon('x', '12') }} Remove
             </button>
         </div>
@@ -72,27 +77,27 @@
 
 <!-- Edit Users Modal -->
 <div name="Edit Users Modal" id="edit-users-modal" class="modal-overlay" style="display:none;"
-     onclick="if(event.target===this) this.style.display='none'">
+     data-click="backdrop.hide">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage Users — {{ client.name }}</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="document.getElementById('edit-users-modal').style.display='none'">&#x2715;</button>
+                    data-click="el.hide" data-target="edit-users-modal">&#x2715;</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:1rem;">
+        <div class="stack gap-md">
             <!-- Current users with remove -->
             {% if client_users %}
             <div>
                 <label class="form-label">Current Users</label>
-                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                <div class="stack gap-xs">
                     {% for u in client_users %}
-                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
-                        <span>{{ u.username }}{% if u.is_default %} <span class="badge badge-info" style="font-size:0.6rem;">default</span>{% endif %}</span>
-                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
+                    <div class="u-bg-surface list-row list-row--plain">
+                        <span>{{ u.username }}{% if u.is_default %} <span class="badge badge-info fs-2xs">default</span>{% endif %}</span>
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
                                 hx-delete="/api/management/clients/{{ client.id }}/users/{{ u.id }}"
                                 hx-target="#client-users-section" hx-swap="innerHTML"
                                 hx-confirm="Remove '{{ u.username }}' from this client?"
-                                style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                               >
                             {{ icon('x', '12') }} Remove
                         </button>
                     </div>
@@ -102,33 +107,34 @@
             {% endif %}
             <!-- Assign user form -->
             {% if available_users is defined and available_users %}
-            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <hr class="divider-line">
             <form name="Submit Users" hx-post="/api/management/clients/{{ client.id }}/users"
                   hx-target="#client-users-section" hx-swap="innerHTML"
-                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-users-modal').style.display='none'">
-                <label class="form-label">Assign User</label>
-                <select name="user_id" class="form-input" required>
+                <label class="form-label" for="assign-user-{{ client.id }}">Assign User</label>
+                {% if may_support %}
+                <select id="assign-user-{{ client.id }}" name="user_id" class="form-input" required>
                     <option value="" disabled selected>Select a user&hellip;</option>
                     {% for u in available_users %}
                     <option value="{{ u.id }}">{{ u.username }}{% if u.full_name %} &mdash; {{ u.full_name }}{% endif %}{% if u.email %} ({{ u.email }}){% endif %}</option>
                     {% endfor %}
                 </select>
+                {% else %}
+                {# A client admin types the username: users on other clients aren't listed to them. #}
+                <input id="assign-user-{{ client.id }}" type="text" name="username" class="form-input" required
+                       autocomplete="off" placeholder="Their exact username">
+                {% endif %}
                 {% if all_roles is defined and all_roles %}
-                <label class="form-label">Role for this client</label>
-                <select name="role" class="form-input">
-                    <option value="">— none (no role) —</option>
-                    {% for r in all_roles %}
-                    <option value="{{ r.name }}"{% if r.name == 'ANALYST' %} selected{% endif %}>{{ r.name }}</option>
-                    {% endfor %}
-                </select>
+                <span class="form-label">Roles on this client</span>
+                <div class="client-roles">{{ role_boxes(["ANALYST"], may_support) }}</div>
                 {% endif %}
                 <button name="Assign User" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Assign User</button>
             </form>
             {% endif %}
-            <div style="display:flex;justify-content:flex-end;">
+            <div class="flex justify-end">
                 <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
-                        onclick="document.getElementById('edit-users-modal').style.display='none'">Close</button>
+                        data-click="el.hide" data-target="edit-users-modal">Close</button>
             </div>
         </div>
     </div>

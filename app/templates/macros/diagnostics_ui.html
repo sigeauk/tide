@@ -1,0 +1,116 @@
+{#
+  Diagnostics page pieces (pages/admin/diagnostics.html, partials/diagnostics_checks.html).
+
+  check_list(checks, outcomes)  every check, grouped Install / Each client  (#diag-checks)
+  check_row(check, outcome)     one check: its status on the right, its findings inside, per client
+  table(columns, rows)          a padded table that scrolls inside a fixed height
+
+  ``outcome`` is app.services.diagnostics.by_check()[check.id], or none before the check has run.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro value(v) -%}
+{%- if v is none -%}—{%- elif v is not string and v.strftime is defined -%}{{ v.strftime('%Y-%m-%d %H:%M') }}{%- else -%}{{ v }}{%- endif -%}
+{%- endmacro %}
+
+{% macro table(columns, rows, scroll=true) %}
+<div class="diag-table-wrap{% if scroll %} diag-table-wrap--scroll{% endif %}">
+    <table class="diag-table">
+        <thead><tr>{% for col in columns %}<th>{{ col | replace('_', ' ') }}</th>{% endfor %}</tr></thead>
+        <tbody>
+        {% for row in rows %}<tr>{% for v in row %}<td>{{ value(v) }}</td>{% endfor %}</tr>{% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endmacro %}
+
+{% macro status(o) %}
+{%- if o is none -%}
+<span class="diag-check__status text-muted">Not run</span>
+{%- elif o.status == 'ok' -%}
+<span class="status-pill status-success">No problems</span>
+{%- elif o.status == 'listing' -%}
+<span class="status-pill status-info">{{ o.count }} listed</span>
+{%- elif o.status == 'failed' and not o.count -%}
+<span class="status-pill status-muted">Could not run</span>
+{%- else -%}
+{% set tone = {'error': 'danger', 'warning': 'warning', 'info': 'info', 'failed': 'muted'}[o.status] %}
+<span class="status-pill status-{{ tone }}">{% if o.status == 'failed' %}Could not run{% else %}Found {{ o.count }}{% if o.affected > 1 %} in {{ o.affected }} clients{% endif %}{% endif %}</span>
+{%- endif -%}
+{%- if o is not none and o.failed and o.status != 'failed' %}
+<span class="diag-check__status text-muted" title="Open the check to see why">{{ o.failed }} could not run</span>
+{%- endif -%}
+{% endmacro %}
+
+{% macro check_row(c, o=none, fix=none, fix_ok={}) %}
+{% set findings = o is not none and o.status not in ('ok',) %}
+<details class="diag-check diag-check--{{ o.status if o is not none else 'idle' }}" id="diag-check-{{ c.id }}"{% if findings %} open{% endif %}>
+    <summary class="diag-check__head">
+        <span class="diag-check__chevron" aria-hidden="true">{{ icon('chevron-right', '14') }}</span>
+        <span class="diag-check__name">
+            <span class="diag-check__title">{{ c.title }}</span>
+            <span class="diag-check__meaning text-secondary">{{ c.meaning }}</span>
+        </span>
+        <span class="diag-check__statuses">{{ status(o) }}</span>
+        <button name="Run Check" type="button" class="btn btn-secondary btn-sm" title="Run this check only"
+                data-click="event.prevent"
+                hx-get="/api/diagnostics/run?check={{ c.id }}" hx-include="#diag-client"
+                hx-target="#diag-check-{{ c.id }}" hx-swap="outerHTML" hx-disabled-elt="this">Run</button>
+    </summary>
+    <div class="diag-check__body">
+        {% if o is none %}
+        <p class="text-muted">Not run yet. Use Run, or Run all checks.</p>
+        {% else %}
+        {% if o.status != 'ok' and o.count %}
+        <p class="diag-advice">{{ icon('info', '14') }} <span><strong>What to do:</strong> {{ c.advice }}</span></p>
+        {% endif %}
+        {% for p in o.parts %}
+        {% set r = p.result %}
+        {% if r.status == 'failed' %}
+        <div class="diag-part">
+            {% if p.name %}<h4 class="diag-part__name">{{ p.name }}</h4>{% endif %}
+            <p class="text-secondary">This check could not run{% if p.name %} for {{ p.name }}{% endif %}: {{ r.error }}</p>
+        </div>
+        {% elif r.count %}
+        <div class="diag-part">
+            {% if p.name %}<h4 class="diag-part__name">{{ p.name }} <span class="text-muted">{{ r.count }}</span></h4>{% endif %}
+            {{ table(r.columns, r.rows) }}
+            {% if r.truncated %}<p class="text-muted diag-part__more">Showing the first {{ r.rows | length }} of {{ r.count }}.</p>{% endif %}
+            {% if fix and p.client_id %}
+            <div class="diag-part__fix" id="fix-{{ c.id }}-{{ p.client_id }}">
+                {% if fix_ok.get(p.client_id) %}
+                <button name="Preview Fix" type="button" class="btn btn-secondary btn-sm" title="{{ fix.does }}"
+                        hx-get="/api/diagnostics/fix/preview?fix={{ fix.id }}&client={{ p.client_id }}"
+                        hx-target="#fix-{{ c.id }}-{{ p.client_id }}" hx-swap="innerHTML" hx-disabled-elt="this">
+                    {{ icon('zap', '13') }} {{ fix.label }}…</button>
+                {% else %}
+                <span class="text-muted" title="{{ fix.does }}">{{ icon('lock', '12') }} A fix is available ({{ fix.label | lower }}), but fixes are off for {{ p.name }}.</span>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% if o.clean %}
+        <p class="text-muted">{{ icon('check', '13') }} No problems in: {{ o.clean | join(', ') }}.</p>
+        {% elif o.status == 'ok' %}
+        <p class="text-muted">{{ icon('check', '13') }} Nothing found.</p>
+        {% endif %}
+        {% endif %}
+    </div>
+</details>
+{% endmacro %}
+
+{% macro check_list(checks, outcomes, fixes={}, fix_ok={}) %}
+<div id="diag-checks" class="diag-checks">
+    {% for scope, label, sub in [('install', 'TIDE setup', "users, clients and linked SIEMs, kept in TIDE's shared database"), ('client', 'Client data', "rules, baselines and rule links, checked in each client's own database")] %}
+    {% set group = checks | selectattr('scope', 'equalto', scope) | list %}
+    {% if group %}
+    <div class="diag-group">
+        <h3 class="diag-group__title">{{ label }} <span class="text-muted">· {{ group | length }} checks: {{ sub }}</span></h3>
+        {% for c in group %}{{ check_row(c, outcomes.get(c.id), fixes.get(c.id), fix_ok) }}{% endfor %}
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+{% endmacro %}

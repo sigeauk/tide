@@ -36,7 +36,7 @@
                     {% for s in systems %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
                 </select>
                 <button name="Apply Baseline" type="button" class="btn btn-primary"
-                        onclick="htmx.ajax('POST', '/api/baselines/{{ baseline.id }}/apply/' + encodeURIComponent(document.getElementById('tpl-apply').value), {swap: 'none'})">
+                        data-click="tpl.apply" data-baseline-id="{{ baseline.id }}">
                     {{ icon_text('plus', 'Apply', '13') }}
                 </button>
             </div>
@@ -73,7 +73,7 @@
                     <option value="executive">Executive / CISO</option>
                     <option value="technical">Technical / Engineer</option>
                 </select>
-                <div><button name="Download Export" type="button" class="btn btn-primary btn-sm" onclick="tideExportTemplate(this)">{{ icon_text('download', 'Download', '13') }}</button></div>
+                <div><button name="Download Export" type="button" class="btn btn-primary btn-sm" data-click="tpl.export">{{ icon_text('download', 'Download', '13') }}</button></div>
             </div>
         </details>
 
@@ -87,19 +87,3 @@
         </div>
     </div>
 </div>
-<script>
-  // Export: a report (PDF or Markdown, for an audience and classification) or the template as TIDE JSON.
-  function tideExportTemplate(btn) {
-    var box = btn.closest('[data-tpl-export]'), id = box.getAttribute('data-baseline-id');
-    var format = document.getElementById('tpl-export-format').value;
-    if (format === 'json') {
-      window.location.href = '/api/baselines/' + encodeURIComponent(id) + '/export.json?include_rules=false';
-      return;
-    }
-    var params = new URLSearchParams({
-      mode: document.getElementById('tpl-export-audience').value, format: format,
-      classification: document.getElementById('tpl-export-classification').value,
-    });
-    window.location.href = '/api/baselines/' + encodeURIComponent(id) + '/report?' + params.toString();
-  }
-</script>

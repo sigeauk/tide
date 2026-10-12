@@ -2,48 +2,48 @@
    Context: host, system, software (list), vulns (list), user #}
 {% from "macros/icons.html" import icon %}
 <div id="host-header">
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:1rem;margin-bottom:1.5rem;">
+    <div class="flex items-start justify-between flex-wrap gap-md mb-lg">
         <div>
-            <h1 style="margin:0;font-size:1.6rem;font-weight:700;">
+            <h1 class="m-0 fs-2xl fw-700">
                 {{ icon('server', '24') }} {{ host.name }}
             </h1>
             {% if system and system.classification %}
-            <span class="system-card__classification u-bg-dyn-tint" style="--u-bg-color:{{ clf_color }};color:{{ clf_color }};border-color:{{ clf_color }}40;margin-top:0.35rem">{{ icon('lock', '10') }} {{ system.classification }}</span>
+            <span class="system-card__classification u-bg-dyn-tint clf-tinted clf-tinted--soft host-header-clf" style="--u-bg-color:{{ clf_color }}">{{ icon('lock', '10') }} {{ system.classification }}</span>
             {% endif %}
             {% if host.ip_address %}
-            <p style="margin:0.3rem 0 0;color:var(--color-muted);font-family:monospace;font-size:0.9rem;">{{ host.ip_address }}</p>
+            <p class="mt-xs mx-0 mb-0 text-muted mono fs-base">{{ host.ip_address }}</p>
             {% endif %}
             {% if host.os %}
-            <p style="margin:0.25rem 0 0;color:var(--color-muted);font-size:0.85rem;">{{ host.os }}</p>
+            <p class="mt-xs mx-0 mb-0 text-muted fs-base">{{ host.os }}</p>
             {% endif %}
         </div>
-        <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <div class="flex gap-sm flex-wrap">
             <button name="Edit Device" class="btn btn-secondary btn-sm"
-                    onclick="document.getElementById('edit-host-modal').style.display='flex'">
+                    data-click="el.show" data-target="edit-host-modal">
                 {{ icon('edit-2', '14') }} Edit Device
             </button>
             <button name="Add Package" class="btn btn-primary btn-sm"
-                    onclick="document.getElementById('add-sw-modal').style.display='flex'">
+                    data-click="el.show" data-target="add-sw-modal">
                 {{ icon('plus', '16') }} Add Package
             </button>
         </div>
     </div>
     <!-- Stat Cards -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1rem;margin-bottom:2rem;">
-        <div class="metric-card" style="text-align:center;">
-            <div class="metric-value" style="color:var(--color-primary);">{{ software | length }}</div>
+    <div class="host-facts">
+        <div class="metric-card text-center">
+            <div class="metric-value text-primary">{{ software | length }}</div>
             <div class="metric-label">Packages</div>
         </div>
-        <div class="metric-card" style="text-align:center;">
-            <div class="metric-value" style="{% if vulns %}color:var(--color-danger);{% else %}color:var(--color-success);{% endif %}">{{ vulns | length }}</div>
+        <div class="metric-card text-center">
+            <div class="metric-value {{ 'text-danger' if vulns else 'text-success' }}">{{ vulns | length }}</div>
             <div class="metric-label">CVE Matches</div>
         </div>
-        <div class="metric-card" style="text-align:center;">
-            <div class="metric-value" style="font-size:1rem;">{{ host.source }}</div>
+        <div class="metric-card text-center">
+            <div class="metric-value fs-lg">{{ host.source }}</div>
             <div class="metric-label">Source</div>
         </div>
-        <div class="metric-card" style="text-align:center;">
-            <div class="metric-value" style="font-size:0.9rem;">{{ host.created_at.strftime('%Y-%m-%d') if host.created_at else '—' }}</div>
+        <div class="metric-card text-center">
+            <div class="metric-value fs-base">{{ host.created_at.strftime('%Y-%m-%d') if host.created_at else '—' }}</div>
             <div class="metric-label">Added</div>
         </div>
     </div>

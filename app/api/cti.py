@@ -1634,8 +1634,10 @@ def _render_job_fragment(job: dict, kind_label: str) -> str:
     else:
         body = "synced"
     err_suffix = f" &middot; {err_count} error(s)" if err_count else ""
+    # The errors themselves on hover: the same text the run's record (sync_history) and log hold.
+    err_title = f' title="{_esc("; ".join(str(e) for e in (summary.get("errors") or [])[:5]))}"' if err_count else ""
     return (
-        f'<span id="{target_id}" class="badge {cls}">'
+        f'<span id="{target_id}" class="badge {cls}"{err_title}>'
         f'{body}{err_suffix}</span>'
     )
 

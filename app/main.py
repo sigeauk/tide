@@ -1,12 +1,13 @@
 """
-TIDE - Threat Intelligence Detection Engineering
+TIDE - Threat Informed Detection Engine
 
 FastAPI Application Entry Point.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Dict, Optional
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -29,7 +30,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -126,9 +127,14 @@ _MAX_SYNC_JOBS = 50
 _sync_jobs: "OrderedDict[str, dict]" = OrderedDict()
 
 
-def _start_sync_job(client_id: str, message: str = "Initialising sync...") -> str:
-    """Create a new sync job record and return its id."""
+def _start_sync_job(client_id: str, message: str = "Initialising sync...", *, actor: Optional[str] = None,
+                    scope: Optional[dict] = None, retry_of: Optional[str] = None) -> str:
+    """Create a new sync job record and return its id. The run is also recorded in sync_history
+    under the same id (app.services.sync_runs), which outlives a restart; this in-memory record
+    only carries the live progress message."""
+    from app.services import sync_runs
     job_id = uuid.uuid4().hex
+    sync_runs.start("rules", run_id=job_id, client_id=client_id, actor=actor, scope=scope, retry_of=retry_of)
     _sync_jobs[job_id] = {
         "state": "running",
         "message": message,
@@ -147,6 +153,11 @@ def _start_sync_job(client_id: str, message: str = "Initialising sync...") -> st
     return job_id
 
 
+def sync_running(client_id: str) -> bool:
+    """Is a rule sync running for this client now (Diagnostics fixes wait for it)."""
+    return any(j["state"] == "running" and j.get("client_id") == client_id for j in list(_sync_jobs.values()))
+
+
 def _update_sync_job(job_id: str, state: str, message: str = "", rule_count: int = 0):
     """Update one sync job's status in place. No-ops if the job is unknown
     (e.g. evicted, or the server restarted since the job was created)."""
@@ -158,20 +169,6 @@ def _update_sync_job(job_id: str, state: str, message: str = "", rule_count: int
     if state in ("complete", "error"):
         job["finished_at"] = time.time()
         job["rule_count"] = rule_count
-
-
-def _sync_tracker_html(job_id: str) -> str:
-    """The initial HTMX polling fragment returned when a sync starts."""
-    return (
-        '<div id="sync-status"'
-        f'     hx-get="/api/sync/status?job_id={job_id}"'
-        '     hx-trigger="load, every 1s"'
-        '     hx-swap="outerHTML"'
-        '     class="sync-tracker sync-running">'
-        '    <span class="sync-spinner"></span>'
-        '    <span>Sync starting...</span>'
-        '</div>'
-    )
 
 
 def get_last_sync_time(rules=None) -> str:
@@ -230,6 +227,8 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
         f"Per-tenant sync triggered (client_id={client_id})"
     )
 
+    from app.services import sync_runs
+    started = datetime.now() - timedelta(seconds=2)   # server time, as DuckDB now() stores it
     if job_id:
         _update_sync_job(job_id, "running", "Connecting to Elastic...")
 
@@ -242,16 +241,52 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
 
         # Run the actual sync
         result = await trigger_sync(client_id=client_id, force_mapping=force_mapping,
-                                    only_siem_id=only_siem_id, only_space=only_space)
+                                    only_siem_id=only_siem_id, only_space=only_space, run_id=job_id)
 
         count = result if isinstance(result, int) else 0
-        if job_id:
+        missed = _destinations_missed(client_id, started, only_siem_id, only_space)
+        if missed:
+            reason = "Not reached: " + "; ".join(f"{name} ({why})" for name, why in missed)
+            if job_id:
+                _update_sync_job(job_id, "complete", f"Synced {count} rules. {reason}", rule_count=count)
+                sync_runs.finish(job_id, "partial", total=count, error=reason,
+                                 detail={"missed": [name for name, _ in missed]})
+        elif job_id:
             _update_sync_job(job_id, "complete", f"Synced {count} rules from Elastic", rule_count=count)
+            sync_runs.finish(job_id, "success", total=count)
     except Exception as e:
         logger.warning(f"Per-tenant sync failed (Elastic may be unreachable): {e}")
         logger.info("TIDE will continue running — sync will retry on next user action")
         if job_id:
             _update_sync_job(job_id, "error", str(e))
+            sync_runs.finish(job_id, "failed", error=str(e))
+
+
+def _destinations_missed(client_id: str, since: datetime, only_siem_id: Optional[str] = None,
+                         only_space: Optional[str] = None) -> list:
+    """(destination name, reason) for each of the client's destinations this sync couldn't reach:
+    its reachability check failed during the run (``siem_space_status``)."""
+    from app.services.database import get_database_service
+    from app.services.tenant_manager import tenant_context_for
+    db = get_database_service()
+    try:
+        names = {(d.get("id"), d.get("space") or "default"): d.get("name") or d.get("label") or d.get("space")
+                 for d in db.get_client_siems(client_id) or []}
+        with tenant_context_for(client_id):
+            offline = db.get_offline_scopes()
+    except Exception as exc:  # noqa: BLE001 - the verdict is a nicety, never a reason to fail the sync
+        logger.debug("Could not read reachability for %s: %s", client_id, exc)
+        return []
+    out = []
+    for (siem_id, space), info in offline.items():
+        if (siem_id, space) not in names or (only_siem_id and (siem_id, space) != (only_siem_id, only_space)):
+            continue
+        checked = info.get("checked_at")
+        if checked is not None and getattr(checked, "tzinfo", None) is not None:
+            checked = checked.replace(tzinfo=None)
+        if checked is None or checked >= since:
+            out.append((names[(siem_id, space)], info.get("reason") or "no answer"))
+    return sorted(out)
 
 
 @asynccontextmanager
@@ -280,6 +315,9 @@ async def lifespan(app: FastAPI):
     from app.services.database import get_database_service
     db = get_database_service()
     logger.info("Database initialized")
+    # Runs still marked running were cut off when TIDE last stopped (one pass at startup, no timer).
+    from app.services import sync_runs
+    sync_runs.mark_interrupted()
 
     # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
     # ``cti_connectors`` has been retired. It was useful for the 4.1.20
@@ -334,6 +372,17 @@ async def lifespan(app: FastAPI):
 
         refresh_tenant_cache(settings.data_dir, settings.db_path)
         sync_shared_data(settings.data_dir, settings.db_path)
+
+        # Encrypt credentials stored before encryption (#59).
+        try:
+            from app.services.cti_database import seal_egress_keys
+            _sealed = db.seal_stored_credentials()
+            for _c in db.list_clients():
+                _sealed += seal_egress_keys(_c["id"])
+            if _sealed:
+                logger.info(f"Encrypted {_sealed} stored credential(s) (data/credentials.key)")
+        except Exception as _e:
+            logger.error(f"Could not encrypt stored credentials: {_e}")
 
         # Open every tenant DB once so legacy reference-table copies are dropped.
         try:
@@ -500,10 +549,12 @@ async def lifespan(app: FastAPI):
     # unchanged.
     
     # Schedule rule log export job
-    _schedule_rule_log_job(db)
-    
-    scheduler.start()
-    logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
+    try:
+        _schedule_rule_log_job(db)
+        scheduler.start()
+        logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
+    except Exception as exc:
+        logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True)
 
     # 5.0.x — CTI connector auto-sync scheduler. This is the only
     # background ticker TIDE owns; per CLAUDE.md §2 it is the
@@ -517,6 +568,12 @@ async def lifespan(app: FastAPI):
         cti_scheduler.start()
     except Exception as exc:  # pragma: no cover
         logger.warning(f"CTI scheduler failed to start (non-fatal): {exc}")
+    # Say plainly, once, if a background service isn't running: TIDE works without them, but
+    # what they do stops happening (Diagnostics → "Background services not running" shows it too).
+    for name, consequence in background_services_down():
+        logger.error(f"Background service not running: {name}. {consequence}")
+    from app.services import diagnostics as _diagnostics
+    _diagnostics.background_status = background_services
 
     yield
 
@@ -541,6 +598,27 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover
         logger.warning(f"ConnectionPool close_all failed: {exc}")
     logger.info("TIDE shutdown complete")
+
+
+def background_services() -> list:
+    """TIDE's two background services (CLAUDE.md Hard Stop 6), each as
+    ``(name, running, detail, what stops when it isn't running)``."""
+    from app.services import cti_scheduler
+    cti = cti_scheduler.status()
+    last = cti["last_tick"].strftime("%Y-%m-%d %H:%M UTC") if cti["last_tick"] else "not yet"
+    return [
+        ("CTI connector scheduler", cti["running"],
+         cti["error"] or f"last checked for due connectors: {last}",
+         "Connectors with a sync interval won't sync on their own; their Sync buttons still work."),
+        ("Rule-log export schedule", bool(scheduler.running),
+         f"{len(scheduler.get_jobs())} export job(s) scheduled" if scheduler.running else "not started",
+         "Rule logs won't be exported on their schedule; Export now still works."),
+    ]
+
+
+def background_services_down() -> list:
+    """``(name, consequence)`` for each background service that isn't running."""
+    return [(name, consequence) for name, running, _detail, consequence in background_services() if not running]
 
 
 def _schedule_rule_log_job(db=None):
@@ -719,6 +797,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/cti/actors": "page:cti_actors",
         "/cti/reports": "page:cti_reports",
 
+        "/api/dashboard": "page:dashboard",
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
         "/api/rules": "page:rules",
@@ -730,6 +809,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/settings": "page:settings",
         "/api/clients": "page:clients",
         "/api/management": "page:management",
+        # Superadmin only (the routes require it); the resource is for the Role Templates matrix.
+        "/diagnostics": "page:diagnostics",
+        "/api/diagnostics": "page:diagnostics",
     }
 
     # Baseline templates are the Baselines page's; anything that reads or changes a system --
@@ -746,10 +828,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/baselines/tactics/*/detections": "page:systems",
         "/api/baselines/tactics/detections/": "page:systems",
         "/api/baselines/tactics/*/siem-rules": "page:systems",
+        # Create Baseline on Threat Landscape and the heatmap makes a template.
+        "/api/heatmap/generate-baseline": "page:baselines",
     }
     PATH_RESOURCE_MAP.update(_BASELINE_RESOURCES)
 
     API_WRITE_RESOURCE_MAP = {
+        "/api/dashboard": "page:dashboard",
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
         "/api/rules": "page:rules",
@@ -761,7 +846,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/settings": "page:settings",
         "/api/clients": "page:clients",
         "/api/management": "page:management",
+        "/api/diagnostics": "page:diagnostics",   # fixes: Support (or a super admin) on that client
         **_BASELINE_RESOURCES,
+    }
+
+    # A user's own session and account, not the page whose API they sit under: anyone signed in
+    # may use them, whatever their role on that page. Each route checks its own limits (switch
+    # only to a client you belong to; change only your own email or password).
+    SELF_SERVICE_PATHS = {
+        "/api/clients/switch",
+        "/api/settings/profile/email",
+        "/api/settings/profile/password",
     }
 
     @staticmethod
@@ -806,6 +901,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         
         def _check_page_permission(user):
             """Check if user has permission to access this path. Returns 403 response or None."""
+            if path in self.SELF_SERVICE_PATHS:
+                return None
             user = _scope_user_to_active_client(user)
             if not user or user.is_superadmin:
                 return None
@@ -1087,7 +1184,7 @@ def create_app() -> FastAPI:
     
     app = FastAPI(
         title="TIDE",
-        description="Threat Intelligence Detection Engineering",
+        description="Threat Informed Detection Engine",
         version=settings.tide_version,
         lifespan=lifespan,
         docs_url="/api/docs" if settings.debug else None,
@@ -1510,6 +1607,9 @@ def create_app() -> FastAPI:
         return _mitre_names["names"].get(str(technique_id or "").upper(), "")
 
     templates.env.globals["mitre_name"] = mitre_name
+    # ATT&CK's tactics in kill-chain order, then Other (app/attack_tactics.py).
+    from app.models.inventory import MITRE_TACTICS
+    templates.env.globals["attack_tactic_order"] = MITRE_TACTICS
 
     def rule_dom_id(rule) -> str:
         """A DOM id for one rule *card or row*, unique per destination.
@@ -1521,16 +1621,8 @@ def create_app() -> FastAPI:
         different destination's card. The scope goes in the id, and is slugified because it ends
         up inside a CSS selector.
         """
-        import re
-
-        def slug(value) -> str:
-            return re.sub(r"[^A-Za-z0-9_-]", "_", str(value or ""))
-
-        return (
-            f"rule-{slug(getattr(rule, 'rule_id', '') or '')}"
-            f"--{slug(getattr(rule, 'siem_id', '') or '')}"
-            f"--{slug(getattr(rule, 'space', None) or 'default')}"
-        )
+        from app.api.rules import rule_dom_id as _dom_id
+        return _dom_id(getattr(rule, 'rule_id', ''), getattr(rule, 'siem_id', ''), getattr(rule, 'space', None))
 
     templates.env.globals["rule_dom_id"] = rule_dom_id
 
@@ -1653,6 +1745,8 @@ def create_app() -> FastAPI:
     app.include_router(management_api.router)
     app.include_router(cti_api.router)
     app.include_router(mitre_api.router)
+    app.include_router(diagnostics_api.router)
+    app.include_router(dashboard_api.router)
     
     # --- HEALTH CHECK ---
     
@@ -1818,6 +1912,7 @@ def create_app() -> FastAPI:
         # keeps this query string in sync via history.replaceState — see
         # the htmx:afterRequest listener in rule_health.html.
         from app.api.rules import (
+            _filter_scope_options,
             _prune_orphan_scopes,
             _apply_lifecycle_counts,
             _parse_date_bound,
@@ -1848,15 +1943,10 @@ def create_app() -> FastAPI:
         min_score_int = int(min_score_q) if min_score_q.strip().lstrip('-').isdigit() else None
         max_score_int = int(max_score_q) if max_score_q.strip().lstrip('-').isdigit() else None
 
-        # Unfiltered metrics purely to populate the SIEM filter dropdown —
-        # this must NOT reflect the active filters below, otherwise
-        # options for spaces excluded by the current filter would vanish
-        # from the dropdown until the next full page load.
-        metrics_all = db.get_rule_health_metrics(
-            thresholds=db.get_client_validation_thresholds(_cid),
-            client_id=_cid,
-        )
-        _prune_orphan_scopes(metrics_all, db, _cid)
+        # The SIEM filter's options: every destination holding rules, unfiltered -- they must NOT
+        # follow the active filters below, or a filtered-out space would vanish from the dropdown
+        # until the next full page load.
+        scopes, spaces = _filter_scope_options(db, _cid)
 
         # Per-tenant since 4.1.13 — tenant context is set above; rule
         # health stats are computed from the same deduplicated rule list
@@ -1902,10 +1992,6 @@ def create_app() -> FastAPI:
             # last-writer-wins for the legacy dict (intentionally lossy)
             space_labels[sp] = label
 
-        # Derive scope keys from the composite (unfiltered) metric. Fall
-        # back to space-only keys for templates that haven't migrated.
-        scopes = sorted(metrics_all.rules_by_scope.keys()) if metrics_all.rules_by_scope else []
-        spaces = sorted(metrics_all.rules_by_space.keys()) if metrics_all.rules_by_space else []
 
         # Destinations whose SIEM failed the reachability check before the last sync: their
         # rules are shown from TIDE's copy. A brief notice, not a banner (it fades after 10 s).
@@ -2040,69 +2126,82 @@ def create_app() -> FastAPI:
         if not _cid:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
-        
+
+        # The layout this user sees (their own, the client's, or the default). ?edit=mine|client
+        # opens the editor on one of them, for users who can change the Dashboard.
+        from app.services import dashboard_layout as layouts
+        user_id = user.id if user else None
+        cards, layout_source, stored_layouts = layouts.load(db, _cid, user_id)
+        can_edit = bool(user and user.can_write("page:dashboard"))
+        editing = request.query_params.get("edit") if can_edit else None
+        if editing not in ("mine", "client"):
+            editing = None
+        if editing:
+            cards = layouts.load_for_edit(db, _cid, user_id, editing)
+        # Only the sections on show are computed; the editor offers every section, so it needs all.
+        shown = set(layouts.SECTION_CARDS) if editing else {c["type"] for c in cards}
+
+        ctx = {
+            "user": user,
+            "active_page": "dashboard",
+            "cards": cards,
+            "section_cards": layouts.SECTION_CARDS,
+            "text_limits": layouts.TEXT_CARDS,
+            "layout_source": layout_source,
+            "stored_layouts": stored_layouts,
+            "can_edit": can_edit,
+            "editing": editing,
+            "env": get_settings(),
+            "app_settings": db.get_all_settings(),
+        }
+
         # Single combined query for all metrics (1 connection, 1 validation load)
         # 4.1.0 P7 — cache rollup per tenant for ~60s. The dashboard is the
         # single most-hit page after login, and the metric set is an aggregate
         # of aggregates (rule scores, validation freshness, threat counts) that
         # changes much slower than the rule-edit pulse. Cache is per
         # client_id so tenants never see each other's roll-ups.
-        from app.services.ttl_cache import dashboard_cache
-        rule_metrics, promotion_metrics, threat_metrics = dashboard_cache.get_or_compute(
-            ("dashboard-metrics", _cid or "__global__"),
-            lambda: db.get_dashboard_metrics(client_id=_cid),
-        )
-        
-        # Integration / repo status (same as settings page)
-        env_settings = get_settings()
-        app_settings = db.get_all_settings()
-        repo_status = {
-            "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
-            "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
-            "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
-            "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
-            "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
-            "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
-        }
+        if shown & {"rule_health", "promotion", "threat_landscape"}:
+            from app.services.ttl_cache import dashboard_cache
+            ctx["rule_metrics"], ctx["promotion_metrics"], ctx["threat_metrics"] = dashboard_cache.get_or_compute(
+                ("dashboard-metrics", _cid or "__global__"),
+                lambda: db.get_dashboard_metrics(client_id=_cid),
+            )
 
-        # Inventory / CVE stats (best-effort — won't crash dashboard if engine unavailable)
-        try:
-            inventory_stats = get_inventory_stats()
-            cve_stats = get_cve_overview_stats()
-            baselines_overview = get_baselines_overview()
-            baselines_rollup = get_system_baselines_rollup()
-        except Exception:
-            inventory_stats = None
-            cve_stats = None
-            baselines_overview = []
-            baselines_rollup = None
+        # Integration / repo status (same as settings page)
+        if "repositories" in shown:
+            env_settings = ctx["env"]
+            ctx["repo_status"] = {
+                "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
+                "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
+                "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
+                "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
+                "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
+                "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
+            }
+
+        # Inventory / CVE / baseline stats (best-effort — won't crash dashboard if engine unavailable)
+        def _best_effort(fn, fallback):
+            try:
+                return fn()
+            except Exception:
+                return fallback
+        if "asset_inventory" in shown:
+            ctx["inventory_stats"] = _best_effort(get_inventory_stats, None)
+        if "cve_overview" in shown:
+            ctx["cve_stats"] = _best_effort(get_cve_overview_stats, None)
+        if "baselines" in shown:
+            ctx["baselines_overview"] = _best_effort(get_baselines_overview, [])
+            ctx["baselines_rollup"] = _best_effort(get_system_baselines_rollup, None)
 
         # Elastic/Kibana connections come from the tenant's own siem_inventory
         # links, not a global env var (those were removed in 4.0.10) — the
         # Connected Services card used to check env.elastic_api_key, which no
         # longer exists on Settings, so it always showed "No API Key".
-        client_siems = db.get_client_siems(_cid) if _cid else []
+        if "connected_services" in shown:
+            ctx["client_siems"] = db.get_client_siems(_cid) if _cid else []
 
-        return render_template(
-            "pages/core/dashboard.html",
-            request,
-            {
-                "user": user,
-                "active_page": "dashboard",
-                "rule_metrics": rule_metrics,
-                "promotion_metrics": promotion_metrics,
-                "threat_metrics": threat_metrics,
-                "last_sync_time": get_last_sync_time(),
-                "env": env_settings,
-                "app_settings": app_settings,
-                "repo_status": repo_status,
-                "inventory_stats": inventory_stats,
-                "cve_stats": cve_stats,
-                "baselines_overview": baselines_overview,
-                "baselines_rollup": baselines_rollup,
-                "client_siems": client_siems,
-            }
-        )
+        return render_template("pages/core/dashboard.html", request, ctx)
     
     @app.get("/threats", response_class=HTMLResponse)
     def threats_page(request: Request, user: CurrentUser):
@@ -2579,7 +2678,7 @@ def create_app() -> FastAPI:
     @app.get("/clients/{client_id}", response_class=HTMLResponse)
     def client_detail_page(request: Request, client_id: str, user: CurrentUser, db: DbDep):
         """Client detail page with SIEM linking and user assignment."""
-        if user and not user.is_admin():
+        if user and not user.is_admin(client_id):   # admin of THIS client, not just the active one
             from fastapi.responses import RedirectResponse
             return RedirectResponse(url="/", status_code=302)
         client = db.get_client(client_id)
@@ -2624,7 +2723,7 @@ def create_app() -> FastAPI:
         all_roles = db.get_all_roles()
         for u in client_users:
             roles_in_tenant = db.get_user_roles(u["id"], client_id=client_id)
-            u["_current_role"] = roles_in_tenant[0] if roles_in_tenant else ""
+            u["_roles"] = roles_in_tenant
         # Systems and baselines assigned to this client
         from app.inventory_engine import list_systems, list_playbooks, get_system_summaries
         from app.services.tenant_manager import tenant_context_for
@@ -2723,33 +2822,14 @@ def create_app() -> FastAPI:
         )
     
     # --- SYNC API ---
-    
-    @app.post("/api/sync/elastic", response_class=HTMLResponse)
-    async def trigger_elastic_sync(
-        request: Request,
-        user: CurrentUser,
-        client_id: ActiveClient,
-        background_tasks: BackgroundTasks,
-    ):
-        """Trigger a manual Elastic sync for the active tenant.
-
-        Always per-tenant since 4.1.13. Cross-tenant ``scope=all`` was
-        removed — detection rules are per-tenant.
-        """
-        import asyncio
-
-        job_id = _start_sync_job(client_id)
-        asyncio.create_task(scheduled_sync(client_id=client_id, job_id=job_id))
-
-        # Return a live sync tracker that polls for status
-        return HTMLResponse(_sync_tracker_html(job_id))
+    # A rule sync starts from Rule Health (app/api/rules.py); this is its progress tracker.
 
     @app.get("/api/sync/status", response_class=HTMLResponse)
     def get_sync_status(request: Request, user: CurrentUser, job_id: Optional[str] = None):
         """Return one sync job's status as an HTMX partial.
 
-        ``job_id`` identifies which sync to watch (from the tracker
-        ``/api/sync/elastic`` returned) — without it, or if the job is
+        ``job_id`` identifies which sync to watch (from the tracker Rule
+        Health's Sync returned) — without it, or if the job is
         unknown (evicted, or from before a restart), this reports idle
         rather than guessing at someone else's sync.
         """
@@ -2775,22 +2855,20 @@ def create_app() -> FastAPI:
             </div>
             """)
         elif state == "complete":
-            return HTMLResponse(f"""
-            <div id="sync-status" class="sync-tracker sync-complete">
+            # Refreshes the rules and their metrics (refreshRules, syncComplete); the tracker
+            # clears itself after 4 s (data-clear-after, actions.js).
+            return HTMLResponse("""
+            <div id="sync-status" class="sync-tracker sync-complete" data-clear-after="4000">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
                     <polyline points="22 4 12 14.01 9 11.01"/>
                 </svg>
                 <span>Sync complete</span>
             </div>
-            <script>
-            document.body.dispatchEvent(new Event('refreshRules'));
-            setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 4000);
-            </script>
-            """)
+            """, headers={"HX-Trigger": "refreshRules, syncComplete"})
         elif state == "error":
             return HTMLResponse(f"""
-            <div id="sync-status" class="sync-tracker sync-error">
+            <div id="sync-status" class="sync-tracker sync-error" data-clear-after="6000">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="10"/>
                     <line x1="15" y1="9" x2="9" y2="15"/>
@@ -2798,7 +2876,6 @@ def create_app() -> FastAPI:
                 </svg>
                 <span>Sync failed: {message}</span>
             </div>
-            <script>setTimeout(function(){{ var el=document.getElementById('sync-status'); if(el) el.outerHTML='<div id="sync-status"></div>'; }}, 6000);</script>
             """)
         else:
             # idle

@@ -1,0 +1,57 @@
+{#
+  A Diagnostics fix, inside the check's row (app.services.diagnostic_fixes):
+    preview  what it will change, and the box to confirm it (type the fix's name)
+    refused  why it did not run (nothing changed), with the preview again when there is one
+    done     what changed, the backup taken first, and Undo
+    undone   what was put back
+  Context: mode, p (preview), allowed, message, done.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/diagnostics_ui.html" import table %}
+
+{% if mode == 'done' %}
+<div class="diag-fix diag-fix--done" role="status">
+    <p>{{ icon('check-circle', '14') }} <strong>{{ done.fix.label }}</strong> for {{ done.client.name }}: {{ done.changed }} changed.
+       Its database was backed up first ({{ done.backup.rsplit('/', 1)[-1] }}). Run the check again to see what is left.</p>
+    <button name="Undo Fix" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/diagnostics/fix/undo/{{ done.run_id }}?client={{ done.client.id }}"
+            hx-target="closest .diag-fix" hx-swap="outerHTML" hx-disabled-elt="this"
+            hx-confirm="Put back exactly what this fix changed?">{{ icon('rotate-ccw', '13') }} Undo</button>
+</div>
+
+{% elif mode == 'undone' %}
+<div class="diag-fix diag-fix--done" role="status">
+    <p>{{ icon('rotate-ccw', '14') }} Undone: {{ done.restored }} put back as they were for {{ done.client.name }}. Run the check again to see them.</p>
+</div>
+
+{% else %}
+<div class="diag-fix">
+    {% if mode == 'refused' %}
+    <p class="diag-fix__refused" role="alert">{{ icon('alert-triangle', '14') }} {{ message }}</p>
+    {% endif %}
+    {% if p is defined and p %}
+    <p><strong>{{ p.fix.label }}</strong> for {{ p.client.name }}. {{ p.fix.does }}</p>
+    {% if p.count %}
+    <p class="text-secondary">This will change {{ p.count }}{% if p.count > p.rows | length %} (the first {{ p.rows | length }} are shown){% endif %}:</p>
+    {{ table(p.columns, p.rows) }}
+    {% if allowed %}
+    <form class="diag-fix__confirm" hx-post="/api/diagnostics/fix/apply" hx-target="closest .diag-fix" hx-swap="outerHTML"
+          hx-disabled-elt="find button" hx-indicator="find .htmx-indicator">
+        <input type="hidden" name="fix" value="{{ p.fix.id }}">
+        <input type="hidden" name="client" value="{{ p.client.id }}">
+        <label for="confirm-{{ p.fix.id }}-{{ p.client.id }}">Type <code>{{ p.fix.id }}</code> to confirm</label>
+        <input id="confirm-{{ p.fix.id }}-{{ p.client.id }}" name="confirm" class="form-input" autocomplete="off" required
+               pattern="{{ p.fix.id }}" title="Type {{ p.fix.id }}">
+        <button name="Apply Fix" type="submit" class="btn btn-danger btn-sm">{{ icon('zap', '13') }} Back up, then apply</button>
+        <span class="htmx-indicator text-secondary">{{ icon('loader', '13') }} Backing up and applying…</span>
+    </form>
+    <p class="text-muted diag-fix__note">The client's database is copied aside first, and Undo puts back exactly these rows.</p>
+    {% else %}
+    <p class="text-muted">Fixes are off for {{ p.client.name }}. A super admin can turn them on under Clients on this page.</p>
+    {% endif %}
+    {% elif mode != 'refused' %}
+    <p class="text-muted">There is nothing for this fix to change now.</p>
+    {% endif %}
+    {% endif %}
+</div>
+{% endif %}

@@ -43,6 +43,10 @@ _TENANT_DETECTION_RULES_COLUMNS: tuple = (
     ("client_id",          "VARCHAR"),
     ("deprecated",         "BOOLEAN"),
     ("source_rule_id",     "VARCHAR"),
+    # Two values of raw_data kept as columns so lists of rules don't have to load the JSON
+    # (database.rule_json_keys): Kibana's own rule_id (the validation key) and the query language.
+    ("kibana_rule_id",     "VARCHAR"),
+    ("rule_language",      "VARCHAR"),
 )
 
 
@@ -552,28 +556,11 @@ def run_mitre_sync(client_id: str | None = None):
         return result
     finally:
         result["duration_ms"] = int((_time.perf_counter() - _t0) * 1000)
-        # Best-effort persistence to sync_history (Migration 42 / Phase D).
-        try:
-            from app.services.database import get_database_service
-            get_database_service().record_sync_run(
-                "mitre",
-                result.get("status", "failed"),
-                total_count=result.get("total", 0),
-                duration_ms=result.get("duration_ms", 0),
-                detail={
-                    "mitre_count": result.get("mitre_count", 0),
-                    "octi_count": result.get("octi_count", 0),
-                    "mitre_files": result.get("mitre_files", 0),
-                    "warnings": result.get("warnings", []),
-                    "errors": result.get("errors", []),
-                },
-                error=result.get("error"),
-            )
-        except Exception as _exc:  # noqa: BLE001
-            logger.debug(f"sync_history insert (mitre) failed: {_exc!r}")
+        # Recorded in sync_history by app.services.cti_jobs, which runs it (app.services.sync_runs).
 
 
-_HOST_DOWN = ("Connection refused", "Connection timed out")
+# A refused certificate is the whole host too: every space would fail the same way.
+_HOST_DOWN = ("Connection refused", "Connection timed out", "Certificate check failed")
 
 
 def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: str, spaces: list) -> list:
@@ -586,7 +573,7 @@ def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: st
     host_down = ""
     for space in spaces:
         ok, reason = (False, host_down) if host_down else elastic_helper.ping_detection_space(kibana_url, token, space)
-        if not ok and reason in _HOST_DOWN:
+        if not ok and reason.startswith(_HOST_DOWN):
             host_down = reason
         try:
             db.record_siem_space_status(siem["id"], space, ok, reason)
@@ -1079,12 +1066,13 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
 
 
 async def trigger_sync(client_id: str, force_mapping: bool = False, only_siem_id: str | None = None,
-                       only_space: str | None = None):
+                       only_space: str | None = None, run_id: str | None = None):
     """Async wrapper around :func:`run_elastic_sync`.
 
     ``client_id`` is **required** (per-tenant since 4.1.13). Runs the sync
     in a thread pool so the FastAPI event loop stays responsive.
-    ``only_siem_id``/``only_space``: see :func:`run_elastic_sync`.
+    ``only_siem_id``/``only_space``: see :func:`run_elastic_sync`. ``run_id`` (the run's id in
+    sync_history) is stamped on every log line the sync writes on its worker thread.
     """
     if not client_id:
         raise ValueError(
@@ -1093,8 +1081,10 @@ async def trigger_sync(client_id: str, force_mapping: bool = False, only_siem_id
         )
     import asyncio
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: run_elastic_sync(client_id=client_id, force_mapping=force_mapping,
-                                  only_siem_id=only_siem_id, only_space=only_space),
-    )
+    from app.services.log_context import run_context
+
+    def _run():
+        with run_context(run_id or "-", client_id):
+            return run_elastic_sync(client_id=client_id, force_mapping=force_mapping,
+                                    only_siem_id=only_siem_id, only_space=only_space)
+    return await loop.run_in_executor(None, _run)

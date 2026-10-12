@@ -1,0 +1,21 @@
+{#
+  Rule Health: this client's last rule sync (app.services.sync_runs.last_rule_sync), reloaded when a
+  sync finishes. A failed, partial or interrupted run says why and offers Retry. Context: run or none.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry %}
+{% if run %}
+<div class="rh-last-sync{% if run.retryable %} rh-last-sync--problem{% endif %}">
+    <span class="rh-last-sync__label">{{ icon('clock', '13') }} Last sync</span>
+    <span>{{ sync_when(run) }}</span>
+    {{ sync_state(run) }}
+    <span class="text-secondary">{{ sync_what(run) }}{% if run.status in ('success', 'partial') %} · {{ run.total_count or 0 }} rules · {{ sync_took(run) }}{% endif %}{% if run.actor %} · by {{ run.actor }}{% endif %}{% if run.retry_of %} · a retry{% endif %}</span>
+    {% if run.retryable %}
+    <span class="rh-last-sync__why">{{ run.error }}</span>
+    {{ sync_retry(run) }}
+    {% endif %}
+</div>
+{% else %}
+<div class="rh-last-sync"><span class="rh-last-sync__label">{{ icon('clock', '13') }} Last sync</span>
+    <span class="text-secondary">No sync recorded yet for this client.</span></div>
+{% endif %}

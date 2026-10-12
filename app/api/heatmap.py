@@ -28,33 +28,8 @@ router = APIRouter(prefix="/api/heatmap", tags=["heatmap"])
 _SYSTEM_HEATMAP_CACHE: Dict[str, tuple[float, List[Dict]]] = {}
 _SYSTEM_HEATMAP_CACHE_TTL = 20.0
 
-# Tactic order for consistent display — single source of truth
-from app.services.report_generator import TACTIC_ORDER
-
-# Map STIX slugs to display titles
-SLUG_TO_TITLE = {
-    "initial-access": "Initial Access",
-    "execution": "Execution",
-    "persistence": "Persistence",
-    "privilege-escalation": "Privilege Escalation",
-    "defense-evasion": "Defense Evasion",
-    "credential-access": "Credential Access",
-    "discovery": "Discovery",
-    "lateral-movement": "Lateral Movement",
-    "collection": "Collection",
-    "command-and-control": "Command and Control",
-    "exfiltration": "Exfiltration",
-    "impact": "Impact",
-    "reconnaissance": "Reconnaissance",
-    "resource-development": "Resource Dev",
-}
-
-
-def get_tactic_display(raw_tactic: str) -> str:
-    """Convert tactic slug to display name."""
-    if not raw_tactic:
-        return "Other"
-    return SLUG_TO_TITLE.get(raw_tactic.lower(), "Other")
+# The matrices' tactic columns, shared with the reports (app/attack_tactics.py lists the tactics).
+from app.services.report_generator import TACTIC_ORDER, _tactic_display as get_tactic_display
 
 
 @router.get("/matrix", response_class=HTMLResponse)
@@ -915,26 +890,22 @@ def get_system_heatmap_matrix(
     matrix_data: Dict[str, List] = {t: [] for t in TACTIC_ORDER}
     matrix_entries: List[dict] = []
 
-    canonical_tactics = {t.lower(): t for t in TACTIC_ORDER}
-
     def _fallback_other_label(raw_tactic: str) -> str:
         label = (raw_tactic or "").strip()
-        if not label:
-            return "OTHER"
-        if label.lower() in canonical_tactics:
+        if not label or get_tactic_display(label) != "Other":
             return "OTHER"
         return label.upper()
+
+    attack_tactic = db.get_technique_map()   # ATT&CK id -> its tactic, for steps that name none
+
+    def _attack_column(tid: str) -> str:
+        return get_tactic_display(attack_tactic.get(tid) or attack_tactic.get(tid.split(".")[0], ""))
 
     for bl in baselines:
         for step in bl.get("tactics", []):
             status = step.get("status", "red")
             title = step.get("title", "")
             raw_step_tactic = (step.get("tactic") or "").strip()
-            step_uses_other_bucket = (
-                not raw_step_tactic
-                or raw_step_tactic == "Other"
-                or raw_step_tactic not in matrix_data
-            )
 
             tagged_ids = []
             for tagged in step.get("techniques", []):
@@ -948,8 +919,14 @@ def get_system_heatmap_matrix(
 
             # System heatmap mirrors the baseline breakdown: one card per step.
             tech_ids = list(dict.fromkeys(tagged_ids))
+            # A step's tactic is free text ("Resource Development", "defense-evasion", "TA0112"):
+            # its column is the tactic it names. When it names none (blank, "Other" or anything
+            # else), the column is ATT&CK's tactic for its first technique, as the ATT&CK heatmap does.
+            step_column = get_tactic_display(raw_step_tactic)
+            if step_column == "Other" and tech_ids:
+                step_column = _attack_column(tech_ids[0])
             display_technique = tech_ids[0] if tech_ids else _fallback_other_label(raw_step_tactic)
-            display_tactic = "Other" if step_uses_other_bucket else raw_step_tactic
+            display_tactic = step_column
             matrix_entries.append({
                 "tech_id": display_technique,
                 "title": title,
@@ -1033,5 +1010,5 @@ def get_system_heatmap_matrix(
     return templates.TemplateResponse(
         request,
         "partials/heatmap_matrix.html",
-        {"data": data},
+        {"data": data, "system_view": True},   # the system page has its own legend
     )

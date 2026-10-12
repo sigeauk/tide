@@ -3,12 +3,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div  name="Baselines Edit" class="client-section-toggle" onclick="var b=document.getElementById('baselines-body');var c=document.getElementById('baselines-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Baselines Edit" class="client-section-toggle" data-click="section.toggle" data-body="baselines-body" data-chev="baselines-chev">
     <span class="client-list-item__icon">{{ icon('shield', '14') }}</span>
     <h2 class="client-section-toggle__title">Baselines</h2>
     <span class="badge badge-neutral badge--xs">{{ client_baselines | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
-        <button  name="Open Edit Baselines Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-baselines-modal').style.display='flex'">
+    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
+        <button  name="Open Edit Baselines Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-baselines-modal">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -23,7 +23,7 @@
         <div class="client-list-item__body">
             {% if can_switch %}
             {# The Baselines page shows the active client's templates, so switch to this client first. #}
-            <a name="Open Baseline" role="link" tabindex="0" class="client-list-item__title" style="cursor:pointer;"
+            <a name="Open Baseline" role="link" tabindex="0" class="client-list-item__title cursor-pointer"
                title="Switch to {{ client.name }} and open this baseline"
                hx-post="/api/clients/switch" hx-vals='{{ {"client_id": client.id} | tojson }}' hx-swap="none"
                hx-trigger="click, keyup[key=='Enter']"

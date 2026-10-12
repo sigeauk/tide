@@ -8,12 +8,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div  name="Linked CTI Connectors Edit" class="client-section-toggle" onclick="var b=document.getElementById('connectors-body');var c=document.getElementById('connectors-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Linked CTI Connectors Edit" class="client-section-toggle" data-click="section.toggle" data-body="connectors-body" data-chev="connectors-chev">
     <span class="client-list-item__icon">{{ icon('link', '14') }}</span>
     <h2 class="client-section-toggle__title">Linked CTI Connectors</h2>
     <span class="badge badge-neutral badge--xs">{{ client_connectors | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
-        <button  name="Open Edit Connectors Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-connectors-modal').style.display='flex'">
+    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
+        <button  name="Open Edit Connectors Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-connectors-modal">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -26,8 +26,8 @@
     {% for c in client_connectors %}
     <div class="client-list-item client-list-item--{% if c.is_active %}active{% else %}inactive{% endif %}">
         <div class="client-list-item__body">
-            <span class="client-list-item__title" style="cursor:default;">{{ c.label or '(unnamed)' }}</span>
-            <span class="badge badge-muted" style="font-size:0.72rem;">{{ c.vendor_label or c.vendor }}</span>
+            <span class="client-list-item__title cursor-default">{{ c.label or '(unnamed)' }}</span>
+            <span class="badge badge-muted fs-xs">{{ c.vendor_label or c.vendor }}</span>
             {% if c.is_active %}
             <span class="badge badge-success badge--xs">Active</span>
             {% else %}
@@ -41,7 +41,7 @@
             <span class="badge badge-grey badge--xs">Untested</span>
             {% endif %}
             {% if c.last_run_at %}
-            <span class="client-list-item__meta" style="font-size:0.72rem;">Last run {{ c.last_run_at.strftime('%Y-%m-%d %H:%M') if c.last_run_at.strftime is defined else c.last_run_at }}</span>
+            <span class="client-list-item__meta fs-xs">Last run {{ c.last_run_at.strftime('%Y-%m-%d %H:%M') if c.last_run_at.strftime is defined else c.last_run_at }}</span>
             {% endif %}
         </div>
     </div>
@@ -51,9 +51,9 @@
 <div class="client-section-empty">
     {{ icon('link', '36') }}
     <p>No CTI connectors linked to this client yet.</p>
-    <p style="font-size:0.8rem;">
+    <p class="text-sm">
         Register connectors in
-        <a name="Management Connectors" href="/management?tab=connectors" style="color:var(--color-primary);">Management &rsaquo; Connectors</a>,
+        <a name="Management Connectors" href="/management?tab=connectors" class="text-primary">Management &rsaquo; Connectors</a>,
         then link them here.
     </p>
 </div>
@@ -62,29 +62,29 @@
 
 <!-- Edit Connectors Modal -->
 <div name="Edit Connectors Modal" id="edit-connectors-modal" class="modal-overlay" style="display:none;"
-     onclick="if(event.target===this) this.style.display='none'">
+     data-click="backdrop.hide">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">Manage CTI Connectors &mdash; {{ client.name }}</h3>
             <button   name="Close Modal" class="modal-x"
-                    onclick="document.getElementById('edit-connectors-modal').style.display='none'">&#x2715;</button>
+                    data-click="el.hide" data-target="edit-connectors-modal">&#x2715;</button>
         </div>
-        <div style="display:flex;flex-direction:column;gap:1rem;">
+        <div class="stack gap-md">
             {% if client_connectors %}
             <div>
                 <label class="form-label">Currently linked</label>
-                <div style="display:flex;flex-direction:column;gap:0.35rem;">
+                <div class="stack gap-xs">
                     {% for c in client_connectors %}
-                    <div class="u-bg-surface" style="display:flex;align-items:center;justify-content:space-between;padding:0.35rem 0.5rem;border-radius:var(--radius-sm);font-size:0.85rem">
+                    <div class="u-bg-surface list-row list-row--plain">
                         <span>{{ c.label or '(unnamed)' }}
-                            <span class="badge badge-muted" style="font-size:0.65rem;">{{ c.vendor_label or c.vendor }}</span>
+                            <span class="badge badge-muted fs-2xs">{{ c.vendor_label or c.vendor }}</span>
                         </span>
-                        <button name="Remove" class="btn btn-ghost btn-sm text-danger"
+                        <button name="Remove" class="btn btn-ghost btn-sm text-danger btn-xs"
                                 hx-delete="/api/management/clients/{{ client.id }}/connectors/{{ c.id }}"
                                 hx-target="#client-connectors-section" hx-swap="innerHTML"
                                 hx-confirm="Unlink '{{ c.label }}' from this client?"
                                 hx-on::before-request="document.getElementById('edit-connectors-modal').style.display='none'"
-                                style="padding:0.15rem 0.35rem;font-size:0.75rem;">
+                               >
                             {{ icon('x', '12') }} Remove
                         </button>
                     </div>
@@ -93,10 +93,10 @@
             </div>
             {% endif %}
             {% if available_connectors %}
-            <hr style="border:none;border-top:1px solid var(--color-border);margin:0;">
+            <hr class="divider-line">
             <form name="Submit Connectors" hx-post="/api/management/clients/{{ client.id }}/connectors"
                   hx-target="#client-connectors-section" hx-swap="innerHTML"
-                  style="display:flex;flex-direction:column;gap:0.75rem;"
+                  class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-connectors-modal').style.display='none'">
                 <label class="form-label">Add Connector</label>
                 <select name="connector_id" class="form-input" required>
@@ -108,17 +108,17 @@
                 <button name="Link Connector" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Link Connector</button>
             </form>
             {% else %}
-            <p style="color:var(--color-text-muted);font-size:0.85rem;text-align:center;">
+            <p class="text-muted fs-base text-center">
                 All registered connectors are already linked to this client, or none have been
                 registered yet.
                 Register connectors in the
-                <a name="Connectors" href="/management?tab=connectors" style="color:var(--color-primary);">Connectors</a>
+                <a name="Connectors" href="/management?tab=connectors" class="text-primary">Connectors</a>
                 tab.
             </p>
             {% endif %}
-            <div style="display:flex;justify-content:flex-end;">
+            <div class="flex justify-end">
                 <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
-                        onclick="document.getElementById('edit-connectors-modal').style.display='none'">Close</button>
+                        data-click="el.hide" data-target="edit-connectors-modal">Close</button>
             </div>
         </div>
     </div>

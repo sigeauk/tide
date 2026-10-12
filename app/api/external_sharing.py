@@ -42,6 +42,12 @@ _FORBIDDEN_RE = re.compile(
 )
 
 
+# Tables in a tenant database that aren't the tenant's to read: the copies of every SIEM's
+# connection settings (API keys included) and of every client's destinations, kept there for
+# TIDE's own use. They are refused as if they didn't exist.
+HIDDEN_TABLES = frozenset({"siem_inventory", "client_siem_map"})
+
+
 class QueryRequest(BaseModel):
     """Incoming query payload."""
     sql: str = Field(..., min_length=1, max_length=4000, description="SQL SELECT statement")
@@ -93,7 +99,7 @@ def _validate_sql(sql: str) -> None:
 def _check_references(conn, sql: str) -> None:
     """Let the query read only this tenant's own tables and views (see app.services.sql_guard)."""
     try:
-        check_references(conn, sql)
+        check_references(conn, sql, hidden=HIDDEN_TABLES)
     except SqlRejected as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 

@@ -24,7 +24,11 @@ except ModuleNotFoundError:
     # raising `ModuleNotFoundError: No module named 'log'` → HTTP 500.
     from app.log import log_debug, log_error, log_info
 
-from app.services.tls import Session as TlsSession, siem_verify
+from app.services.tls import Session as TlsSession, describe_error as describe_tls_error, siem_verify
+
+import logging
+
+_logger = logging.getLogger(__name__)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 load_dotenv()
@@ -56,6 +60,9 @@ READ_TIMEOUT = 30
 def _request_failure(exc: Exception, read_timeout) -> str:
     """A person-readable reason for a request that raised. "Connection timed out" and
     "Connection refused" mean the host is not there; a read timeout means it is, but slow."""
+    cert = describe_tls_error(exc)
+    if cert:
+        return cert
     if isinstance(exc, requests.exceptions.ConnectTimeout):
         return "Connection timed out"
     if isinstance(exc, requests.exceptions.ReadTimeout):
@@ -2116,12 +2123,96 @@ def create_detection_rule(
         return False, str(e), None
 
 
+# ── Rules whose stored API key Kibana can't decrypt ──────────────────────────────────────────
+# A rule created or imported under another xpack.encryptedSavedObjects.encryptionKey keeps an
+# apiKey the target Kibana can't read, and updating it fails with "Unable to decrypt attribute
+# "apiKey"". _put_rule heals it: refresh the key (alerting _update_api_key, by the rule's saved
+# object id) and retry; failing that, delete the rule and create it again under the same rule_id.
+
+_DECRYPT_FAILURE = re.compile(r"unable to decrypt attribute\W+api_?key", re.IGNORECASE)
+# Read-only fields a create refuses or that belong to the rule being replaced.
+_NOT_FOR_CREATE = ("id", "_version", "created_at", "created_by", "updated_at", "updated_by",
+                   "execution_summary", "revision", "immutable", "rule_source")
+
+
+def _is_decrypt_failure(response) -> bool:
+    return response.status_code >= 400 and bool(_DECRYPT_FAILURE.search(response.text or ""))
+
+
+def _creatable(rule: dict) -> dict:
+    return {k: v for k, v in rule.items() if k not in _NOT_FOR_CREATE}
+
+
+def _put_rule(session, base_url: str, space: str, rule: dict, on_recreated=None):
+    """PUT ``rule`` (a whole rule, keyed by its ``rule_id``) to ``space``, healing a stored API key
+    Kibana can't decrypt. Returns ``(response, note)``: the response of the last request, and a
+    sentence for the user when the rule had to be healed (else None). ``on_recreated(old_id,
+    new_id)`` is called with the Kibana saved-object ids when it was deleted and created again."""
+    url = f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules"
+    response = session.put(url, json=rule)
+    if not _is_decrypt_failure(response):
+        return response, None
+    rule_id = rule.get("rule_id")
+    _logger.warning("Rule %s has invalid API key credentials on target cluster (space %s). "
+                    "Triggering _update_api_key refresh...", rule_id, space)
+    try:
+        existing = _lookup_rule_by_rule_id(session, base_url, space, rule_id)
+    except Exception:
+        existing = None
+    saved_id = (existing or {}).get("id")
+
+    if saved_id:
+        refresh = session.post(f"{_space_api_prefix(base_url, space)}/api/alerting/rule/{saved_id}/_update_api_key")
+        if refresh.status_code in (200, 204):
+            retry = session.put(url, json=rule)
+            if not _is_decrypt_failure(retry):
+                if retry.status_code in (200, 201):
+                    _logger.warning("Rule %s: API key refreshed in space %s and the update applied.", rule_id, space)
+                    return retry, "Its API key in Kibana couldn't be read, so TIDE refreshed it first."
+                return retry, None
+        else:
+            _logger.warning("Rule %s: _update_api_key failed in space %s: HTTP %s %s",
+                            rule_id, space, refresh.status_code, (refresh.text or "")[:200])
+
+    # Fallback: delete and create again. Only with a copy of the rule as it is now, to put back if
+    # the create fails, and never for an Elastic prebuilt rule (a create would make it a custom one).
+    if not existing:
+        return response, None
+    if existing.get("immutable") or (existing.get("rule_source") or {}).get("type") == "external":
+        _logger.warning("Rule %s is an Elastic prebuilt rule; not re-creating it in space %s.", rule_id, space)
+        return response, ("Its API key in Kibana can't be read and couldn't be refreshed. It is an Elastic "
+                          "prebuilt rule, so TIDE didn't re-create it: reinstall it in Kibana.")
+    _logger.warning("Rule %s: refresh didn't fix the API key in space %s; deleting and re-creating it "
+                    "under the same rule_id.", rule_id, space)
+    deleted = session.delete(url, params={"rule_id": rule_id})
+    if deleted.status_code not in (200, 204, 404):
+        return deleted, None
+    created = session.post(url, json=_creatable(rule))
+    if created.status_code in (200, 201):
+        new_id = (created.json() or {}).get("id")
+        _logger.warning("Rule %s re-created in space %s: Kibana id %s, was %s.", rule_id, space, new_id, saved_id)
+        if on_recreated and new_id:
+            try:
+                on_recreated(saved_id, new_id)
+            except Exception:
+                _logger.exception("Rule %s re-created, but TIDE couldn't update its own records", rule_id)
+        return created, ("Its API key in Kibana couldn't be read or refreshed, so TIDE deleted and "
+                         "re-created it there (same rule ID, new Kibana ID).")
+    restored = session.post(url, json=_creatable(existing))
+    _logger.error("Rule %s: re-create failed in space %s (HTTP %s); putting the old rule back: HTTP %s.",
+                  rule_id, space, created.status_code, restored.status_code)
+    return created, (None if restored.status_code in (200, 201) else
+                     "TIDE deleted it to re-create it, the create failed and so did putting it back: "
+                     "restore it from TIDE's copy.")
+
+
 def update_detection_rule(
     rule_id: str,
     rule_data: dict,
     space: str = "default",
     kibana_url: str = None,
     api_key: str = None,
+    on_recreated=None,
 ) -> Tuple[bool, str]:
     """Update an existing detection rule in Kibana.
     
@@ -2131,33 +2222,32 @@ def update_detection_rule(
         space: Target Kibana space
         kibana_url: Base Kibana URL
         api_key: Kibana API key
-    
+        on_recreated: called with (old, new) Kibana saved-object ids if the rule's API key couldn't
+            be read and it had to be deleted and created again (_put_rule)
+
     Returns: (success, message)
     """
     if not (kibana_url and api_key):
         return False, "Missing kibana_url or api_key"
-    
+
     session = _make_session(api_key, kibana_url)
     base_url = kibana_url.rstrip("/")
-    
+
     # Prepare update (preserve rule_id and id fields)
     rule = rule_data.copy()
     rule["rule_id"] = rule_id
     for readonly in ["id", "_version", "created_at", "created_by", "updated_by"]:
         rule.pop(readonly, None)
-    
-    prefix = _space_api_prefix(base_url, space)
-    url = f"{prefix}/api/detection_engine/rules"
-    
+
     try:
-        response = session.put(url, json=rule)
+        response, note = _put_rule(session, base_url, space, rule, on_recreated)
         if response.status_code not in (200, 201):
-            error_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+            error_msg = f"HTTP {response.status_code}: {response.text[:200]}" + (f" {note}" if note else "")
             log_error(f"Failed to update rule: {error_msg}")
             return False, error_msg
-        
+
         log_info(f"Updated rule {rule_id} in {space}")
-        return True, f"Updated rule '{rule.get('name', rule_id)}'"
+        return True, f"Updated rule '{rule.get('name', rule_id)}'" + (f". {note}" if note else "")
     except Exception as e:
         log_error(f"Update rule failed: {e}")
         return False, str(e)
@@ -2215,6 +2305,7 @@ def enable_detection_rule(
     space: str = "default",
     kibana_url: str = None,
     api_key: str = None,
+    on_recreated=None,
 ) -> Tuple[bool, str]:
     """Enable a detection rule in Kibana.
     
@@ -2236,7 +2327,7 @@ def enable_detection_rule(
         
         rule_data = get_resp.json()
         rule_data["enabled"] = True
-        return update_detection_rule(rule_id, rule_data, space, base_url, api_key)
+        return update_detection_rule(rule_id, rule_data, space, base_url, api_key, on_recreated)
     except Exception as e:
         log_error(f"Enable rule failed: {e}")
         return False, str(e)
@@ -2247,6 +2338,7 @@ def disable_detection_rule(
     space: str = "default",
     kibana_url: str = None,
     api_key: str = None,
+    on_recreated=None,
 ) -> Tuple[bool, str]:
     """Disable a detection rule in Kibana.
     
@@ -2268,7 +2360,7 @@ def disable_detection_rule(
         
         rule_data = get_resp.json()
         rule_data["enabled"] = False
-        return update_detection_rule(rule_id, rule_data, space, base_url, api_key)
+        return update_detection_rule(rule_id, rule_data, space, base_url, api_key, on_recreated)
     except Exception as e:
         log_error(f"Disable rule failed: {e}")
         return False, str(e)
@@ -2348,7 +2440,7 @@ def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
                                source_kibana_url=None, source_api_key=None,
                                target_kibana_url=None, target_api_key=None,
-                               delete_source=True):
+                               delete_source=True, on_target_recreated=None):
     """
     Promote a rule from source space to target space, potentially across different SIEMs.
 
@@ -2356,6 +2448,9 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     ``siem_inventory`` / ``client_siem_map`` by the caller. The legacy global
     ``ELASTIC_URL`` / ``ELASTIC_API_KEY`` env-var fallbacks were removed in 4.0.10
     — both sides MUST be supplied.
+
+    ``on_target_recreated(old_id, new_id)``: called when overwriting the target's copy found its API
+    key unreadable and the copy had to be deleted and created again (_put_rule).
 
     Returns: (success: bool, message: str)
     """
@@ -2451,7 +2546,9 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     
     if target_existing_id:
         rule["rule_id"] = target_existing_id
-        response = tgt_session.put(url, json=rule)
+        response, heal_note = _put_rule(tgt_session, tgt_base, target_space, rule, on_target_recreated)
+        if heal_note:
+            log_info(f"Promotion target: {heal_note}")
         action = "Updated"
     else:
         response = tgt_session.post(url, json=rule)

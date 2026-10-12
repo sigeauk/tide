@@ -11,6 +11,7 @@ every call chain.
 """
 import logging
 import os
+import ssl
 import threading
 import time
 from urllib.parse import urlsplit
@@ -79,6 +80,37 @@ def siem_verify(url: str) -> "str | bool":
                 logger.warning("Could not read SIEM TLS settings: %s", exc)
             _loaded_at = time.monotonic()
         return verify_arg(_siem_origins.get(_origin(url), False))
+
+
+_CA_PROBLEMS = ("key usage", "basic constraints", "authority key identifier", "subject key identifier",
+                "invalid ca certificate")
+
+
+def describe_error(exc: BaseException) -> "str | None":
+    """A person-readable reason when *exc* is a failed certificate check, else None.
+
+    requests raises SSLError as a kind of ConnectionError, so callers ask this first or a
+    certificate problem reads as an unreachable host."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        text = str(exc)
+        if "CERTIFICATE_VERIFY_FAILED" in text or isinstance(exc, ssl.SSLCertVerificationError):
+            reason = text.split("certificate verify failed:", 1)[-1].split("(_ssl.c", 1)[0].strip(" :')\"")
+            low = reason.lower()
+            if any(p in low for p in _CA_PROBLEMS):
+                advice = ("the CA certificate is installed but lacks fields TLS now requires; "
+                          "reissue it (README, \"TLS certificates\") or untick Verify TLS certificate")
+            elif "mismatch" in low:
+                advice = "the certificate does not name this host; use the name it was issued for"
+            elif "expired" in low or "not yet valid" in low:
+                advice = "the certificate is outside its validity dates"
+            else:
+                advice = ("install the CA certificate that signed it (README, \"TLS certificates\") "
+                          "or untick Verify TLS certificate")
+            return f"Certificate check failed: {reason} ({advice})"
+        exc = exc.__cause__ or exc.__context__
+    return None
 
 
 class Session(requests.Session):

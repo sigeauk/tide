@@ -6,15 +6,16 @@
 {% block head %}{% endblock %}
 
 {% block content %}
-<div class="rule-browser-page">
-<div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:1rem;">
+<div class="rule-browser-page"{% if offline_notice %} data-offline-notice="{{ offline_notice }}"{% endif %}>
+<div class="page-header flex items-start justify-between gap-md">
     <div>
         <h1 class="page-title-hero">
             Rule Health
         </h1>
         <p class="page-subtitle">Assess the quality and validation status of your detection rules.</p>
+        <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
     </div>
-    <div style="display:flex;align-items:center;gap:0.75rem;flex-shrink:0;">
+    <div class="flex items-center gap-ms shrink-0">
         <div id="sync-status"></div>
         <div class="rh-more">
             <button name="More Actions" id="rh-more-btn" type="button" class="btn btn-secondary rh-more__btn"
@@ -65,7 +66,7 @@
                 </button>
                 <button name="Import Validation File" type="button" role="menuitem" class="rh-more__item"
                     title="Import a checkedRule.json validation file"
-                    onclick="document.getElementById('import-validation-modal').style.display='flex'">
+                    data-click="el.show" data-target="import-validation-modal">
                     {{ icon('upload', '15') }}<span>Import validation file</span>
                 </button>
                 <button name="Find Duplicate Rules" type="button" role="menuitem" class="rh-more__item"
@@ -151,11 +152,11 @@
         </select>
     </div>
 
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">State</label>
         <button type="button" id="rh-state-btn"
             class="btn btn-secondary form-input form-select tide-filter-btn"
-            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-state-dropdown');">
+            data-click="filterDropdown.toggle" data-target="rh-state-dropdown">
             <span id="rh-state-label">{% set state_names = {'live': 'Live', 'offline': 'SIEM offline', 'deprecated': 'Deprecated'} %}{% for s in state %}{{ state_names.get(s | lower, s) }}{{ ', ' if not loop.last }}{% else %}All states{% endfor %}</span>
             {{ icon('chevron-down', '14') }}
         </button>
@@ -175,11 +176,11 @@
         </div>
     </div>
     
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">Score</label>
         <button type="button" id="rh-score-btn"
             class="btn btn-secondary form-input form-select tide-filter-btn"
-            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-score-dropdown');">
+            data-click="filterDropdown.toggle" data-target="rh-score-dropdown">
             <span id="rh-score-label">Score</span>
             {{ icon('chevron-down', '14') }}
         </button>
@@ -208,11 +209,11 @@
         </div>
     </div>
 
-    <div class="filter-group" style="position:relative;">
+    <div class="filter-group relative">
         <label class="form-label">Validate</label>
         <button type="button" id="rh-validated-btn"
             class="btn btn-secondary form-input form-select tide-filter-btn"
-            onclick="event.stopPropagation(); tideToggleFilterDropdown('rh-validated-dropdown');">
+            data-click="filterDropdown.toggle" data-target="rh-validated-dropdown">
             <span id="rh-validated-label">Validate</span>
             {{ icon('chevron-down', '14') }}
         </button>
@@ -308,12 +309,12 @@
 
 <!-- Import Validation File Modal -->
 <div name="Import Validation File Modal" id="import-validation-modal" class="modal-overlay" style="display:none;"
-     onclick="if(event.target===this) this.style.display='none'">
+     data-click="backdrop.hide">
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('upload', '16') }} Import validation file</h3>
             <button name="Close" type="button" class="btn btn-icon"
-                    onclick="document.getElementById('import-validation-modal').style.display='none'">&#x2715;</button>
+                    data-click="el.hide" data-target="import-validation-modal">&#x2715;</button>
         </div>
         <p class="rule-help">
             Import a <code>checkedRule.json</code>-shaped file into this client's rule validations —
@@ -323,7 +324,7 @@
         <form id="import-validation-form" name="Import Validation File"
               hx-post="/api/rules/import-validation" hx-encoding="multipart/form-data"
               hx-target="body" hx-swap="beforeend"
-              style="display:flex;flex-direction:column;gap:0.75rem;">
+              class="flex flex-col gap-ms">
             <div>
                 <label class="form-label">File</label>
                 <input type="file" name="file" accept=".json,application/json" class="form-input" required>
@@ -333,8 +334,8 @@
                 <input type="text" name="checked_by" class="form-input" placeholder="Leave blank to keep each entry's own name">
                 <small class="rule-help">Set this to record the import under one name instead of whatever is in the file.</small>
             </div>
-            <label style="display:flex;gap:0.5rem;align-items:flex-start;">
-                <input type="checkbox" name="overwrite" value="true" style="margin-top:0.2rem;">
+            <label class="flex gap-sm items-start">
+                <input type="checkbox" name="overwrite" value="true" class="mt-xs">
                 <span>
                     Overwrite rules that already have a validation date<br>
                     <small class="rule-help">Off by default: only fills rules with no validation yet, so nothing already recorded is replaced.</small>
@@ -342,7 +343,7 @@
             </label>
             <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
-                        onclick="document.getElementById('import-validation-modal').style.display='none'">Cancel</button>
+                        data-click="el.hide" data-target="import-validation-modal">Cancel</button>
                 <button name="Import" type="submit" class="btn btn-primary">Import</button>
             </div>
         </form>
@@ -351,171 +352,3 @@
 
 {% endblock %}
 
-{% block scripts %}
-<script>
-    // Close sync/filter dropdowns on outside click
-    document.addEventListener('click', function(e) {
-        document.querySelectorAll('.sync-dropdown').forEach(function(d) {
-            if (!d.parentElement.contains(e.target)) d.style.display = 'none';
-        });
-        document.querySelectorAll('.tide-filter-dropdown').forEach(function(d) {
-            if (!d.parentElement.contains(e.target)) d.style.display = 'none';
-        });
-    });
-
-    // "Last selected wins" for the three mutually-exclusive sort selects:
-    // clearing the siblings in the CAPTURE phase guarantees this runs before
-    // htmx's own (bubble-phase) change listener reads their values via
-    // hx-include, so only the just-changed selector is ever sent as active.
-    document.addEventListener('change', function(e) {
-        var sortIds = ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'];
-        if (sortIds.indexOf(e.target.id) === -1) return;
-        var colInput = document.getElementById('rh-sort-col'), dirInput = document.getElementById('rh-sort-dir');
-        if (colInput) colInput.value = '';
-        if (dirInput) dirInput.value = '';
-        sortIds.forEach(function(id) {
-            var el = document.getElementById(id);
-            if (el && el !== e.target) el.value = '';
-        });
-    }, true);
-
-    // Cosmetic: keep each dropdown button's label in sync with its filters.
-    function tideUpdateStateLabel() {
-        var checked = Array.prototype.slice.call(document.querySelectorAll("#rh-state-dropdown input[name='state']:checked"));
-        var label = document.getElementById('rh-state-label');
-        if (!label) return;
-        label.textContent = checked.length
-            ? checked.map(function(c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
-            : 'All states';
-    }
-    function tideUpdateScoreLabel() {
-        var label = document.getElementById('rh-score-label');
-        if (!label) return;
-        var sort = document.getElementById('rh-sort-score').value;
-        var min = document.querySelector("#rh-score-dropdown [name='min_score']").value;
-        var max = document.querySelector("#rh-score-dropdown [name='max_score']").value;
-        var parts = [];
-        if (sort === 'desc') parts.push('High → Low');
-        else if (sort === 'asc') parts.push('Low → High');
-        if (min || max) parts.push((min || '0') + '–' + (max || '100'));
-        label.textContent = parts.length ? parts.join(' · ') : 'Score';
-    }
-    function tideUpdateValidatedLabel() {
-        var label = document.getElementById('rh-validated-label');
-        if (!label) return;
-        var sort = document.getElementById('rh-sort-validated').value;
-        var from = document.querySelector("#rh-validated-dropdown [name='validated_from']").value;
-        var to = document.querySelector("#rh-validated-dropdown [name='validated_to']").value;
-        var parts = [];
-        if (sort === 'desc') parts.push('Newest → Oldest');
-        else if (sort === 'asc') parts.push('Oldest → Newest');
-        if (from || to) parts.push((from || '…') + ' – ' + (to || '…'));
-        label.textContent = parts.length ? parts.join(' · ') : 'Validate';
-    }
-    document.addEventListener('change', function(e) {
-        if (e.target.matches("#rh-state-dropdown input[name='state']")) tideUpdateStateLabel();
-        if (e.target.closest('#rh-score-dropdown')) tideUpdateScoreLabel();
-        if (e.target.closest('#rh-validated-dropdown')) tideUpdateValidatedLabel();
-    });
-    tideUpdateScoreLabel();
-    tideUpdateValidatedLabel();
-
-    // Rule-card-level mutations (validate, edit, sync, archive, restore)
-    // only swap the one card, not #rules-grid, so they don't get the
-    // "rulesFiltered" HX-Trigger the grid fetch emits. Re-trigger the
-    // metrics container directly here — it already carries its own
-    // hx-include, so the refetch honors whatever filters are active
-    // instead of reverting the stats cards to unfiltered totals.
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.target.classList && (event.target.classList.contains('rule-card') || event.target.classList.contains('rule-row'))) {
-            htmx.trigger(document.getElementById('metrics-container'), 'rulesFiltered');
-        }
-    });
-
-    // Cards / table view. The choice rides along as the `view` filter (hidden input),
-    // is kept in the URL by the replaceState below, and is remembered per browser.
-    (function() {
-        var input = document.getElementById('rh-view');
-        if (!input) return;
-        function setPressed(view) {
-            document.querySelectorAll('[data-rh-view]').forEach(function(btn) {
-                btn.setAttribute('aria-pressed', btn.getAttribute('data-rh-view') === view ? 'true' : 'false');
-            });
-        }
-        if (!input.value) {
-            var stored = 'cards';
-            try { stored = localStorage.getItem('tide.rulesView') || 'cards'; } catch (_) { /* storage blocked */ }
-            input.value = stored === 'table' ? 'table' : 'cards';
-        }
-        setPressed(input.value);
-        document.addEventListener('click', function(e) {
-            var btn = e.target.closest && e.target.closest('[data-rh-view]');
-            if (!btn) return;
-            var view = btn.getAttribute('data-rh-view');
-            if (input.value === view) return;
-            input.value = view;
-            try { localStorage.setItem('tide.rulesView', view); } catch (_) { /* storage blocked */ }
-            setPressed(view);
-            htmx.trigger(document.body, 'refreshRules');
-        });
-    })();
-
-    // Table view: clicking a sortable header.
-    //  • score / rule / validated drive the same sort selects as the filter bar;
-    //  • SIEM / state / severity / author / lang use the table-only sort_col + sort_dir.
-    // Either way the most recent choice wins and the other sorts are cleared.
-    document.addEventListener('click', function(e) {
-        var th = e.target.closest && e.target.closest('.rt-th--sortable');
-        if (!th) return;
-        var def = th.getAttribute('data-sort-default');
-        var colInput = document.getElementById('rh-sort-col'), dirInput = document.getElementById('rh-sort-dir');
-        var col = th.getAttribute('data-sort-col');
-        if (col) {
-            var same = colInput.value === col;
-            dirInput.value = same ? (dirInput.value === 'asc' ? 'desc' : 'asc') : def;
-            colInput.value = col;
-            ['rh-sort-score', 'rh-sort-validated', 'rh-sort-name'].forEach(function(id) {
-                var el = document.getElementById(id); if (el) el.value = '';
-            });
-            tideUpdateScoreLabel(); tideUpdateValidatedLabel();
-            htmx.trigger(document.body, 'refreshRules');
-            return;
-        }
-        var select = document.getElementById(th.getAttribute('data-sort-select'));
-        if (!select) return;
-        select.value = (select.value === def) ? (def === 'desc' ? 'asc' : 'desc') : def;
-        select.dispatchEvent(new Event('change', { bubbles: true }));   // capture handler clears sort_col + sibling selects
-    });
-
-    // Keep the address bar (and therefore a page refresh) in sync with
-    // the last-applied grid filters/pagination.
-    document.body.addEventListener('htmx:afterRequest', function(event) {
-        if (!event.detail.successful || !event.detail.target || event.detail.target.id !== 'rules-grid') return;
-        var reqPath = event.detail.pathInfo && (event.detail.pathInfo.finalRequestPath || event.detail.pathInfo.requestPath);
-        if (reqPath && reqPath.indexOf('/api/rules') === 0) {
-            window.history.replaceState(null, '', '/rules' + reqPath.slice('/api/rules'.length));
-        }
-    });
-
-    {% if offline_notice %}
-    (function () {
-        function notify() { if (window.showToast) window.showToast({{ offline_notice | tojson }}, 'warning', 10000); }
-        if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', notify); else notify();
-    })();
-    {% endif %}
-
-    document.body.addEventListener('htmx:afterSwap', function(event) {
-        if (event.detail.target.id === 'toast-container') {
-            const toasts = event.detail.target.querySelectorAll('.toast');
-            toasts.forEach(function(toast) {
-                setTimeout(function() {
-                    toast.style.opacity = '0';
-                    setTimeout(function() { toast.remove(); }, 300);
-                }, 5000);
-            });
-        }
-    });
-</script>
-{% include "pages/rules/_rules_columns_script.html" %}
-{% include "pages/rules/_bulk_edit_script.html" %}
-{% endblock %}

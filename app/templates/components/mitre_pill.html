@@ -40,12 +40,10 @@ Parameters:
 {% set size_class = 'mitre-' ~ size %}
 
 <span  name="Open Technique Details" 
-    class="mitre-pill {{ status_class }} {{ size_class }}"
+    class="mitre-pill {{ status_class }} {{ size_class }}{% if clickable %} cursor-pointer{% endif %}"
     {% if clickable %}
-    onpointerdown="event.preventDefault(); event.stopPropagation();"
-    onmousedown="event.preventDefault(); event.stopPropagation();"
-    onclick="event.preventDefault(); event.stopPropagation();{% if close_modal %} if (window.tideCloseRuleModal) { window.tideCloseRuleModal(); }{% endif %} if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ technique_id }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
-    style="cursor: pointer;"
+    data-pointerdown="pill.hold" data-mousedown="pill.hold" data-click="pill.open" data-technique="{{ technique_id }}"
+    {%- if search_filter %} data-search="{{ search_filter }}"{% endif %}{% if close_modal %} data-close-modal{% endif %}
     {% endif %}
     title="{{ technique_id }}{% set _name = mitre_name(technique_id) %}{% if _name %} - {{ _name }}{% endif %}{% if rule_count > 0 or show_zero_count %} ({{ rule_count }} rule{{ '' if rule_count == 1 else 's' }}){% endif %}">
     {{ technique_id }}{% if rule_count > 0 or show_zero_count %}<span class="mitre-rule-count">({{ rule_count }})</span>{% endif %}
@@ -81,12 +79,10 @@ Render a row of MITRE pills, all displayed with wrapping (no truncation).
             {% else %}
                 {# No coverage data - render neutral pill #}
                 <span name="Open Technique Details" 
-                    class="mitre-pill mitre-neutral mitre-{{ size }}"
+                    class="mitre-pill mitre-neutral mitre-{{ size }}{% if clickable %} cursor-pointer{% endif %}"
                     {% if clickable %}
-                    onpointerdown="event.preventDefault(); event.stopPropagation();"
-                    onmousedown="event.preventDefault(); event.stopPropagation();"
-                    onclick="event.preventDefault(); event.stopPropagation(); if (window.htmx) { htmx.ajax('GET', '/api/heatmap/technique/{{ mid }}{% if search_filter %}?search={{ search_filter | urlencode }}{% endif %}', { target: '#slide-panel-container', swap: 'innerHTML' }); } return false;"
-                    style="cursor: pointer;"
+                    data-pointerdown="pill.hold" data-mousedown="pill.hold" data-click="pill.open" data-technique="{{ mid }}"
+                    {%- if search_filter %} data-search="{{ search_filter }}"{% endif %}
                     {% endif %}
                     title="{{ mid }}{% set _name = mitre_name(mid) %}{% if _name %} - {{ _name }}{% endif %}">
                     {{ mid }}

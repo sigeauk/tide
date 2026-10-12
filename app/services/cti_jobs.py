@@ -73,6 +73,8 @@ def submit(
     label: str = "",
     client_id: Optional[str] = None,
     on_success: Optional[Callable[[Any], None]] = None,
+    actor: Optional[str] = None,
+    scope: Optional[dict] = None,
 ) -> str:
     """Register and start a background CTI sync job.
 
@@ -98,12 +100,20 @@ def submit(
         are swallowed and logged — they must not flip the job to
         ``failed`` because the work itself succeeded.
 
+    actor, scope:
+        Optional. Who started it, and what it covers (e.g. the connector id), for the run's record
+        in sync_history. A ``connector-auto`` job is recorded as scheduled.
+
     Returns
     -------
     str
-        The job id, suitable for ``/cti/sync/jobs/{id}``.
+        The job id, suitable for ``/cti/sync/jobs/{id}``. The run is recorded in sync_history under
+        the same id (app.services.sync_runs).
     """
+    from app.services import sync_runs
     job_id = uuid.uuid4().hex
+    sync_runs.start(kind, run_id=job_id, client_id=client_id, actor=actor, label=label, scope=scope,
+                    trigger="scheduled" if kind == "connector-auto" else "manual")
     job: dict[str, Any] = {
         "id": job_id,
         "kind": kind,
@@ -122,7 +132,7 @@ def submit(
 
     thread = threading.Thread(
         target=_run,
-        args=(job_id, runner, on_success),
+        args=(job_id, runner, on_success, client_id),
         name=f"cti-sync-{kind}-{job_id[:8]}",
         daemon=True,
     )
@@ -159,12 +169,31 @@ def list_jobs(
 # ── Internals ────────────────────────────────────────────────────────
 
 
+def _verdict(result: Any) -> tuple:
+    """(status, error, total, detail) for sync_history from a runner's return value. Some runners
+    report a failure in what they return rather than by raising (``status``, ``errors``)."""
+    summary = result.as_dict() if hasattr(result, "as_dict") else result
+    if not isinstance(summary, dict):
+        return "success", None, 0, {}
+    errors = [str(e) for e in (summary.get("errors") or [])]
+    total = summary.get("total") or summary.get("total_count") or summary.get("indicators_new") or 0
+    state = summary.get("status")
+    if state == "failed":
+        return "failed", summary.get("error") or "; ".join(errors[:3]) or "failed", total, summary
+    if state == "partial" or errors:
+        return "partial", "; ".join(errors[:3]) or summary.get("error"), total, summary
+    return "success", None, total, summary
+
+
 def _run(
     job_id: str,
     runner: Callable[[], Any],
     on_success: Optional[Callable[[Any], None]],
+    client_id: Optional[str] = None,
 ) -> None:
-    """Background-thread entry point. Updates the registry in place."""
+    """Background-thread entry point. Updates the registry in place and records how the run ended."""
+    from app.services import sync_runs
+    from app.services.log_context import run_context
     with _LOCK:
         job = _JOBS.get(job_id)
         if job is None:
@@ -173,16 +202,22 @@ def _run(
         job["started_at"] = _now()
 
     try:
-        result = runner()
+        with run_context(job_id, client_id):
+            result = runner()
     except Exception as exc:
-        logger.exception("CTI sync job %s failed", job_id)
+        with run_context(job_id, client_id):
+            logger.exception("CTI sync job %s failed", job_id)
         with _LOCK:
             job = _JOBS.get(job_id)
             if job is not None:
                 job["status"] = JOB_STATUS_FAILED
                 job["error"] = str(exc)[:500]
                 job["finished_at"] = _now()
+        sync_runs.finish(job_id, "failed", error=str(exc)[:500])
         return
+
+    status, error, total, detail = _verdict(result)
+    sync_runs.finish(job_id, status, total=total, error=error, detail=detail)
 
     with _LOCK:
         job = _JOBS.get(job_id)

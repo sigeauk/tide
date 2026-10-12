@@ -192,37 +192,26 @@ def extract_mitre_techniques(rule: Dict) -> List[str]:
     return list(set(techniques))
 
 
-# Canonical mapping of Sigma tag slugs → human-readable MITRE tactic names
-_TACTIC_TAG_MAP = {
-    "initial_access": "Initial Access",
-    "execution": "Execution",
-    "persistence": "Persistence",
-    "privilege_escalation": "Privilege Escalation",
-    "defense_evasion": "Defense Evasion",
-    "credential_access": "Credential Access",
-    "discovery": "Discovery",
-    "lateral_movement": "Lateral Movement",
-    "collection": "Collection",
-    "command_and_control": "Command and Control",
-    "exfiltration": "Exfiltration",
-    "impact": "Impact",
-    "resource_development": "Resource Development",
-    "reconnaissance": "Reconnaissance",
-}
+def _tag_tactic(slug: str) -> Optional[str]:
+    """The tactic a Sigma ``attack.<slug>`` tag names (``initial_access``, ``defense-evasion``,
+    ``stealth``), by its ATT&CK name; None for a technique, group or software tag."""
+    from app.attack_tactics import tactic_name
+    if re.fullmatch(r"[tgsc]\d{4}(\.\d{3})?", slug.lower()):
+        return None
+    return tactic_name(slug)
 
 
 def extract_mitre_tactics(rule: Dict) -> List[str]:
     """Extract MITRE ATT&CK tactic names from a Sigma rule's tags.
 
-    Tags like ``attack.initial_access`` are mapped via *_TACTIC_TAG_MAP*
-    to human-readable names (e.g. "Initial Access").
+    Tags like ``attack.initial_access`` become ATT&CK tactic names ("Initial Access").
     """
     tactics: list[str] = []
     for tag in (rule.get("tags") or []):
         if not isinstance(tag, str) or not tag.startswith("attack."):
             continue
         slug = tag[len("attack."):]
-        tactic = _TACTIC_TAG_MAP.get(slug)
+        tactic = _tag_tactic(slug)
         if tactic:
             tactics.append(tactic)
     return list(dict.fromkeys(tactics))  # dedupe, preserve order
@@ -1108,29 +1097,7 @@ def build_detection_rule_dict(
         "threat": [],
     }
 
-    tactic_map = {
-        'reconnaissance': {'id': 'TA0043', 'name': 'Reconnaissance'},
-        'resource_development': {'id': 'TA0042', 'name': 'Resource Development'},
-        'resource-development': {'id': 'TA0042', 'name': 'Resource Development'},
-        'initial_access': {'id': 'TA0001', 'name': 'Initial Access'},
-        'initial-access': {'id': 'TA0001', 'name': 'Initial Access'},
-        'execution': {'id': 'TA0002', 'name': 'Execution'},
-        'persistence': {'id': 'TA0003', 'name': 'Persistence'},
-        'privilege_escalation': {'id': 'TA0004', 'name': 'Privilege Escalation'},
-        'privilege-escalation': {'id': 'TA0004', 'name': 'Privilege Escalation'},
-        'defense_evasion': {'id': 'TA0005', 'name': 'Defense Evasion'},
-        'defense-evasion': {'id': 'TA0005', 'name': 'Defense Evasion'},
-        'credential_access': {'id': 'TA0006', 'name': 'Credential Access'},
-        'credential-access': {'id': 'TA0006', 'name': 'Credential Access'},
-        'discovery': {'id': 'TA0007', 'name': 'Discovery'},
-        'lateral_movement': {'id': 'TA0008', 'name': 'Lateral Movement'},
-        'lateral-movement': {'id': 'TA0008', 'name': 'Lateral Movement'},
-        'collection': {'id': 'TA0009', 'name': 'Collection'},
-        'command_and_control': {'id': 'TA0011', 'name': 'Command and Control'},
-        'command-and-control': {'id': 'TA0011', 'name': 'Command and Control'},
-        'exfiltration': {'id': 'TA0010', 'name': 'Exfiltration'},
-        'impact': {'id': 'TA0040', 'name': 'Impact'},
-    }
+    from app.attack_tactics import ID_BY_NAME
 
     tactics_found: list = []
     techniques_found: list = []
@@ -1145,9 +1112,10 @@ def build_detection_rule_dict(
                 if tech_id not in techniques_found:
                     techniques_found.append(tech_id)
         elif tag_lower.startswith('attack.'):
-            tname = tag_lower.replace('attack.', '')
-            if tname in tactic_map and tactic_map[tname] not in tactics_found:
-                tactics_found.append(tactic_map[tname])
+            tname = _tag_tactic(tag_lower.replace('attack.', ''))
+            entry = {'id': ID_BY_NAME[tname], 'name': tname} if tname else None
+            if entry and entry not in tactics_found:
+                tactics_found.append(entry)
 
     for tactic in tactics_found:
         threat_entry: Dict = {

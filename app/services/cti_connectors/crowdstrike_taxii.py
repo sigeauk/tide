@@ -81,7 +81,7 @@ FIELDS: List[FieldSpec] = [
 
 
 def _get_falcon_token(api_base: str, client_id: str,
-                      client_secret: str, verify=False) -> str:
+                      client_secret: str, *, verify) -> str:
     """OAuth2 client-credentials \u2192 bearer token.
 
     Falcon requires ``grant_type=client_credentials`` in the form body

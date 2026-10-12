@@ -235,8 +235,12 @@ class AuthService:
                 return canonical, is_super
         return "ANALYST", is_super
 
-    def get_user_from_token(self, token: str) -> Optional[User]:
-        """Validate Keycloak JWT and return User model with JIT provisioning."""
+    def get_user_from_token(self, token: str, login: bool = False) -> Optional[User]:
+        """Validate Keycloak JWT and return User model with JIT provisioning.
+
+        Keycloak's groups seed a new account's role and super-admin flag; after that TIDE owns
+        both. ``login`` marks an actual sign-in (the OIDC callback), the only time it records
+        ``last_login``; an ordinary request writes nothing."""
         token_data = self.validate_token(token)
         if not token_data:
             return None
@@ -252,6 +256,7 @@ class AuthService:
                 full_name=token_data.name,
                 kc_role=kc_role,
                 is_superadmin=is_super,
+                login=login,
             )
             if db_user and not db_user.get("is_active", True):
                 logger.warning(f"Keycloak user {token_data.preferred_username} is deactivated in TIDE")
@@ -436,16 +441,14 @@ class AuthService:
                         is_superadmin=is_super,
                     )
                 else:
-                    # Existing SSO/hybrid user — refresh profile and superadmin
-                    # state only. TIDE owns per-client role assignments.
+                    # Existing SSO/hybrid user — refresh the profile only. TIDE owns its
+                    # per-client roles and super-admin flag (last_login is written below).
                     if token_data is not None:
                         db.jit_provision_keycloak_user(
                             keycloak_id=db_user.get("keycloak_id") or token_data.sub,
                             username=db_user.get("username") or username,
                             email=db_user.get("email") or token_data.email,
                             full_name=db_user.get("full_name") or token_data.name,
-                            kc_role=kc_role,
-                            is_superadmin=is_super,
                         )
 
                 # Offline-fallback backfill: now that we know the password is
@@ -485,12 +488,21 @@ class AuthService:
 
     def create_session_token(self, user_id: str) -> str:
         """Create a signed session token for local auth."""
-        return self._get_signer().dumps({"uid": user_id})
+        # ``iat``: when it was issued, to the microsecond, so ending a user's sessions
+        # (users.sessions_valid_after, #30) is exact even within the same second.
+        return self._get_signer().dumps({"uid": user_id, "iat": time.time()})
+
+    def session_user_id(self, token: str) -> Optional[str]:
+        """The user a validly signed session token belongs to, whatever its age (for signing out)."""
+        try:
+            return (self._get_signer().loads(token) or {}).get("uid")
+        except Exception:
+            return None
 
     def get_user_from_session(self, token: str, max_age: int = 86400) -> Optional[User]:
         """Validate a local session token and return User."""
         try:
-            data = self._get_signer().loads(token, max_age=max_age)
+            data, signed_at = self._get_signer().loads(token, max_age=max_age, return_timestamp=True)
             user_id = data.get("uid")
             if not user_id:
                 return None
@@ -499,6 +511,14 @@ class AuthService:
             db_user = db.get_user_by_id(user_id)
             if not db_user or not db_user.get("is_active", True):
                 return None
+            # Ended by signing out, a password change or reset, or deactivation (#30). Sessions from
+            # before ``iat`` existed are judged by their signing time, in whole seconds.
+            cutoff = db_user.get("sessions_valid_after")
+            if cutoff:
+                iat = data.get("iat")
+                issued = datetime.utcfromtimestamp(iat) if isinstance(iat, (int, float)) else signed_at.replace(tzinfo=None)
+                if issued < cutoff:
+                    return None
             db_roles = db.get_user_roles(db_user["id"])
             client_role_map = db.get_user_role_map(db_user["id"])
             user = User.from_db(db_user, db_roles, client_roles=client_role_map)

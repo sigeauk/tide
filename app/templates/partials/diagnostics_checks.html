@@ -1,0 +1,6 @@
+{#
+  Diagnostics run results (GET /api/diagnostics/run): Run all returns every check (#diag-checks);
+  a row's Run returns just that row, swapped in place. Context: checks, outcomes, single, fixes (check id -> Fix), fix_ok (client id -> fixes allowed).
+#}
+{% from "macros/diagnostics_ui.html" import check_list, check_row %}
+{% if single %}{{ check_row(single, outcomes.get(single.id), fixes.get(single.id), fix_ok) }}{% else %}{{ check_list(checks, outcomes, fixes, fix_ok) }}{% endif %}

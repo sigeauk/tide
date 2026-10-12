@@ -8,7 +8,7 @@
 <div class="page-header">
     <div class="page-header__text">
         <p class="cti-back-link"><a name="Back to Indicators" href="/cti/indicators">{{ icon('arrow-right','12') }} <span>Back to Indicators</span></a></p>
-        <h1 class="page-title-hero" style="word-break:break-all;">{{ icon('crosshair','24') }} {{ indicator.observable_value }}</h1>
+        <h1 class="page-title-hero break-all">{{ icon('crosshair','24') }} {{ indicator.observable_value }}</h1>
         <p class="page-subtitle">
             <span class="badge badge-secondary">{{ indicator.pattern_type or '—' }}</span>
             <span class="cti-meta-sep">TLP <strong>{{ tlp_v|upper }}</strong></span>
@@ -21,7 +21,7 @@
 
 <div class="metrics-grid">
     <div class="metric-card">
-        <p class="metric-value" style="font-size:0.95rem;">{{ tlp_v|upper }}</p>
+        <p class="metric-value fs-lg">{{ tlp_v|upper }}</p>
         <p class="metric-label">TLP marking</p>
         <p class="metric-sub">{{ icon_text('shield','Ceiling ' ~ tlp_ceiling|upper,'14') }}</p>
     </div>
@@ -46,16 +46,16 @@
         <p class="metric-sub">{{ icon_text('file-text','Reports → IOC','14') }}</p>
     </div>
     <div class="metric-card">
-        <p class="metric-value" style="font-size:0.95rem;">{{ indicator.last_seen or '—' }}</p>
+        <p class="metric-value fs-lg">{{ indicator.last_seen or '—' }}</p>
         <p class="metric-label">Last seen</p>
         <p class="metric-sub">{{ icon_text('clock','Most recent','14') }}</p>
     </div>
 </div>
 
-<section class="card card-padded" style="margin-bottom:1rem;">
+<section class="card card-padded mb-md">
     <h2 class="section-title">{{ icon('info','16') }} Details</h2>
     <dl class="kv">
-        <dt>Pattern</dt><dd style="word-break:break-all;">{{ indicator.pattern or '—' }}</dd>
+        <dt>Pattern</dt><dd class="break-all">{{ indicator.pattern or '—' }}</dd>
         <dt>Pattern type</dt><dd>{{ indicator.pattern_type or '—' }}</dd>
         <dt>Valid from</dt><dd>{{ indicator.valid_from or '—' }}</dd>
         <dt>Valid until</dt><dd>{{ indicator.valid_until or '—' }}</dd>
@@ -65,7 +65,7 @@
         <dt>MITRE techniques</dt><dd>
             {% if indicator.mitre_techniques %}
                 {% for t in indicator.mitre_techniques %}
-                <span class="badge badge-secondary" style="margin-right:0.25rem;">{{ t }}</span>
+                <span class="badge badge-secondary mr-xs">{{ t }}</span>
                 {% endfor %}
             {% else %}—{% endif %}
         </dd>
@@ -73,7 +73,7 @@
     </dl>
 </section>
 
-<section class="card card-padded" style="margin-bottom:1rem;">
+<section class="card card-padded mb-md">
     <h2 class="section-title">
         {{ icon('users','16') }} Related actors
         <span class="badge badge-secondary">{{ indicator.related_actors|length }}</span>
@@ -85,7 +85,7 @@
         {% for a in indicator.related_actors %}
             <tr>
                 <td><a  name="Actors" href="/cti/actors/{{ a.name }}?stix_type={{ a.stix_type }}">{{ a.name }}</a></td>
-                <td><span class="badge badge-secondary" style="font-size:0.7rem;">{{ a.stix_type }}</span></td>
+                <td><span class="badge badge-secondary fs-xs">{{ a.stix_type }}</span></td>
                 <td>{{ a.origin or '—' }}</td>
             </tr>
         {% endfor %}

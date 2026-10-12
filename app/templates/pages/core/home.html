@@ -7,10 +7,10 @@
 {% endblock %}
 
 {% block content %}
-<div class="page-header header-centered mb-xl" style="display: flex; flex-direction: column; align-items: center; text-align: center;">
+<div class="page-header header-centered mb-xl flex flex-col items-center text-center">
     <img src="/static/icons/tide 48x48.png" alt="TIDE" class="mb-md" width="150" height="150">   
     <p class="page-subtitle">
-         <strong>Threat Informed Detection Engineering</strong> — A standalone, containerized platform for managing detection rules, analyzing threat coverage, and automating security workflows.
+         <strong>Threat Informed Detection Engine</strong> — A standalone, containerized platform for managing detection rules, analyzing threat coverage, and automating security workflows.
     </p>
 </div>
 
@@ -120,7 +120,7 @@
         Logged in as <strong class="text-primary">{{ user.username }}</strong>
     </p>
     {% endif %}
-    <p class="text-primary" style="font-size: 0.8rem;">
+    <p class="text-primary fs-md">
         TIDE v{{ settings.tide_version }}
     </p>
 </div>

@@ -213,10 +213,10 @@
         <div class="rm-panel sm-picker" id="sm-add-coverage"{% if not ae %} hidden{% endif %}>
           <div class="rm-panel__head">
             <h3 class="rm-panel__title">Add coverage</h3>
-            <button type="button" class="rm-x" onclick="document.getElementById('sm-add-coverage').hidden = true" title="Close" aria-label="Close">{{ icon('x', '13') }}</button>
+            <button type="button" class="rm-x" data-click="step.coverageClose" title="Close" aria-label="Close">{{ icon('x', '13') }}</button>
           </div>
           <label class="rm-label" for="sm-cov-kind">Type</label>
-          <select id="sm-cov-kind" class="form-input form-select" onchange="tideCoverageKind(this.value)">
+          <select id="sm-cov-kind" class="form-input form-select" data-change="step.coverageKind">
             <option value="rule">Rule (alerting)</option>
             <option value="gap"{% if mark and mark.override_type != 'na' %} data-edit{% endif %}>{{ 'Known gap (edit)' if mark and mark.override_type != 'na' else 'Known gap' }}</option>
             <option value="na"{% if mark and mark.override_type == 'na' %} data-edit{% endif %}>{{ 'Not applicable (edit)' if mark and mark.override_type == 'na' else 'Not applicable' }}</option>
@@ -315,7 +315,7 @@
             <h3 class="rm-panel__title">Coverage {% if detail.mapped_count + detail.watched | length %}<span class="rm-fold__count">{{ detail.mapped_count + detail.watched | length }}</span>{% endif %}</h3>
             {% if not new %}
             {% call section_menu('Coverage') %}
-            <button name="Add Coverage" type="button" role="menuitem" class="rh-more__item" onclick="tideAddCoverage()"
+            <button name="Add Coverage" type="button" role="menuitem" class="rh-more__item" data-click="step.coverageAdd"
                     title="Add a rule, known gap, N/A, dashboard, report or log">{{ icon('plus', '14') }}<span>Add coverage</span></button>
             {% endcall %}
             {% endif %}
@@ -376,7 +376,7 @@
                 <label class="rm-label" for="sm-watch-why-{{ w.id }}">Rationale <span class="text-muted">(optional)</span></label>
                 <textarea id="sm-watch-why-{{ w.id }}" name="rationale" class="form-input" rows="3">{{ we.rationale if we else w.rationale }}</textarea>
                 <div class="sm-risks__actions">
-                  <button name="Cancel Coverage" type="button" class="btn btn-secondary btn-sm" onclick="tideEditWatch(this, false)">Cancel</button>
+                  <button name="Cancel Coverage" type="button" class="btn btn-secondary btn-sm" data-click="step.watchCancel">Cancel</button>
                   <button name="Save Coverage" type="submit" class="btn btn-primary btn-sm">Save</button>
                 </div>
               </form>
@@ -384,7 +384,7 @@
                 <button name="Coverage Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
                         aria-haspopup="menu" aria-expanded="false" title="{{ w.kind_label }} actions" aria-label="Actions for {{ w.title }}">{{ icon('more-horizontal', '14') }}</button>
                 <div class="rh-more__menu" role="menu" hidden>
-                  <button name="Update Coverage" type="button" role="menuitem" class="rh-more__item" onclick="tideEditWatch(this, true)"
+                  <button name="Update Coverage" type="button" role="menuitem" class="rh-more__item" data-click="step.watchEdit"
                           title="Change its type, title, link or rationale">{{ icon('pencil', '14') }}<span>Update</span></button>
                   <button name="Remove Coverage" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                           title="Remove this {{ w.kind_label | lower }} from the technique"
@@ -412,7 +412,7 @@
                 <div class="rh-more__menu" role="menu" hidden>
                   <button name="Relink Rule" type="button" role="menuitem" class="rh-more__item"
                           data-relink-id="{{ d.id }}" data-relink-name="{{ d.name }}" data-relink-query="{{ d.relink_query }}"
-                          onclick="tideRelinkRule(this)" title="Pick the rule this mapping should point at">{{ icon('link', '14') }}<span>Relink</span></button>
+                          data-click="step.relink" title="Pick the rule this mapping should point at">{{ icon('link', '14') }}<span>Relink</span></button>
                   <button name="Remove Mapping" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                           title="Remove this rule from the technique" hx-delete="{{ unmap_url }}" hx-target="#modal-container"
                           hx-swap="innerHTML" hx-include="unset" hx-confirm="{{ unmap_confirm }}">{{ icon('trash-2', '14') }}<span>Remove</span></button>
@@ -458,7 +458,7 @@
             <h3 class="rm-panel__title">Risks</h3>
             {% if not new %}
             {% call section_menu('Risks') %}
-            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" onclick="tideToggleRisks(true)"
+            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" data-click="step.risksEdit"
                     title="Edit priority and category">{{ icon('pencil', '14') }}<span>Update</span></button>
             {% endcall %}
             {% endif %}
@@ -482,7 +482,7 @@
               {% for k, v in rl.category.items() %}<option value="{{ k }}"{% if step.category == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
             </select>
             <div class="sm-risks__actions">
-              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" onclick="tideToggleRisks(false)">Cancel</button>
+              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" data-click="step.risksCancel">Cancel</button>
               <button name="Save Risks" type="submit" class="btn btn-primary btn-sm">Save</button>
             </div>
           </form>
@@ -516,71 +516,3 @@
   </div>
 </div>
 
-<script>
-  // The picker posts the destination alongside the rule id -- the same rule at two
-  // destinations is two different mappings.
-  function selectSiemRule(btn, ruleId, ruleName, scope) {
-    document.getElementById('siem-det-rule-ref').value = ruleId;
-    document.getElementById('siem-det-rule-scope').value = scope || '';
-    document.querySelector('#add-siem-det-form input[name="note"]').value = ruleName || '';
-    htmx.trigger(document.getElementById('add-siem-det-form'), 'submit');
-  }
-  // Risks: view <-> form (priority and category).
-  function tideToggleRisks(editing) {
-    document.getElementById('sm-risks-view').hidden = editing;
-    document.getElementById('sm-risks-form').hidden = !editing;
-    if (editing) document.getElementById('sm-risk-priority').focus();
-  }
-  // Add coverage: one panel at the top of the centre column; the type picks the form under it.
-  function tideAddCoverage() {
-    tideSetRelink(null);
-    var panel = document.getElementById('sm-add-coverage');
-    panel.hidden = false;
-    panel.scrollIntoView({ block: 'nearest' });
-    tideCoverageKind(document.getElementById('sm-cov-kind').value);
-  }
-  // Relink: the rule picker, searched by the mapping's rule name; picking a rule points that
-  // mapping at it (replace_id) instead of adding another.
-  function tideSetRelink(btn) {
-    document.getElementById('siem-det-replace').value = btn ? btn.dataset.relinkId : '';
-    document.getElementById('sm-relink-name').textContent = btn ? btn.dataset.relinkName : '';
-    document.getElementById('sm-relink-note').hidden = !btn;
-  }
-  function tideRelinkRule(btn) {
-    var panel = document.getElementById('sm-add-coverage'), input = document.getElementById('sm-rule-search');
-    tideSetRelink(btn);
-    document.getElementById('sm-cov-kind').value = 'rule';
-    input.value = btn.dataset.relinkQuery || '';
-    document.getElementById('sm-cov-rule').dataset.loaded = '1';   // one search, by name
-    panel.hidden = false;
-    panel.scrollIntoView({ block: 'nearest' });
-    tideCoverageKind('rule');
-    htmx.trigger(input, 'tideOpenPicker');
-  }
-  function tideCoverageKind(kind) {
-    var forms = { rule: 'sm-cov-rule', gap: 'sm-cov-mark', na: 'sm-cov-mark' };
-    var shown = forms[kind] || 'sm-cov-watch';
-    document.querySelectorAll('#sm-add-coverage [data-cov-form]').forEach(function (el) { el.hidden = el.id !== shown; });
-    if (kind === 'rule') {
-      var input = document.getElementById('sm-rule-search'), picker = document.getElementById('sm-cov-rule');
-      input.focus();
-      if (!picker.dataset.loaded) { picker.dataset.loaded = '1'; htmx.trigger(input, 'tideOpenPicker'); }
-    } else if (kind === 'gap' || kind === 'na') {
-      document.getElementById('sm-gap-type').value = kind;
-      document.getElementById('sm-gap-reason').focus();
-    } else {
-      document.getElementById('sm-cov-watch-kind').value = kind;
-      document.getElementById('sm-cov-title').focus();
-    }
-  }
-  // A dashboard, report or log's Update: its card shows its form in place of its body.
-  function tideEditWatch(el, editing) {
-    var item = el.closest('[data-watch-item]');
-    item.querySelector('[data-watch-view]').hidden = editing;
-    item.querySelector('[data-watch-form]').hidden = !editing;
-    if (editing) item.querySelector('[data-watch-form] input[name="title"]').focus();
-  }
-  // A refused dashboard / report / log comes back with its form open.
-  var tideAddCov = document.getElementById('sm-add-coverage');
-  if (tideAddCov && !tideAddCov.hidden) tideCoverageKind(document.getElementById('sm-cov-kind').value);
-</script>

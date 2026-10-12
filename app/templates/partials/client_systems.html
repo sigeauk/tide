@@ -3,12 +3,12 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-<div  name="Systems Edit" class="client-section-toggle" onclick="var b=document.getElementById('systems-body');var c=document.getElementById('systems-chev');if(b.style.display==='none'){b.style.display='';c.style.transform='rotate(90deg)';}else{b.style.display='none';c.style.transform='rotate(0deg)';}">
+<div  name="Systems Edit" class="client-section-toggle" data-click="section.toggle" data-body="systems-body" data-chev="systems-chev">
     <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
     <h2 class="client-section-toggle__title">Systems</h2>
     <span class="badge badge-neutral badge--xs">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
-    <div   name="Edit Item" class="client-section-toggle__actions" onclick="event.stopPropagation();">
-        <button  name="Open Edit Systems Modal" class="btn btn-info btn-sm" onclick="document.getElementById('edit-systems-modal').style.display='flex'">
+    <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
+        <button  name="Open Edit Systems Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-systems-modal">
             {{ icon('edit-2', '14') }} Edit
         </button>
     </div>
@@ -25,7 +25,7 @@
         <div class="client-list-item__body">
             <a  name="Systems" href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
             {% if sys.classification %}
-            <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
+            <span class="badge badge-muted fs-xs">{{ sys.classification }}</span>
             {% endif %}
             {% if summary.worst_status == 'red' %}
             <span class="badge badge-danger badge--xs">{{ summary.vuln_count }} CVE{{ 's' if summary.vuln_count != 1 }} — At Risk</span>
@@ -50,7 +50,7 @@
         <div class="client-list-item__body">
             <a  name="Systems" href="/systems/{{ sys.id }}" class="client-list-item__title">{{ sys.name }}</a>
             {% if sys.classification %}
-            <span class="badge badge-muted" style="font-size:0.72rem;">{{ sys.classification }}</span>
+            <span class="badge badge-muted fs-xs">{{ sys.classification }}</span>
             {% endif %}
         </div>
     </div>

@@ -3,13 +3,13 @@
   Opened from the Rule Health bulk bar with the selected rules; Start posts them back as items_json.
 #}
 <div class="modal-overlay" data-bulk-edit-dialog>
-    <div class="modal-content modal-sm" style="max-width:34rem;" onclick="event.stopPropagation()">
+    <div class="modal-content modal-sm modal-34rem" data-stop-click>
     {% if job is defined and job %}
         {% include "components/bulk_edit_status.html" %}
     {% elif error %}
         <h2 class="modal-section-title">{{ label }} rules</h2>
         <div class="alert alert-warning mb-md"><p>{{ error }}</p></div>
-        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Close</button></div>
+        <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button></div>
     {% else %}
         <h2 class="modal-section-title">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</h2>
         <form name="Bulk Edit" hx-post="/api/rules/bulk-edit/start" hx-target="closest .modal-content" hx-swap="innerHTML" hx-include="this">
@@ -32,39 +32,39 @@
                     {% endfor %}
                 </select>
             </div>
-            <fieldset style="border:0;padding:0;margin:0 0 1rem;">
+            <fieldset class="border-0 p-0 mt-0 mx-0 mb-md">
                 <legend class="form-label">Validation</legend>
-                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                <label class="flex gap-sm items-start mb-sm">
                     <input type="radio" name="validation" value="keep" checked>
                     <span><strong>Keep each rule's current validation</strong><br>
-                    <span class="text-muted" style="font-size:0.78rem;">Validated rules stay validated on their original date; unvalidated rules stay unvalidated.</span></span>
+                    <span class="text-muted fs-sm">Validated rules stay validated on their original date; unvalidated rules stay unvalidated.</span></span>
                 </label>
-                <label style="display:flex;gap:0.5rem;align-items:flex-start;margin-bottom:0.4rem;">
+                <label class="flex gap-sm items-start mb-sm">
                     <input type="radio" name="validation" value="stamp">
                     <span><strong>Mark every moved rule as validated now</strong><br>
-                    <span class="text-muted" style="font-size:0.78rem;">Resets the date and validator on all of them.</span></span>
+                    <span class="text-muted fs-sm">Resets the date and validator on all of them.</span></span>
                 </label>
-                <label style="display:flex;gap:0.5rem;align-items:flex-start;">
+                <label class="flex gap-sm items-start">
                     <input type="radio" name="validation" value="new_only">
                     <span><strong>Mark as validated only rules that never were</strong><br>
-                    <span class="text-muted" style="font-size:0.78rem;">Existing validation dates are kept; the rest are stamped now.</span></span>
+                    <span class="text-muted fs-sm">Existing validation dates are kept; the rest are stamped now.</span></span>
                 </label>
             </fieldset>
-            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
+            <label class="flex items-center gap-sm mb-xs">
                 <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from its source after moving
             </label>
-            <p class="text-muted mb-md" style="font-size:0.78rem;">Unticked, this is a copy: each source rule stays live and gets linked to its new copy (see the Linked panel in the rule window).</p>
+            <p class="text-muted mb-md fs-sm">Unticked, this is a copy: each source rule stays live and gets linked to its new copy (see the Linked panel in the rule window).</p>
             {% elif action == 'delete' %}
             <div class="alert alert-warning mb-md">
                 <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. Elastic is never changed; if any of these rules still exist there, the next sync will bring them straight back.</p>
             </div>
-            <label style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem;">
+            <label class="flex items-center gap-sm mb-xs">
                 <input type="checkbox" name="remove_links" value="true" checked> Also remove any links to these rules
             </label>
             {% endif %}
 
             <div class="modal-actions">
-                <button name="Cancel" type="button" class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
                 <button name="Start Bulk Edit" type="submit" class="btn {{ 'btn-danger' if action == 'delete' else 'btn-primary' }}">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</button>
             </div>
         </form>

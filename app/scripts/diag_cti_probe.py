@@ -37,6 +37,8 @@ def main() -> int:
         print("no active opencti_inventory rows")
         return 0
     url, token = row
+    from app.services.credentials import reveal_or_none
+    token = reveal_or_none(token)
     base = url.rstrip("/") + "/graphql"
     headers = {
         "Authorization": f"Bearer {token}",

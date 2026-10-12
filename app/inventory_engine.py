@@ -2633,7 +2633,7 @@ def generate_baseline_from_actor(
     Uses a single DB connection for the entire operation to avoid
     per-step connection overhead.
     """
-    from app.api.heatmap import get_tactic_display
+    from app.attack_tactics import tactic_name
 
     name = baseline_name.strip() if baseline_name.strip() else f"{actor_name} Baseline"
     desc = description.strip() if description.strip() else f"Auto-generated from {actor_name} threat profile ({len(ttps)} techniques)."
@@ -2660,11 +2660,9 @@ def generate_baseline_from_actor(
 
         # Insert all steps + junction rows in the same connection
         for idx, tech_id in enumerate(sorted_ttps, start=1):
-            raw_tactic = technique_tactic_map.get(tech_id, "")
-            tactic_display = get_tactic_display(raw_tactic)
+            tactic_val = tactic_name(technique_tactic_map.get(tech_id, "")) or ""
             tech_name = technique_name_map.get(tech_id, tech_id)
             title = f"{tech_id} — {tech_name}" if tech_name != tech_id else tech_id
-            tactic_val = tactic_display if tactic_display != "Other" else ""
             step_description = (technique_description_map.get(tech_id) or "").strip()
 
             step_row = conn.execute(
@@ -3560,41 +3558,28 @@ def attack_plain_text(text: Optional[str]) -> str:
     return re.sub(r"[ \t]{2,}", " ", out).replace(" .", ".").strip()
 
 
-_TACTIC_ALIASES = {
-    "resource dev": "Resource Development", "c2": "Command and Control",
-    "command & control": "Command and Control", "privesc": "Privilege Escalation",
-    "recon": "Reconnaissance", "exfil": "Exfiltration",
-}
-
-
 def canonical_tactic(raw: Optional[str]) -> str:
     """A baseline step's free-text tactic as the ATT&CK tactic it means, or "Other".
 
     Steps are typed by hand and imported from several places, so the same tactic turns up as
-    "Resource Dev", "resource-development" or blank. Grouping and ATT&CK ordering need one name.
+    "Resource Dev", "resource-development", "TA0005" or blank. Grouping and ATT&CK ordering need
+    one name. Anything that isn't a tactic is kept as typed (title-cased if typed in lower case).
     """
-    from app.models.inventory import MITRE_TACTICS
-    text = " ".join((raw or "").replace("-", " ").replace("_", " ").split()).lower()
+    from app.attack_tactics import tactic_name
+    text = " ".join((raw or "").split())
     if not text:
         return "Other"
-    for t in MITRE_TACTICS:
-        if t.lower() == text:
-            return t
-    raw = raw.strip()
-    # An ATT&CK shortname this list doesn't know yet ("stealth", "defense-impairment") reads as
-    # a name; anything typed with capitals is kept as typed.
-    return _TACTIC_ALIASES.get(text) or (text.title() if raw == raw.lower() else raw)
+    return tactic_name(text) or (text.title() if text == text.lower() else text)
 
 
 def tactic_sort_key(tactic: str, mode: str = "attack"):
-    """ATT&CK kill-chain order (unknown tactics after the fourteen, A-Z, then Other), or plain A-Z."""
-    from app.models.inventory import MITRE_TACTICS
+    """ATT&CK kill-chain order (unknown tactics after ATT&CK's, A-Z, then Other), or plain A-Z."""
+    from app.attack_tactics import ORDER
     if mode == "alpha":
         return (0, tactic.lower())
-    known = MITRE_TACTICS[:-1]            # "Other" always sorts last
-    if tactic in known:
-        return (known.index(tactic), "")
-    return (len(known) + (1 if tactic == "Other" else 0), tactic.lower())
+    if tactic in ORDER:
+        return (ORDER.index(tactic), "")
+    return (len(ORDER) + (1 if tactic == "Other" else 0), tactic.lower())
 
 
 def group_system_steps(steps: List[Dict], group_by: List[str], tactic_sort: str = "attack") -> List[Dict]:
@@ -4091,7 +4076,7 @@ def _backfill_step_tactics():
         "T1059": "Execution", "T1053": "Execution",
         "T1547": "Persistence", "T1098": "Persistence",
         "T1548": "Privilege Escalation", "T1134": "Privilege Escalation",
-        "T1070": "Defense Evasion", "T1027": "Defense Evasion",
+        "T1070": "Stealth", "T1027": "Stealth",
         "T1110": "Credential Access", "T1558": "Credential Access",
         "T1083": "Discovery", "T1018": "Discovery",
         "T1071": "Command and Control", "T1105": "Command and Control",

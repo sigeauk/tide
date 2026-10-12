@@ -3,7 +3,9 @@
   prev/next through the catalogue grid it was opened from, the sections menu and close. The body
   is the kind's own (spec.window_body): sections in three columns that collapse and move, the
   arrangement remembered per kind in this browser.
-  Context: spec, detail, dom_id, covered_ttps, ttp_rule_counts, coverage (optional), source context.
+  Context: spec, detail, dom_id, covered_ttps, ttp_rule_counts, coverage (optional), source context,
+  baseline_from (optional: the number of techniques Create baseline would add; a group, software or
+  campaign, for a user who can edit Baselines).
 #}
 {% from "macros/icons.html" import icon %}
 {% from "components/window_ui.html" import layout_menu %}
@@ -28,6 +30,26 @@
           <button name="Previous {{ spec.singular }}" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous {{ spec.singular | lower }} (←)" aria-label="Previous {{ spec.singular | lower }}" disabled>{{ icon('chevron-left', '16') }}</button>
           <button name="Next {{ spec.singular }}" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next {{ spec.singular | lower }} (→)" aria-label="Next {{ spec.singular | lower }}" disabled>{{ icon('chevron-right', '16') }}</button>
         </div>
+        {% if baseline_from %}
+        <div class="rh-more mw-baseline" data-more>
+            <button name="Create Baseline" type="button" class="btn btn-secondary btn-sm" data-more-toggle
+                    aria-haspopup="dialog" aria-expanded="false" aria-label="Create baseline"
+                    title="Make a baseline of the {{ baseline_from }} techniques this {{ spec.singular | lower }} uses">{{ icon('plus', '14') }}<span class="mw-baseline__text">Create baseline</span></button>
+            <div class="rh-more__menu mw-baseline__form" role="dialog" aria-label="Create baseline" hidden data-keep-open>
+                <form name="Create Baseline From {{ spec.singular }}" hx-post="/api/baselines/from-mitre/{{ spec.key }}/{{ detail.id }}"
+                      hx-target="#toast-container" hx-swap="afterbegin" hx-include="unset">
+                    <input type="hidden" name="src" value="{{ source_domain }}">
+                    <label class="mw-baseline__label" for="mw-bl-name">Baseline name</label>
+                    <input id="mw-bl-name" name="baseline_name" class="form-input" required value="{{ detail.name }} Baseline">
+                    <label class="mw-baseline__label" for="mw-bl-desc">Description (optional)</label>
+                    <textarea id="mw-bl-desc" name="description" class="form-input" rows="2"
+                              placeholder="From the ATT&amp;CK {{ spec.singular | lower }} {{ detail.name }} ({{ detail.id }})"></textarea>
+                    <p class="mw-baseline__hint">One baseline technique for each of the {{ baseline_from }} techniques, described by what ATT&amp;CK says the {{ spec.singular | lower }} does with it. Baselines opens on it.</p>
+                    <button name="Create Baseline Submit" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Create</button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
         {{ layout_menu() }}
         <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
       </div>

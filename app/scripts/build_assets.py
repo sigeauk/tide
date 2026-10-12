@@ -42,6 +42,31 @@ DIST_DIR = CSS_DIR / "dist"
 JS_DIST_DIR = JS_DIR / "dist"
 MANIFEST_PATH = STATIC_DIR / "manifest.json"
 
+# Page and partial scripts (app/static/js/pages/<name>.js): each registers its actions and page
+# init with TIDE.action / TIDE.page (actions.js), so their order doesn't matter.
+PAGE_SCRIPTS = [
+    "baselines",
+    "client_detail",
+    "clients",
+    "cve_affected",
+    "cve_detail",
+    "cve_overview",
+    "heatmap",
+    "hosts",
+    "management",
+    "misc",
+    "preferences",
+    "rule_form",
+    "rule_health",
+    "shell",
+    "sigma",
+    "step_window",
+    "system_detail",
+    "system_steps",
+    "systems",
+    "threats",
+]
+
 # Bundles to build — keep tiny on purpose. New bundles get a new entry here
 # rather than auto-discovery so the build output stays predictable. The
 # order in *sources* matters (concatenation is positional).
@@ -51,6 +76,7 @@ BUNDLES: dict = {
         "sources": [
             CSS_DIR / "style.css",
             CSS_DIR / "heatmap.css",
+            CSS_DIR / "utilities.css",   # last: utilities win over component rules
         ],
     },
     "app.js": {
@@ -58,7 +84,8 @@ BUNDLES: dict = {
         "sources": [
             JS_DIR / "app.js",
             JS_DIR / "catalog-grid.js",
-        ],
+            JS_DIR / "actions.js",        # after app.js (which sets window.TIDE); before the pages
+        ] + [JS_DIR / "pages" / f"{name}.js" for name in PAGE_SCRIPTS],
     },
 }
 

@@ -144,7 +144,7 @@ async def require_admin(
 async def require_superadmin(
     user: Annotated[User, Depends(require_auth)]
 ) -> User:
-    """Dependency: Require platform-wide super-admin (Keycloak `superadmin` group).
+    """Dependency: Require platform-wide super-admin (Platform Admin in Management → Users).
 
     A tenant ADMIN can manage their own client through the management panel,
     but operations that affect the *global* client list (create / delete) are
@@ -200,7 +200,63 @@ AuthDep = Annotated[AuthService, Depends(get_auth)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 CurrentUser = Annotated[Optional[User], Depends(get_current_user)]
 RequireUser = Annotated[User, Depends(require_auth)]
+async def require_client_admin(
+    client_id: str,
+    user: Annotated[User, Depends(require_auth)]
+) -> User:
+    """Dependency: ADMIN on the client named in the route's path (``{client_id}``), or a super admin.
+
+    RequireAdmin only checks the active client, so a route that acts on the client in its URL
+    must use this: an admin of one client must not change another's users, roles or links."""
+    if not user.is_admin(client_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access for this client required",
+        )
+    return user
+
+
+def admin_client_ids(user: User) -> set:
+    """The clients this user holds the ADMIN role on (a super admin's access to every client is separate)."""
+    return {cid for cid, roles in (user.client_roles or {}).items() if any(r.upper() == "ADMIN" for r in roles)}
+
+
+def can_manage_user(db: DatabaseService, actor: User, target: dict) -> bool:
+    """May ``actor`` reset, deactivate or delete ``target``?
+
+    A super admin may manage anyone. A client admin may manage a user only when every client the
+    user belongs to is one they administer, and never a super admin: a user who is also on a client
+    the admin doesn't run (where the admin may be only an Analyst) belongs to that client too."""
+    if actor.is_superadmin:
+        return True
+    if not target or target.get("is_superadmin"):
+        return False
+    clients = set(db.get_user_client_ids(target["id"]))
+    return bool(clients) and clients <= admin_client_ids(actor)
+
+
+def require_manageable_user(db: DatabaseService, actor: User, user_id: str) -> dict:
+    """The target user, or 404 / 403 when ``actor`` may not reset, deactivate or delete them."""
+    target = db.get_user_by_id(user_id)
+    if not target:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if not can_manage_user(db, actor, target):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only a super admin can manage a Platform Admin or a user who is also on a client you don't administer.",
+        )
+    return target
+
+
+def require_client_member(db: DatabaseService, actor: User, user_id: str, client_id: str) -> None:
+    """403 unless ``user_id`` is on ``client_id`` (super admins excepted): a client admin changes the
+    roles of their own client's users only."""
+    if not actor.is_superadmin and client_id not in db.get_user_client_ids(user_id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="That user isn't on this client.")
+
+
 RequireAdmin = Annotated[User, Depends(require_admin)]
+ClientAdmin = Annotated[User, Depends(require_client_admin)]
 RequireSuperadmin = Annotated[User, Depends(require_superadmin)]
 
 

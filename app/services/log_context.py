@@ -22,6 +22,7 @@ lines; anything else → human readable. JSON shape is the contract documented i
 
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import logging
@@ -88,6 +89,20 @@ def set_context_fields(**fields: Any) -> None:
     ctx.update({k: v for k, v in fields.items() if v is not None})
 
 
+@contextlib.contextmanager
+def run_context(run_id: str, client_id: Optional[str] = None):
+    """Stamp ``run_id`` (and the run's client) on every log line written inside, for a sync
+    running on a worker thread or task, where the request's context doesn't reach. The id is the
+    one the UI shows and sync_history keeps, so a failure can be traced from the screen to the log."""
+    fields = dict(request_context.get())
+    fields.update({"run_id": run_id, **({"client_id": client_id} if client_id else {})})
+    token = request_context.set(fields)
+    try:
+        yield
+    finally:
+        request_context.reset(token)
+
+
 # ── logging.Filter that injects context fields into every record ─────────────
 class ContextFilter(logging.Filter):
     """Copies contextvar fields onto each LogRecord.
@@ -97,7 +112,7 @@ class ContextFilter(logging.Filter):
     aligned without conditional logic.
     """
 
-    _FIELDS = ("request_id", "user_id", "client_id", "route", "method")
+    _FIELDS = ("request_id", "user_id", "client_id", "route", "method", "run_id")
 
     def filter(self, record: logging.LogRecord) -> bool:  # noqa: D401
         ctx = request_context.get()
@@ -139,6 +154,7 @@ class JsonFormatter(logging.Formatter):
             "client_id": getattr(record, "client_id", "-"),
             "route": getattr(record, "route", "-"),
             "method": getattr(record, "method", "-"),
+            "run_id": getattr(record, "run_id", "-"),
         }
         # Merge any extra=... fields the caller attached.
         for key, value in record.__dict__.items():
@@ -241,6 +257,12 @@ def audit_log(event: str, **fields: Any) -> None:
     """Emit a ``tide.audit`` INFO record. ``event`` is the taxonomy key
     (login, client_switch, role_change, rule_promote, baseline_create, …)."""
     _audit_logger.info(event, extra={"event": event, **fields})
+
+
+def audit_admin(event: str, actor: Any, **fields: Any) -> None:
+    """Audit an administrative change: who made it (``actor``, a User) and what it changed.
+    Used for user, role, client-membership and Role Templates changes."""
+    audit_log(event, actor_id=getattr(actor, "id", None), actor_username=getattr(actor, "username", None), **fields)
 
 
 def perf_log(route: str, status: int, elapsed_ms: float, **fields: Any) -> None:

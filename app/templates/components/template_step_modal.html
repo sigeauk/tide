@@ -113,7 +113,7 @@
             <h3 class="rm-panel__title">Risks</h3>
             {% if not new %}
             {% call section_menu('Risks') %}
-            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" onclick="tideToggleRisks(true)"
+            <button name="Update Risks" type="button" role="menuitem" class="rh-more__item" data-click="step.risksEdit"
                     title="Edit priority and category">{{ icon('pencil', '14') }}<span>Update</span></button>
             {% endcall %}
             {% endif %}
@@ -138,7 +138,7 @@
               {% for k, v in rl.category.items() %}<option value="{{ k }}"{% if step.category == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
             </select>
             <div class="sm-risks__actions">
-              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" onclick="tideToggleRisks(false)">Cancel</button>
+              <button name="Cancel Risks" type="button" class="btn btn-secondary btn-sm" data-click="step.risksCancel">Cancel</button>
               <button name="Save Risks" type="submit" class="btn btn-primary btn-sm">Save</button>
             </div>
           </form>
@@ -171,11 +171,3 @@
   </div>
 </div>
 
-<script>
-  // Risks: view <-> form (priority and category).
-  function tideToggleRisks(editing) {
-    document.getElementById('sm-risks-view').hidden = editing;
-    document.getElementById('sm-risks-form').hidden = !editing;
-    if (editing) document.getElementById('sm-risk-priority').focus();
-  }
-</script>

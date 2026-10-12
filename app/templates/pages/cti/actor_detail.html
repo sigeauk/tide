@@ -38,23 +38,23 @@
         <p class="metric-sub">{{ icon_text('file-text','Mentions','14') }}</p>
     </div>
     <div class="metric-card">
-        <p class="metric-value" style="font-size:0.95rem;">{{ actor.first_seen or '—' }}</p>
+        <p class="metric-value fs-lg">{{ actor.first_seen or '—' }}</p>
         <p class="metric-label">First seen</p>
         <p class="metric-sub">{{ icon_text('clock','Earliest sighting','14') }}</p>
     </div>
     <div class="metric-card">
-        <p class="metric-value" style="font-size:0.95rem;">{{ actor.last_seen or '—' }}</p>
+        <p class="metric-value fs-lg">{{ actor.last_seen or '—' }}</p>
         <p class="metric-label">Last seen</p>
         <p class="metric-sub">{{ icon_text('clock','Most recent','14') }}</p>
     </div>
     <div class="metric-card">
-        <p class="metric-value" style="font-size:0.95rem;">{{ actor.origin or '—' }}</p>
+        <p class="metric-value fs-lg">{{ actor.origin or '—' }}</p>
         <p class="metric-label">Origin</p>
         <p class="metric-sub">{{ icon_text('map-pin','Attributed region','14') }}</p>
     </div>
 </div>
 
-<section class="card card-padded" style="margin-bottom:1rem;">
+<section class="card card-padded mb-md">
     <h2 class="section-title">{{ icon('info','16') }} Details</h2>
     <dl class="kv">
         <dt>Aliases</dt><dd>{{ (actor.aliases or [])|join(', ') or '—' }}</dd>
@@ -65,11 +65,11 @@
         <dt>Source</dt><dd>{{ source_labels.get(actor.source_id, '—') if actor.source_id else '—' }}</dd>
     </dl>
     {% if actor.description %}
-    <p style="margin-top:1rem;white-space:pre-wrap;">{{ actor.description }}</p>
+    <p class="mt-md pre-wrap">{{ actor.description }}</p>
     {% endif %}
 </section>
 
-<section class="card card-padded" style="margin-bottom:1rem;">
+<section class="card card-padded mb-md">
     <h2 class="section-title">
         {{ icon('crosshair','16') }} Indicators attributed to this actor
         <span class="badge badge-secondary">{{ actor.related_indicators|length }}</span>

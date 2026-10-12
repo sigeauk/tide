@@ -26,10 +26,11 @@ def own_tables(conn) -> set:
     ).fetchall()}
 
 
-def check_references(conn, sql: str, catalog_views: bool = False) -> None:
+def check_references(conn, sql: str, catalog_views: bool = False, hidden=frozenset()) -> None:
     """Raise SqlRejected unless ``sql`` is one SELECT reading only the database's own tables.
     ``catalog_views`` also allows the information_schema / pg_catalog views, which describe the
-    database and read no files."""
+    database and read no files. ``hidden`` names tables it may not read at all (nor name a CTE
+    after, which could otherwise pass a read of the table off as a read of the CTE)."""
     tree = json.loads(conn.execute("SELECT json_serialize_sql(?)", [sql]).fetchone()[0])
     if tree.get("error") or len(tree.get("statements") or []) != 1:
         raise SqlRejected("Only a single SELECT statement is allowed.")
@@ -59,6 +60,10 @@ def check_references(conn, sql: str, catalog_views: bool = False) -> None:
         if not PLAIN_NAME.match(name):
             raise SqlRejected(f"CTE names must be plain identifiers: {name}")
     cte_names = {n.lower() for n in ctes}
+    hidden = {h.lower() for h in hidden}
+    for name in [n for _, _, n in tables] + list(ctes):
+        if name.lower() in hidden:
+            raise SqlRejected(f"Unknown table: {name}")
     for catalog, schema, name in tables:
         if catalog_views and catalog.lower() in ("", database) and schema.lower() in ("information_schema", "pg_catalog"):
             continue
