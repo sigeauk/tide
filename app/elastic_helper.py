@@ -2253,6 +2253,81 @@ def update_detection_rule(
         return False, str(e)
 
 
+# Kept by Kibana itself; a whole-rule PUT must not send them back.
+_SERVER_FIELDS = ("id", "_version", "created_at", "created_by", "updated_at", "updated_by", "revision",
+                  "execution_summary", "immutable", "rule_source")
+
+
+def _same(a, b) -> bool:
+    """Equal as a rule field: an absent field, None, "" and [] are all "not set"."""
+    return (a if a not in (None, "", [], {}) else None) == (b if b not in (None, "", [], {}) else None)
+
+
+def apply_rule_changes(
+    rule_id: str,
+    changes: dict,
+    remove: tuple = (),
+    space: str = "default",
+    kibana_url: str = None,
+    api_key: str = None,
+    cached: Optional[dict] = None,
+    on_recreated=None,
+) -> Tuple[str, str, Optional[dict]]:
+    """Apply ``changes`` (and clear the fields in ``remove``) to the rule as Kibana holds it now,
+    leaving every other field as Kibana has it: type-specific settings (threshold, new terms,
+    indicator match), filters, data view, exceptions and actions are never rebuilt from TIDE's
+    copy. Kibana's update replaces the whole rule, so it is read first and written back whole.
+
+    ``cached`` is TIDE's copy the edit was made from. When a field being changed was changed in
+    Kibana since that copy, nothing is written: saving would silently overwrite someone else's change.
+
+    Returns ``(outcome, message, before)``: outcome is "updated", "conflict", "missing" or "error";
+    ``before`` is the rule as Kibana held it (None when it couldn't be read).
+    """
+    if not (kibana_url and api_key):
+        return "error", "This SIEM has no Kibana URL or API key configured.", None
+    session = _make_session(api_key, kibana_url)
+    base_url = kibana_url.rstrip("/")
+    try:
+        live = _lookup_rule_by_rule_id(session, base_url, space, rule_id)
+    except Exception as exc:
+        return "error", f"Couldn't read the rule from Kibana, so nothing was changed: {exc}", None
+    if not live:
+        return "missing", "Kibana no longer has this rule in this space, so nothing was changed.", None
+
+    if cached is not None:
+        conflicts = [k for k in (*changes, *remove)
+                     if not _same(live.get(k), cached.get(k)) and not _same(live.get(k), changes.get(k))]
+        if conflicts:
+            return "conflict", ", ".join(conflicts), live
+
+    rule = {k: v for k, v in live.items() if k not in _SERVER_FIELDS and k not in remove}
+    rule.update(changes)
+    if "timestamp_override" in remove:
+        rule.pop("timestamp_override_fallback_disabled", None)
+    if rule.get("type") == "esql":
+        rule.pop("index", None)     # an ES|QL rule takes its indices from the query's FROM
+    rule["rule_id"] = live.get("rule_id") or rule_id
+    try:
+        response, note = _put_rule(session, base_url, space, rule, on_recreated)
+    except Exception as exc:
+        return "error", f"Couldn't reach Kibana, so nothing was changed: {exc}", live
+    if response.status_code not in (200, 201):
+        return "error", _kibana_error(response) + (f" {note}" if note else ""), live
+    log_info(f"Updated rule {rule_id} in {space}: {', '.join(sorted({*changes, *remove}))}")
+    return "updated", note or "", live
+
+
+def _kibana_error(response) -> str:
+    """Kibana's own reason for refusing a request, readable: its message, not the raw body."""
+    try:
+        body = response.json() or {}
+        message = body.get("message") or body.get("error") or ""
+    except ValueError:
+        message = ""
+    return f"Kibana refused the change (HTTP {response.status_code}): {message or (response.text or '')[:300]}"
+
+
 def restore_detection_rule(
     rule_data: dict,
     space: str = "default",

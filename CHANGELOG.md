@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.1] - 2026-10-13
+
+### Changed
+- **Management → Query is much faster.** Every query used to copy the whole database first, which took tens of seconds on a large client. A copy is now reused for 5 minutes, so the queries after the first answer at once. The result says how old the copy is, and **Fresh copy** takes a new one. Queries still never touch the live database. The copy now also refuses to read files or other databases, even if a query got past TIDE's own checks. If the disk hasn't room for a copy, the query says so instead of running.
+- **Save and Cancel stay in view in the rule Edit form.** They are pinned to the bottom of the form while you scroll, with **Reason for Change** beside them instead of inside **About Rule**, since every edit needs one.
+- **Rule Health no longer repeats the last sync under the page title.** The **Last Synced** card shows when the rules were last synced. A sync that failed, only partly finished or was interrupted is still shown there, with why and **Retry**.
+
+### Fixed
+- **A Diagnostics fix could overwrite the backup of another one.** Two fixes on the same client within the same second got backups with the same name, so the copy taken before the first fix was lost. Each backup now has its own name.
+- **TIDE could sign everyone out at the end of a sync.** Once TIDE held sync records more than 90 days old, clearing them out at the end of each rule or CTI sync hit a fault in TIDE's database. For a moment everyone's sign-in stopped working: the next click went to the sign-in page, and anything being saved then was lost. Upgrading repairs the database by itself; there is nothing to do by hand. A brief database error also no longer signs anyone out.
+- **Editing a rule in TIDE now reliably changes it in Kibana.**
+  - **Save did nothing for some rules.** A rule with an empty query, such as a KQL rule that matches only on filters, couldn't be saved: the form refused to send it without saying why. These rules can now be edited. When a field needs fixing, the form opens its section and says what's wrong.
+  - **Only what you change is sent**, onto the rule as Kibana has it at that moment. Saving used to send TIDE's whole copy of the rule back. That could undo changes made in Kibana since TIDE last synced the rule, and could add you as the rule's author. It also sent threshold, new terms and indicator match rules as plain query rules, without their settings. These rules now keep their settings: the form says they stay as they are in Kibana, and doesn't offer a query language the rule can't use.
+  - **Changes made in Kibana aren't overwritten.** If someone changed a field in Kibana since TIDE last synced the rule, and you change that field too, nothing is saved. The form says which field it was, and TIDE loads Kibana's version so you can check it and make your change again.
+  - **Errors are shown in the form.** When Kibana refuses a change, or the rule can't be saved for another reason, the form stays open with what you typed and shows the reason. It used to show nothing, or only "Request failed" messages. Creating a rule does the same.
+  - **You can see it working.** Save shows it is busy and can't be pressed twice. The rule window then says what was saved to Kibana, for example "Changed: investigation guide". A save that changes nothing says so, sends nothing to Kibana and adds nothing to the rule's History.
+  - **Clearing a field removes it.** Clearing the timestamp override used to put `event.ingested` back while still saying the rule was updated. Now an empty field removes the override, and the rule uses `@timestamp`. Editing a rule with no override shows the field empty, so saving another change no longer adds one. Clearing **Highlighted fields** removes them too. New rules still start with `event.ingested`.
+
 ## [6.1.0] - 2026-10-12
 
 ### Added

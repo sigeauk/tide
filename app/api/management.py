@@ -4226,10 +4226,11 @@ def _check_query(conn, sql: str) -> None:
         raise SqlRejected(f"Statement type '{kw}' is not allowed (read-only mode).")
 
 
-def _render_query_results(rows, cols, elapsed_ms, truncated):
+def _render_query_results(rows, cols, elapsed_ms, truncated, source=""):
+    source_note = f'<div class="text-secondary text-sm m-0 mb-sm">{_esc(source)}</div>' if source else ""
     if not rows:
         return (
-            f'<div class="text-secondary p-ms">'
+            f'{source_note}<div class="text-secondary p-ms">'
             f'No rows. ({elapsed_ms} ms)</div>'
         )
     head = "".join(f"<th>{_esc(c)}</th>" for c in cols)
@@ -4252,7 +4253,7 @@ def _render_query_results(rows, cols, elapsed_ms, truncated):
             f'Truncated to {_QUERY_MAX_ROWS} rows.</div>'
         )
     return (
-        f'<div class="text-secondary text-sm m-0 mb-sm">'
+        f'{source_note}<div class="text-secondary text-sm m-0 mb-sm">'
         f'{len(rows)} row(s) - {elapsed_ms} ms</div>'
         f'<div class="table-scroll">'
         f'<table class="data-table w-full text-sm">'
@@ -4270,6 +4271,7 @@ def _render_query_tab(
     sql_value: str = "",
     query_name: str = "",
 ):
+    _snapshot_sweep()                       # opening the page frees expired query copies
     selected_preset = (selected_preset or "").strip()
     target_value = (target_value or "shared").strip() or "shared"
     sql_value = sql_value or ""
@@ -4309,8 +4311,9 @@ def _render_query_tab(
   Only <code>SELECT / WITH / SHOW / DESCRIBE /
   EXPLAIN / SUMMARIZE</code> statements are allowed and results are capped at
   {_QUERY_MAX_ROWS} rows. Targets are resolved from the on-disk data directory;
-  arbitrary file paths are rejected. Queries run against a point-in-time
-  snapshot copy so the live writer is never blocked.
+  arbitrary file paths are rejected. Queries run against a read-only copy of the
+  database, so the live one is never touched or blocked. A copy is reused for
+  {_SNAPSHOT_TTL // 60} minutes; tick <strong>Fresh copy</strong> to query the data as it is now.
 </div>
 <form id="mgmt-query-form"
       hx-post="/api/management/query/exec"
@@ -4342,6 +4345,9 @@ def _render_query_tab(
   </label>
   <div class="flex items-center gap-sm flex-wrap">
     <button type="submit" class="btn btn-primary btn-sm">Run query</button>
+    <label class="flex items-center gap-xs text-sm" title="Take a new copy of the database for this query, instead of reusing one up to {_SNAPSHOT_TTL // 60} minutes old">
+      <input type="checkbox" name="fresh" value="1"> Fresh copy
+    </label>
         <button type="button" class="btn btn-secondary btn-sm"
                         hx-post="/api/management/query/save"
                         hx-include="#mgmt-query-form"
@@ -4502,47 +4508,156 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
     cleaned, err = _validate_sql(sql_raw)
     if err:
         return HTMLResponse(f'<div class="alert alert-error">{_esc(err)}</div>')
+    fresh = str(form.get("fresh", "")).lower() in ("1", "true", "on")
     # Copying the file and running the query can take seconds: keep it off the event loop.
-    return HTMLResponse(await _run_in_threadpool_q(_run_query, path, target_key, cleaned))
+    return HTMLResponse(await _run_in_threadpool_q(_run_query, path, target_key, cleaned, fresh))
 
 
-def _run_query(path: str, target_key: str, cleaned: str) -> str:
-    """Run a validated statement against a snapshot of ``path`` and render the result."""
-    import shutil as _shutil_q
-    import tempfile as _tempfile_q
+# ── Query snapshots ──────────────────────────────────────────────────────────────────────────────
+# A query never touches the live file: it runs on a private copy, opened read-only with DuckDB's
+# own file and network access switched off, so even a statement that slipped past _validate_sql /
+# _check_query can neither change TIDE's data nor read anything but that copy. The copy is reused
+# for _SNAPSHOT_TTL seconds (each target has its own), because copying a multi-GB tenant database
+# for every query made the page take tens of seconds per query. Old copies are removed when a
+# later query finds them, and at startup; there is no timer.
+import threading as _threading_q
+import tempfile as _tempfile_q
+import shutil as _shutil_q
+
+_SNAPSHOT_TTL = 300
+_SNAPSHOT_ROOT = _os_q.path.join(_tempfile_q.gettempdir(), "tide_query_snapshots")
+_SNAPSHOT_CONFIG = {"enable_external_access": False, "lock_configuration": True,
+                    "autoinstall_known_extensions": False, "autoload_known_extensions": False}
+_snapshots: dict = {}                       # live path -> {"file", "dir", "taken", "readers", "retired"}
+_snapshots_lock = _threading_q.Lock()       # guards _snapshots
+_snapshot_build_locks: dict = {}            # live path -> Lock: one copy at a time per target
+_shutil_q.rmtree(_SNAPSHOT_ROOT, ignore_errors=True)   # leftovers from before a restart
+
+
+def _snapshot_connect(file: str):
+    return _duckdb_q.connect(file, read_only=True, config=_SNAPSHOT_CONFIG)
+
+
+def _snapshot_copy(path: str) -> dict:
+    """A new copy of ``path`` (and its WAL). One taken while the app was writing may not open:
+    it is thrown away and taken again, never kept."""
+    _os_q.makedirs(_SNAPSHOT_ROOT, exist_ok=True)
+    need = sum(_os_q.path.getsize(p) for p in (path, path + ".wal") if _os_q.path.exists(p)) * 1.2
+    if _shutil_q.disk_usage(_SNAPSHOT_ROOT).free < need:
+        raise RuntimeError(f"Not enough free disk space for a copy of this database "
+                           f"({need / 1073741824:.1f} GB needed in {_SNAPSHOT_ROOT}).")
+    last_error = None
+    for _ in range(2):
+        tmpd = _tempfile_q.mkdtemp(prefix="snap_", dir=_SNAPSHOT_ROOT)
+        snap = _os_q.path.join(tmpd, _os_q.path.basename(path))
+        try:
+            _shutil_q.copy2(path, snap)
+            if _os_q.path.exists(path + ".wal"):
+                _shutil_q.copy2(path + ".wal", snap + ".wal")
+            conn = _snapshot_connect(snap)
+            try:
+                conn.execute("SELECT count(*) FROM duckdb_tables()").fetchone()
+            finally:
+                conn.close()
+            # "Taken" is when the copy was complete: a large copy can take tens of seconds.
+            return {"file": snap, "dir": tmpd, "taken": _time_q.time(), "readers": 0, "retired": False}
+        except Exception as exc:              # a torn copy, or the file changed under us
+            last_error = exc
+            _shutil_q.rmtree(tmpd, ignore_errors=True)
+    raise RuntimeError(f"Couldn't take a readable copy of the database: {last_error}")
+
+
+def _snapshot_release(snap: dict) -> None:
+    with _snapshots_lock:
+        snap["readers"] -= 1
+        gone = snap["retired"] and snap["readers"] <= 0
+    if gone:
+        _shutil_q.rmtree(snap["dir"], ignore_errors=True)
+
+
+def _snapshot_retire(path: str, snap: dict) -> None:
+    """Stop handing ``snap`` out; delete it once nobody is reading it."""
+    with _snapshots_lock:
+        if _snapshots.get(path) is snap:
+            del _snapshots[path]
+        snap["retired"] = True
+        gone = snap["readers"] <= 0
+    if gone:
+        _shutil_q.rmtree(snap["dir"], ignore_errors=True)
+
+
+def _snapshot_sweep(keep: str = "") -> None:
+    """Delete expired copies (other than ``keep``'s) to free the disk. Called by each query and
+    when the Query page opens, so a copy outlives its last use only until the page is next used."""
+    now = _time_q.time()
+    with _snapshots_lock:
+        stale = [(p, s) for p, s in _snapshots.items() if p != keep and now - s["taken"] >= _SNAPSHOT_TTL]
+    for p, s in stale:
+        _snapshot_retire(p, s)
+
+
+def _snapshot_acquire(path: str, fresh: bool) -> dict:
+    """The current copy of ``path`` (taken now when there is none, it is older than
+    _SNAPSHOT_TTL or ``fresh``), marked as being read. Release it with _snapshot_release."""
+    _snapshot_sweep(keep=path)
+    now = _time_q.time()
+    with _snapshots_lock:
+        build_lock = _snapshot_build_locks.setdefault(path, _threading_q.Lock())
+    with build_lock:
+        with _snapshots_lock:
+            snap = _snapshots.get(path)
+            if snap and not fresh and now - snap["taken"] < _SNAPSHOT_TTL:
+                snap["readers"] += 1
+                return snap
+        if snap:
+            _snapshot_retire(path, snap)
+        snap = _snapshot_copy(path)
+        with _snapshots_lock:
+            _snapshots[path] = snap
+            snap["readers"] += 1
+        return snap
+
+
+def _snapshot_age(taken: float) -> str:
+    seconds = max(0, int(_time_q.time() - taken))
+    when = _time_q.strftime("%H:%M:%S", _time_q.localtime(taken))
+    return "just now" if seconds < 5 else f"{seconds} s ago" if seconds < 90 else f"{round(seconds / 60)} min ago (at {when})"
+
+
+def _run_query(path: str, target_key: str, cleaned: str, fresh: bool = False) -> str:
+    """Run a validated statement against a copy of ``path`` (see Query snapshots) and render it."""
     upper = cleaned.upper()
     is_select = upper.startswith("SELECT") or upper.startswith("WITH")
     wrapped = f"SELECT * FROM ({cleaned}) AS _q LIMIT {_QUERY_MAX_ROWS + 1}" if is_select and "LIMIT" not in upper else cleaned
     started = _time_q.monotonic()
     try:
-        # Snapshot-copy the DB so we never contend with the live writer.
-        # DuckDB enforces a single-process file lock, so a direct read_only
-        # open against the live file fails with a Conflicting lock error.
-        with _tempfile_q.TemporaryDirectory(prefix="tide_q_") as tmpd:
-            snap = _os_q.path.join(tmpd, _os_q.path.basename(path))
-            _shutil_q.copy2(path, snap)
-            wal = path + ".wal"
-            if _os_q.path.exists(wal):
-                try:
-                    _shutil_q.copy2(wal, snap + ".wal")
-                except Exception:
-                    pass
-            conn = _duckdb_q.connect(snap, read_only=True)
-            try:
-                _check_query(conn, cleaned)
-                cur = conn.execute(wrapped)
-                cols = [d[0] for d in (cur.description or [])]
-                rows = cur.fetchall()
-            finally:
-                conn.close()
+        snap = _snapshot_acquire(path, fresh)
+    except Exception as exc:
+        logger.warning("query_exec: no snapshot of %s: %s", target_key, exc)
+        return f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+    try:
+        conn = _snapshot_connect(snap["file"])
+        try:
+            _check_query(conn, cleaned)
+            cur = conn.execute(wrapped)
+            cols = [d[0] for d in (cur.description or [])]
+            rows = cur.fetchall()
+        finally:
+            conn.close()
     except SqlRejected as exc:
         return f'<div class="alert alert-error">{_esc(str(exc))}</div>'
     except Exception as exc:
         logger.warning("query_exec failed on %s: %s", target_key, exc)
+        if isinstance(exc, (_duckdb_q.IOException, _duckdb_q.InternalException, _duckdb_q.FatalException)):
+            _snapshot_retire(path, snap)     # a damaged copy: the next query takes a new one
         return f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+    finally:
+        _snapshot_release(snap)
     elapsed_ms = int((_time_q.monotonic() - started) * 1000)
     truncated = is_select and len(rows) > _QUERY_MAX_ROWS
-    return _render_query_results(rows[:_QUERY_MAX_ROWS] if truncated else rows, cols, elapsed_ms, truncated)
+    source = (f"From a copy of the database taken {_snapshot_age(snap['taken'])}; "
+              f"copies are reused for {_SNAPSHOT_TTL // 60} min. Tick Fresh copy for a new one.")
+    return _render_query_results(rows[:_QUERY_MAX_ROWS] if truncated else rows, cols, elapsed_ms, truncated, source)
 
 
 # ===========================================================================

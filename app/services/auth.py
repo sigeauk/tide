@@ -500,33 +500,43 @@ class AuthService:
             return None
 
     def get_user_from_session(self, token: str, max_age: int = 86400) -> Optional[User]:
-        """Validate a local session token and return User."""
+        """Validate a local session token and return User. A token that is badly signed, expired or
+        ended gives None. A database error is tried once more before giving None: the shared
+        connection is re-opened after a failure, and a brief database fault must not sign people out."""
         try:
             data, signed_at = self._get_signer().loads(token, max_age=max_age, return_timestamp=True)
-            user_id = data.get("uid")
-            if not user_id:
-                return None
-            from app.services.database import get_database_service
-            db = get_database_service()
-            db_user = db.get_user_by_id(user_id)
-            if not db_user or not db_user.get("is_active", True):
-                return None
-            # Ended by signing out, a password change or reset, or deactivation (#30). Sessions from
-            # before ``iat`` existed are judged by their signing time, in whole seconds.
-            cutoff = db_user.get("sessions_valid_after")
-            if cutoff:
-                iat = data.get("iat")
-                issued = datetime.utcfromtimestamp(iat) if isinstance(iat, (int, float)) else signed_at.replace(tzinfo=None)
-                if issued < cutoff:
-                    return None
-            db_roles = db.get_user_roles(db_user["id"])
-            client_role_map = db.get_user_role_map(db_user["id"])
-            user = User.from_db(db_user, db_roles, client_roles=client_role_map)
-            user.permissions = db.get_user_permissions(db_user["id"])
-            return user
         except Exception:
             return None
-    
+        for attempt in (1, 2):
+            try:
+                return self._session_user(data, signed_at)
+            except Exception:
+                logger.warning("Session check failed on a database error (attempt %d of 2)", attempt, exc_info=attempt == 2)
+        return None
+
+    def _session_user(self, data: dict, signed_at: datetime) -> Optional[User]:
+        user_id = data.get("uid")
+        if not user_id:
+            return None
+        from app.services.database import get_database_service
+        db = get_database_service()
+        db_user = db.get_user_by_id(user_id)
+        if not db_user or not db_user.get("is_active", True):
+            return None
+        # Ended by signing out, a password change or reset, or deactivation (#30). Sessions from
+        # before ``iat`` existed are judged by their signing time, in whole seconds.
+        cutoff = db_user.get("sessions_valid_after")
+        if cutoff:
+            iat = data.get("iat")
+            issued = datetime.utcfromtimestamp(iat) if isinstance(iat, (int, float)) else signed_at.replace(tzinfo=None)
+            if issued < cutoff:
+                return None
+        db_roles = db.get_user_roles(db_user["id"])
+        client_role_map = db.get_user_role_map(db_user["id"])
+        user = User.from_db(db_user, db_roles, client_roles=client_role_map)
+        user.permissions = db.get_user_permissions(db_user["id"])
+        return user
+
     def get_dev_user(self) -> User:
         """Get mock user for development mode."""
         return User.dev_user()

@@ -19,7 +19,8 @@
     </header>
     <div class="rm-form-body">
 
-    <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" class="rule-create-form" data-mode="{{ mode }}">
+    <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" hx-sync="this:drop"
+          hx-disabled-elt="find button[type='submit']" class="rule-create-form" data-mode="{{ mode }}">
       <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
       <div class="rule-accordion-stack flex flex-col gap-ms">
         <details class="rule-accordion" open>
@@ -55,11 +56,14 @@
           <div class="rule-accordion-panel">
             <div class="form-section">
               <label for="rule-language">Query Language *</label>
+              {% if rule_type_label %}
+                <div class="scope-note">This is a {{ rule_type_label }} rule. Its {{ rule_type_label }} settings aren't shown here and stay as they are in Kibana; change them there.</div>
+              {% endif %}
               <select class="rule-form-select" id="rule-language" name="language" required>
                 <option value="kuery" {% if form_values.language == 'kuery' %}selected{% endif %}>KQL (Kibana Query Language)</option>
                 <option value="kql" {% if form_values.language == 'kql' %}selected{% endif %}>KQL (Legacy)</option>
-                <option value="eql" {% if form_values.language == 'eql' %}selected{% endif %}>EQL (Event Query Language)</option>
-                <option value="esql" {% if form_values.language == 'esql' %}selected{% endif %}>ES|QL</option>
+                <option value="eql" {% if form_values.language == 'eql' %}selected{% endif %}{% if rule_type_label %} disabled{% endif %}>EQL (Event Query Language)</option>
+                <option value="esql" {% if form_values.language == 'esql' %}selected{% endif %}{% if rule_type_label %} disabled{% endif %}>ES|QL</option>
                 <option value="lucene" {% if form_values.language == 'lucene' %}selected{% endif %}>Lucene</option>
               </select>
             </div>
@@ -68,8 +72,9 @@
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
             </div>
             <div class="form-section">
-              <label for="rule-query">Query *</label>
-              <textarea class="rule-form-textarea mono" id="rule-query" name="query" required rows="6">{{ form_values.query }}</textarea>
+              <label for="rule-query">Query{% if mode != 'edit' %} *{% endif %}</label>
+              {# Not required when editing: a KQL rule can match on filters alone, with an empty query. #}
+              <textarea class="rule-form-textarea mono" id="rule-query" name="query"{% if mode != 'edit' %} required{% endif %} rows="6">{{ form_values.query }}</textarea>
             </div>
           </div>
         </details>
@@ -106,7 +111,7 @@
             </div>
             <div class="form-section">
               <label for="rule-timestamp-override">Timestamp Override</label>
-              <input class="rule-form-control" type="text" id="rule-timestamp-override" name="timestamp_override" value="{{ form_values.timestamp_override }}" placeholder="event.ingested">
+              <input class="rule-form-control" type="text" id="rule-timestamp-override" name="timestamp_override" value="{{ form_values.timestamp_override }}" placeholder="None: the rule uses @timestamp">
             </div>
             <div class="form-section">
               <label>MITRE ATT&CK Techniques</label>
@@ -132,11 +137,13 @@
               <label for="rule-note">Investigation Guide</label>
               <textarea class="rule-form-textarea" id="rule-note" name="note" rows="3" placeholder="Optional investigation guidance">{{ form_values.note }}</textarea>
             </div>
+            {% if mode != 'edit' %}
             <div class="form-section">
-              <label for="rule-reason">Reason for Change{% if mode == 'edit' %} *{% endif %}</label>
+              <label for="rule-reason">Reason for Change</label>
               <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Document the change before saving">{{ form_values.reason }}</textarea>
-              <div class="rule-help">{% if mode == 'edit' %}Required when editing a rule. Validation fills this automatically.{% else %}Optional context for analysts and changelog reviewers.{% endif %}</div>
+              <div class="rule-help">Optional context for analysts and changelog reviewers.</div>
             </div>
+            {% endif %}
           </div>
         </details>
 
@@ -170,10 +177,18 @@
         </details>
       </div>
 
+      {# Pinned to the bottom of the dialog. An edit always needs a reason, so it sits by Save. #}
       <div class="rm-form-actions">
-        <div id="rule-form-popup" class="rm-form-popup u-bg-danger-soft" style="display:none">
+        {% if mode == 'edit' %}
+        <div class="rm-form-reason">
+          <label for="rule-reason">Reason for Change *</label>
+          <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Why you're changing this rule. Recorded in its History.">{{ form_values.reason }}</textarea>
         </div>
+        {% endif %}
+        {# Why the form wasn't saved: a field to fill in (rule_form.js) or the server's refusal. #}
+        <div id="rule-form-error" class="rm-form-error" aria-live="assertive"></div>
         <button   name="Submit Rule Form" type="submit" class="btn btn-primary">
+          <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
           {% if mode == 'edit' %}
             {{ icon_text('save', submit_label, '14') }}
           {% else %}

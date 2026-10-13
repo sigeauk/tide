@@ -408,7 +408,8 @@ def _rule_form_values(rule, username: str = "", prefill: Optional[dict] = None) 
         "type": str(raw.get("type") or "query"),
         "risk_score": str(raw.get("risk_score") or _severity_to_risk_score(severity_value.lower())),
         "index": ", ".join(_split_csv(raw.get("index") or [])),
-        "timestamp_override": str(raw.get("timestamp_override") or "event.ingested"),
+        # Editing shows the rule's own override (blank = none); only a new rule starts on event.ingested.
+        "timestamp_override": str(raw.get("timestamp_override") or ("" if rule else "event.ingested")),
         "highlighted_fields": ", ".join(_split_csv(raw.get("investigation_fields", {}).get("field_names", []) if isinstance(raw.get("investigation_fields"), dict) else raw.get("investigation_fields") or [])),
         "reason": "",
     }
@@ -445,6 +446,7 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         "selected_tactics": selected_tactics,
         "form_values": form_values,
         "mode": "edit" if rule else "create",
+        "rule_type_label": _rule_type_label(form_values["type"]) if rule and form_values["type"] not in _LANGUAGE_TYPES else "",
         "scope_locked": scope_locked,
         "rule": rule,
         "siem_id": getattr(rule, "siem_id", "") if rule else "",
@@ -493,7 +495,7 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
     lookback = (form_data.get("from") or "now-6m").strip() or "now-6m"
     risk_score_raw = (form_data.get("risk_score") or "").strip()
     index_patterns = _split_csv(form_data.get("index") or "")
-    timestamp_override = (form_data.get("timestamp_override") or "event.ingested").strip() or "event.ingested"
+    timestamp_override = (form_data.get("timestamp_override") or "").strip()   # blank = no override
     highlighted_fields = _split_csv(form_data.get("highlighted_fields") or "")
     reason = (form_data.get("reason") or "").strip()
     raw_mitre_values = (
@@ -525,8 +527,9 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
         "type": _RULE_TYPE_BY_LANGUAGE.get(language, "query"),
         "mitre_ids": mitre_ids,
         "index": index_patterns,
-        "timestamp_override": timestamp_override,
     }
+    if timestamp_override:
+        payload["timestamp_override"] = timestamp_override
     if language == "esql":
         # ES|QL rules source their index from the query's FROM clause —
         # Kibana's esql rule schema doesn't accept a separate "index" field.
@@ -541,6 +544,70 @@ def _build_rule_payload(form_data, technique_lookup: dict[str, dict], default_au
     else:
         payload["threat"] = []
     return payload, rule_name, query, mitre_ids
+
+
+def _as_form(values: dict):
+    """Form values (``_rule_form_values``) as the browser would post them."""
+    from starlette.datastructures import FormData
+    def text(v):
+        return ", ".join(v) if isinstance(v, list) else ("true" if v else "false") if isinstance(v, bool) else str(v)
+    return FormData([(k, text(v)) for k, v in values.items()])
+
+
+# Optional fields the Edit form can clear: a field it shows empty that the rule has is removed.
+_CLEARABLE = ("timestamp_override", "investigation_fields")
+# Rule types whose type follows the query language. Others (threshold, new terms, indicator match,
+# machine learning) keep their own type and settings; the form edits only their common fields.
+_LANGUAGE_TYPES = ("query", "eql", "esql")
+
+
+def _form_changes(rule, form, technique_lookup: dict, username: str) -> tuple[dict, tuple, str]:
+    """What the user changed in the Edit form: ``(changes, removed, problem)``.
+
+    The form shows every field, filled from TIDE's copy of the rule, and posts every field back.
+    Only the fields whose value differs from what the form showed are changes: both sides go
+    through the same normalisation (``_build_rule_payload``), so a field the user didn't touch is
+    never sent, and Kibana keeps whatever it holds for it. ``problem`` is a sentence for the user
+    when the change can't be made.
+    """
+    before, *_ = _build_rule_payload(_as_form(_rule_form_values(rule, username)), technique_lookup, username)
+    after, *_ = _build_rule_payload(form, technique_lookup, username)
+    raw = getattr(rule, "raw_data", None) or {}
+    if not after["name"]:
+        return {}, (), "The rule needs a name."
+
+    changes = {}
+    for key, value in after.items():
+        if key in ("reason", "type", "threat"):
+            continue
+        if key == "mitre_ids":
+            if _canonicalize_id_list(value, uppercase=True) != _canonicalize_id_list(before.get(key), uppercase=True):
+                changes["mitre_ids"], changes["threat"] = value, after["threat"]
+        elif value != before.get(key):
+            changes[key] = value
+    removed = tuple(k for k in _CLEARABLE if k in before and k not in after)
+
+    if "language" in changes:
+        rule_type = str(raw.get("type") or "query")
+        if rule_type not in _LANGUAGE_TYPES:
+            return {}, (), (f"A {_rule_type_label(rule_type)} rule's query language can't be changed. "
+                            "Set the language back, or change it in Kibana.")
+        changes["type"] = after["type"]
+    if "query" in changes and not changes["query"] and str(raw.get("type") or "query") != "query":
+        return {}, (), "The query can't be empty."
+    return changes, removed, ""
+
+
+def _rule_type_label(rule_type: str) -> str:
+    return {"threshold": "threshold", "new_terms": "new terms", "threat_match": "indicator match",
+            "machine_learning": "machine learning", "saved_query": "saved query"}.get(rule_type, rule_type)
+
+
+def _form_error(message: str, status_code: int = 400) -> HTMLResponse:
+    """A refusal shown inside the open rule form (rule_form.js puts it in ``#rule-form-error``),
+    so what the user typed stays where it is."""
+    return HTMLResponse(f'<p class="rm-note rm-note--danger" role="alert">{escape(message)}</p>',
+                        status_code=status_code)
 
 
 def _value_for_compare(value: Any) -> str:
@@ -604,34 +671,39 @@ def _canonicalize_id_list(value: Any, *, uppercase: bool = False) -> list[str]:
     return normalized
 
 
+# What the Edit form changes, as the user calls it (History, messages).
+_FIELD_LABELS = {
+    "name": "name",
+    "description": "description",
+    "query": "query",
+    "language": "language",
+    "severity": "severity",
+    "risk_score": "risk score",
+    "enabled": "enabled",
+    "author": "author",
+    "tags": "tags",
+    "note": "investigation guide",
+    "interval": "interval",
+    "from": "lookback",
+    "index": "index",
+    "timestamp_override": "timestamp override",
+    "investigation_fields": "custom highlighted fields",
+    "mitre_ids": "MITRE techniques",
+}
+
+
 def _summarize_rule_changes(old_payload: dict, new_payload: dict) -> tuple[str, str, list[dict[str, str]]]:
-    labels = {
-        "name": "name",
-        "description": "description",
-        "query": "query",
-        "language": "language",
-        "severity": "severity",
-        "risk_score": "risk score",
-        "enabled": "enabled",
-        "author": "author",
-        "tags": "tags",
-        "note": "investigation guide",
-        "interval": "interval",
-        "from": "lookback",
-        "index": "index",
-        "timestamp_override": "timestamp override",
-        "investigation_fields": "custom highlighted fields",
-        "mitre_ids": "MITRE techniques",
-    }
     changed: list[str] = []
     changed_diffs: list[dict[str, str]] = []
-    for key, label in labels.items():
-        if key not in new_payload:
+    for key, label in _FIELD_LABELS.items():
+        if key not in new_payload and key not in old_payload:
             continue
 
-        if key == "mitre_ids":
-            before_ids = _canonicalize_id_list(old_payload.get(key), uppercase=True)
-            after_ids = _canonicalize_id_list(new_payload.get(key), uppercase=True)
+        if key in ("mitre_ids", "investigation_fields"):
+            # Compared as id lists: order-free, and highlighted fields' {"field_names": []} is none.
+            names = lambda v: v.get("field_names") if isinstance(v, dict) else v
+            before_ids = _canonicalize_id_list(names(old_payload.get(key)), uppercase=key == "mitre_ids")
+            after_ids = _canonicalize_id_list(names(new_payload.get(key)), uppercase=key == "mitre_ids")
             if before_ids != after_ids:
                 changed.append(label)
                 changed_diffs.append(
@@ -1575,8 +1647,8 @@ async def retry_rule_sync(request: Request, run_id: str, db: DbDep, user: Requir
 
 @router.get("/sync/last", response_class=HTMLResponse)
 def last_rule_sync(request: Request, user: RequireUser, client_id: ActiveClient):
-    """Rule Health's line about this client's last rule sync: when, who, the result and, for a
-    failed, partial or interrupted run, why and Retry."""
+    """Rule Health's notice when this client's last rule sync failed, partly finished or was
+    interrupted: why, and Retry. Empty when it went fine (the Last Synced card says when)."""
     from app.services import sync_runs
     return request.app.state.templates.TemplateResponse(
         request, "partials/rules/last_sync.html", {"run": sync_runs.last_rule_sync(client_id)})
@@ -1678,22 +1750,13 @@ async def create_rule(
         rule_data, rule_name, query, _ = _build_rule_payload(form_data, technique_lookup, user.username)
 
         if not rule_name or not query:
-            return HTMLResponse(
-                '<div class="empty-state-text">Rule name and query are required.</div>',
-                status_code=400,
-            )
+            return _form_error("Rule name and query are required.")
         if not siem_id or not space:
-            return HTMLResponse(
-                '<div class="empty-state-text">Select a target SIEM/space pair.</div>',
-                status_code=400,
-            )
+            return _form_error("Select a target SIEM/space pair.")
 
         allowed_pairs = set(db.get_client_siem_scopes(client_id) or [])
         if (siem_id, space) not in allowed_pairs:
-            return HTMLResponse(
-                '<div class="empty-state-text">Selected SIEM/space is not assigned to this tenant.</div>',
-                status_code=403,
-            )
+            return _form_error("Selected SIEM/space is not assigned to this tenant.", 403)
 
         siem = next(
             (
@@ -1703,10 +1766,7 @@ async def create_rule(
             None,
         )
         if not siem:
-            return HTMLResponse(
-                '<div class="empty-state-text">Unable to resolve SIEM credentials for selected pair.</div>',
-                status_code=404,
-            )
+            return _form_error("Unable to resolve SIEM credentials for selected pair.", 404)
 
         success, message, new_rule_id = await run_in_threadpool(elastic_helper.create_detection_rule,
             rule_data,
@@ -1715,10 +1775,7 @@ async def create_rule(
             api_key=siem.get("api_token_enc"),
         )
         if not success:
-            return HTMLResponse(
-                f'<div class="empty-state-text">Failed to create rule: {message}</div>',
-                status_code=400,
-            )
+            return _form_error(f"Failed to create rule: {message}", 502)
 
         db.record_rule_history(
             rule_id=new_rule_id,
@@ -1739,10 +1796,7 @@ async def create_rule(
         return HTMLResponse('<div hidden data-start-sync></div>')
     except Exception as e:
         logger.exception("create_rule failed")
-        return HTMLResponse(
-            f'<div class="empty-state-text">Error: {str(e)}</div>',
-            status_code=500,
-        )
+        return _form_error(f"Error: {e}", 500)
 
 
 @router.get("/{rule_id}/history", response_class=HTMLResponse)
@@ -2458,112 +2512,90 @@ async def edit_rule(
     space: str = Query("default"),
     siem_id: Optional[str] = Query(None),
 ):
-    """Update a rule in Kibana and append lifecycle history."""
+    """Save the Edit form's changes to the rule in Kibana and record them in its History.
+
+    Only the fields the user changed are sent, onto the rule as Kibana holds it now
+    (``_form_changes``, ``elastic_helper.apply_rule_changes``). A refusal is shown inside the
+    form, keeping what was typed; success re-opens the rule window, refreshed from Kibana."""
     from app import elastic_helper
 
     thresholds = db.get_client_validation_thresholds(client_id)
-    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
-
+        return _form_error("This rule is no longer in TIDE. Close the form and sync the rules.", 404)
     actual_siem_id = siem_id or getattr(rule, "siem_id", None)
-    if not actual_siem_id:
-        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
-
-    siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == actual_siem_id), None)
+    siem = next((s for s in (db.get_client_siems(client_id) or [])
+                 if s.get("id") == actual_siem_id and str(s.get("space") or "default") == space), None)
     if not siem:
-        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+        return _form_error("This rule's destination is no longer linked to this client.", 404)
 
     form = await request.form()
-    _, technique_lookup = _build_technique_groups(db)
-    updated_fields, new_name, _, _ = _build_rule_payload(form, technique_lookup, user.username)
     reason = (form.get("reason") or "").strip()
     if not reason:
-        return HTMLResponse(
-            '<div class="empty-state-text">Reason for change is required before saving.</div>',
-            status_code=400,
-        )
+        return _form_error("Reason for Change is required before saving.")
+    _, technique_lookup = _build_technique_groups(db)
+    changes, removed, problem = _form_changes(rule, form, technique_lookup, user.username)
+    if problem:
+        return _form_error(problem)
+    if not changes and not removed:
+        return _modal_with_card_oob(request, db, client_id, rule, space, actual_siem_id, settings,
+                                    flash="Nothing changed, so the rule was not updated.")
 
-    old_payload = dict(rule.raw_data or {})
-    # Some historic rule payloads store MITRE only in structured columns, not
-    # in raw_data. Backfill for diffing so unchanged MITRE doesn't appear as
-    # "- -> Txxxx" on unrelated edits.
-    if not old_payload.get("mitre_ids"):
-        persisted_mitre_ids = _canonicalize_id_list(
-            getattr(rule, "mitre_ids", []) or [],
-            uppercase=True,
-        )
-        if persisted_mitre_ids:
-            old_payload["mitre_ids"] = persisted_mitre_ids
-
-    payload = dict(old_payload)
-    payload.update(updated_fields)
-    if new_name:
-        payload["name"] = new_name
-
-    # TIDE may retain a logical/source identity after Elastic generated a new
-    # ID during restore or promotion. Kibana updates must use the payload's
-    # actual Elastic ID, while TIDE history continues to use rule_id.
-    elastic_rule_id = str(old_payload.get("rule_id") or old_payload.get("id") or rule_id)
+    cached = dict(rule.raw_data or {})
+    rule_mitre = _canonicalize_id_list(getattr(rule, "mitre_ids", []) or [], uppercase=True)
+    kibana_changes = {k: v for k, v in changes.items() if k != "mitre_ids"}   # Kibana takes "threat"
     if rule.deprecated:
+        # Kibana no longer has it: change TIDE's copy only.
+        before = cached
+        payload = {k: v for k, v in {**cached, **changes}.items() if k not in removed}
         if not db.update_cached_rule(rule_id, actual_siem_id, space, payload):
-            return HTMLResponse('<div class="empty-state-text">TIDE-only rule update failed.</div>', status_code=400)
-        update_message = "Deprecated rule updated in TIDE only."
+            return _form_error("TIDE couldn't save its copy of this rule. Nothing was changed.", 500)
+        update_message = "Saved in TIDE only: Kibana no longer has this rule."
     else:
-        # Editing updates ONLY this rule -- never a linked one. A link means these are
-        # deliberately, temporarily separate (isolate-to-edit, a SIEM migration in progress);
-        # silently pushing an edit to the linked rule too would defeat the entire point of
-        # Compare-before-Merge, since by the time you compared them the edit would already be
-        # on both sides. This used to loop over every linked rule and update them all -- a
-        # carry-over from the old staging/production auto-sync model that no longer applies.
-        # Push a reviewed edit across on purpose with Merge, from the Compare view.
-        success, message = await run_in_threadpool(elastic_helper.update_detection_rule,
-            rule_id=elastic_rule_id, rule_data=payload, space=space,
-            kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+        # Editing changes ONLY this rule, never a linked one: a link means the two are deliberately
+        # separate for now. Push a reviewed edit across on purpose with Merge, from Compare.
+        elastic_rule_id = str(cached.get("rule_id") or rule_id)
+        outcome, message, before = await run_in_threadpool(
+            elastic_helper.apply_rule_changes, rule_id=elastic_rule_id, changes=kibana_changes, remove=removed,
+            space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"), cached=cached,
             on_recreated=db.kibana_recreate_hook(client_id, rule_id, actual_siem_id, space, user.username, user.id),
         )
-        if not success:
-            logger.error(
-                "Rule edit update failed: rule_id=%s siem_id=%s space=%s message=%s",
-                rule_id, actual_siem_id, space, message,
-            )
-            return HTMLResponse(
-                f'<div class="empty-state-text">Rule update failed: {escape(str(message))}</div>',
-                status_code=409,
-            )
-        # Anything Kibana had to do first (refresh or re-create the rule's API key) follows the
-        # plain "Updated rule '<name>'" (elastic_helper.update_detection_rule).
-        plain = f"Updated rule '{payload.get('name', elastic_rule_id)}'"
-        update_message = "Rule updated." + (f" {message[len(plain) + 2:]}" if message.startswith(plain + ". ") else "")
+        if outcome != "updated":
+            logger.warning("Rule edit not saved (%s): rule_id=%s siem_id=%s space=%s %s",
+                           outcome, rule_id, actual_siem_id, space, message)
+        if outcome == "conflict":
+            fields = ", ".join(_FIELD_LABELS.get(k, k) for k in message.split(", "))
+            await run_in_threadpool(sync_single_rule, db, client_id, rule_id, actual_siem_id, space, user.id, user.username)
+            return _form_error(f"Someone changed this rule's {fields} in Kibana since TIDE last synced it, so "
+                               "nothing was saved. TIDE has now loaded Kibana's version: go back to the rule, "
+                               "check it, and make your change again.", 409)
+        if outcome == "missing":
+            return _form_error(message + " Use Sync this rule in the rule window to update TIDE.", 404)
+        if outcome != "updated":
+            return _form_error(message, 502)
+        update_message = "Saved to Kibana." + (f" {message}" if message else "")
 
-    change_message, changed_fields, field_diffs = _summarize_rule_changes(old_payload, payload)
+    before = {**(before or cached), "mitre_ids": rule_mitre}
+    after = {k: v for k, v in {**before, **changes}.items() if k not in removed}
+    change_message, changed_fields, field_diffs = _summarize_rule_changes(before, after)
     db.record_rule_history(
-        rule_id=rule_id,
-        siem_id=actual_siem_id,
-        space=space,
-        client_id=client_id,
-        action="edited",
-        actor_user_id=user.id,
-        actor_name=user.username,
-        detail={
-            "message": update_message + " " + change_message,
-            "reason": reason,
-            "changed_fields": changed_fields,
-            "field_diffs": field_diffs,
-        },
+        rule_id=rule_id, siem_id=actual_siem_id, space=space, client_id=client_id, action="edited",
+        actor_user_id=user.id, actor_name=user.username,
+        detail={"message": update_message + " " + change_message, "reason": reason,
+                "changed_fields": changed_fields, "field_diffs": field_diffs},
     )
 
     # The rule window stays open on this rule, showing the change (#62): refresh just this rule
     # from Kibana rather than the whole client, then re-render the window and its card behind it.
     status, sync_message = 200, ""
-    if not rule.deprecated:   # a deprecated rule was changed in TIDE only; Kibana no longer has it
+    if not rule.deprecated:
         status, sync_message, _ = await run_in_threadpool(
             sync_single_rule, db, client_id, rule_id, actual_siem_id, space, user.id, user.username,
         )
-    refreshed = db.get_rule_by_id(rule_id, space, siem_id=actual_siem_id, thresholds=thresholds, client_id=client_id)
-    if not refreshed:
-        return HTMLResponse(f'<div class="empty-state-text">{escape(update_message)} {escape(sync_message)}</div>')
-    flash = update_message if status == 200 else f"{update_message} Refreshing it from Kibana failed: {sync_message}"
+    refreshed = db.get_rule_by_id(rule_id, space, siem_id=actual_siem_id, thresholds=thresholds, client_id=client_id) or rule
+    flash = f"{update_message} Changed: {changed_fields}." if field_diffs else update_message
+    if status != 200:
+        flash += f" Showing TIDE's copy from before the change: reloading it from Kibana failed ({sync_message})."
     return _modal_with_card_oob(request, db, client_id, refreshed, space, actual_siem_id, settings, flash=flash)
 
 

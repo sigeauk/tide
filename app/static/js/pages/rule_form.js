@@ -86,7 +86,7 @@
     function initForm(form) {
         var mode = form.dataset.mode;
         var scopeSelect = form.querySelector('#rule-scope-pair'), indexInput = form.querySelector('#rule-index');
-        var reasonInput = form.querySelector('#rule-reason'), popup = document.getElementById('rule-form-popup');
+        var reasonInput = form.querySelector('#rule-reason'), errorBox = form.querySelector('#rule-form-error');
 
         // A destination's default index fills an empty index field (an operator's own value wins).
         function updateDefaultIndex() {
@@ -100,40 +100,68 @@
             if (mode === 'create') updateDefaultIndex();
         }
 
-        function showPopup(message) {
-            if (!popup) return;
-            popup.textContent = message;
-            popup.style.display = 'inline-flex';
+        function showError(message) { showFormError(form, message); }
+        function clearError() { if (errorBox) errorBox.replaceChildren(); }
+
+        // A field the user can't see (its section is folded) must say what's wrong: otherwise the
+        // browser refuses to submit and shows nothing, and Save looks like it does nothing.
+        function reveal(field) {
+            var section = field.closest('details');
+            if (section && !section.open) section.open = true;
+            field.focus();
         }
-        function hidePopup() {
-            if (!popup) return;
-            popup.style.display = 'none';
-            popup.textContent = '';
-        }
-        if (reasonInput) reasonInput.addEventListener('input', hidePopup);
+        form.addEventListener('invalid', function (evt) {
+            var field = evt.target, label = field.id && form.querySelector('label[for="' + field.id + '"]');
+            if (form.querySelector(':invalid') !== field) return;     // report the first one only
+            reveal(field);
+            showError(((label && label.textContent) || field.name).replace('*', '').trim() + ': ' + field.validationMessage);
+        }, true);
 
         // Saving an edit needs a Reason for Change.
         function enforceEditReason() {
             if (mode !== 'edit') return true;
             if (reasonInput) reasonInput.value = (reasonInput.value || '').trim();
             if (reasonInput && reasonInput.value) return true;
-            var about = Array.from(document.querySelectorAll('.rule-accordion > summary')).find(function (summary) {
-                return (summary.textContent || '').trim().toLowerCase() === 'about rule';
-            });
-            if (about && about.parentElement && !about.parentElement.open) about.parentElement.open = true;
-            if (reasonInput) reasonInput.focus();
-            showPopup('Reason for Change is required before saving.');
+            if (reasonInput) reveal(reasonInput);
+            showError('Reason for Change is required before saving.');
             return false;
         }
+        if (reasonInput) reasonInput.addEventListener('input', clearError);
         form.addEventListener('submit', function (evt) {
-            hidePopup();
+            clearError();
             if (!enforceEditReason()) { evt.preventDefault(); evt.stopPropagation(); }
         });
         form.addEventListener('htmx:beforeRequest', function (evt) {
-            hidePopup();
+            clearError();
             if (!enforceEditReason()) evt.preventDefault();
         });
+
+        form.addEventListener('htmx:sendError', function () {
+            showError('TIDE could not be reached, so nothing was saved. Check your connection and try again.');
+        });
     }
+
+    function showFormError(form, message) {
+        var box = form.querySelector('#rule-form-error');
+        if (!box) return;
+        var note = document.createElement('p');
+        note.className = 'rm-note rm-note--danger';
+        note.setAttribute('role', 'alert');
+        note.textContent = message;
+        box.replaceChildren(note);
+    }
+
+    // The server refused a save (rules._form_error): show why in the form, keeping what was typed,
+    // instead of the page's generic "request failed" toasts. A lapsed sign-in still goes to the
+    // login page. htmx fires this on the swap target (#modal-container), so it is caught here.
+    document.addEventListener('htmx:beforeSwap', function (evt) {
+        var form = evt.detail.requestConfig && evt.detail.requestConfig.elt, status = evt.detail.xhr.status;
+        if (!form || !form.matches || !form.matches('.rule-create-form') || status < 400 || status === 401) return;
+        evt.detail.shouldSwap = false;
+        evt.detail.isError = false;
+        var text = new DOMParser().parseFromString(evt.detail.xhr.responseText || '', 'text/html').body.textContent;
+        showFormError(form, (text || '').trim() || 'Saving failed (HTTP ' + status + '). Nothing was changed.');
+    });
 
     // A rule saved (create or edit): sync so it shows up. Rule Health shows the sync's progress
     // in its tracker; from anywhere else (a technique window's Sigma Convert) the sync just runs.

@@ -102,7 +102,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 84
+SCHEMA_VERSION = 85
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -3732,6 +3732,18 @@ class DatabaseService:
             conn.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS sessions_valid_after TIMESTAMP")
             self._set_schema_version(conn, 84)
             logger.info("Migration 84: added users.sessions_valid_after.")
+
+        # ── Migration 85: drop sync_history's secondary indexes ──────────
+        # Rows written under migration 42's (sync_kind, started_at DESC) index, before migration 83
+        # added columns, could not be deleted afterwards: the 90-day prune in sync_runs.finish failed
+        # with DuckDB's FATAL "Failed to delete all rows from index", which invalidates the whole
+        # shared database (sessions included) at the end of every sync. The table holds 90 days of
+        # syncs, so the indexes bought nothing; only the primary key stays.
+        if current_version < 85:
+            for name in ("idx_sync_history_kind_started", "idx_sync_history_client_started"):
+                conn.execute(f"DROP INDEX IF EXISTS {name}")
+            self._set_schema_version(conn, 85)
+            logger.info("Migration 85: dropped sync_history's secondary indexes.")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 

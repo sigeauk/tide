@@ -217,7 +217,7 @@ Rule Health → **⋮** opens the sync options for the client you have selected:
 - **Sync** reads the rules from every destination (SIEM and space) linked to the client. Hover over it to sync a single destination instead.
 - **Sync with mappings** does the same, and also asks each SIEM again which fields its index patterns have. Use it after changing index mappings in the SIEM. A normal sync asks only about patterns it hasn't checked in the last 24 hours.
 
-The page shows progress while the sync runs, and you can leave the page; it carries on. The line under the page title shows the client's last sync and how it ended:
+The page shows progress while the sync runs, and you can leave the page; it carries on. The **Last Synced** card shows when the client's rules were last synced. A sync that didn't finish cleanly is shown under the page title, with how it ended (all results are also listed in **Diagnostics → Sync activity**):
 
 | Result | Meaning |
 |--------|---------|

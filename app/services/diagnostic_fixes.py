@@ -226,7 +226,7 @@ def _backup(db, client: Dict, conn) -> str:
                          f"({need / 1073741824:.1f} GB needed). Nothing was changed.")
     conn.execute("CHECKPOINT")
     stem = re.sub(r"[^A-Za-z0-9_-]", "_", row[0].rsplit(".", 1)[0])
-    dest = os.path.join(dest_dir, f"{stem}_{datetime.utcnow():%Y%m%dT%H%M%SZ}.duckdb")
+    dest = os.path.join(dest_dir, f"{stem}_{datetime.utcnow():%Y%m%dT%H%M%S%fZ}.duckdb")
     shutil.copy2(src, dest)
     if os.path.exists(src + ".wal"):
         shutil.copy2(src + ".wal", dest + ".wal")
