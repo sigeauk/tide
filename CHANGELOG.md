@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.2] - 2026-10-14
+
+### Added
+- **Several dashboards, built from sections you choose and filter.** A client can have as many dashboards as it needs. Pick one from the list beside the page title. Each person sees the dashboard they opened last, or the client's default. **Edit** names a dashboard and adds, arranges and filters its sections. The **…** menu makes a new dashboard, duplicates one, sets the default, or deletes one (other than the default). Anyone who can edit the Dashboard can do all of this, for everyone on the client.
+  - A section shows the figures from one page: Rule Health, a system, Threat Landscape, Baselines, Asset Inventory or CVE Overview. A section can also show the state of the connected services or repositories. Add the same kind of section as often as you like, give each its own name, and tick which figures it shows. For example, one section can show Total Rules and Validated for one SIEM's enabled rules, and another the average quality of a second SIEM's rules.
+  - A Rule Health section is filtered as the Rule Health page is: by SIEM, status, state, score, validation date and search. A system's section shows that system's figures. Other sections show figures for the whole client, as their pages do. While you edit, each section shows its figures as they will look.
+  - A section's figures share its width, however many it shows. Make a section narrower to put another beside it.
+  - Figures are worked out each time a dashboard opens, so a change, such as a rule mapped on a system, shows as soon as you reload.
+  - Clicking a figure opens its page, filtered the same way, so you can see the rules or techniques behind it.
+
+### Changed
+- **Your Dashboard layouts are now dashboards.** The client's layout is now its default dashboard, "Overview". A client that never changed its layout gets TIDE's default layout as "Overview". Each person's own layout is now a dashboard named after them, which anyone who can edit the Dashboard can rename or delete. **Edit** replaces **Customise**, **Edit my layout** and **Edit the layout for** the client.
+- **The Dashboard's Promotion section is gone.** It counted rules under the old production and staging split, which destinations replaced. A Rule Health section filtered to a SIEM shows the same figures.
+- **Windows have tidier headers.** The rule, MITRE and baseline technique windows now have the same controls on the right of the header, in the same order: the window's main action, previous and next, the **…** menu, then close. In the rule window, the date the rule was last validated sits beside **Validate**, and **Edit** is now the first item in the **…** menu.
+- **Arranging sections works the same everywhere.** Every window, and each system's page, has **Sections** in its **…** menu. There you choose which sections show, turn on **Move sections** to drag them into a new order, or reset the layout. The move handles show only while **Move sections** is on. In a window it stays on until you close the window. A system's page can now hide sections too. Moving a section in a baseline technique window no longer goes through that section's own **…** menu.
+- **The Last run section in the rule window is easier to read.** The first row shows the run's status, when it ran, how long it took and any gap. The second row shows how often the rule runs, how far back it looks and its maximum alerts. Kibana's message is in a quieter box, and **Test** sits on one line below.
+- **Score breakdown has a plain heading.** It no longer repeats the rule's score, which is shown at the top of the window, or the scoring model version.
+
+### Fixed
+- **Sigma rules in a technique window stays collapsed.** Once its suggested rules loaded, the section opened again, so it never stayed collapsed. It now stays as you left it, including when you move to the next or previous technique.
+- **The rule window's header no longer flickers when you move to the next or previous rule.** While the next rule loaded, **Validate** briefly showed a spinner and the validation date jumped sideways. Both now stay still until the next rule appears.
+
 ## [6.1.1] - 2026-10-13
 
 ### Changed

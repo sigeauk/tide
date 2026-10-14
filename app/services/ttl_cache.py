@@ -1,11 +1,11 @@
 """
 4.1.0 P7 — Tiny in-process TTL cache for hot read-only computations.
 
-Plan §1.4 + §7: Heatmap-matrix builds and dashboard-metric rollups are
-the two heaviest single-tenant requests (each issues 5–15 DuckDB
-queries plus pandas dataframes and reads validation JSON). Both are
-strictly read-only with respect to the request and tolerate a few
-seconds of staleness — perfect candidates for a short-TTL cache.
+Plan §1.4 + §7: Heatmap-matrix builds are a heavy single-tenant request
+(5–15 DuckDB queries plus pandas dataframes and validation JSON), strictly
+read-only and tolerant of a few seconds of staleness — a candidate for a
+short-TTL cache. (Dashboard sections used one until 6.1.2; a figure there
+must follow a change at once, so they are worked out on every view.)
 
 This module is deliberately minimal:
 
@@ -115,7 +115,3 @@ class TTLCache:
 # constantly. 64 entries handles ~8 tenants × 8 distinct actor-set
 # permutations cached at once.
 heatmap_matrix_cache = TTLCache(ttl_seconds=30.0, maxsize=64)
-
-# Dashboard rollup: longer TTL because it's an aggregate of aggregates
-# and changes much less frequently than per-rule edits surface.
-dashboard_cache = TTLCache(ttl_seconds=60.0, maxsize=16)

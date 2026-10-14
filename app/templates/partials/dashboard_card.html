@@ -1,6 +1,9 @@
 {#
-  One Dashboard card: ``card`` is {type, w} (+ text for a title or text block). With ``editing``
-  set, the card carries the editor's controls and a title or text block is an input.
+  One Dashboard card: ``card`` is a title or text block ({type, w, text}) or a section ({type:
+  "section", source, w, name, metrics, filters}) with ``view``, what its source worked out
+  (app/api/dashboard.py section_view). With ``editing`` set, the card carries the editor's
+  controls: a section shows its name, which cards it shows and its source page's filters, above
+  a preview that follows them.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/dashboard.html" import card_tools %}
@@ -29,146 +32,85 @@
     {% endif %}
 </div>
 
-{% elif kind in section_cards %}
-{% set label, section_icon = section_cards[kind] %}
-<section class="overview-section dash-card dash-w-{{ card.w }}" data-dash-card data-type="{{ kind }}" data-w="{{ card.w }}" aria-label="{{ label }}">
+{% elif kind == 'section' and card.source in sources %}
+{% set src = sources[card.source] %}
+{% set shown_name = card.name or view.default_name or src.label %}
+<section class="overview-section dash-card dash-w-{{ card.w }}" data-dash-card data-type="section"
+         data-source="{{ card.source }}" data-w="{{ card.w }}" aria-label="{{ shown_name }}">
     <div class="dash-card__head">
-        <h2>{{ icon(section_icon, '20') }} {{ label }}</h2>
-        {% if editing %}{{ card_tools(label, card.w) }}{% endif %}
+        {% if editing %}
+        <span class="dash-card__icon" title="{{ src.label }}">{{ icon(src.icon, '20') }}</span>
+        <input type="text" class="form-input dash-name-input" data-dash-name maxlength="{{ name_limit }}"
+               value="{{ card.name }}" placeholder="{{ view.default_name or src.label }}" aria-label="Section name">
+        {{ card_tools(shown_name, card.w) }}
+        {% else %}
+        <h2>{{ icon(src.icon, '20') }} {{ shown_name }}</h2>
+        {% endif %}
     </div>
-    <div class="metrics-grid">
-    {% if kind == 'rule_health' %}
-        {% set metrics = rule_metrics %}
-        {% include "partials/metrics_row.html" %}
-
-    {% elif kind == 'promotion' %}
-        {% set metrics = promotion_metrics %}
-        {% include "partials/promotion_metrics.html" %}
-
-    {% elif kind == 'threat_landscape' %}
-        {% set metrics = threat_metrics %}
-        {% include "partials/threat_metrics.html" %}
-
-    {% elif kind == 'baselines' %}
-        {% if baselines_overview or (baselines_rollup and baselines_rollup.baselines) %}
-        <div class="metric-card">
-            <p class="metric-value">{{ baselines_overview | length }}</p>
-            <p class="metric-label">Templates</p>
-            <p class="metric-sub">{{ icon_text('clipboard-list','Baseline templates','14') }}</p>
-        </div>
-        <div class="metric-card">
-            {% set ns_tactics = namespace(total=0) %}
-            {% for bl in baselines_overview %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
-            <p class="metric-value">{{ ns_tactics.total }}</p>
-            <p class="metric-label">Techniques Defined</p>
-            <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
-        </div>
-        {# Coverage lives on each system's own baselines, not on the templates they came from. #}
-        {% set ru = baselines_rollup or {'baselines': 0, 'rules_mapped': 0, 'red': 0, 'green': 0} %}
-        <div class="metric-card">
-            <p class="metric-value">{{ ru.baselines }}</p>
-            <p class="metric-label">System Baselines</p>
-            <p class="metric-sub">{{ icon_text('layers','Baselines on systems','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'success' if ru.rules_mapped > 0 else '' }}">{{ ru.rules_mapped }}</p>
-            <p class="metric-label">Rules Mapped</p>
-            <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'danger' if ru.red > 0 else 'success' }}">{{ ru.red }}</p>
-            <p class="metric-label">Uncovered</p>
-            <p class="metric-sub">{{ icon_text('alert-triangle','System baselines with gaps','14') }}</p>
-        </div>
-        <div class="metric-card">
-            <p class="metric-value {{ 'success' if ru.green > 0 else '' }}">{{ ru.green }}</p>
-            <p class="metric-label">Fully Covered</p>
-            <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
-        </div>
-        {% else %}
-        <div class="metric-card metric-card--empty">
-            <p class="metric-value fs-lg">—</p>
-            <p class="metric-label">No baseline data</p>
-            <p class="metric-sub"><a name="Go to Baselines →" href="/baselines">Go to Baselines →</a></p>
-        </div>
+    {% if editing %}
+    {% set f = card.filters or {} %}
+    <div class="dash-settings" data-dash-settings>
+        <fieldset class="dash-settings__group">
+            <legend>Cards</legend>
+            <div class="dash-settings__checks">
+                {% for key, label in src.metrics %}
+                <label><input type="checkbox" data-dash-metric value="{{ key }}"{% if key in card.metrics %} checked{% endif %}> {{ label }}</label>
+                {% endfor %}
+            </div>
+        </fieldset>
+        {% if card.source == 'rule_health' %}
+        <fieldset class="dash-settings__group">
+            <legend>Filters, as on Rule Health</legend>
+            <div class="dash-settings__fields">
+                <label class="dash-field">SIEM
+                    <select class="form-input form-select" data-dash-filter="space">
+                        <option value="">All SIEMs</option>
+                        {% for value, label in filter_options.scopes %}<option value="{{ value }}"{% if f.space == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                        {% if f.space and f.space not in (filter_options.scopes | map('first') | list) %}<option value="{{ f.space }}" selected>No longer linked</option>{% endif %}
+                    </select>
+                </label>
+                <label class="dash-field">Status
+                    <select class="form-input form-select" data-dash-filter="enabled">
+                        <option value="">All</option>
+                        <option value="true"{% if f.enabled == 'true' %} selected{% endif %}>Enabled</option>
+                        <option value="false"{% if f.enabled == 'false' %} selected{% endif %}>Disabled</option>
+                    </select>
+                </label>
+                <div class="dash-field" role="group" aria-label="State">State
+                    <div class="dash-settings__checks">
+                        {% for value, label in rule_states %}<label><input type="checkbox" data-dash-filter="state" value="{{ value }}"{% if value in (f.state or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}
+                    </div>
+                </div>
+                <div class="dash-field" role="group" aria-label="Score">Score
+                    <span class="dash-field__pair">
+                        <input type="number" class="form-input" min="0" max="100" data-dash-filter="min_score" value="{{ f.min_score if f.min_score is not none else '' }}" placeholder="Min" aria-label="Lowest score">
+                        <input type="number" class="form-input" min="0" max="100" data-dash-filter="max_score" value="{{ f.max_score if f.max_score is not none else '' }}" placeholder="Max" aria-label="Highest score">
+                    </span>
+                </div>
+                <div class="dash-field" role="group" aria-label="Validated between">Validated
+                    <span class="dash-field__pair">
+                        <input type="date" class="form-input" data-dash-filter="validated_from" value="{{ f.validated_from or '' }}" aria-label="Validated from">
+                        <input type="date" class="form-input" data-dash-filter="validated_to" value="{{ f.validated_to or '' }}" aria-label="Validated to">
+                    </span>
+                </div>
+                <label class="dash-field">Search
+                    <input type="text" class="form-input" data-dash-filter="search" maxlength="{{ search_limit }}" value="{{ f.search or '' }}" placeholder="Rule name, MITRE ID, author…">
+                </label>
+            </div>
+        </fieldset>
+        {% elif card.source == 'system' %}
+        <fieldset class="dash-settings__group">
+            <legend>System</legend>
+            <label class="dash-field">Show the cards from
+                <select class="form-input form-select" data-dash-filter="system_id">
+                    <option value="">Choose a system</option>
+                    {% for value, label in filter_options.systems %}<option value="{{ value }}"{% if f.system_id == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                </select>
+            </label>
+        </fieldset>
         {% endif %}
-
-    {% elif kind == 'connected_services' %}
-        {% if client_siems %}
-        {% for siem in client_siems %}
-        <div class="integration-card">
-            <div class="integration-card-name">{{ siem.label }} &middot; {{ siem.name }}</div>
-            <div class="integration-card-url">{{ siem.kibana_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if siem.is_active else 'inactive' }}">{{ 'Connected' if siem.is_active else 'Inactive' }}</span>
-        </div>
-        {% endfor %}
-        {% else %}
-        <div class="integration-card">
-            <div class="integration-card-name">Elasticsearch</div>
-            <div class="integration-card-url">No SIEM linked to this client</div>
-            <span class="integration-card-status status-inactive">Not configured</span>
-        </div>
-        {% endif %}
-
-        <div class="integration-card">
-            <div class="integration-card-name">OpenCTI</div>
-            <div class="integration-card-url">{{ env.opencti_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">GitLab</div>
-            <div class="integration-card-url">{{ env.gitlab_url }}</div>
-            <span class="integration-card-status status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
-        </div>
-
-        <div class="integration-card">
-            <div class="integration-card-name">Logging</div>
-            <div class="integration-card-url">Rule log export to SIEM</div>
-            <span class="integration-card-status status-{{ 'active' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'inactive' }}">{{ 'Enabled' if app_settings.get('rule_log_enabled', 'false') == 'true' else 'Disabled' }}</span>
-        </div>
-
-    {% elif kind == 'repositories' %}
-        {% set repos = [
-            ('MITRE Enterprise ATT&CK', env.mitre_source, repo_status.mitre_enterprise, 'Active', 'Missing'),
-            ('MITRE Mobile ATT&CK', env.mitre_mobile_source, repo_status.mitre_mobile, 'Active', 'Missing'),
-            ('MITRE ICS ATT&CK', env.mitre_ics_source, repo_status.mitre_ics, 'Active', 'Missing'),
-            ('MITRE PRE-ATT&CK', env.mitre_pre_source, repo_status.mitre_pre, 'Active', 'Missing'),
-            ('Sigma Rules', env.sigma_repo_url, repo_status.sigma, 'Cloned', 'Not Found'),
-            ('Elastic Detection Rules', env.elastic_repo_url, repo_status.elastic_detection, 'Cloned', 'Not Found'),
-        ] %}
-        {% for name, source, present, yes, no in repos %}
-        <div class="integration-card">
-            <div class="integration-card-name">{{ name }}</div>
-            <div class="integration-card-url" title="{{ source }}">{{ source | truncate(50, True, '...') }}</div>
-            <span class="integration-card-status status-{{ 'active' if present else 'inactive' }}">{{ yes if present else no }}</span>
-        </div>
-        {% endfor %}
-
-    {% elif kind == 'asset_inventory' %}
-        {% if inventory_stats %}
-        {% set stats = inventory_stats %}
-        {% include "partials/inventory_metrics.html" %}
-        {% else %}
-        <div class="metric-card metric-card--empty">
-            <p class="metric-value fs-lg">—</p>
-            <p class="metric-label">No inventory data</p>
-            <p class="metric-sub"><a name="Go to Systems →" href="/systems">Go to Systems →</a></p>
-        </div>
-        {% endif %}
-
-    {% elif kind == 'cve_overview' %}
-        {% if cve_stats %}
-        {% set stats = cve_stats %}
-        {% include "partials/cve_metrics.html" %}
-        {% else %}
-        <div class="metric-card metric-card--empty">
-            <p class="metric-value fs-lg">—</p>
-            <p class="metric-label">No CVE data</p>
-            <p class="metric-sub"><a name="Import CVE →" href="/cve-overview">Import CVE →</a></p>
-        </div>
-        {% endif %}
+    </div>
     {% endif %}
-    </div>
+    <div class="metrics-grid" data-dash-preview>{% include "partials/dashboard_section.html" %}</div>
 </section>
 {% endif %}

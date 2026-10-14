@@ -16,7 +16,7 @@
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
-{% from "components/window_ui.html" import collapse_ctl, layout_menu, section_menu %}
+{% from "components/window_ui.html" import collapse_ctl, drag_ctl, section_menu, sections_item, window_menu %}
 
 {% set step = detail.step %}
 {% set rl = detail.risk_labels %}
@@ -40,17 +40,19 @@
         {% endif %}
       </div>
       <div class="rm-header__tools">
+        {% if not new %}
+        <button name="Add Another Technique" type="button" class="rm-iconbtn rm-iconbtn--boxed" title="Add another technique to {{ detail.baseline_name }}"
+                aria-label="Add another technique" hx-get="/api/baselines/techniques-new?baseline_id={{ detail.baseline_id }}"
+                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon('plus', '16') }}</button>
+        {% endif %}
         <div class="rm-nav" role="group" aria-label="Browse techniques">
           <button name="Previous Technique" type="button" class="rm-iconbtn" data-rm-nav="prev" title="Previous technique (←)" aria-label="Previous technique" disabled>{{ icon('chevron-left', '16') }}</button>
           <button name="Next Technique" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next technique (→)" aria-label="Next technique" disabled>{{ icon('chevron-right', '16') }}</button>
-          {% if not new %}
-          <button name="Add Another Technique" type="button" class="rm-iconbtn" title="Add another technique to {{ detail.baseline_name }}"
-                  aria-label="Add another technique" hx-get="/api/baselines/techniques-new?baseline_id={{ detail.baseline_id }}"
-                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon('plus', '16') }}</button>
-          {% endif %}
         </div>
         {% if not new %}
-        {% call layout_menu(hint='menu') %}
+        {% call window_menu() %}
+        {{ sections_item() }}
+        <div class="rh-more__sep" role="separator"></div>
         <button name="Remove Technique" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                 title="Delete this technique from the template"
                 hx-delete="{{ step_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
@@ -92,7 +94,7 @@
           <div class="rm-panel__head">
             {{ collapse_ctl('Sigma rules') }}
             <h3 class="rm-panel__title">Sigma rules</h3>
-            {% if not new %}{{ section_menu('Sigma rules') }}{% endif %}
+            {% if not new %}{{ drag_ctl('Sigma rules') }}{% endif %}
           </div>
           {% if new %}
           <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>

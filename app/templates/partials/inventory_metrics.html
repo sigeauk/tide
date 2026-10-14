@@ -1,36 +1,38 @@
+{% from "macros/metrics.html" import metric_card %}
+{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
 
 {#  Partial: partials/inventory_metrics.html
     Context:  stats (InventoryStats)
 #}
 {% from "macros/icons.html" import icon_text %}
 
-<div class="metric-card">
+{% call metric_card('systems', keys, link) %}
     <p class="metric-value">{{ stats.environment_count }}</p>
     <p class="metric-label">Systems</p>
     <p class="metric-sub">{{ icon_text('layout','Enterprise segments','14') }}</p>
-</div>
-<div class="metric-card">
+{% endcall %}
+{% call metric_card('devices', keys, link) %}
     <p class="metric-value">{{ stats.host_count }}</p>
     <p class="metric-label">Devices</p>
     <p class="metric-sub">{{ icon_text('server','Physical & virtual','14') }}</p>
-</div>
-<div class="metric-card">
+{% endcall %}
+{% call metric_card('packages', keys, link) %}
     <p class="metric-value">{{ stats.software_count }}</p>
     <p class="metric-label">Packages</p>
     <p class="metric-sub">{{ icon_text('package','Installed packages','14') }}</p>
-</div>
-<div class="metric-card">
+{% endcall %}
+{% call metric_card('cve_matches', keys, link) %}
     <p class="metric-value {{ 'danger' if stats.unique_vuln_count > 0 else '' }}">{{ stats.unique_vuln_count }}</p>
     <p class="metric-label">CVE Matches</p>
     <p class="metric-sub">{{ icon_text('bug','Unique CVEs matched','14') }}</p>
-</div>
-<div class="metric-card">
+{% endcall %}
+{% call metric_card('affected_devices', keys, link) %}
     <p class="metric-value {{ 'danger' if stats.affected_host_count > 0 else '' }}">{{ stats.affected_host_count }}</p>
     <p class="metric-label">Affected Devices</p>
     <p class="metric-sub">{{ icon_text('alert-triangle','Devices with CVE match','14') }}</p>
-</div>
-<div class="metric-card">
+{% endcall %}
+{% call metric_card('baseline_assignments', keys, link) %}
     <p class="metric-value">{{ stats.baseline_assignment_count }}</p>
     <p class="metric-label">Baseline Assignments</p>
     <p class="metric-sub">{{ icon_text('clipboard-list', stats.baseline_count ~ ' baseline playbooks', '14') }}</p>
-</div>
+{% endcall %}

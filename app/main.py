@@ -2106,12 +2106,20 @@ def create_app() -> FastAPI:
     
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard_page(request: Request, user: CurrentUser):
-        """Dashboard page - Aggregated overview of detection engineering posture."""
-        import os
+        """The dashboard this user last opened, else the client's default."""
+        return _dashboard_page(request, user, None)
+
+    @app.get("/dashboard/{dashboard_id}", response_class=HTMLResponse)
+    def dashboard_page_one(request: Request, dashboard_id: str, user: CurrentUser):
+        """One of the client's dashboards; ?edit=1 opens its editor, for users who can change it."""
+        return _dashboard_page(request, user, dashboard_id)
+
+    def _dashboard_page(request: Request, user, dashboard_id: Optional[str]):
         from app.services.database import get_database_service
-        from app.inventory_engine import get_inventory_stats, get_cve_overview_stats, get_baselines_overview, get_system_baselines_rollup
+        from app.services import dashboards
+        from app.api.dashboard import page_context
         db = get_database_service()
-        
+
         # Resolve active client for tenant-scoped metrics
         # (mirrors the resolution chain in deps.get_active_client)
         _cid = request.cookies.get("active_client_id")
@@ -2127,80 +2135,14 @@ def create_app() -> FastAPI:
             _cid = db.get_default_client_id()
         _activate_page_tenant(request, user, db, _cid)
 
-        # The layout this user sees (their own, the client's, or the default). ?edit=mine|client
-        # opens the editor on one of them, for users who can change the Dashboard.
-        from app.services import dashboard_layout as layouts
         user_id = user.id if user else None
-        cards, layout_source, stored_layouts = layouts.load(db, _cid, user_id)
-        can_edit = bool(user and user.can_write("page:dashboard"))
-        editing = request.query_params.get("edit") if can_edit else None
-        if editing not in ("mine", "client"):
-            editing = None
-        if editing:
-            cards = layouts.load_for_edit(db, _cid, user_id, editing)
-        # Only the sections on show are computed; the editor offers every section, so it needs all.
-        shown = set(layouts.SECTION_CARDS) if editing else {c["type"] for c in cards}
-
-        ctx = {
-            "user": user,
-            "active_page": "dashboard",
-            "cards": cards,
-            "section_cards": layouts.SECTION_CARDS,
-            "text_limits": layouts.TEXT_CARDS,
-            "layout_source": layout_source,
-            "stored_layouts": stored_layouts,
-            "can_edit": can_edit,
-            "editing": editing,
-            "env": get_settings(),
-            "app_settings": db.get_all_settings(),
-        }
-
-        # Single combined query for all metrics (1 connection, 1 validation load)
-        # 4.1.0 P7 — cache rollup per tenant for ~60s. The dashboard is the
-        # single most-hit page after login, and the metric set is an aggregate
-        # of aggregates (rule scores, validation freshness, threat counts) that
-        # changes much slower than the rule-edit pulse. Cache is per
-        # client_id so tenants never see each other's roll-ups.
-        if shown & {"rule_health", "promotion", "threat_landscape"}:
-            from app.services.ttl_cache import dashboard_cache
-            ctx["rule_metrics"], ctx["promotion_metrics"], ctx["threat_metrics"] = dashboard_cache.get_or_compute(
-                ("dashboard-metrics", _cid or "__global__"),
-                lambda: db.get_dashboard_metrics(client_id=_cid),
-            )
-
-        # Integration / repo status (same as settings page)
-        if "repositories" in shown:
-            env_settings = ctx["env"]
-            ctx["repo_status"] = {
-                "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
-                "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
-                "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
-                "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
-                "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
-                "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
-            }
-
-        # Inventory / CVE / baseline stats (best-effort — won't crash dashboard if engine unavailable)
-        def _best_effort(fn, fallback):
-            try:
-                return fn()
-            except Exception:
-                return fallback
-        if "asset_inventory" in shown:
-            ctx["inventory_stats"] = _best_effort(get_inventory_stats, None)
-        if "cve_overview" in shown:
-            ctx["cve_stats"] = _best_effort(get_cve_overview_stats, None)
-        if "baselines" in shown:
-            ctx["baselines_overview"] = _best_effort(get_baselines_overview, [])
-            ctx["baselines_rollup"] = _best_effort(get_system_baselines_rollup, None)
-
-        # Elastic/Kibana connections come from the tenant's own siem_inventory
-        # links, not a global env var (those were removed in 4.0.10) — the
-        # Connected Services card used to check env.elastic_api_key, which no
-        # longer exists on Settings, so it always showed "No API Key".
-        if "connected_services" in shown:
-            ctx["client_siems"] = db.get_client_siems(_cid) if _cid else []
-
+        dashboard = dashboards.resolve(db, _cid, user_id, dashboard_id)
+        if dashboard is None:                       # deleted, or another client's
+            return RedirectResponse(url="/dashboard", status_code=302)
+        dashboards.remember(db, _cid, user_id, dashboard["id"])
+        editing = request.query_params.get("edit") == "1" and bool(user and user.can_write("page:dashboard"))
+        ctx = page_context(db, _cid, user, dashboard, editing)
+        ctx.update({"user": user, "active_page": "dashboard"})
         return render_template("pages/core/dashboard.html", request, ctx)
     
     @app.get("/threats", response_class=HTMLResponse)

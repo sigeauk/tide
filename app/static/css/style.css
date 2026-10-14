@@ -3558,10 +3558,9 @@ body.light {
 
 .dash-card { min-width: 0; container-type: inline-size; }
 .dash-grid > .overview-section { margin-bottom: 0; }
-/* A narrow card fits fewer metric tiles to a row */
-@container (max-width: 760px) { .dash-card .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
-@container (max-width: 420px) { .dash-card .metrics-grid { grid-template-columns: repeat(2, 1fr); } }
-.dash-card .metrics-grid { margin-bottom: 0; }
+/* A section's tiles share its width: as many to a row as fit, stretched to fill it, so a section
+   showing two tiles has no empty columns beside them. */
+.dash-card .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); margin-bottom: 0; }
 
 .dash-card__head { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }
 .dash-card__head > h2 { flex: 1 1 auto; min-width: 0; margin-bottom: 0; }
@@ -3602,6 +3601,40 @@ body.light {
 .dash-tools__sep { width: 1px; height: 1rem; margin: 0 0.25rem; background: var(--color-border); }
 .dash-tools__width { min-width: 2.2rem; text-align: center; font-size: 0.75rem; font-weight: 600; color: var(--color-text-secondary); }
 .dash-tools .rm-x { margin-left: 0.35rem; }
+.dash-editbar__name { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; }
+.dash-editbar__name .form-input { width: min(22rem, 60vw); }
+
+/* Header: the title, then the picker of the client's dashboards */
+.dash-header__title { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.dash-picker__btn { display: inline-flex; align-items: center; gap: 0.4rem; max-width: 22rem; }
+.dash-picker__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-picker__menu { left: 0; right: auto; min-width: 16rem; max-height: 60vh; overflow-y: auto; }
+.dash-picker__menu .rh-more__item { text-decoration: none; }
+.dash-picker__menu .is-current { color: var(--color-primary); font-weight: 600; }
+.dash-picker__item { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-picker__default { font-size: 0.7rem; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* A section: its cards open their page, filtered as the section is */
+a.metric-card--link { display: block; color: inherit; text-decoration: none; }
+a.metric-card--link:hover { border-top-color: var(--color-primary); background: var(--color-bg-action-hover); }
+a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.dash-section-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.4rem; margin: 0; padding: 1rem; color: var(--color-text-muted); }
+
+/* A section in the editor: its name, which cards it shows and its page's filters */
+.dash-card__icon { display: inline-flex; color: var(--color-text-secondary); }
+.dash-name-input { flex: 1 1 auto; min-width: 0; font-weight: 700; }
+.dash-settings { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem; background: var(--color-bg-base); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.dash-settings__group { margin: 0; padding: 0; border: 0; min-width: 0; }
+.dash-settings__group > legend { margin-bottom: 0.4rem; padding: 0; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+.dash-settings__checks { display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; }
+.dash-settings__checks label { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; color: var(--color-text); cursor: pointer; }
+.dash-settings__checks input { margin: 0; accent-color: var(--color-primary); }
+.dash-settings__fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.6rem 1rem; }
+.dash-field { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; font-size: 0.75rem; font-weight: 600; color: var(--color-text-secondary); }
+.dash-field .form-input { height: 32px; padding-top: 0.2rem; padding-bottom: 0.2rem; font-size: 0.82rem; font-weight: 400; }
+.dash-field__pair { display: flex; gap: 0.4rem; }
+.dash-field__pair .form-input { flex: 1 1 0; min-width: 0; }
+.dash-field .dash-settings__checks label { font-weight: 400; }
 
 .tech-grid {
   display: grid;
@@ -7340,10 +7373,11 @@ body.is-resizing-slide-panel {
 .rm-header__badges .sev-pill,
 .rm-header__badges .tide-lifecycle { font-size: 0.7rem; }
 .rm-header__meta { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.78rem; color: var(--color-text-secondary); }
-.rm-header__tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.6rem; flex-shrink: 0; }
-.rm-header__actions { display: flex; align-items: center; gap: 0.4rem; }
+/* right side, one gap throughout: primary action(s) · prev/next · "…" · close */
+.rm-header__tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.rm-header__actions { display: flex; align-items: center; gap: 0.5rem; }
 .rm-header__actions .btn:not(.htmx-request) > .htmx-indicator { display: none; }
-.rm-valdate { font-variant-numeric: tabular-nums; }
+.rm-valdate { font-size: 0.7rem; font-variant-numeric: tabular-nums; }
 /* "…" actions menu: the dots turn into a spinner while Sync/Restore run (hx-indicator) */
 .rm-overflow__busy { display: none; }
 .rm-overflow.htmx-request .rm-overflow__idle { display: none; }
@@ -7490,23 +7524,34 @@ body.is-resizing-slide-panel {
 /* Field mappings: whether each index pattern matches any index (#63) */
 .rm-index-list { list-style: none; margin: 0; padding: 0 0.85rem 0.6rem; display: flex; flex-direction: column; gap: 0.3rem; }
 .rm-index-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
-/* Last run: Kibana's message for the rule's last run (#63) */
+/* Last run (#63): Kibana's message for the rule's last run, or why there is none. A quiet box
+   with a thin left accent: amber for a warning, red for a failure, grey otherwise. */
 .rm-run-message {
-  margin: 0.5rem 0 0; padding: 0.5rem 0.65rem; max-height: 12rem; overflow: auto;
-  white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, monospace); font-size: 0.72rem;
-  color: var(--color-text-secondary); background: var(--color-bg-action); border: 1px solid var(--color-border-muted);
-  border-radius: var(--radius-sm);
+  margin: 0.75rem 0 0; padding: 0.45rem 0.7rem; max-height: 12rem; overflow: auto;
+  white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono, monospace); font-size: 0.72rem; line-height: 1.45;
+  color: var(--color-text-secondary); background: var(--color-bg-base);
+  border: 0; border-left: 3px solid var(--color-border-strong); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.rm-run-message--failed { color: var(--color-danger-text); border-color: var(--color-danger); background: var(--color-sev-1-bg); }
-.rm-run-none { margin: 0; font-size: 0.8rem; color: var(--color-text-muted); }
+.rm-run-message--warning { border-left-color: color-mix(in srgb, var(--color-warning) 60%, var(--color-bg-base)); }
+.rm-run-message--danger { border-left-color: color-mix(in srgb, var(--color-danger) 60%, var(--color-bg-base)); }
+.rm-run-message--note { font-family: inherit; font-size: 0.78rem; color: var(--color-text-muted); }
 .rm-note--info { color: var(--color-info-text); border: 1px solid var(--color-info); background: var(--color-info-glow); }
 .rm-flash { margin: 0.6rem 1.25rem 0; flex-shrink: 0; }
-/* Last run: the run's metrics and its schedule in one row; Test sits below */
-.rm-runfacts { margin: 0; }
-.rm-run-none + .rm-runfacts { margin-top: 0.6rem; }
-.rm-test { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border-muted); }
-.rm-test .rm-label { margin: 0; }
-.rm-test .form-select { width: auto; min-width: 5.5rem; height: 30px; padding-top: 0.2rem; padding-bottom: 0.2rem; }
+/* Last run: the run in one row, its schedule in the next, sharing one set of columns (subgrid) so
+   they line up; Status sizes to its badge. Narrow, the rows wrap onto three columns. Test sits below. */
+.rm-run { container-type: inline-size; }
+.rm-runfacts-grid { display: grid; grid-template-columns: max-content repeat(4, minmax(0, 1fr)); column-gap: 1.25rem; }
+.rm-runfacts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-template-columns: subgrid; row-gap: 0.6rem; margin: 0; }
+.rm-runfacts + .rm-runfacts { margin-top: 0.6rem; padding-top: 0.6rem; border-top: 1px solid var(--color-border-muted); }
+@container (max-width: 28rem) { .rm-runfacts-grid { grid-template-columns: max-content repeat(2, minmax(0, 1fr)); } }
+.rm-runfacts__nw { white-space: nowrap; }
+.rm-runfacts dt { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-muted); }
+.rm-runfacts dd { margin: 0.15rem 0 0; font-size: 0.82rem; font-weight: 600; color: var(--color-text); font-variant-numeric: tabular-nums; }
+.rm-runfacts .status-pill { font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase; white-space: nowrap; }
+.rm-test { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.75rem; padding-top: 0.6rem; border-top: 1px solid var(--color-border-muted); }
+.rm-test .rm-label { margin: 0; white-space: nowrap; }
+.rm-test .form-select { width: auto; min-width: 4.75rem; height: 28px; padding-top: 0.1rem; padding-bottom: 0.1rem; font-size: 0.78rem; }
+.rm-test .btn { height: 28px; }
 
 /* Management: per-client rule scoring weights */
 .scoring-editor { display: flex; flex-direction: column; gap: 0.75rem; padding: 0 0.25rem; }
@@ -7547,34 +7592,33 @@ body.is-resizing-slide-panel {
 .rule-modal.is-arranging .rm-col { min-height: 8rem; }
 [data-section].is-dragging { opacity: 0.4; }
 .rm-drop-marker { height: 0.3rem; border-radius: 999px; background: var(--color-primary); flex-shrink: 0; }
-.rm-drag { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-left: auto; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: grab; opacity: 0.45; transition: opacity var(--transition-fast); flex-shrink: 0; }
-.rm-panel:hover .rm-drag, .rm-fold:hover .rm-drag, .rm-drag:focus-visible { opacity: 1; }
+.rm-drag { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-left: auto; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: grab; flex-shrink: 0; }
 .rm-drag:hover { color: var(--color-text); border-color: var(--color-border); background: var(--color-bg-action); }
 .rm-drag:active { cursor: grabbing; }
 .rm-drag:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
-/* a section's "…" menu, and the move bar its Move shows (window_ui.html section_menu) */
+/* Section handles only show while "…" › Sections › Move sections is on (is-layout-edit on the root) */
+[data-rm-drag] { display: none; }
+.is-layout-edit [data-rm-drag] { display: grid; }
+.is-layout-edit .rm-col > [data-section]:not([hidden]) { outline: 1px dashed color-mix(in srgb, var(--color-primary) 45%, transparent); outline-offset: 2px; }
+/* a section's own "…" menu, then its handle */
 .rm-secmenu { margin-left: auto; flex-shrink: 0; }
+.rm-secmenu + .rm-drag { margin-left: 0; }
 .rm-secmenu__btn { width: 1.5rem; height: 1.5rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; }
 .rm-secmenu__btn:hover:not(:disabled), .rm-secmenu__btn[aria-expanded="true"] { border-color: var(--color-border); background: var(--color-bg-action); }
 .rm-secmenu .rh-more__menu { min-width: 11rem; }
-.rm-movebar { display: flex; align-items: center; gap: 0.2rem; flex-basis: 100%; padding: 0.3rem; border: 1px dashed var(--color-primary); border-radius: var(--radius-sm); }
-.rm-movebar[hidden] { display: none; }
-.rm-movebar .rm-drag { margin-left: 0; opacity: 1; }
-.rm-movebar .btn { margin-left: auto; }
-[data-section].is-moving { outline: 2px solid var(--color-primary); outline-offset: 2px; }
-.rule-modal .rm-panel.is-moving .rm-panel__head { flex-wrap: wrap; }
+/* "…" › Sections: the entry, and the panel it opens in place of the menu's items */
+.rm-menu__main[hidden], .rm-layout__menu[hidden] { display: none; }
+.rm-menu__sub > svg:last-child { margin-left: auto; color: var(--color-text-muted); }
+.rm-menu__back { font-weight: 600; color: var(--color-text-secondary); }
 .rm-layout__menu { min-width: 15rem; }
 .rm-layout__head { margin: 0.3rem 0.7rem 0.2rem; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
 .rm-layout__item { cursor: pointer; }
 .rm-layout__item input { margin: 0; accent-color: var(--color-primary); }
-.rm-layout__hint { display: flex; align-items: center; gap: 0.3rem; margin: 0.2rem 0.7rem 0.35rem; font-size: 0.72rem; color: var(--color-text-muted); }
+.rm-layout__switch { justify-content: space-between; cursor: pointer; }
+.rm-layout__switch .toggle-slider { background-color: var(--color-bg-base); box-shadow: inset 0 0 0 1px var(--color-border-strong); }
 
-/* reorderable sections */
+/* small square move buttons (Dashboard editor) */
 .rm-panel__tools { display: inline-flex; align-items: center; gap: 0.5rem; }
-.rm-move { display: inline-flex; gap: 0.15rem; margin-left: auto; opacity: 0.45; transition: opacity var(--transition-fast); }
-.rm-panel:hover .rm-move,
-.rm-fold:hover .rm-move,
-.rm-move:focus-within { opacity: 1; }
 .rm-move__btn { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: pointer; }
 .rm-move__btn:hover:not(:disabled) { color: var(--color-text); border-color: var(--color-border); background: var(--color-bg-action); }
 .rm-move__btn:disabled { opacity: 0.3; cursor: default; }
@@ -7593,7 +7637,7 @@ body.is-resizing-slide-panel {
 .modal-content[aria-busy="true"] { cursor: progress; }
 
 /* ── Loading skeleton (cloned from #rule-modal-skeleton) ──────── */
-.rm-skel .rm-header__tools { gap: 0.6rem; }
+.rm-skel .rm-header__tools { gap: 0.5rem; }
 .rm-skel__block {
   border-radius: var(--radius-sm);
   background: linear-gradient(90deg, var(--color-bg-layer-4) 25%, var(--color-bg-layer-5) 50%, var(--color-bg-layer-4) 75%);
@@ -7607,6 +7651,7 @@ body.is-resizing-slide-panel {
 .rm-skel__pill { height: 1.3rem; width: 9rem; border-radius: 999px; }
 .rm-skel__pill--sm { width: 4rem; }
 .rm-skel__tool { height: 2rem; width: 8rem; }
+.rm-skel__tool--sm { width: 4rem; }
 .rm-skel__h { height: 0.7rem; width: 40%; margin-bottom: 0.8rem; }
 .rm-skel__line { height: 0.75rem; margin-bottom: 0.55rem; }
 .rm-skel__line--short { width: 60%; }
@@ -7763,11 +7808,10 @@ body.is-resizing-slide-panel {
 .rm-panel.is-collapsed > :not(.rm-panel__head) { display: none; }
 .rm-panel.is-collapsed .rm-panel__head { margin-bottom: 0; }
 .rm-panel.is-collapsed .rm-filters, .rm-panel.is-collapsed .rm-panel__tools .btn, .rm-panel.is-collapsed .rm-chart-delta { display: none; }
-.rm-panel__head .rm-move { margin-left: auto; }
 .rm-panel__head .rm-panel__title { margin-right: auto; }
 
 /* Rule modal: every section (panel or <details>) shares one header — chevron button, uppercase title,
-   move arrows — so collapsed sections are all the same size. */
+   move handle — so collapsed sections are all the same size. */
 .rm-fold > summary {
   padding: 0.85rem;
   gap: 0.5rem;
@@ -8288,13 +8332,13 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-header__main { min-width: 0; flex: 1 1 auto; }
 .sys-header__clf { font-size: 0.7rem; vertical-align: middle; margin-left: 0.5rem; }
 .rh-more__btn--sm { height: 30px; width: 30px; }
+.sys-layout { display: contents; }
 .sys-sections { display: flex; flex-direction: column; gap: 1rem; margin-top: 1rem; }
 .sys-section__head { display: flex; align-items: center; gap: 0.5rem; }
 .sys-section__title { display: inline-flex; align-items: center; gap: 0.45rem; margin: 0; font-size: 1.1rem; flex: 1 1 auto; min-width: 0; }
 .sys-section__count { font-size: 0.75rem; font-weight: 600; color: var(--color-text-muted); padding: 0.05rem 0.45rem; border: 1px solid var(--color-border); border-radius: 999px; }
 .sys-section__tools { display: inline-flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
 .sys-section__body { margin-top: 0.85rem; }
-.sys-section .rm-move { margin-left: 0; }
 .sys-section.is-collapsed .sys-section__body,
 .sys-section.is-collapsed .sys-section__tools { display: none; }
 .sys-section.is-collapsed .rm-collapse svg { transform: rotate(-90deg); }

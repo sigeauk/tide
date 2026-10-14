@@ -1,16 +1,20 @@
 """
-Dashboard layout: save or reset the active client's layout, or the user's own copy of it.
+Dashboards: the page's context, each section's figures, and the editor's actions (new, save,
+duplicate, set as default, delete, and the preview a section shows while it is edited).
 
-Both need write access to the Dashboard (page:dashboard). The page itself is /dashboard in
-app/main.py; app/services/dashboard_layout.py holds the layouts.
+The actions need write access to the Dashboard (page:dashboard). The page itself is /dashboard
+and /dashboard/<id> in app/main.py, built by ``page_context``; app/services/dashboards.py holds
+the dashboards and what a section may show.
 """
 import json
 import logging
+import os
+from typing import Optional
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Response
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 
 from app.api.deps import ActiveClient, DbDep, RequireUser, require_write
-from app.services import dashboard_layout as layouts
+from app.services import dashboards
 
 logger = logging.getLogger(__name__)
 
@@ -18,35 +22,177 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"],
                    dependencies=[Depends(require_write("page:dashboard"))])
 
 
-def _owner(scope: str, user) -> str:
-    if scope == "client":
-        return layouts.CLIENT
-    if scope == "mine":
-        return layouts.user_owner(user.id)
-    raise HTTPException(status_code=400, detail="scope must be 'mine' or 'client'")
+# ── what a section shows ─────────────────────────────────────────────────────────────────────
+
+def _repo_status() -> dict:
+    from app.config import get_settings
+    s = get_settings()
+    mitre = lambda name: os.path.isfile(os.path.join(s.mitre_repo_path, name))  # noqa: E731
+    return {
+        "mitre_enterprise": mitre("enterprise-attack.json"), "mitre_mobile": mitre("mobile-attack.json"),
+        "mitre_ics": mitre("ics-attack.json"), "mitre_pre": mitre("pre-attack.json"),
+        "sigma": os.path.isdir(os.path.join(s.sigma_repo_path, "rules")),
+        "elastic": os.path.isdir(s.elastic_repo_path),
+    }
 
 
-def _back_to_dashboard() -> Response:
-    return Response(status_code=204, headers={"HX-Redirect": "/dashboard"})
+def _compute(db, client_id: str, card: dict) -> dict:
+    """A section's figures from the database, the same way its page works them out."""
+    from app import inventory_engine as eng
+    source, f = card["source"], card.get("filters") or {}
+    if source == "rule_health":
+        from app.api.rules import filtered_rule_metrics
+        return filtered_rule_metrics(db, client_id, f)
+    if source == "system":
+        system = eng.get_system(f["system_id"], client_id=client_id) if f.get("system_id") else None
+        if not system:
+            return {"empty": "This system no longer exists." if f.get("system_id") else "No system chosen yet.",
+                    "no_link": True}
+        data = eng.get_system_steps(system.id, client_id=client_id)
+        return {"default_name": system.name, "totals": data["totals"], "coverage_undefined": data.get("coverage_undefined")}
+    if source == "threat_landscape":
+        from app.main import get_last_sync_time
+        return {"metrics": db.get_threat_landscape_metrics(client_id=client_id), "last_sync_time": get_last_sync_time()}
+    if source == "baselines":
+        return {"overview": eng.get_baselines_overview(client_id=client_id),
+                "rollup": eng.get_system_baselines_rollup(client_id=client_id)}
+    if source == "asset_inventory":
+        return {"stats": eng.get_inventory_stats(client_id=client_id)}
+    if source == "cve_overview":
+        return {"stats": eng.get_cve_overview_stats(client_id=client_id)}
+    if source == "connected_services":
+        return {"client_siems": db.get_client_siems(client_id) if client_id else []}
+    if source == "repositories":
+        return {"repo_status": _repo_status()}
+    return {}
 
 
-@router.post("/layout")
-def save_layout(db: DbDep, user: RequireUser, client_id: ActiveClient,
-                scope: str = Form(...), layout: str = Form(...)):
-    owner = _owner(scope, user)
+def section_view(db, client_id: str, card: dict, done: Optional[dict] = None) -> dict:
+    """What a section shows: its source's figures for its filters, worked out afresh each time so
+    a change shows as soon as the page is reloaded, and where its cards go. ``done`` shares the
+    figures between sections of one page with the same source and filters."""
+    key = (card["source"], json.dumps(card.get("filters") or {}, sort_keys=True))
+    if done is not None and key in done:
+        view = dict(done[key])
+    else:
+        try:
+            view = _compute(db, client_id, card)
+        except Exception:
+            logger.exception("Dashboard section %s for client %s failed", card["source"], client_id)
+            view = {"empty": "These figures can't be worked out just now. Reload in a moment.", "no_link": True}
+        if done is not None:
+            done[key] = dict(view)
+    view["link"] = "" if view.get("no_link") else dashboards.link_for(card)
+    return view
+
+
+def _filter_options(db, client_id: str) -> dict:
+    """The choices a section's filters offer, as their pages offer them."""
+    from app.api.rules import _build_scope_labels, _filter_scope_options
+    from app.inventory_engine import list_systems
+    scopes, _ = _filter_scope_options(db, client_id)
+    labels = _build_scope_labels(db, client_id)
+    return {
+        "scopes": [(s, labels.get(s, s.split("|")[-1].capitalize())) for s in scopes],
+        "systems": [(s.id, s.name) for s in list_systems(client_id=client_id)],
+    }
+
+
+def page_context(db, client_id: str, user, dashboard: dict, editing: bool) -> dict:
+    from app.config import get_settings
+    cards, done = dashboard["cards"], {}
+    ctx = {
+        "dashboard": dashboard,
+        "dashboards": dashboards.list_dashboards(db, client_id),
+        "items": [(c, section_view(db, client_id, c, done) if c["type"] == "section" else {}) for c in cards],
+        "sources": dashboards.SOURCES,
+        "text_limits": dashboards.TEXT_CARDS,
+        "name_limit": dashboards.NAME_LIMIT,
+        "search_limit": dashboards.SEARCH_LIMIT,
+        "rule_states": dashboards.RULE_STATES,
+        "can_edit": bool(user and user.can_write("page:dashboard")),
+        "editing": editing,
+        "env": get_settings(),
+        "app_settings": db.get_all_settings(),
+    }
+    if editing:
+        ctx["filter_options"] = _filter_options(db, client_id)
+        ctx["new_cards"] = [("title", {"type": "title", "w": 12, "text": ""}),
+                            ("text", {"type": "text", "w": 6, "text": ""})] + \
+                           [(f"section:{k}", dashboards.new_section(k)) for k in dashboards.SOURCES]
+    return ctx
+
+
+# ── the editor's actions ─────────────────────────────────────────────────────────────────────
+
+def _go(url: str) -> Response:
+    return Response(status_code=204, headers={"HX-Redirect": url})
+
+
+def _bad(exc: Exception) -> HTTPException:
+    return HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/new")
+def new_dashboard(db: DbDep, user: RequireUser, client_id: ActiveClient):
+    did = dashboards.create(db, client_id, "New dashboard", [], user.username)
+    logger.info("Dashboard created: client=%s id=%s by=%s", client_id, did, user.username)
+    return _go(f"/dashboard/{did}?edit=1")
+
+
+@router.post("/{dashboard_id}/save")
+def save_dashboard(dashboard_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
+                   name: str = Form(...), layout: str = Form(...)):
     try:
-        cards = layouts.clean(json.loads(layout))
+        found = dashboards.save(db, client_id, dashboard_id, name, json.loads(layout), user.username)
     except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    layouts.save(db, client_id, owner, cards, user.username)
-    logger.info("Dashboard layout saved: client=%s owner=%s cards=%d by=%s",
-                client_id, owner, len(cards), user.username)
-    return _back_to_dashboard()
+        raise _bad(exc)
+    if not found:
+        raise HTTPException(status_code=404, detail="That dashboard no longer exists.")
+    logger.info("Dashboard saved: client=%s id=%s by=%s", client_id, dashboard_id, user.username)
+    return _go(f"/dashboard/{dashboard_id}")
 
 
-@router.post("/layout/reset")
-def reset_layout(db: DbDep, user: RequireUser, client_id: ActiveClient, scope: str = Form(...)):
-    owner = _owner(scope, user)
-    layouts.reset(db, client_id, owner)
-    logger.info("Dashboard layout reset: client=%s owner=%s by=%s", client_id, owner, user.username)
-    return _back_to_dashboard()
+@router.post("/{dashboard_id}/duplicate")
+def duplicate_dashboard(dashboard_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    source = dashboards.get(db, client_id, dashboard_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="That dashboard no longer exists.")
+    name = f"Copy of {source['name']}"[:dashboards.NAME_LIMIT]
+    did = dashboards.create(db, client_id, name, source["cards"], user.username)
+    logger.info("Dashboard duplicated: client=%s from=%s id=%s by=%s", client_id, dashboard_id, did, user.username)
+    return _go(f"/dashboard/{did}?edit=1")
+
+
+@router.post("/{dashboard_id}/default")
+def default_dashboard(dashboard_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    if not dashboards.set_default(db, client_id, dashboard_id):
+        raise HTTPException(status_code=404, detail="That dashboard no longer exists.")
+    logger.info("Dashboard made default: client=%s id=%s by=%s", client_id, dashboard_id, user.username)
+    return _go(f"/dashboard/{dashboard_id}")
+
+
+@router.post("/{dashboard_id}/delete")
+def delete_dashboard(dashboard_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    result = dashboards.delete(db, client_id, dashboard_id)
+    if result == "default":
+        raise HTTPException(status_code=400, detail="The default dashboard can't be deleted. Make another the default first.")
+    logger.info("Dashboard deleted: client=%s id=%s result=%s by=%s", client_id, dashboard_id, result, user.username)
+    return _go("/dashboard")
+
+
+@router.post("/preview")
+def preview_section(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient,
+                    card: str = Form(...)):
+    """A section's cards as its settings stand in the editor, before it is saved."""
+    try:
+        cleaned = dashboards.clean([json.loads(card)])
+    except (ValueError, TypeError) as exc:
+        raise _bad(exc)
+    if not cleaned or cleaned[0]["type"] != "section":
+        raise HTTPException(status_code=400, detail="Only a section has a preview.")
+    from app.config import get_settings
+    return request.app.state.templates.TemplateResponse(request, "partials/dashboard_section.html", {
+        "card": cleaned[0], "view": section_view(db, client_id, cleaned[0]),
+        "env": get_settings(), "app_settings": db.get_all_settings(),
+    })

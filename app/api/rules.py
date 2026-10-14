@@ -1163,22 +1163,36 @@ def get_metrics(
     validated_to: Optional[str] = Query(None),
 ):
     """Get rule health metrics, scoped to the same filters as the rules grid."""
+    ctx = filtered_rule_metrics(db, client_id, {
+        "search": search, "space": space, "enabled": enabled, "state": state, "min_score": min_score,
+        "max_score": max_score, "validated_from": validated_from, "validated_to": validated_to,
+    })
+    return request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
+
+
+def filtered_rule_metrics(db, client_id: str, params: dict) -> dict:
+    """Rule Health's metric strip for these filters, given as the page takes them (``space`` is
+    "<siem_id>|<space>"): the context partials/metrics_row.html needs. The page's metrics and a
+    Dashboard section built from it both come from here, so they always agree."""
     from app.main import get_last_sync_time
 
-    min_score_int = int(min_score) if min_score and min_score.strip().lstrip('-').isdigit() else None
-    max_score_int = int(max_score) if max_score and max_score.strip().lstrip('-').isdigit() else None
+    def _int(value):
+        value = "" if value is None else str(value)
+        return int(value) if value.strip().lstrip('-').isdigit() else None
+
+    enabled = str(params.get("enabled") or "")
     filters = RuleFilters(
-        search=search if search else None,
-        space=space if space else None,
+        search=params.get("search") or None,
+        space=params.get("space") or None,
         enabled=None if not enabled else (enabled.lower() == 'true'),
-        state=[s for s in state if s],
-        min_score=min_score_int,
-        max_score=max_score_int,
-        validated_from=_parse_date_bound(validated_from, end_of_day=False),
-        validated_to=_parse_date_bound(validated_to, end_of_day=True),
+        state=[s for s in (params.get("state") or []) if s],
+        min_score=_int(params.get("min_score")),
+        max_score=_int(params.get("max_score")),
+        validated_from=_parse_date_bound(params.get("validated_from"), end_of_day=False),
+        validated_to=_parse_date_bound(params.get("validated_to"), end_of_day=True),
     )
 
-    # Per-tenant since 4.1.13 — tenant context is pinned by ActiveClient.
+    # Per-tenant since 4.1.13 — tenant context is pinned by the caller.
     # Computed from the deduplicated rule list (matching what the grid
     # renders) rather than raw SQL rows — a migrated/merged identity's
     # staging and production copies both satisfy the same filters, which
@@ -1189,16 +1203,12 @@ def get_metrics(
     # longer in client_siem_map after a mapping change).
     _prune_orphan_scopes(metrics, db, client_id)
     _apply_lifecycle_counts(metrics, db, client_id, deduped_rules)
-    templates = request.app.state.templates
-    return templates.TemplateResponse(
-        request, "partials/metrics_row.html",
-        {
-            "metrics": metrics,
-            "last_sync_time": get_last_sync_time(all_rules),
-            "space_labels": _build_space_labels(db, client_id),
-            "scope_labels": _build_scope_labels(db, client_id),
-        },
-    )
+    return {
+        "metrics": metrics,
+        "last_sync_time": get_last_sync_time(all_rules),
+        "space_labels": _build_space_labels(db, client_id),
+        "scope_labels": _build_scope_labels(db, client_id),
+    }
 
 
 @router.post("/{rule_id}/validate", response_class=HTMLResponse)

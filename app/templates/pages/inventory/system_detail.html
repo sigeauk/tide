@@ -1,11 +1,13 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "components/window_ui.html" import drag_ctl, sections_item, sections_panel %}
 
 {#
   A system, in Rule Health's shape: header with a "…" menu, a whole-system metric strip, then
-  sections (Techniques, Devices, Heatmap) that collapse and reorder -- both remembered per browser
-  (data-fold / data-section, app.js). The technique grid inside Baselines is filtered, sorted and
+  sections (Techniques, Devices, Heatmap) that collapse, hide and move as a window's do ("…" ›
+  Sections, components/window_ui.html) -- all remembered per browser (data-fold / data-section,
+  app.js). The technique grid inside Baselines is filtered, sorted and
   grouped from the bar above it; those choices ride in the URL, and the presentation ones (sort,
   group, view) are also remembered per browser.
 
@@ -24,13 +26,9 @@
 {% macro collapse_ctl(label) -%}
 <button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '16') }}</button>
 {%- endmacro %}
-{% macro move_ctl() -%}
-<span class="rm-move" role="group" aria-label="Reorder section">
-    <button type="button" class="rm-move__btn" data-rm-move="up" title="Move section up" aria-label="Move section up">{{ icon('chevron-up', '13') }}</button>
-    <button type="button" class="rm-move__btn" data-rm-move="down" title="Move section down" aria-label="Move section down">{{ icon('chevron-down', '13') }}</button>
-</span>
-{%- endmacro %}
 
+{# The arrangement's root: the header's "…" › Sections arranges the sections below it. #}
+<div class="sys-layout" data-layout-key="tide.systemPageLayout" data-layout-legacy="tide.systemPageOrder">
 <div class="page-header sys-header">
     <div class="sys-header__main">
         <h1 class="page-title-hero">
@@ -43,12 +41,13 @@
         </h1>
         <p class="page-subtitle">{{ system.description or 'No description.' }}</p>
     </div>
-    <div class="rh-more" data-more>
+    <div class="rh-more" data-more data-rm-layout>
         <button name="System Actions" type="button" class="btn btn-secondary rh-more__btn" data-more-toggle
                 aria-haspopup="menu" aria-expanded="false" title="Edit this system, export a report">
             {{ icon('more-vertical', '18') }}<span class="sr-only">More actions</span>
         </button>
         <div class="rh-more__menu" role="menu" hidden>
+            <div class="rm-menu__main" data-rm-menu-main>
             <button name="Edit System" type="button" role="menuitem" class="rh-more__item"
                     data-click="el.show" data-target="edit-env-modal">
                 {{ icon('edit-2', '15') }}<span>Edit system</span>
@@ -57,6 +56,10 @@
                     data-click="systemPage.exportOpen">
                 {{ icon('download', '15') }}<span>Export report</span>
             </button>
+            <div class="rh-more__sep" role="separator"></div>
+            {{ sections_item() }}
+            </div>
+            {{ sections_panel() }}
         </div>
     </div>
 </div>
@@ -70,10 +73,10 @@
 </div>
 {% endif %}
 
-<div class="sys-sections" data-order-key="tide.systemPageOrder" data-fold-store="tide.systemPageFolds">
+<div class="sys-sections rm-col" data-col="main" data-fold-store="tide.systemPageFolds">
 
 {# ── Baselines ──────────────────────────────────────────────────────────────────────────── #}
-<section class="card card-padded sys-section" data-section="baselines" data-fold="baselines" aria-label="Baselines">
+<section class="card card-padded sys-section" data-section="baselines" data-section-label="Baselines" data-fold="baselines" aria-label="Baselines">
     <div class="sys-section__head">
         {{ collapse_ctl('baselines') }}
         <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="sys-section__count">{{ bl_count }}</span></h2>
@@ -108,7 +111,7 @@
                 </button>
             </div>
         </div>
-        {{ move_ctl() }}
+        {{ drag_ctl('Baselines') }}
     </div>
     <div class="sys-section__body">
     {% if baselines %}
@@ -134,7 +137,7 @@
 </section>
 
 {# ── Devices ────────────────────────────────────────────────────────────────────────────── #}
-<section class="card card-padded sys-section" data-section="devices" data-fold="devices" aria-label="Devices">
+<section class="card card-padded sys-section" data-section="devices" data-section-label="Devices" data-fold="devices" aria-label="Devices">
     <div class="sys-section__head">
         {{ collapse_ctl('devices') }}
         <h2 class="section-title sys-section__title">{{ icon('server', '18') }} Devices <span class="sys-section__count">{{ host_count }}</span></h2>
@@ -152,7 +155,7 @@
                 {{ icon('plus', '14') }} Add Device
             </button>
         </div>
-        {{ move_ctl() }}
+        {{ drag_ctl('Devices') }}
     </div>
     <div class="sys-section__body">
         <div id="hosts-section">
@@ -164,11 +167,11 @@
 </section>
 
 {# ── Heatmap ────────────────────────────────────────────────────────────────────────────── #}
-<section class="card card-padded sys-section" data-section="heatmap" data-fold="heatmap" aria-label="Heatmap">
+<section class="card card-padded sys-section" data-section="heatmap" data-section-label="Heatmap" data-fold="heatmap" aria-label="Heatmap">
     <div class="sys-section__head">
         {{ collapse_ctl('heatmap') }}
         <h2 class="section-title sys-section__title">{{ icon('target', '18') }} Heatmap</h2>
-        {{ move_ctl() }}
+        {{ drag_ctl('Heatmap') }}
     </div>
     <div class="sys-section__body">
     {% if baselines %}
@@ -194,6 +197,7 @@
     </div>
 </section>
 
+</div>
 </div>
 
 <!-- ── Add Device Modal ──────────────────────────────────────────── -->

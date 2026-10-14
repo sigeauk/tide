@@ -1,0 +1,11 @@
+{#
+  One card in a metric strip, its face from the call block. A Dashboard section passes ``keys``
+  (the cards it shows: one not among them is left out) and ``link`` (the whole card opens its
+  page, filtered as the section is). A page passes neither, and every card shows as it is.
+#}
+{% macro metric_card(key, keys=none, link=none, classes='', tip=false) -%}
+{% if keys is none or key in keys %}
+{% if link %}<a class="metric-card metric-card--link{{ ' ' ~ classes if classes }}" href="{{ link }}">{{ caller() }}</a>
+{% else %}<div class="metric-card{{ ' ' ~ classes if classes }}"{% if tip %} tabindex="0"{% endif %}>{{ caller() }}</div>{% endif %}
+{% endif %}
+{%- endmacro %}

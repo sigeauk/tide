@@ -1,39 +1,41 @@
+{% from "macros/metrics.html" import metric_card %}
+{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
 {% from "macros/icons.html" import icon %}
 <!-- Threat Landscape Metrics Row -->
-<div class="metric-card">
+{% call metric_card('actors', keys, link) %}
     <p class="metric-value">{{ metrics.total_actors }}</p>
     <p class="metric-label">Tracked Actors</p>
     <p class="metric-sub">{{ metrics.origin_breakdown | length }} origins</p>
-</div>
+{% endcall %}
 
-<div class="metric-card">
+{% call metric_card('ttps', keys, link) %}
     <p class="metric-value">{{ metrics.unique_ttps }}</p>
     <p class="metric-label">Unique TTPs</p>
     <p class="metric-sub">{{ metrics.total_ttps }} total instances</p>
-</div>
+{% endcall %}
 
-<div class="metric-card">
+{% call metric_card('coverage', keys, link) %}
     <p class="metric-value {% if metrics.global_coverage_pct >= 70 %}success{% elif metrics.global_coverage_pct >= 40 %}warning{% else %}danger{% endif %}">{{ metrics.global_coverage_pct }}%</p>
     <p class="metric-label">Global Coverage</p>
     <p class="metric-sub">{{ metrics.covered_ttps }} covered</p>
-</div>
+{% endcall %}
 
-<div class="metric-card">
+{% call metric_card('gaps', keys, link) %}
     <p class="metric-value {% if metrics.uncovered_ttps < 20 %}success{% elif metrics.uncovered_ttps < 50 %}warning{% else %}danger{% endif %}">{{ metrics.uncovered_ttps }}</p>
     <p class="metric-label">Coverage Gaps</p>
     <p class="metric-sub">TTPs without rules</p>
-</div>
+{% endcall %}
 
-<div class="metric-card">
+{% call metric_card('fully_covered', keys, link) %}
     <p class="metric-value {% if metrics.fully_covered_actors > metrics.uncovered_actors %}success{% else %}warning{% endif %}">{{ metrics.fully_covered_actors }}</p>
     <p class="metric-label">Fully Covered</p>
     <p class="metric-sub">{{ metrics.partially_covered_actors }} partial</p>
-</div>
+{% endcall %}
 
-<div class="metric-card">
+{% call metric_card('last_synced', keys, link) %}
     <p class="metric-value fs-title">
         {{ icon('refresh-cw', '24') }}
     </p>
     <p class="metric-label">Last Synced</p>
     <p class="metric-sub">{{ last_sync_time | default('Never') }}</p>
-</div>
+{% endcall %}

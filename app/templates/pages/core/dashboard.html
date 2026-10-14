@@ -1,41 +1,63 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 
-{% block title %}Dashboard | TIDE{% endblock %}
+{#
+  A dashboard (app/api/dashboard.py builds the context): the picker of the client's dashboards
+  beside the title; for editors, Edit and a "…" menu (New, Duplicate, Set as default, Delete).
+  With ?edit=1 the cards carry the editor's controls (app.js, "Dashboard editor"), and Save posts
+  the name and cards.
+#}
 
-{% block head %}
-{% endblock %}
+{% block title %}{{ dashboard.name }} | Dashboard | TIDE{% endblock %}
 
 {% block content %}
 {% set client_name = active_client.name if active_client else 'this client' %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title-hero">Dashboard</h1>
+<div class="page-header dash-header">
+    <div class="dash-header__main">
+        <div class="dash-header__title">
+            <h1 class="page-title-hero">Dashboard</h1>
+            {% if not editing %}
+            <div class="rh-more dash-picker" data-more>
+                <button name="Choose Dashboard" type="button" class="btn btn-secondary btn-sm dash-picker__btn" data-more-toggle
+                        aria-haspopup="menu" aria-expanded="false" title="Choose a dashboard">
+                    <span class="dash-picker__name">{{ dashboard.name }}</span>{{ icon('chevron-down', '14') }}
+                </button>
+                <div class="rh-more__menu dash-picker__menu" role="menu" hidden>
+                    {% for d in dashboards %}
+                    <a role="menuitem" class="rh-more__item{{ ' is-current' if d.id == dashboard.id }}" href="/dashboard/{{ d.id }}"
+                       {% if d.id == dashboard.id %}aria-current="page"{% endif %}><span class="dash-picker__item">{{ d.name }}</span>{% if d.is_default %}<span class="dash-picker__default">Default</span>{% endif %}</a>
+                    {% endfor %}
+                    {% if can_edit %}
+                    <div class="rh-more__sep" role="separator"></div>
+                    <button name="New Dashboard" type="button" role="menuitem" class="rh-more__item"
+                            hx-post="/api/dashboard/new" hx-include="unset">{{ icon('plus', '14') }}<span>New dashboard</span></button>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
         <p class="page-subtitle">Overview of your detection engineering posture across all modules.</p>
     </div>
     {% if can_edit and not editing %}
-    <div class="flex gap-sm items-center flex-wrap">
-        {% if layout_source == 'user' %}
-        <span class="status-pill status-info" title="You are seeing your own layout, not {{ client_name }}'s">Your layout</span>
-        {% endif %}
+    <div class="flex gap-sm items-center">
+        <a name="Edit Dashboard" class="btn btn-secondary btn-sm" href="/dashboard/{{ dashboard.id }}?edit=1"
+           title="Name this dashboard, and add, arrange and filter its sections">{{ icon('pencil', '14') }} Edit</a>
         <div class="rh-more" data-more>
-            <button name="Customise Dashboard" type="button" class="btn btn-secondary btn-sm" data-more-toggle
-                    aria-haspopup="menu" aria-expanded="false">{{ icon('layout', '14') }} Customise</button>
+            <button name="Dashboard Actions" type="button" class="btn btn-secondary btn-sm rh-more__btn rh-more__btn--sm" data-more-toggle
+                    aria-haspopup="menu" aria-expanded="false" title="More actions">{{ icon('more-vertical', '16') }}<span class="sr-only">More actions</span></button>
             <div class="rh-more__menu" role="menu" hidden>
-                <a name="Edit My Layout" role="menuitem" class="rh-more__item" href="/dashboard?edit=mine"
-                   title="Arrange the Dashboard for yourself only">{{ icon('user', '14') }}<span>Edit my layout</span></a>
-                <a name="Edit Client Layout" role="menuitem" class="rh-more__item" href="/dashboard?edit=client"
-                   title="Arrange the Dashboard for everyone on {{ client_name }} who hasn't made their own">{{ icon('users', '14') }}<span>Edit the layout for {{ client_name }}</span></a>
-                {% if stored_layouts %}<div class="rh-more__sep" role="separator"></div>{% endif %}
-                {% if 'user' in stored_layouts %}
-                <button name="Reset My Layout" type="button" role="menuitem" class="rh-more__item"
-                        hx-post="/api/dashboard/layout/reset" hx-vals='{"scope": "mine"}'
-                        hx-confirm="Remove your own layout? You will see the layout for {{ client_name }}.">{{ icon('rotate-ccw', '14') }}<span>Reset my layout</span></button>
-                {% endif %}
-                {% if 'client' in stored_layouts %}
-                <button name="Reset Client Layout" type="button" role="menuitem" class="rh-more__item"
-                        hx-post="/api/dashboard/layout/reset" hx-vals='{"scope": "client"}'
-                        hx-confirm="Put the layout for {{ client_name }} back to TIDE's default? Anyone with their own layout keeps it.">{{ icon('rotate-ccw', '14') }}<span>Reset the layout for {{ client_name }}</span></button>
+                <button name="New Dashboard" type="button" role="menuitem" class="rh-more__item"
+                        hx-post="/api/dashboard/new" hx-include="unset">{{ icon('plus', '14') }}<span>New dashboard</span></button>
+                <button name="Duplicate Dashboard" type="button" role="menuitem" class="rh-more__item"
+                        hx-post="/api/dashboard/{{ dashboard.id }}/duplicate" hx-include="unset">{{ icon('copy', '14') }}<span>Duplicate</span></button>
+                {% if not dashboard.is_default %}
+                <button name="Set Default Dashboard" type="button" role="menuitem" class="rh-more__item"
+                        title="Show this dashboard to everyone on {{ client_name }} who hasn't picked another"
+                        hx-post="/api/dashboard/{{ dashboard.id }}/default" hx-include="unset">{{ icon('star', '14') }}<span>Set as default</span></button>
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Delete Dashboard" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
+                        hx-post="/api/dashboard/{{ dashboard.id }}/delete" hx-include="unset"
+                        hx-confirm="Delete the dashboard “{{ dashboard.name }}” for everyone on {{ client_name }}? This can't be undone.">{{ icon('trash-2', '14') }}<span>Delete</span></button>
                 {% endif %}
             </div>
         </div>
@@ -46,8 +68,11 @@
 {% if editing %}
 <div class="dash-editbar" data-dash-editbar>
     <div class="dash-editbar__text">
-        <strong>{{ 'Editing your own layout' if editing == 'mine' else 'Editing the layout for everyone on ' ~ client_name }}</strong>
-        <span class="dash-editbar__hint">Drag {{ icon('move', '11') }} or use the arrow keys to move a card; {{ icon('minus-circle', '11') }} {{ icon('plus-circle', '11') }} change its width. Empty titles and text blocks aren't kept.</span>
+        <label class="dash-editbar__name">
+            <span>Name</span>
+            <input form="dash-save-form" name="name" class="form-input" value="{{ dashboard.name }}" maxlength="{{ name_limit }}" required aria-label="Dashboard name">
+        </label>
+        <span class="dash-editbar__hint">Drag {{ icon('move', '11') }} or use the arrow keys to move a card; {{ icon('minus-circle', '11') }} {{ icon('plus-circle', '11') }} change its width. A section's cards open their page, filtered as the section is. Empty titles and text blocks aren't kept.</span>
     </div>
     <div class="dash-editbar__actions">
         <div class="rh-more" data-more>
@@ -57,35 +82,34 @@
                 <button name="Add Title" type="button" role="menuitem" class="rh-more__item" data-dash-add="title">{{ icon('hash', '14') }}<span>Title</span></button>
                 <button name="Add Text Block" type="button" role="menuitem" class="rh-more__item" data-dash-add="text">{{ icon('file-text', '14') }}<span>Text block</span></button>
                 <div class="rh-more__sep" role="separator"></div>
-                {% for kind, section in section_cards.items() %}
-                <button name="Add {{ section[0] }}" type="button" role="menuitem" class="rh-more__item" data-dash-add="{{ kind }}">{{ icon(section[1], '14') }}<span>{{ section[0] }}</span></button>
+                {% for key, src in sources.items() %}
+                <button name="Add {{ src.label }}" type="button" role="menuitem" class="rh-more__item" data-dash-add="section:{{ key }}">{{ icon(src.icon, '14') }}<span>{{ src.label }}</span></button>
                 {% endfor %}
             </div>
         </div>
-        <form class="dash-editbar__form" hx-post="/api/dashboard/layout" data-dash-save>
-            <input type="hidden" name="scope" value="{{ editing }}">
+        <form id="dash-save-form" class="dash-editbar__form" hx-post="/api/dashboard/{{ dashboard.id }}/save" data-dash-save>
             <input type="hidden" name="layout" value="" data-dash-layout-field>
-            <a name="Cancel Layout" class="btn btn-secondary btn-sm" href="/dashboard" data-dash-cancel>Cancel</a>
-            <button name="Save Layout" type="submit" class="btn btn-primary btn-sm">{{ icon('save', '14') }} Save layout</button>
+            <a name="Cancel Layout" class="btn btn-secondary btn-sm" href="/dashboard/{{ dashboard.id }}" data-dash-cancel>Cancel</a>
+            <button name="Save Layout" type="submit" class="btn btn-primary btn-sm">{{ icon('save', '14') }} Save</button>
         </form>
     </div>
 </div>
 {% endif %}
 
 <div class="dash-grid{{ ' is-editing' if editing else '' }}" data-dash-grid>
-    {% for card in cards %}{% include "partials/dashboard_card.html" %}{% endfor %}
+    {% for card, view in items %}{% include "partials/dashboard_card.html" %}{% endfor %}
 </div>
-{% if not cards and not editing %}
+{% if not items and not editing %}
 <div class="empty-state-text dash-empty">
-    Nothing is on this Dashboard yet.{% if can_edit %} Use <strong>Customise</strong> to add cards.{% endif %}
+    Nothing is on this dashboard yet.{% if can_edit %} Use <strong>Edit</strong> to add sections.{% endif %}
 </div>
 {% endif %}
 
 {% if editing %}
-{# What Add puts on the page: a copy of one of these. #}
-{% for kind in ['title', 'text'] + (section_cards | list) %}
+{# What Add puts on the page: a copy of one of these. A section's figures load once it is added. #}
+{% for kind, card in new_cards %}
 <template data-dash-template="{{ kind }}">
-    {% with card = {'type': kind, 'w': 6 if kind == 'text' else 12, 'text': ''} %}{% include "partials/dashboard_card.html" %}{% endwith %}
+    {% with view = {'pending': true} %}{% include "partials/dashboard_card.html" %}{% endwith %}
 </template>
 {% endfor %}
 {% endif %}

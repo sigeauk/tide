@@ -1,0 +1,101 @@
+{#
+  A Dashboard section's cards: ``card`` (its source, chosen cards and filters) and ``view`` (what
+  app/api/dashboard.py section_view worked out for it). Each source shows its page's own cards,
+  limited to the chosen ones, each opening the page filtered as the section is. The editor's
+  preview is this same partial.
+#}
+{% from "macros/icons.html" import icon %}
+{% set metric_keys = card.metrics %}
+{% set metric_link = view.link %}
+{% set src = card.source %}
+{% if view.pending %}
+<p class="dash-section-note">{{ icon('loader', '14', 'spin') }} Working out the figures…</p>
+{% elif view.empty %}
+<p class="dash-section-note">{{ view.empty }}</p>
+{% elif src == 'rule_health' %}
+    {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}
+    {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}
+    {% include "partials/metrics_row.html" %}
+{% elif src == 'system' %}
+    {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}
+    {% include "partials/system_steps_metrics.html" %}
+{% elif src == 'threat_landscape' %}
+    {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}
+    {% include "partials/threat_metrics.html" %}
+{% elif src == 'baselines' %}
+    {% set baselines_overview = view.overview %}{% set baselines_rollup = view.rollup %}
+    {% include "partials/baselines_metrics.html" %}
+{% elif src == 'asset_inventory' %}
+    {% if view.stats %}{% set stats = view.stats %}{% include "partials/inventory_metrics.html" %}
+    {% else %}
+    <div class="metric-card metric-card--empty">
+        <p class="metric-value fs-lg">—</p>
+        <p class="metric-label">No inventory data</p>
+        <p class="metric-sub"><a name="Go to Systems →" href="/systems">Go to Systems →</a></p>
+    </div>
+    {% endif %}
+{% elif src == 'cve_overview' %}
+    {% if view.stats %}{% set stats = view.stats %}{% include "partials/cve_metrics.html" %}
+    {% else %}
+    <div class="metric-card metric-card--empty">
+        <p class="metric-value fs-lg">—</p>
+        <p class="metric-label">No CVE data</p>
+        <p class="metric-sub"><a name="Import CVE →" href="/cve-overview">Import CVE →</a></p>
+    </div>
+    {% endif %}
+{% elif src == 'connected_services' %}
+    {% if 'siems' in metric_keys %}
+    {% for siem in view.client_siems %}
+    <div class="integration-card">
+        <div class="integration-card-name">{{ siem.label }} &middot; {{ siem.name }}</div>
+        <div class="integration-card-url">{{ siem.kibana_url }}</div>
+        <span class="integration-card-status status-{{ 'active' if siem.is_active else 'inactive' }}">{{ 'Connected' if siem.is_active else 'Inactive' }}</span>
+    </div>
+    {% else %}
+    <div class="integration-card">
+        <div class="integration-card-name">Elasticsearch</div>
+        <div class="integration-card-url">No SIEM linked to this client</div>
+        <span class="integration-card-status status-inactive">Not configured</span>
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% if 'opencti' in metric_keys %}
+    <div class="integration-card">
+        <div class="integration-card-name">OpenCTI</div>
+        <div class="integration-card-url">{{ env.opencti_url }}</div>
+        <span class="integration-card-status status-{{ 'active' if env.opencti_token else 'inactive' }}">{{ 'Connected' if env.opencti_token else 'No Token' }}</span>
+    </div>
+    {% endif %}
+    {% if 'gitlab' in metric_keys %}
+    <div class="integration-card">
+        <div class="integration-card-name">GitLab</div>
+        <div class="integration-card-url">{{ env.gitlab_url }}</div>
+        <span class="integration-card-status status-{{ 'active' if env.gitlab_token else 'inactive' }}">{{ 'Connected' if env.gitlab_token else 'No Token' }}</span>
+    </div>
+    {% endif %}
+    {% if 'logging' in metric_keys %}
+    {% set logging_on = app_settings.get('rule_log_enabled', 'false') == 'true' %}
+    <div class="integration-card">
+        <div class="integration-card-name">Logging</div>
+        <div class="integration-card-url">Rule log export to SIEM</div>
+        <span class="integration-card-status status-{{ 'active' if logging_on else 'inactive' }}">{{ 'Enabled' if logging_on else 'Disabled' }}</span>
+    </div>
+    {% endif %}
+{% elif src == 'repositories' %}
+    {% set repos = [
+        ('mitre_enterprise', 'MITRE Enterprise ATT&CK', env.mitre_source, 'Active', 'Missing'),
+        ('mitre_mobile', 'MITRE Mobile ATT&CK', env.mitre_mobile_source, 'Active', 'Missing'),
+        ('mitre_ics', 'MITRE ICS ATT&CK', env.mitre_ics_source, 'Active', 'Missing'),
+        ('mitre_pre', 'MITRE PRE-ATT&CK', env.mitre_pre_source, 'Active', 'Missing'),
+        ('sigma', 'Sigma Rules', env.sigma_repo_url, 'Cloned', 'Not Found'),
+        ('elastic', 'Elastic Detection Rules', env.elastic_repo_url, 'Cloned', 'Not Found'),
+    ] %}
+    {% for key, name, source, yes, no in repos if key in metric_keys %}
+    {% set present = view.repo_status[key] %}
+    <div class="integration-card">
+        <div class="integration-card-name">{{ name }}</div>
+        <div class="integration-card-url" title="{{ source }}">{{ source | truncate(50, True, '...') }}</div>
+        <span class="integration-card-status status-{{ 'active' if present else 'inactive' }}">{{ yes if present else no }}</span>
+    </div>
+    {% endfor %}
+{% endif %}

@@ -733,11 +733,18 @@ console.debug('TIDE app.js loading...');
         if (prev) prev.disabled = idx <= 0;
         if (next) next.disabled = idx === -1 || (idx >= ruleModalNavSnapshot.length - 1 && !ruleNavSentinel());
     }
+    // Loads a window in place of the open one. The request is marked busy on the open window's
+    // prev/next pair: left to htmx, the whole #modal-container is, so every button in it (Validate)
+    // swaps its label for its spinner until the next window arrives, and the header jumps.
+    function loadIntoWindow(url) {
+        var source = document.querySelector('#modal-container .rm-nav') || document.getElementById('modal-container');
+        htmx.ajax('GET', url, { source: source, target: '#modal-container', swap: 'innerHTML' });
+    }
     function openSnapshotEntry(entry) {
         if (!entry || !entry.url) return;
         var live = entry.id ? document.getElementById(entry.id) : null;
         if (live) live.scrollIntoView({ block: 'nearest' });
-        htmx.ajax('GET', entry.url, { target: '#modal-container', swap: 'innerHTML' });
+        loadIntoWindow(entry.url);
     }
     function openAdjacentRule(dir) {
         var idx = ruleNavIndex();
@@ -784,7 +791,7 @@ console.debug('TIDE app.js loading...');
                 }
             }
         }
-        htmx.ajax('GET', info.url, { target: '#modal-container', swap: 'innerHTML' });
+        loadIntoWindow(info.url);
     };
     function ruleWindowFrom(response) {
         try { return JSON.parse(response.headers.get('X-Tide-Rule-Window') || 'null'); } catch (_) { return null; }
@@ -817,14 +824,19 @@ console.debug('TIDE app.js loading...');
         try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* storage blocked */ }
     }
 
-    // ── Window layout (rule window, technique window) ──
-    // Every [data-section] directly in a .rm-col[data-col] can be dragged by its handle (or moved
-    // with the arrow keys on the handle) to any place in any column, and hidden or shown from the
-    // header's sections menu. The arrangement is remembered per kind of window (data-layout-key)
-    // as {cols: {left: [...], centre: [...], right: [...]}, hidden: [...]}. A column left with
-    // nothing visible folds away, and comes back as a drop target while a section is dragged.
+    // ── Window layout (rule window, technique windows, a system's page) ──
+    // A layout root ([data-layout-key]: a window's .rule-modal, or a page's wrapper) holds columns
+    // (.rm-col[data-col]) of sections ([data-section]). "…" › Sections (components/window_ui.html)
+    // shows and hides them, and while its Move sections switch is on every section's handle shows:
+    // drag it to any place in any column, or use the arrow keys on it. The arrangement is
+    // remembered per kind of root (data-layout-key) as {cols: {left: [...], centre: [...]}, hidden:
+    // [...]}. In a window, a column left with nothing visible folds away, and comes back as a drop
+    // target while a section is dragged.
     var WINDOW_COL_WIDTHS = { left: 'minmax(260px, 1fr)', centre: 'minmax(0, 1.7fr)', right: 'minmax(240px, 0.85fr)' };
-    function windowCols(modal) { return Array.prototype.slice.call(modal.querySelectorAll('.rm-body > .rm-col[data-col]')); }
+    function layoutRoot(el) { return el.closest('[data-layout-key]'); }
+    function windowCols(modal) {
+        return Array.prototype.slice.call(modal.querySelectorAll('.rm-col[data-col]')).filter(function(col) { return layoutRoot(col) === modal; });
+    }
     function windowSections(col) { return Array.prototype.slice.call(col.querySelectorAll(':scope > [data-section]')); }
     function currentWindowLayout(modal) {
         var cols = {}, hidden = [];
@@ -885,20 +897,38 @@ console.debug('TIDE app.js loading...');
         }
         writePref(key, now);
     }
+    // Move sections stays on while the window is open (prev/next, Validate and Sync re-render it)
+    // and goes off when it closes; on a page it lasts until the page is left.
+    var windowArrangingKey = null;
+    function setArranging(modal, on) {
+        modal.classList.toggle('is-layout-edit', on);
+        if (modal.closest('#modal-container')) windowArrangingKey = on ? modal.getAttribute('data-layout-key') : null;
+    }
     function applyWindowLayout(modal) {
-        modal._tideDefaultLayout = currentWindowLayout(modal);     // as the page drew it, for Reset
+        // As the page drew it, for Reset; a page is restored again by htmx's first load event.
+        if (!modal._tideDefaultLayout) modal._tideDefaultLayout = currentWindowLayout(modal);
         var saved = readPref(modal.getAttribute('data-layout-key'), null);
+        var legacy = !saved && modal.getAttribute('data-layout-legacy');   // an older order-only pref
+        var order = legacy && readPref(legacy, null), cols = windowCols(modal);
+        if (Array.isArray(order) && cols.length) { saved = { cols: {}, hidden: [] }; saved.cols[cols[0].getAttribute('data-col')] = order; }
         if (saved && saved.cols) arrangeWindow(modal, saved); else fitWindowColumns(modal);
+        if (modal.closest('#modal-container')) modal.classList.toggle('is-layout-edit', windowArrangingKey === modal.getAttribute('data-layout-key'));
     }
 
-    // Sections menu: tick to show, untick to hide. It stays open while ticking (data-keep-open).
+    // "…" › Sections opens the sections panel in place of the menu's items; Back returns. The list
+    // is built as it opens: tick to show, untick to hide. The panel stays open while ticking
+    // (data-keep-open), and the menu opens on its items again next time.
+    function showSectionsPanel(menu, open) {
+        var main = menu.querySelector('[data-rm-menu-main]'), panel = menu.querySelector('[data-rm-sections]');
+        if (!main || !panel) return;
+        main.hidden = open;
+        panel.hidden = !open;
+    }
     function sectionLabel(s) {
         return s.getAttribute('data-section-label') || s.getAttribute('data-section');
     }
-    document.addEventListener('click', function(e) {
-        var toggle = e.target.closest && e.target.closest('[data-rm-layout] [data-more-toggle]');
-        if (!toggle) return;
-        var modal = toggle.closest('.rule-modal'), list = modal.querySelector('[data-rm-layout-list]');
+    function fillSectionsPanel(panel, modal) {
+        var list = panel.querySelector('[data-rm-layout-list]');
         list.innerHTML = '';
         windowCols(modal).forEach(function(col) {
             windowSections(col).forEach(function(s) {
@@ -913,11 +943,21 @@ console.debug('TIDE app.js loading...');
                 list.appendChild(label);
             });
         });
-    }, true);
+        panel.querySelector('[data-rm-arrange]').checked = modal.classList.contains('is-layout-edit');
+    }
+    document.addEventListener('click', function(e) {
+        var t = e.target.closest && e.target.closest('[data-rm-sections-open], [data-rm-sections-back]');
+        if (!t) return;
+        var menu = t.closest('.rh-more__menu'), open = t.hasAttribute('data-rm-sections-open');
+        if (open) fillSectionsPanel(menu.querySelector('[data-rm-sections]'), layoutRoot(t));
+        showSectionsPanel(menu, open);
+        menu.querySelector(open ? '[data-rm-sections-back]' : '[data-rm-sections-open]').focus({ preventScroll: true });
+    });
     document.addEventListener('change', function(e) {
-        var box = e.target.closest && e.target.closest('[data-rm-show]');
+        var box = e.target.closest && e.target.closest('[data-rm-show], [data-rm-arrange]');
         if (!box) return;
-        var modal = box.closest('.rule-modal');
+        var modal = layoutRoot(box);
+        if (box.hasAttribute('data-rm-arrange')) { setArranging(modal, box.checked); return; }
         var s = modal.querySelector('.rm-col > [data-section="' + box.getAttribute('data-rm-show') + '"]');
         if (!s) return;
         s.hidden = !box.checked;
@@ -927,7 +967,7 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('click', function(e) {
         var btn = e.target.closest && e.target.closest('[data-rm-layout-reset]');
         if (!btn) return;
-        var modal = btn.closest('.rule-modal');
+        var modal = layoutRoot(btn);
         if (modal._tideDefaultLayout) arrangeWindow(modal, modal._tideDefaultLayout);
         try { localStorage.removeItem(modal.getAttribute('data-layout-key')); } catch (_) { /* storage blocked */ }
         closeMoreMenus(null);
@@ -943,7 +983,7 @@ console.debug('TIDE app.js loading...');
         var handle = e.target.closest && e.target.closest('[data-rm-drag]');
         if (!handle) return;
         draggingSection = handle.closest('[data-section]');
-        var modal = draggingSection.closest('.rule-modal');
+        var modal = layoutRoot(draggingSection);
         modal.classList.add('is-arranging');
         fitWindowColumns(modal);
         draggingSection.classList.add('is-dragging');
@@ -956,7 +996,7 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('dragover', function(e) {
         if (!draggingSection) return;
         var col = e.target.closest && e.target.closest('.rm-col[data-col]');
-        if (!col || col.closest('.rule-modal') !== draggingSection.closest('.rule-modal')) return;
+        if (!col || layoutRoot(col) !== layoutRoot(draggingSection)) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         var before = null;
@@ -976,7 +1016,7 @@ console.debug('TIDE app.js loading...');
     });
     document.addEventListener('dragend', function() {
         if (!draggingSection) return;
-        var modal = draggingSection.closest('.rule-modal');
+        var modal = layoutRoot(draggingSection);
         draggingSection.classList.remove('is-dragging');
         if (dropMarker) dropMarker.remove();
         modal.classList.remove('is-arranging');
@@ -986,7 +1026,7 @@ console.debug('TIDE app.js loading...');
     });
     // Move a section one place up or down (-1 / 1), or to the column to the 'left' or 'right'.
     function moveWindowSection(section, dir) {
-        var col = section.parentElement, modal = section.closest('.rule-modal');
+        var col = section.parentElement, modal = layoutRoot(section);
         if (typeof dir === 'number') {
             var shown = windowSections(col).filter(function(s) { return !s.hidden; }), j = shown.indexOf(section) + dir;
             if (j < 0 || j >= shown.length) return;
@@ -1000,10 +1040,10 @@ console.debug('TIDE app.js loading...');
         saveWindowLayout(modal);
         section.scrollIntoView({ block: 'nearest' });
     }
-    // Or with the keyboard: arrow keys on a focused handle (or in a section's move bar) move its
-    // section. (Captured first, so ← → don't also step to another rule.)
+    // Or with the keyboard: arrow keys on a focused handle move its section. (Captured first, so
+    // ← → don't also step to another rule.)
     document.addEventListener('keydown', function(e) {
-        var handle = e.target.closest && e.target.closest('[data-rm-drag], [data-rm-movebar]');
+        var handle = e.target.closest && e.target.closest('[data-rm-drag]');
         var dir = handle && { ArrowUp: -1, ArrowDown: 1, ArrowLeft: 'left', ArrowRight: 'right' }[e.key];
         if (!dir) return;
         e.preventDefault();
@@ -1012,88 +1052,12 @@ console.debug('TIDE app.js loading...');
         e.target.focus({ preventScroll: true });
     }, true);
 
-    // A section's "…" › Move (components/window_ui.html section_menu): its head shows the move bar
-    // -- drag handle, arrows, Done -- until Done, Esc, or another section is moved.
-    function stopMovingSections(except) {
-        document.querySelectorAll('[data-section].is-moving').forEach(function(s) {
-            if (s === except) return;
-            s.classList.remove('is-moving');
-            var bar = s.querySelector('[data-rm-movebar]');
-            if (bar) bar.hidden = true;
-        });
-    }
-    document.addEventListener('click', function(e) {
-        var t = e.target.closest && e.target.closest('[data-rm-move-start], [data-rm-step], [data-rm-move-done]');
-        if (!t) return;
-        var section = t.closest('[data-section]');
-        if (t.hasAttribute('data-rm-move-done')) { stopMovingSections(null); return; }
-        if (t.hasAttribute('data-rm-step')) {
-            var step = t.getAttribute('data-rm-step');
-            moveWindowSection(section, { up: -1, down: 1 }[step] || step);
-            t.focus({ preventScroll: true });
-            return;
-        }
-        stopMovingSections(section);
-        section.classList.add('is-moving');
-        var bar = section.querySelector('[data-rm-movebar]');
-        bar.hidden = false;
-        section.scrollIntoView({ block: 'nearest' });
-        bar.querySelector('[data-rm-drag]').focus({ preventScroll: true });
-    });
-    document.addEventListener('keydown', function(e) {
-        if (e.key !== 'Escape' || !document.querySelector('[data-section].is-moving')) return;
-        e.preventDefault();
-        e.stopPropagation();          // ends moving; the window stays open
-        stopMovingSections(null);
-    }, true);
-
-    // Page sections (a container with data-order-key, e.g. a system's Baselines / Devices /
-    // Heatmap): order remembered, moved with their up/down buttons.
-    function ruleOrderKey(col) { return col.getAttribute('data-order-key'); }
-    function ruleSectionEls(col) { return Array.prototype.slice.call(col.querySelectorAll(':scope > [data-section]')); }
-    function updateMoveButtons(col) {
-        var items = ruleSectionEls(col);
-        items.forEach(function(el, i) {
-            var up = el.querySelector('[data-rm-move="up"]'), down = el.querySelector('[data-rm-move="down"]');
-            if (up) up.disabled = i === 0;
-            if (down) down.disabled = i === items.length - 1;
-        });
-    }
-    function applyRuleSectionOrder(col) {
-        var order = readPref(ruleOrderKey(col), []);
-        if (Array.isArray(order) && order.length) {
-            var items = ruleSectionEls(col), byKey = {};
-            items.forEach(function(el) { byKey[el.getAttribute('data-section')] = el; });
-            var anchor = col.querySelector(':scope > .rm-note');            // keep non-section notes where they are
-            order.forEach(function(k) { if (byKey[k]) { col.insertBefore(byKey[k], anchor); delete byKey[k]; } });
-            Object.keys(byKey).forEach(function(k) { col.insertBefore(byKey[k], anchor); });   // sections added later go last
-        }
-        updateMoveButtons(col);
-    }
-    document.addEventListener('click', function(e) {
-        var btn = e.target.closest && e.target.closest('[data-rm-move]');
-        if (!btn || btn.disabled) return;
-        e.preventDefault();               // the buttons live inside <summary>: do not toggle the section
-        e.stopPropagation();
-        var section = btn.closest('[data-section]'), col = section && section.parentElement;
-        if (!col) return;
-        var items = ruleSectionEls(col), i = items.indexOf(section);
-        var j = btn.getAttribute('data-rm-move') === 'up' ? i - 1 : i + 1;
-        if (j < 0 || j >= items.length) return;
-        if (j < i) col.insertBefore(section, items[j]); else col.insertBefore(items[j], section);
-        writePref(ruleOrderKey(col), ruleSectionEls(col).map(function(el) { return el.getAttribute('data-section'); }));
-        updateMoveButtons(col);
-        var same = section.querySelector('[data-rm-move="' + btn.getAttribute('data-rm-move') + '"]');
-        var target = same && !same.disabled ? same : section.querySelector('[data-rm-move]:not(:disabled)');
-        if (target) target.focus({ preventScroll: true });
-        section.scrollIntoView({ block: 'nearest' });
-    }, true);
-
-    // ── Dashboard layout editor (pages/core/dashboard.html?edit=mine|client) ──
+    // ── Dashboard editor (pages/core/dashboard.html?edit=1) ──
     // Each [data-dash-card] in the editing grid moves by its handle (drag it, or the arrow keys on
     // it) or its ← → buttons, gets narrower or wider in twelfths of the page, and is removed with ×.
-    // Add copies a <template data-dash-template>; a section shows at most once. Save posts the whole
-    // layout as JSON (the server checks it). Leaving with unsaved changes asks first.
+    // Add copies a <template data-dash-template>; a section can be added any number of times. A
+    // section's preview follows its cards and filters as they change. Save posts the name and the
+    // whole layout as JSON (the server checks it). Leaving with unsaved changes asks first.
     var DASH_WIDTHS = [3, 4, 6, 8, 9, 12];
     var DASH_WIDTH_LABELS = { 3: '¼', 4: '⅓', 6: '½', 8: '⅔', 9: '¾', 12: 'Full' };
     var dashDirty = false, dashDragging = null;
@@ -1102,19 +1066,14 @@ console.debug('TIDE app.js loading...');
     function dashRefresh() {
         var grid = dashGrid();
         if (!grid) return;
-        var cards = dashCards(grid), present = {};
+        var cards = dashCards(grid);
         cards.forEach(function(c, i) {
-            present[c.getAttribute('data-type')] = true;
             var w = +c.getAttribute('data-w');
             c.querySelector('[data-dash-step="-1"]').disabled = i === 0;
             c.querySelector('[data-dash-step="1"]').disabled = i === cards.length - 1;
             c.querySelector('[data-dash-width="-1"]').disabled = w <= DASH_WIDTHS[0];
             c.querySelector('[data-dash-width="1"]').disabled = w >= DASH_WIDTHS[DASH_WIDTHS.length - 1];
             c.querySelector('[data-dash-width-label]').textContent = DASH_WIDTH_LABELS[w] || w;
-        });
-        document.querySelectorAll('[data-dash-add]').forEach(function(b) {
-            var t = b.getAttribute('data-dash-add');
-            b.disabled = t !== 'title' && t !== 'text' && !!present[t];
         });
     }
     function dashChanged() { dashDirty = true; dashRefresh(); }
@@ -1139,7 +1098,7 @@ console.debug('TIDE app.js loading...');
         dashChanged();
     }
     function dashFocus(card) {
-        var el = card && (card.querySelector('[data-dash-text]') || card.querySelector('[data-dash-drag]'));
+        var el = card && (card.querySelector('[data-dash-text], [data-dash-name]') || card.querySelector('[data-dash-drag]'));
         if (el) el.focus({ preventScroll: true });
     }
     document.addEventListener('click', function(e) {
@@ -1151,6 +1110,7 @@ console.debug('TIDE app.js loading...');
             var grid = dashGrid();
             grid.appendChild(tpl.content.cloneNode(true));
             var added = dashCards(grid).pop();
+            if (added.getAttribute('data-type') === 'section') dashPreview(added);
             dashChanged();
             added.scrollIntoView({ block: 'nearest' });
             dashFocus(added);
@@ -1175,7 +1135,50 @@ console.debug('TIDE app.js loading...');
         handle.focus({ preventScroll: true });
     });
     document.addEventListener('input', function(e) {
-        if (e.target.closest && e.target.closest('[data-dash-text]')) dashDirty = true;
+        if (e.target.closest && e.target.closest('[data-dash-text], [data-dash-name], [data-dash-editbar]')) dashDirty = true;
+    });
+
+    // A card as the server stores it. A section: its name, the cards it shows and its filters
+    // (each [data-dash-filter] by name; ticked boxes of one name make a list).
+    function dashCardData(c) {
+        var card = { type: c.getAttribute('data-type'), w: +c.getAttribute('data-w') }, text = c.querySelector('[data-dash-text]');
+        if (text) card.text = text.value;
+        if (card.type !== 'section') return card;
+        card.source = c.getAttribute('data-source');
+        card.name = c.querySelector('[data-dash-name]').value;
+        card.metrics = Array.prototype.map.call(c.querySelectorAll('[data-dash-metric]:checked'), function(b) { return b.value; });
+        card.filters = {};
+        c.querySelectorAll('[data-dash-filter]').forEach(function(el) {
+            var key = el.getAttribute('data-dash-filter');
+            if (el.type === 'checkbox') {
+                card.filters[key] = card.filters[key] || [];
+                if (el.checked) card.filters[key].push(el.value);
+            } else if (el.value !== '') {
+                card.filters[key] = el.value;
+            }
+        });
+        return card;
+    }
+    // The section's cards as its settings stand, from the server (the same partial the page shows).
+    var dashPreviewTimers = new WeakMap();
+    function dashPreview(card) {
+        var target = card.querySelector('[data-dash-preview]');
+        if (!target) return;
+        clearTimeout(dashPreviewTimers.get(card));
+        dashPreviewTimers.set(card, setTimeout(function() {
+            htmx.ajax('POST', '/api/dashboard/preview', {
+                source: target, target: target, swap: 'innerHTML', values: { card: JSON.stringify(dashCardData(card)) },
+            });
+        }, 350));
+    }
+    ['change', 'input'].forEach(function(name) {
+        document.addEventListener(name, function(e) {
+            var settings = e.target.closest && e.target.closest('[data-dash-settings]');
+            if (!settings || !dashGrid()) return;
+            if (name === 'input' && e.target.type !== 'text' && e.target.type !== 'number') return;
+            dashDirty = true;
+            dashPreview(settings.closest('[data-dash-card]'));
+        });
     });
 
     // Drag: the card follows the pointer, landing before or after the card under it (beside it, or
@@ -1220,18 +1223,14 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('submit', function(e) {
         var form = e.target.closest && e.target.closest('[data-dash-save]');
         if (!form) return;
-        form.querySelector('[data-dash-layout-field]').value = JSON.stringify(dashCards(dashGrid()).map(function(c) {
-            var card = { type: c.getAttribute('data-type'), w: +c.getAttribute('data-w') }, text = c.querySelector('[data-dash-text]');
-            if (text) card.text = text.value;
-            return card;
-        }));
+        form.querySelector('[data-dash-layout-field]').value = JSON.stringify(dashCards(dashGrid()).map(dashCardData));
     }, true);
     document.addEventListener('htmx:beforeOnLoad', function(e) {
         if (e.detail.elt && e.detail.elt.matches && e.detail.elt.matches('[data-dash-save]') && e.detail.xhr.status < 300) dashDirty = false;
     });
     document.addEventListener('htmx:beforeRequest', function(e) {
         if (!dashDirty || !dashGrid() || !e.detail.boosted || (e.detail.elt.closest && e.detail.elt.closest('[data-dash-cancel]'))) return;
-        if (window.confirm('Leave without saving your Dashboard layout?')) dashDirty = false;
+        if (window.confirm('Leave without saving this dashboard?')) dashDirty = false;
         else e.preventDefault();
     });
     window.addEventListener('beforeunload', function(e) {
@@ -1269,7 +1268,7 @@ console.debug('TIDE app.js loading...');
             panel = btn.closest('.rm-panel[data-fold], .sys-section[data-fold]');
         } else {
             var head = e.target.closest('.rm-panel[data-fold] > .rm-panel__head');
-            if (!head || e.target.closest('a, button, input, select, textarea, label, [data-more], [data-rm-movebar]')) return;
+            if (!head || e.target.closest('a, button, input, select, textarea, label, [data-more]')) return;
             if (window.getSelection && String(window.getSelection())) return;
             panel = head.parentElement;
         }
@@ -1282,20 +1281,24 @@ console.debug('TIDE app.js loading...');
         writePref(key, folds);
     }, true);
 
-    // Page-level reorderable sections (a container with data-order-key AND data-fold-store; a
-    // window's columns restore themselves on swap, above): restore order and open/closed state on
-    // a full load and on every boosted navigation, which swaps the body without a load event.
+    // Page sections (a system's Baselines / Devices / Heatmap: a container with data-fold-store,
+    // under a page's layout root; a window restores itself on swap, below): restore open/closed
+    // state and arrangement on a full load and on every boosted navigation, which swaps the body
+    // without a load event.
     function restorePageSections(root) {
         var scope = root && root.querySelectorAll ? root : document;
-        var cols = Array.prototype.slice.call(scope.querySelectorAll('[data-order-key][data-fold-store]'));
-        if (scope.matches && scope.matches('[data-order-key][data-fold-store]')) cols.push(scope);
-        cols.forEach(function(col) {
+        function within(sel) {
+            var found = Array.prototype.slice.call(scope.querySelectorAll(sel));
+            if (scope.matches && scope.matches(sel)) found.push(scope);
+            return found;
+        }
+        within('[data-fold-store]').forEach(function(col) {
             var folds = readPref(col.getAttribute('data-fold-store') || '', {}) || {};
             col.querySelectorAll(':scope > [data-fold]').forEach(function(panel) {
                 if (folds[panel.getAttribute('data-fold')] === false) setPanelCollapsed(panel, true);
             });
-            applyRuleSectionOrder(col);
         });
+        within('[data-layout-key]:not(.rule-modal)').forEach(applyWindowLayout);
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function() { restorePageSections(); });
     else restorePageSections();
@@ -1391,6 +1394,7 @@ console.debug('TIDE app.js loading...');
         document.querySelectorAll('[data-more] .rh-more__menu:not([hidden])').forEach(function(m) {
             if (m === except) return;
             m.hidden = true;
+            showSectionsPanel(m, false);
             var t = m.parentElement.querySelector('[data-more-toggle]');
             if (t) t.setAttribute('aria-expanded', 'false');
         });
@@ -1405,9 +1409,9 @@ console.debug('TIDE app.js loading...');
             return;
         }
         // Picking an item, or clicking anywhere else, closes any open menu. Deferred so the item's
-        // own htmx/onclick handler still sees it. A menu of checkboxes (data-keep-open) stays open
-        // while they are ticked.
-        if (e.target.closest && e.target.closest('.rh-more__menu[data-keep-open]')) return;
+        // own htmx/onclick handler still sees it. A menu of checkboxes (data-keep-open), or a part
+        // of one (the Sections panel), stays open while they are ticked.
+        if (e.target.closest && e.target.closest('.rh-more__menu[data-keep-open], .rh-more__menu [data-keep-open]')) return;
         setTimeout(function() { closeMoreMenus(null); }, 0);
     });
     // Esc closes an open menu first; only the next Esc closes the window it is in.
@@ -1428,9 +1432,12 @@ console.debug('TIDE app.js loading...');
     });
 
     // An edit swapped into a collapsed section (Update from its "…" menu) opens it, without changing
-    // the remembered fold, so the form is never loaded out of sight.
+    // the remembered fold, so the form is never loaded out of sight. Content a section loads by
+    // itself (Sigma rules' suggestions) leaves it as it was.
     document.addEventListener('htmx:afterSwap', function(e) {
         var target = e.detail && e.detail.target;
+        var elt = e.detail && e.detail.requestConfig && e.detail.requestConfig.elt;
+        if (!elt || !elt.closest || !elt.closest('.rh-more__menu')) return;
         var panel = target && target.closest && target.closest('.rule-modal .rm-panel.is-collapsed[data-fold]');
         if (panel) setPanelCollapsed(panel, false);
     });
@@ -1439,6 +1446,8 @@ console.debug('TIDE app.js loading...');
     document.addEventListener('htmx:afterSwap', function(e) {
         var target = e.detail && e.detail.target;
         if (!target || target.id !== 'modal-container') return;
+        // A window opened afresh (not swapped in place of an open one) starts with Move sections off.
+        if (!target.classList.contains('rm-swap-quiet')) windowArrangingKey = null;
         var modal = target.querySelector('.rule-modal[data-rule-dom-id]');
         if (!modal) return;
         var folds = readRuleModalFolds();

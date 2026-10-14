@@ -1,3 +1,5 @@
+{% from "macros/metrics.html" import metric_card %}
+{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
 {% from "macros/icons.html" import icon, icon_text %}
 <!-- Metrics Row Partial - swappable via HTMX -->
 
@@ -7,7 +9,7 @@
 {% set has_states = (metrics.state_linked + metrics.state_deprecated + metrics.state_offline) > 0 %}
 {% set scopes = metrics.rules_by_scope.items() | list %}
 {% set scope_labels = scope_labels | default({}) %}
-<div class="metric-card metric-card--tip" tabindex="0">
+{% call metric_card('total', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.total_rules }}</p>
     <p class="metric-label">Total Rules</p>
     <p class="metric-sub">
@@ -30,17 +32,17 @@
         {% for key, count in scopes %}<div class="metric-tip__row">{{ scope_labels.get(key, key.split('|')[-1] | capitalize) }} <span>{{ count }}</span></div>{% endfor %}
         {% endif %}
     </div>
-</div>
+{% endcall %}
 
 {# ── 2. Enabled ── #}
-<div class="metric-card">
+{% call metric_card('enabled', keys, link) %}
     <p class="metric-value success">{{ metrics.enabled_rules }}</p>
     <p class="metric-label">Enabled</p>
     <p class="metric-sub">{{ metrics.disabled_rules }} disabled</p>
-</div>
+{% endcall %}
 
 {# ── 3. Validated ── #}
-<div class="metric-card metric-card--tip" tabindex="0">
+{% call metric_card('validated', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value success">{{ metrics.validated_count }}</p>
     <p class="metric-label">Validated</p>
     <p class="metric-sub">
@@ -52,10 +54,10 @@
         <div class="metric-tip__row"><b class="text-danger">E</b> Expired: validation has lapsed, no longer validated <span>{{ metrics.validation_expired_count }}</span></div>
         <div class="metric-tip__row"><b>N</b> Never validated <span>{{ metrics.never_validated_count }}</span></div>
     </div>
-</div>
+{% endcall %}
 
 {# ── 4. Quality (bracket breakdown) ── #}
-<div class="metric-card metric-card--tip" tabindex="0">
+{% call metric_card('quality', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.avg_score }}</p>
     <p class="metric-label">Avg Quality</p>
     <p class="metric-sub">
@@ -70,11 +72,11 @@
         <div class="metric-tip__row"><b class="text-sev-medium">L</b> Low: 50-69 <span>{{ metrics.quality_fair }}</span></div>
         <div class="metric-tip__row"><b class="text-danger">C</b> Critical: below 50 <span>{{ metrics.quality_poor }}</span></div>
     </div>
-</div>
+{% endcall %}
 
 {# ── 5. Severity ── #}
 {% set sev = metrics.severity_breakdown %}
-<div class="metric-card metric-card--tip" tabindex="0">
+{% call metric_card('severity', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ metrics.total_rules }}</p>
     <p class="metric-label">Severity</p>
     <p class="metric-sub">
@@ -89,13 +91,13 @@
         <div class="metric-tip__row"><b class="text-sev-medium">M</b> Medium <span>{{ sev.get('medium', 0) }}</span></div>
         <div class="metric-tip__row"><b class="text-success">L</b> Low <span>{{ sev.get('low', 0) }}</span></div>
     </div>
-</div>
+{% endcall %}
 
 {# ── 6. Last Synced ── #}
-<div class="metric-card">
+{% call metric_card('last_synced', keys, link) %}
     <p class="metric-value fs-title">
         {{ icon('refresh-cw', '24') }}
     </p>
     <p class="metric-label">Last Synced</p>
     <p class="metric-sub">{{ last_sync_time | default('Never') }}</p>
-</div>
+{% endcall %}

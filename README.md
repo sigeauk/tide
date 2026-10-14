@@ -46,7 +46,9 @@ TIDE is a **standalone, containerised platform** for detection engineering. It b
 TIDE is multi-tenant: each **client** has its own data, users and roles, and its own **destinations** (a SIEM and one of its Kibana spaces) that its rules come from.
 
 ### Dashboard
-- The selected client's rule health, rule promotion, threat landscape, baseline and CVE figures, and the state of its connected services, at a glance.
+- The selected client's figures at a glance, on as many named dashboards as it needs; one is the default, and each person sees the one they opened last.
+- A dashboard is made of sections. Each shows the figures from one page (Rule Health, a system, Threat Landscape, Baselines, Asset Inventory or CVE Overview), or the state of the connected services and repositories. Add a section as often as you like, choose which figures it shows, and filter it as its page is filtered: Rule Health by SIEM, status, state, score, validation date and search, and a system's section by system.
+- Clicking a figure opens its page, filtered the same way, to see what is behind it.
 
 ### Systems, Baselines and Risks
 - **Systems**: the environments you defend, with their devices and software (add them by hand, or import a Nessus scan), their CVEs, and the baselines applied to them.
