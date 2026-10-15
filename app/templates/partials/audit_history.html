@@ -36,7 +36,7 @@
             <span class="badge {% if latest.score_percentage >= 75 %}badge-success{% elif latest.score_percentage >= 50 %}badge-warning{% else %}badge-danger{% endif %} audit-score">{{ latest.score_percentage | round | int }}%</span>
             <span class="fs-xs flex items-center gap-sm">
                 <span class="text-success fw-600" title="Covered">{{ icon('shield-check','11') }} {{ latest.count_green }}</span>
-                <span class="text-warning fw-600" title="Gap">{{ icon('alert-triangle','11') }} {{ latest.count_amber }}</span>
+                <span class="text-warning fw-600" title="Gap">{{ icon('triangle-alert','11') }} {{ latest.count_amber }}</span>
                 <span class="text-danger fw-600" title="Missing">{{ icon('x','11') }} {{ latest.count_red }}</span>
                 <span class="text-muted fw-600" title="N/A">{{ icon('minus-circle','11') }} {{ latest.count_grey }}</span>
             </span>

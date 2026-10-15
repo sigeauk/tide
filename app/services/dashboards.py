@@ -1,7 +1,7 @@
 """Dashboards: a client's named dashboards, what each one shows, and which one each user last opened.
 
 A dashboard is a list of cards, each ``{"type": ..., "w": ...}``: a title or text block (plus
-``text``), or a section (``type`` "section", plus ``source``, ``name``, ``metrics`` and
+``text``), or a section (``type`` "section", plus ``source``, ``name``, ``icon``, ``metrics`` and
 ``filters``) showing chosen metric cards from one source. A source mirrors a page's metric strip
 (Rule Health, a system, Threat Landscape, ...): its cards and, where the page's cards follow its
 filters, those filters. Any source can be added any number of times. ``w`` is the card's width in
@@ -14,13 +14,17 @@ escaped when the page shows it.
 """
 import json
 import logging
+import re
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
+from app.services import builtin_data
 from app.services.tenant_manager import tenant_context_for
 
 logger = logging.getLogger(__name__)
@@ -65,12 +69,13 @@ SOURCES: Dict[str, Source] = {
     "connected_services": Source("Connected Services", "settings", (
         ("siems", "SIEMs"), ("opencti", "OpenCTI"), ("gitlab", "GitLab"), ("logging", "Logging"),
     )),
-    "repositories": Source("Repositories", "github", (
-        ("mitre_enterprise", "MITRE Enterprise ATT&CK"), ("mitre_mobile", "MITRE Mobile ATT&CK"),
-        ("mitre_ics", "MITRE ICS ATT&CK"), ("mitre_pre", "MITRE PRE-ATT&CK"),
-        ("sigma", "Sigma Rules"), ("elastic", "Elastic Detection Rules"),
-    )),
+    # Shown as "Built-in data" since 6.1.3; the key stays, so saved dashboards keep the section.
+    "repositories": Source("Built-in data", "database", builtin_data.ITEMS),
 }
+# A Built-in data section saved before 6.1.3 (when it was Repositories, with Elastic) showing every
+# card it had then also shows the three it gained; only those lists still name Elastic. Its old
+# label, which 6.1.2 saved as its name, gives way to the new one.
+_REPOSITORIES_BEFORE_6_1_3 = ("mitre_enterprise", "mitre_mobile", "mitre_ics", "mitre_pre", "sigma")
 TEXT_CARDS = {"title": 120, "text": 2000}      # type -> most characters
 NAME_LIMIT = 80                                # a section's or a dashboard's name
 WIDTHS = (3, 4, 6, 8, 9, 12)
@@ -86,10 +91,22 @@ DEFAULT_LAYOUT = [{"type": "section", "source": s, "w": 12, "name": "",
 
 
 def new_section(source: str) -> dict:
-    """A section as Add puts it on a dashboard: every card, no filters, and no name of its own, so
-    it is headed by its source (a System section by the system's name) until it is given one."""
-    return {"type": "section", "source": source, "w": 12, "name": "",
+    """A section as Add puts it on a dashboard: every card, no filters, and no name or icon of its
+    own, so it is headed by its source's (a System section by the system's name) until given one."""
+    return {"type": "section", "source": source, "w": 12, "name": "", "icon": "",
             "metrics": [k for k, _ in SOURCES[source].metrics], "filters": {}}
+
+
+@lru_cache(maxsize=1)
+def available_icons() -> Tuple[str, ...]:
+    """Every icon TIDE has (the names in macros/icons.html), sorted: what a section's icon may be."""
+    path = Path(__file__).resolve().parent.parent / "templates" / "macros" / "icons.html"
+    try:
+        names = re.findall(r"^\s*'([a-z0-9-]+)':\s*'<", path.read_text(encoding="utf-8"), re.M)
+    except OSError as exc:
+        logger.warning("Dashboards: could not read the icon set: %s", exc)
+        names = []
+    return tuple(sorted(set(names)))
 
 
 def _one_line(text, limit: int, what: str) -> str:
@@ -167,9 +184,16 @@ def clean(cards) -> List[dict]:
                 continue
             keys = [k for k, _ in SOURCES[source].metrics]
             chosen = card.get("metrics") if isinstance(card.get("metrics"), list) else keys
+            name = _one_line(card.get("name"), NAME_LIMIT, "A section's name")
+            if source == "repositories":
+                if {"elastic", *_REPOSITORIES_BEFORE_6_1_3} <= set(chosen):
+                    chosen = keys  # saved showing every card before 6.1.3 added three: show them too
+                if name == "Repositories":
+                    name = ""      # its 6.1.2 label, saved as its name: show the label it has now
             out.append({
                 "type": "section", "source": source, "w": w,
-                "name": _one_line(card.get("name"), NAME_LIMIT, "A section's name"),
+                "name": name,
+                "icon": card.get("icon") if card.get("icon") in available_icons() else "",
                 "metrics": [k for k in keys if k in chosen] or keys,
                 "filters": _clean_filters(source, card.get("filters")),
             })

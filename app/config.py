@@ -142,27 +142,8 @@ class Settings(BaseSettings):
     gitlab_url: str = Field(default="http://gitlab:8929/", alias="GITLAB_URL")
     gitlab_token: str = Field(default="", alias="GITLAB_TOKEN")
     
-    # --- MITRE DATA SOURCES (local files baked into Docker image) ---
-    mitre_source: str = Field(
-        default="/opt/repos/mitre/enterprise-attack.json",
-        alias="MITRE_SOURCE"
-    )
-    mitre_mobile_source: str = Field(
-        default="/opt/repos/mitre/mobile-attack.json",
-        alias="MITRE_MOBILE_SOURCE"
-    )
-    mitre_ics_source: str = Field(
-        default="/opt/repos/mitre/ics-attack.json",
-        alias="MITRE_ICS_SOURCE"
-    )
-    mitre_pre_source: str = Field(
-        default="/opt/repos/mitre/pre-attack.json",
-        alias="MITRE_PRE_SOURCE"
-    )
-    sigma_repo_url: str = Field(default="(bundled in image)", alias="SIGMA_REPO_URL")
-    elastic_repo_url: str = Field(default="(bundled in image)", alias="ELASTIC_REPO_URL")
+    # --- BUILT-IN DATA (baked into the Docker image; app/services/builtin_data.py reports on it) ---
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")
-    elastic_repo_path: str = Field(default="/opt/repos/elastic-detection-rules", alias="ELASTIC_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")
     
     # --- CVE / VULNERABILITY INTELLIGENCE (baked into Docker image) ---

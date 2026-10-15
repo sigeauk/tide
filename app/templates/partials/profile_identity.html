@@ -1,0 +1,55 @@
+{#
+  Profile: your display name and picture. Rendered by Settings & Administration -> Profile and by
+  each save (app/api/settings.py), which also sends the sidebar's copy out of band (oob).
+  The pencil beside the name swaps it for the name form (prefs.nameEdit, is-editing).
+  Context: user, and after a save message + ok; only a refusal is shown, as a change shows itself.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/avatar.html" import avatar, sidebar_identity %}
+<section class="preference-card profile-identity" id="profile-identity" aria-label="Profile">
+    <div class="preference-header">
+        {{ icon('id-card', '20', 'preference-icon') }}
+        <h3>Profile</h3>
+    </div>
+
+    <div class="profile-identity__row">
+        {{ avatar(user, 'xl') }}
+        <div class="profile-identity__who">
+            <div class="profile-identity__name-line">
+                <span class="profile-identity__name">{{ user.label }}</span>
+                <button name="Edit Display Name" type="button" class="profile-identity__edit" data-click="prefs.nameEdit"
+                        title="Change the name TIDE shows for you" aria-label="Edit display name">{{ icon('pencil', '14') }}</button>
+            </div>
+            <form name="Save Display Name" class="profile-identity__name-form" hx-post="/api/settings/profile/display-name"
+                  hx-target="#profile-identity" hx-swap="outerHTML" data-keyup="prefs.nameKey">
+                <input id="profile-display-name" type="text" name="display_name" class="form-input" maxlength="64"
+                       value="{{ user.display_name or '' }}" placeholder="{{ user.name or user.username }}" aria-label="Display name">
+                <button name="Save Display Name" type="submit" class="btn btn-primary btn-sm">Save</button>
+                <button name="Cancel Display Name" type="button" class="btn btn-secondary btn-sm" data-click="prefs.nameEdit">Cancel</button>
+            </form>
+            <span class="text-muted fs-md">{{ user.username }}{% if user.email %} &middot; {{ user.email }}{% endif %}</span>
+            <div class="profile-identity__actions">
+                <form name="Upload Picture" hx-post="/api/settings/profile/avatar" hx-encoding="multipart/form-data"
+                      hx-trigger="change" hx-target="#profile-identity" hx-swap="outerHTML">
+                    <label class="btn btn-secondary btn-sm">
+                        {{ icon('upload', '14') }} {{ 'Change picture' if user.avatar_version else 'Upload picture' }}
+                        <input type="file" name="avatar" class="sr-only" accept="image/png,image/jpeg,image/webp,image/gif">
+                    </label>
+                </form>
+                {% if user.avatar_version %}
+                <button name="Remove Picture" type="button" class="btn btn-secondary btn-sm"
+                        hx-delete="/api/settings/profile/avatar" hx-target="#profile-identity" hx-swap="outerHTML">
+                    {{ icon('trash-2', '14') }} Remove
+                </button>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    {% if message and not ok %}
+    <p class="profile-identity__message text-danger" role="status">{{ message }}</p>
+    {% endif %}
+</section>
+{% if oob %}
+{{ sidebar_identity(user, oob=true) }}
+{% endif %}

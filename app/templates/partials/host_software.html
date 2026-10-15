@@ -71,7 +71,7 @@
             <button  name="Close Modal" class="btn btn-secondary btn-sm py-xs px-sm fs-xs"
                     data-click="hosts.swEdit" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}"
                     title="Edit">
-                {{ icon('edit-2', '11') }} Edit
+                {{ icon('pencil', '11') }} Edit
             </button>
             <button name="Delete Software" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
                     hx-delete="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"

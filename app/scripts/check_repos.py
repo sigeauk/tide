@@ -40,7 +40,6 @@ def main():
         ("/opt/repos/mitre/enterprise-attack.json", "Enterprise ATT&CK", 5000),
         ("/opt/repos/mitre/mobile-attack.json", "Mobile ATT&CK", 1000),
         ("/opt/repos/mitre/ics-attack.json", "ICS ATT&CK", 500),
-        ("/opt/repos/mitre/pre-attack.json", "Pre-ATT&CK", 100),
     ]
     
     for path, desc, min_size in mitre_files:

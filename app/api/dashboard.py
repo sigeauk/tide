@@ -8,7 +8,6 @@ the dashboards and what a section may show.
 """
 import json
 import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
@@ -23,18 +22,6 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"],
 
 
 # ── what a section shows ─────────────────────────────────────────────────────────────────────
-
-def _repo_status() -> dict:
-    from app.config import get_settings
-    s = get_settings()
-    mitre = lambda name: os.path.isfile(os.path.join(s.mitre_repo_path, name))  # noqa: E731
-    return {
-        "mitre_enterprise": mitre("enterprise-attack.json"), "mitre_mobile": mitre("mobile-attack.json"),
-        "mitre_ics": mitre("ics-attack.json"), "mitre_pre": mitre("pre-attack.json"),
-        "sigma": os.path.isdir(os.path.join(s.sigma_repo_path, "rules")),
-        "elastic": os.path.isdir(s.elastic_repo_path),
-    }
-
 
 def _compute(db, client_id: str, card: dict) -> dict:
     """A section's figures from the database, the same way its page works them out."""
@@ -63,7 +50,8 @@ def _compute(db, client_id: str, card: dict) -> dict:
     if source == "connected_services":
         return {"client_siems": db.get_client_siems(client_id) if client_id else []}
     if source == "repositories":
-        return {"repo_status": _repo_status()}
+        from app.services import builtin_data
+        return {"items": builtin_data.status()}
     return {}
 
 
@@ -110,6 +98,7 @@ def page_context(db, client_id: str, user, dashboard: dict, editing: bool) -> di
         "name_limit": dashboards.NAME_LIMIT,
         "search_limit": dashboards.SEARCH_LIMIT,
         "rule_states": dashboards.RULE_STATES,
+        "icon_names": dashboards.available_icons(),
         "can_edit": bool(user and user.can_write("page:dashboard")),
         "editing": editing,
         "env": get_settings(),

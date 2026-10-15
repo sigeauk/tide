@@ -27,7 +27,7 @@
 {% else %}
 <div class="diag-fix">
     {% if mode == 'refused' %}
-    <p class="diag-fix__refused" role="alert">{{ icon('alert-triangle', '14') }} {{ message }}</p>
+    <p class="diag-fix__refused" role="alert">{{ icon('triangle-alert', '14') }} {{ message }}</p>
     {% endif %}
     {% if p is defined and p %}
     <p><strong>{{ p.fix.label }}</strong> for {{ p.client.name }}. {{ p.fix.does }}</p>

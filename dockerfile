@@ -62,8 +62,7 @@ RUN sigma plugin list >/dev/null && \
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
 RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json && \
     curl -sSL -o /opt/repos/mitre/mobile-attack.json https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json && \
-    curl -sSL -o /opt/repos/mitre/ics-attack.json https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json && \
-    curl -sSL -o /opt/repos/mitre/pre-attack.json https://raw.githubusercontent.com/mitre/cti/master/pre-attack/pre-attack.json
+    curl -sSL -o /opt/repos/mitre/ics-attack.json https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json
 
 # ─── CVE / VULNERABILITY DATA ─────
 RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
@@ -76,9 +75,10 @@ RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
         https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/refs/heads/main/mappings/nist_800_53/attack-16.1/nist_800_53-rev5/enterprise/nist_800_53-rev5_attack-16.1-enterprise.json || \
     echo "WARN: mappings-explorer downloads failed — mapping pages will be incomplete at runtime"
 
-# Copy application code and VERSION file
+# Copy application code, VERSION, and the README and CHANGELOG (shown in Settings & Administration -> Documentation)
 COPY app/ /app/app/
 COPY VERSION /app/VERSION
+COPY README.md CHANGELOG.md /app/
 
 ENV PYTHONPATH="/app"
 

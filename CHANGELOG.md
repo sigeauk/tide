@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.3] - 2026-10-15
+
+### Added
+- **Settings & Administration, under your name.** Your name at the bottom of the sidebar opens like the other sidebar groups, with **Settings**, a switch to the light or dark theme, and **Log Out**. Settings opens Settings & Administration: one page with a tab each for Profile & Preferences, Management, Diagnostics and Documentation, so the sidebar keeps only the pages you use day to day. You see the same tabs your role allowed before: Management for admins, Diagnostics for super admins and Support. Bookmarks to the old Management, Diagnostics and Preferences pages open the right tab.
+- **Your own name and picture.** In **Profile & Preferences**, choose the name TIDE shows for you, and add a picture (PNG, JPEG, WebP or GIF, up to 256 KB). Single sign-on users can do this too. The tab also shows how you sign in, your access, and when you last signed in, alongside the theme, brand colour and your API keys, with Profile, Sign-in and Appearance side by side.
+- **The TIDE guide, inside TIDE.** The **Documentation** tab shows the guide with a list of its sections, and works without internet access. It starts with what's new: every change in the current major version, taken from these release notes, newest first. Every role can read it; admins can change that in Role Templates.
+- **Choose each dashboard section's icon.** In **Edit**, click a section's icon to choose any of TIDE's icons, with a search to find one. **Default icon** puts back the section's own.
+
+### Changed
+- **Figure cards show figures, not descriptions.** Across TIDE (Dashboard, Systems, Baselines, CVE Overview, Threat Landscape, the MITRE pages, CTI and Diagnostics), a card shows its figure, its name, and a second line only when that line holds figures, such as "8 of 24 scored" or the coloured counts under Validated. What the card counts is in a tip when you hover over it or tab to it. When a card has no figure, it still says why.
+- **The Dashboard's Repositories section is now Built-in data, and covers everything TIDE works from offline.** Besides ATT&CK and Sigma, it now shows the CISA KEV catalogue and the two ATT&CK mappings (KEV to ATT&CK, and NIST 800-53 to ATT&CK). Each tile says only whether the data is available. Hover over a tile to see its version or date and when it was bundled into TIDE, for example "Catalogue 2026.10.13, 1,741 vulnerabilities" or "3,154 rules". Tiles no longer show file locations. A section that showed every tile shows the new ones too.
+- **The threat report's coverage table heads its rules column "Detection Rules"**, since the rules come from the client's connected SIEMs.
+
+### Removed
+- **The Notifications and Display preferences.** They were saved in your browser but never changed anything.
+- **The Elastic Detection Rules tile.** TIDE never bundled those rules, so the tile always said "Not Found". Rules come from the client's connected SIEMs. The `ELASTIC_REPO_URL`, `ELASTIC_REPO_PATH`, `SIGMA_REPO_URL` and `MITRE_*_SOURCE` settings are gone too, as nothing reads them. If they're still set, TIDE ignores them.
+- **PRE-ATT&CK.** MITRE retired it in ATT&CK v8 (2020) and moved its content into Enterprise, as the Reconnaissance and Resource Development tactics. TIDE no longer bundles it. It added nothing current: its techniques were all retired, and its seven groups are in Enterprise too. The MITRE pages' source filter no longer offers PRE, and the Built-in data section no longer lists it. Until the next threat sync, the seven actors it covered still show PRE as one of their sources.
+
+### Fixed
+- **The brand colour now changes TIDE's accent colour.** The brand colour slider (now in **Profile & Preferences**) used to change nothing. It now recolours buttons, links, tabs and highlights in both themes, and **Reset** puts back the default.
+
 ## [6.1.2] - 2026-10-14
 
 ### Added

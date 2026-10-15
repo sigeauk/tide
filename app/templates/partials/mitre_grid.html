@@ -4,7 +4,7 @@
   replaces the metric strip, out of band.
   mode: flat | append (a later page) | groups (group heads only) | group_body (one group's items).
 #}
-{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/icons.html" import icon %}
 {% from "components/mitre_ui.html" import coverage_pill, source_pills %}
 
 {% macro sort_arrow(key) -%}
@@ -72,11 +72,13 @@
 
 {% if mode in ('flat', 'groups') %}
 <div class="metrics-grid" id="catalog-metrics" hx-swap-oob="true">
+    {# A card's figures only: a sub-line when it adds figures, what it counts in its hover tip. #}
     {% for m in metrics %}
-    <div class="metric-card">
+    <div class="metric-card{{ ' metric-card--tip' if m.tip }}"{% if m.tip %} tabindex="0"{% endif %}>
         <p class="metric-value {{ m.tone | default('') }}">{{ m.value }}</p>
         <p class="metric-label">{{ m.label }}</p>
-        <p class="metric-sub">{{ icon_text(m.icon, m.sub, '14') }}</p>
+        {% if m.sub %}<p class="metric-sub">{{ m.sub }}</p>{% endif %}
+        {% if m.tip %}<div class="metric-tip" role="tooltip">{{ m.tip }}</div>{% endif %}
     </div>
     {% endfor %}
 </div>

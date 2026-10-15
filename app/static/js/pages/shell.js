@@ -1,6 +1,6 @@
 /*
- * Controls used across the app, over the helpers in app.js: the sidebar (nav groups, user menu,
- * theme, collapse) and client switcher, MITRE technique pills (open the side panel), the rule
+ * Controls used across the app, over the helpers in app.js: the sidebar (nav groups, the account
+ * group's theme switch, collapse) and client switcher, MITRE technique pills (open the side panel), the rule
  * window's Move / Delete / Add link, the rule compare window, clickable list rows, Expand / Collapse
  * all, and a few form helpers (diagnostics, generate baselines, a system's Manage baselines).
  */
@@ -11,7 +11,6 @@
 
     TIDE.actions('nav', {
         group: function (e, el) { window.toggleNavGroup(el.dataset.group); },
-        userMenu: function (e) { window.toggleUserMenu(e); },
         clientMenu: function (e) { window.toggleClientMenu(e); },
         theme: function () { window.toggleTheme(); },
         sidebar: function () { window.toggleSidebar(); },

@@ -28,16 +28,16 @@
 
 {# ── Type-count summary cards (top 5 + total) ─────────────── #}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ total_indicators }}</p>
         <p class="metric-label">Total indicators</p>
-        <p class="metric-sub">{{ icon_text('database','Within TLP ceiling','14') }}</p>
+        <div class="metric-tip" role="tooltip">Within TLP ceiling</div>
     </div>
     {% for pt, n in type_counts[:5] %}
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ n }}</p>
         <p class="metric-label">{{ pt }}</p>
-        <p class="metric-sub">{{ icon_text('hash','Pattern type','14') }}</p>
+        <div class="metric-tip" role="tooltip">Pattern type</div>
     </div>
     {% endfor %}
 </div>

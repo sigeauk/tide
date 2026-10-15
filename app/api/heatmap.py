@@ -331,7 +331,6 @@ def get_technique_detail(
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1

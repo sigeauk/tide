@@ -27,10 +27,9 @@ SOURCE_META: Dict[str, Dict[str, str]] = {
     "enterprise": {"label": "MITRE ATT&CK Enterprise", "code": "ENT", "pill_class": "src-enterprise"},
     "mobile": {"label": "MITRE ATT&CK Mobile", "code": "MOB", "pill_class": "src-mobile"},
     "ics": {"label": "MITRE ATT&CK ICS", "code": "ICS", "pill_class": "src-ics"},
-    "pre": {"label": "MITRE ATT&CK PRE", "code": "PRE", "pill_class": "src-pre"},
 }
-SOURCE_ORDER = ["enterprise", "ics", "mobile", "pre"]
-SOURCE_OPTIONS = [("all", "All"), ("enterprise", "Enterprise"), ("mobile", "Mobile"), ("ics", "ICS"), ("pre", "PRE")]
+SOURCE_ORDER = ["enterprise", "ics", "mobile"]
+SOURCE_OPTIONS = [("all", "All"), ("enterprise", "Enterprise"), ("mobile", "Mobile"), ("ics", "ICS")]
 
 
 def resolve_source(src: str) -> Tuple[str, Dict[str, str]]:
@@ -86,7 +85,7 @@ def resolve_detail(db, kind: str, object_id: str, src: str) -> Tuple[str, Option
     detail = getter(object_id, domain=src)
     if detail:
         return src, detail
-    for candidate in ("enterprise", "mobile", "ics", "pre"):
+    for candidate in ("enterprise", "mobile", "ics"):
         if candidate != src:
             detail = getter(object_id, domain=candidate)
             if detail:
@@ -203,7 +202,7 @@ def _plural(n: int, word: str, plural: Optional[str] = None) -> str:
     return f"{n} {word if n == 1 else (plural or word + 's')}"
 
 
-def _coverage_metrics(items: List[dict], first: dict, second: dict, avg_sub: str) -> List[dict]:
+def _coverage_metrics(items: List[dict], first: dict, second: dict, avg_tip: str) -> List[dict]:
     """The metric strip of a kind scored by coverage_of: its own first two cards, then fully,
     partly and not covered, then the average coverage of those with techniques to cover."""
     levels = {k: 0 for k in COVERAGE_LEVELS}
@@ -214,10 +213,10 @@ def _coverage_metrics(items: List[dict], first: dict, second: dict, avg_sub: str
     return [
         first,
         second,
-        {"value": levels["full"], "label": "Fully covered", "sub": "Every technique has a rule", "icon": "shield-check", "tone": "success" if levels["full"] else ""},
-        {"value": levels["partial"], "label": "Partly covered", "sub": "Some techniques have rules", "icon": "shield", "tone": "warning" if levels["partial"] else ""},
-        {"value": levels["none"], "label": "Not covered", "sub": "No technique has a rule", "icon": "shield-off", "tone": "danger" if levels["none"] else ""},
-        {"value": f"{avg}%" if avg is not None else "—", "label": "Average coverage", "sub": avg_sub, "icon": "target"},
+        {"value": levels["full"], "label": "Fully covered", "tip": "Every technique has a rule", "tone": "success" if levels["full"] else ""},
+        {"value": levels["partial"], "label": "Partly covered", "tip": "Some techniques have rules", "tone": "warning" if levels["partial"] else ""},
+        {"value": levels["none"], "label": "Not covered", "tip": "No technique has a rule", "tone": "danger" if levels["none"] else ""},
+        {"value": f"{avg}%" if avg is not None else "—", "label": "Average coverage", "tip": avg_tip},
     ]
 
 
@@ -251,8 +250,8 @@ def _groups_metrics(items: List[dict]) -> List[dict]:
     using = sum(1 for it in items if it.get("coverage"))
     return _coverage_metrics(
         items,
-        {"value": len(items), "label": "Groups", "sub": "Matching the filters", "icon": "users"},
-        {"value": using, "label": "Using techniques", "sub": "With ATT&CK techniques", "icon": "crosshair"},
+        {"value": len(items), "label": "Groups", "tip": "Matching the filters"},
+        {"value": using, "label": "Using techniques", "tip": "With ATT&CK techniques"},
         "Across groups using techniques",
     )
 
@@ -406,12 +405,12 @@ def _techniques_metrics(items: List[dict]) -> List[dict]:
     used_gaps = sum(1 for it in items if it["coverage"]["level"] != "full" and it["group_count"])
     pct = round(100 * levels["full"] / len(items)) if items else None
     return [
-        {"value": len(items), "label": "Techniques", "sub": f"{len(items) - subs} techniques, {subs} sub-techniques", "icon": "crosshair"},
-        {"value": levels["full"], "label": "Covered", "sub": "An enabled rule carries the id", "icon": "shield-check", "tone": "success" if levels["full"] else ""},
-        {"value": levels["partial"], "label": "Through sub-techniques", "sub": "Only some sub-techniques have rules", "icon": "shield", "tone": "warning" if levels["partial"] else ""},
-        {"value": levels["none"], "label": "Not covered", "sub": "No enabled rule", "icon": "shield-off", "tone": "danger" if levels["none"] else ""},
-        {"value": used_gaps, "label": "Gaps groups use", "sub": "Not fully covered, used by a known group", "icon": "users", "tone": "danger" if used_gaps else ""},
-        {"value": f"{pct}%" if pct is not None else "—", "label": "Coverage", "sub": "Of the techniques shown", "icon": "target"},
+        {"value": len(items), "label": "Techniques", "sub": f"{len(items) - subs} techniques, {subs} sub-techniques"},
+        {"value": levels["full"], "label": "Covered", "tip": "An enabled rule carries the id", "tone": "success" if levels["full"] else ""},
+        {"value": levels["partial"], "label": "Through sub-techniques", "tip": "Only some sub-techniques have rules", "tone": "warning" if levels["partial"] else ""},
+        {"value": levels["none"], "label": "Not covered", "tip": "No enabled rule", "tone": "danger" if levels["none"] else ""},
+        {"value": used_gaps, "label": "Gaps groups use", "tip": "Not fully covered, used by a known group", "tone": "danger" if used_gaps else ""},
+        {"value": f"{pct}%" if pct is not None else "—", "label": "Coverage", "tip": "Of the techniques shown"},
     ]
 
 
@@ -554,8 +553,8 @@ def _software_metrics(items: List[dict]) -> List[dict]:
     used = sum(1 for it in items if it["group_count"])
     return _coverage_metrics(
         items,
-        {"value": len(items), "label": "Software", "sub": f"{malware} malware, {_plural(len(items) - malware, 'tool')}", "icon": "package"},
-        {"value": used, "label": "Used by groups", "sub": "At least one known group uses it", "icon": "users"},
+        {"value": len(items), "label": "Software", "sub": f"{malware} malware, {_plural(len(items) - malware, 'tool')}"},
+        {"value": used, "label": "Used by groups", "tip": "At least one known group uses it"},
         "Across software with techniques",
     )
 
@@ -629,8 +628,8 @@ def _campaigns_metrics(items: List[dict]) -> List[dict]:
     attributed = sum(1 for it in items if it["group_ids"])
     return _coverage_metrics(
         items,
-        {"value": len(items), "label": "Campaigns", "sub": "Matching the filters", "icon": "activity"},
-        {"value": attributed, "label": "Attributed", "sub": "Linked to a known group", "icon": "users"},
+        {"value": len(items), "label": "Campaigns", "tip": "Matching the filters"},
+        {"value": attributed, "label": "Attributed", "tip": "Linked to a known group"},
         "Across campaigns using techniques",
     )
 
@@ -687,8 +686,8 @@ def _mitigations_metrics(items: List[dict]) -> List[dict]:
     addressed = set().union(*(it["technique_ids"] for it in items)) if items else set()
     return _coverage_metrics(
         items,
-        {"value": len(items), "label": "Mitigations", "sub": "Matching the filters", "icon": "shield"},
-        {"value": len(addressed), "label": "Techniques addressed", "sub": "Mitigated by those shown", "icon": "crosshair"},
+        {"value": len(items), "label": "Mitigations", "tip": "Matching the filters"},
+        {"value": len(addressed), "label": "Techniques addressed", "tip": "Mitigated by those shown"},
         "Of the techniques each mitigates",
     )
 
@@ -752,8 +751,8 @@ def _tactics_metrics(items: List[dict]) -> List[dict]:
     ids = set().union(*(it["technique_ids"] for it in items)) if items else set()
     return _coverage_metrics(
         items,
-        {"value": len(items), "label": "Tactics", "sub": "Matching the filters", "icon": "layers"},
-        {"value": len(ids), "label": "Techniques", "sub": "Techniques and sub-techniques under them", "icon": "crosshair"},
+        {"value": len(items), "label": "Tactics", "tip": "Matching the filters"},
+        {"value": len(ids), "label": "Techniques", "tip": "Techniques and sub-techniques under them"},
         "Of each tactic's techniques",
     )
 

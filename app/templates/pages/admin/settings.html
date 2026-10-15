@@ -1,31 +1,45 @@
-{% extends "base.html" %}
-
-{% block title %}Settings - TIDE{% endblock %}
+{% extends "pages/admin/settings_layout.html" %}
+{#
+  Settings & Administration -> Profile & Preferences: your name and picture, how you sign in, the
+  theme, and (with Settings access) your API keys. Context: user, account (your users row), sso (realm).
+#}
 {% from "macros/icons.html" import icon %}
+{% block title %}Profile & Preferences - TIDE{% endblock %}
+{% block settings_subtitle %}Your profile, how you sign in, how TIDE looks, and your API keys.{% endblock %}
 
-{% block content %}
-<div class="page-header">
-    <h1 class="page-title-hero">Settings</h1>
-    <p class="page-subtitle">
-        Manage your profile, password and personal API keys.
-        Tenant, SIEM, logging, Sigma asset and classification administration now live in
-        <a name="Management" href="/management" class="text-primary">Management</a>.
-    </p>
-</div>
+{% block settings_tab_content %}
+<div class="profile-grid">
+    {% include "partials/profile_identity.html" %}
 
-<!-- Profile panel (API keys + local account controls) -->
-<div class="settings-panel active" id="tab-profile">
-    <div class="preferences-grid preferences-grid--single">
-        <div class="preference-card">
-            <div class="preference-header">
-                <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-                    <circle cx="12" cy="7" r="4"/>
-                </svg>
-                <h3>Profile</h3>
-            </div>
+    <section class="preference-card" aria-label="Sign-in">
+        <div class="preference-header">
+            {{ icon('fingerprint', '20', 'preference-icon') }}
+            <h3>Sign-in</h3>
+        </div>
+        {% set via_sso = user and user.auth_provider != 'local' %}
+        <dl class="profile-facts">
+            <dt>Signed in with</dt>
+            <dd>
+                {% if via_sso %}<span class="status-pill status-success">{{ icon('shield-check', '12') }} Single sign-on</span>
+                {% else %}<span class="status-pill status-muted">{{ icon('key', '12') }} TIDE account</span>{% endif %}
+            </dd>
+            {% if via_sso %}
+            <dt>Identity provider</dt>
+            <dd>Keycloak, realm <code>{{ sso.realm }}</code></dd>
+            {% endif %}
+            <dt>Access</dt>
+            <dd>
+                {% if user and user.is_superadmin %}<span class="status-pill status-info">Platform Admin</span>{% endif %}
+                {% for r in (user.roles if user else []) %}<span class="status-pill status-muted">{{ r | title }}</span>{% endfor %}
+                {% if user and not user.is_superadmin and not user.roles %}<span class="text-muted">No role on this client</span>{% endif %}
+            </dd>
+            <dt>Last signed in</dt>
+            <dd>{{ account.last_login.strftime('%Y-%m-%d %H:%M') if account.last_login else '—' }}</dd>
+        </dl>
 
-            {% if user and user.auth_provider == 'local' %}
+        {% if user and not via_sso %}
+        <details class="profile-credentials">
+            <summary class="cursor-pointer fw-600">Change email or password</summary>
             <div class="preferences-grid preferences-grid--two">
                 <div class="overview-section m-0">
                     <h4 class="mt-0 mr-0 mb-ms ml-0 text-primary">Update Email</h4>
@@ -53,97 +67,131 @@
                     </form>
                 </div>
             </div>
-            {% else %}
-            <div class="alert mt-sm fs-base">
-                Managed by SSO. Profile credentials are controlled by your identity provider.
+        </details>
+        {% endif %}
+    </section>
+
+    <section class="preference-card" aria-label="Appearance">
+        <div class="preference-header">
+            {{ icon('palette', '20', 'preference-icon') }}
+            <h3>Appearance</h3>
+        </div>
+        <div class="preference-body">
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Theme</span>
+                </div>
+                <div class="theme-toggle-group">
+                    <button name="Dark" type="button" class="theme-btn" id="theme-dark" data-click="prefs.theme" data-theme="dark">
+                        <svg viewBox="0 0 24 24"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                        Dark
+                    </button>
+                    <button name="Light" type="button" class="theme-btn" id="theme-light" data-click="prefs.theme" data-theme="light">
+                        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+                        Light
+                    </button>
+                </div>
             </div>
-            {% endif %}
+            <div class="preference-item">
+                <div class="preference-info">
+                    <span class="preference-label">Brand colour</span>
+                </div>
+                <div class="hue-picker">
+                    <input name="Brand Hue" type="range" min="0" max="360" value="212" id="hue-slider" class="hue-slider" data-input="prefs.hue" aria-label="Brand colour hue">
+                    <span class="hue-value" id="hue-value">Default</span>
+                    <button name="Reset Brand Colour" type="button" class="btn btn-secondary btn-sm" id="hue-reset" data-click="prefs.hueReset" hidden>Reset</button>
+                </div>
+            </div>
+        </div>
+    </section>
+</div>
+
+{% if not user or user.can_read('page:settings') %}
+<div class="profile-api-keys">
+    <div class="preference-card">
+        <div class="preference-header">
+            <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+            </svg>
+            <h3>API Key Management</h3>
+        </div>
+        <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
+
+        <div class="alert mt-ms mr-0 mb-md ml-0 fs-md">
+            <p><strong>External Query API (HTTPS)</strong></p>
+            <p class="mt-xs">Query endpoint: <code>POST /api/external/query</code></p>
+            <p class="mt-xs">List tenants: <code>GET /api/external/clients</code></p>
+            <p class="mt-xs">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
+            <p class="mt-xs">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
+            <p class="mt-xs text-muted">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
         </div>
 
-        <div class="preference-card">
-            <div class="preference-header">
-                <svg class="preference-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4"/>
-                </svg>
-                <h3>API Key Management</h3>
+        <details class="mt-0 mr-0 mb-md ml-0">
+            <summary class="cursor-pointer fw-600">Security constraints</summary>
+            <ul class="mt-sm mr-0 mb-0 ml-md fs-md text-muted">
+                <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
+                <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
+                <li>Maximum SQL length: <code>4000</code> characters</li>
+                <li>Queries run against isolated tenant databases — each API key can only access tenants assigned to its owner</li>
+                <li>Tenant DB is opened read-only; no writes are possible even if SQL validation were bypassed</li>
+                <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
+            </ul>
+        </details>
+
+        <details class="mt-0 mr-0 mb-md ml-0">
+            <summary class="cursor-pointer fw-600">Common query tables</summary>
+            <div class="mt-sm fs-md text-muted leading-normal">
+                <p><code>detection_rules</code>, <code>threat_actors</code>, <code>mitre_techniques</code>, <code>systems</code>, <code>hosts</code>, <code>software_inventory</code>, <code>vuln_detections</code>, <code>applied_detections</code>, <code>blind_spots</code>, <code>playbooks</code>, <code>playbook_steps</code>, <code>step_techniques</code>, <code>step_detections</code>, <code>system_baselines</code>, <code>system_baseline_snapshots</code>, <code>classifications</code>, <code>app_settings</code></p>
             </div>
-            <p class="preference-desc">Manage API keys for the external query endpoint (<code>/api/external/query</code>). Keys authenticate external applications to run read-only SQL queries against TIDE data.</p>
+        </details>
 
-            <div class="alert mt-ms mr-0 mb-md ml-0 fs-md">
-                <p><strong>External Query API (HTTPS)</strong></p>
-                <p class="mt-xs">Query endpoint: <code>POST /api/external/query</code></p>
-                <p class="mt-xs">List tenants: <code>GET /api/external/clients</code></p>
-                <p class="mt-xs">Header: <code>X-TIDE-API-KEY: &lt;your key&gt;</code></p>
-                <p class="mt-xs">Request body: <code>{"sql": "SELECT ...", "client_id": "TENANT_ID"}</code></p>
-                <p class="mt-xs text-muted">The API key inherits your tenant access. If you have access to one tenant, <code>client_id</code> is optional. Use <code>/api/external/clients</code> to discover your available tenants.</p>
-            </div>
-
-            <details class="mt-0 mr-0 mb-md ml-0">
-                <summary class="cursor-pointer fw-600">Security constraints</summary>
-                <ul class="mt-sm mr-0 mb-0 ml-md fs-md text-muted">
-                    <li>Only <code>SELECT</code> and <code>WITH</code> (CTE) statements are allowed</li>
-                    <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
-                    <li>Maximum SQL length: <code>4000</code> characters</li>
-                    <li>Queries run against isolated tenant databases — each API key can only access tenants assigned to its owner</li>
-                    <li>Tenant DB is opened read-only; no writes are possible even if SQL validation were bypassed</li>
-                    <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
-                </ul>
-            </details>
-
-            <details class="mt-0 mr-0 mb-md ml-0">
-                <summary class="cursor-pointer fw-600">Common query tables</summary>
-                <div class="mt-sm fs-md text-muted leading-normal">
-                    <p><code>detection_rules</code>, <code>threat_actors</code>, <code>mitre_techniques</code>, <code>systems</code>, <code>hosts</code>, <code>software_inventory</code>, <code>vuln_detections</code>, <code>applied_detections</code>, <code>blind_spots</code>, <code>playbooks</code>, <code>playbook_steps</code>, <code>step_techniques</code>, <code>step_detections</code>, <code>system_baselines</code>, <code>system_baseline_snapshots</code>, <code>classifications</code>, <code>app_settings</code></p>
-                </div>
-            </details>
-
-            <details class="mt-0 mr-0 mb-md ml-0">
-                <summary class="cursor-pointer fw-600">cURL examples and responses</summary>
-                <div class="mt-sm">
-                    <p class="fs-md text-muted mb-sm"><strong>List your tenants</strong></p>
+        <details class="mt-0 mr-0 mb-md ml-0">
+            <summary class="cursor-pointer fw-600">cURL examples and responses</summary>
+            <div class="mt-sm">
+                <p class="fs-md text-muted mb-sm"><strong>List your tenants</strong></p>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s https://your-tide-host/api/external/clients \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE"</pre>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"clients":[{"id":"1b650e71-...","name":"Primary Client","slug":"primary"}]}</pre>
 
-                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Count all rules (single tenant — client_id optional)</strong></p>
+                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Count all rules (single tenant — client_id optional)</strong></p>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
   -d '{"sql":"SELECT COUNT(*) AS total_rules FROM detection_rules"}'</pre>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm mt-sm">{"columns":["total_rules"],"rows":[{"total_rules":239}],"row_count":1}</pre>
 
-                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Query a specific tenant</strong></p>
+                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Query a specific tenant</strong></p>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">curl -s -X POST https://your-tide-host/api/external/query \
   -H "Content-Type: application/json" \
   -H "X-TIDE-API-KEY: YOUR_KEY_HERE" \
   -d '{"sql":"SELECT rule_id, name, severity, score FROM detection_rules ORDER BY score DESC LIMIT 5", "client_id":"1b650e71-..."}'</pre>
 
-                    <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Error examples</strong></p>
+                <p class="fs-md text-muted mt-ms mr-0 mb-sm ml-0"><strong>Error examples</strong></p>
 <pre class="bg-surface p-sm rounded-sm overflow-auto fs-sm">401: {"detail":"Invalid or missing API key."}
 400: {"detail":"Only SELECT statements are allowed."}
 400: {"detail":"client_id is required when the API key owner has access to multiple tenants..."}
 403: {"detail":"API key does not have access to the requested tenant."}
 400: {"detail":"Forbidden SQL keyword: DROP"}</pre>
-                </div>
-            </details>
+            </div>
+        </details>
 
-            <!-- Create key form -->
-            <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
-                  hx-on::after-request="if(event.detail.successful){this.reset();}"
-                  class="flex gap-sm items-center my-md mx-0 flex-wrap">
-                <input type="text" name="api_key_label" class="form-input api-key-label-input" placeholder="Key label (e.g. SIEM integration)" required>
-                <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
-            </form>
+        <!-- Create key form -->
+        <form name="Submit Keys" hx-post="/api/settings/api-keys" hx-target="#api-key-section" hx-swap="innerHTML"
+              hx-on::after-request="if(event.detail.successful){this.reset();}"
+              class="flex gap-sm items-center my-md mx-0 flex-wrap">
+            <input type="text" name="api_key_label" class="form-input api-key-label-input" placeholder="Key label (e.g. SIEM integration)" required>
+            <button name="Create Key" type="submit" class="btn btn-primary btn-sm">{{ icon('plus','14') }} Create Key</button>
+        </form>
 
-            <!-- Key list (HTMX loaded) -->
-            <div id="api-key-section">
-                <div name="Open Keys" id="api-key-list"
-                     hx-get="/api/settings/api-keys"
-                     hx-trigger="load"
-                     hx-swap="innerHTML">
-                </div>
+        <!-- Key list (HTMX loaded) -->
+        <div id="api-key-section">
+            <div name="Open Keys" id="api-key-list"
+                 hx-get="/api/settings/api-keys"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
             </div>
         </div>
     </div>
 </div>
+{% endif %}
 {% endblock %}

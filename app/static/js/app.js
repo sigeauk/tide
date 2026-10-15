@@ -20,7 +20,8 @@ console.debug('TIDE app.js loading...');
         'nav-group-rules',
         'nav-group-threats',
         'nav-group-mitre',
-        'nav-group-cti'
+        'nav-group-cti',
+        'nav-group-account'
     ];
 
     // ========================================
@@ -37,32 +38,18 @@ console.debug('TIDE app.js loading...');
     // ========================================
 
     /**
-     * Update theme toggle UI
+     * Update theme toggle UI: the account group's item names the theme it switches to.
      */
     function updateThemeUI(isLight) {
-        const icon = document.getElementById('theme-icon');
         const label = document.getElementById('theme-label');
-        
-        if (icon) {
-            if (isLight) {
-                icon.innerHTML = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>';
-            } else {
-                icon.innerHTML = '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>';
-            }
-        }
         if (label) {
-            label.textContent = isLight ? 'Light Mode' : 'Dark Mode';
+            label.textContent = isLight ? 'Dark Mode' : 'Light Mode';
         }
-    }
-
-    function closeUserMenu(event) {
-        const menu = document.getElementById('user-menu');
-        const container = document.querySelector('.user-menu-container');
-        
-        if (menu && container && !container.contains(event.target)) {
-            menu.classList.remove('show');
-            document.removeEventListener('click', closeUserMenu);
-        }
+        // Profile & Preferences' Dark / Light buttons, when that page is open.
+        const dark = document.getElementById('theme-dark');
+        const light = document.getElementById('theme-light');
+        if (dark) dark.classList.toggle('active', !isLight);
+        if (light) light.classList.toggle('active', isLight);
     }
 
     // ========================================
@@ -170,35 +157,6 @@ console.debug('TIDE app.js loading...');
     };
 
     /**
-     * Toggle user menu dropdown
-     */
-    window.toggleUserMenu = function(event) {
-        if (event) {
-            event.stopPropagation();
-            event.preventDefault();
-        }
-        
-        const menu = document.getElementById('user-menu');
-        if (!menu) {
-            console.error('toggleUserMenu: user-menu element not found');
-            return;
-        }
-        
-        const isCurrentlyShown = menu.classList.contains('show');
-        
-        if (isCurrentlyShown) {
-            menu.classList.remove('show');
-            document.removeEventListener('click', closeUserMenu);
-        } else {
-            menu.classList.add('show');
-            // Use setTimeout to avoid the current click triggering close immediately
-            setTimeout(function() {
-                document.addEventListener('click', closeUserMenu);
-            }, 10);
-        }
-    };
-
-    /**
      * Toggle client switcher dropdown
      */
     window.toggleClientMenu = function(event) {
@@ -231,12 +189,30 @@ console.debug('TIDE app.js loading...');
     /**
      * Toggle theme between light and dark
      */
-    window.toggleTheme = function() {
-        const body = document.body;
-        if (!body) return;
-        const isLight = body.classList.toggle('light');
+    window.setTheme = function(isLight) {
+        if (!document.body) return;
+        document.body.classList.toggle('light', isLight);
         localStorage.setItem('theme', isLight ? 'light' : 'dark');
         updateThemeUI(isLight);
+    };
+
+    /**
+     * Brand colour: a hue (0-360) replaces the accent colour (body.brand-custom in style.css);
+     * null goes back to the theme's own. ``restoring`` applies a saved hue without saving it again.
+     */
+    window.setBrandHue = function(hue, restoring) {
+        if (!document.body) return;
+        const custom = hue !== null && hue !== undefined && hue !== '';
+        if (custom) document.documentElement.style.setProperty('--brand-hue', hue);
+        else document.documentElement.style.removeProperty('--brand-hue');
+        document.body.classList.toggle('brand-custom', custom);
+        if (restoring) return;
+        if (custom) localStorage.setItem('brand-hue', hue);
+        else localStorage.removeItem('brand-hue');
+    };
+
+    window.toggleTheme = function() {
+        window.setTheme(!document.body.classList.contains('light'));
     };
 
     /**
@@ -480,6 +456,7 @@ console.debug('TIDE app.js loading...');
      * Restore theme from localStorage
      */
     function restoreTheme() {
+        window.setBrandHue(localStorage.getItem('brand-hue'), true);
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme === 'light') {
             document.body.classList.add('light');
@@ -1146,6 +1123,7 @@ console.debug('TIDE app.js loading...');
         if (card.type !== 'section') return card;
         card.source = c.getAttribute('data-source');
         card.name = c.querySelector('[data-dash-name]').value;
+        card.icon = c.getAttribute('data-icon') || '';
         card.metrics = Array.prototype.map.call(c.querySelectorAll('[data-dash-metric]:checked'), function(b) { return b.value; });
         card.filters = {};
         c.querySelectorAll('[data-dash-filter]').forEach(function(el) {
@@ -1159,6 +1137,76 @@ console.debug('TIDE app.js loading...');
         });
         return card;
     }
+    // A section's icon: its button opens the page's one icon picker beside it. Picking an icon sets
+    // the section's data-icon ('' = its source's own) and redraws the button. Esc, a click outside
+    // or picking closes it; it goes back to the page so removing a section never takes it along.
+    var dashIconFor = null;
+    function dashIconPicker() { return document.querySelector('[data-dash-iconpicker]'); }
+    function dashIconClose() {
+        var picker = dashIconPicker();
+        if (!picker || picker.hidden) return;
+        picker.hidden = true;
+        document.body.appendChild(picker);
+        if (dashIconFor) dashIconFor.setAttribute('aria-expanded', 'false');
+        dashIconFor = null;
+    }
+    function dashIconFilter(text) {
+        text = text.trim().toLowerCase();
+        dashIconPicker().querySelectorAll('.dash-iconpicker__opt').forEach(function(b) {
+            b.hidden = text !== '' && b.getAttribute('data-dash-icon-pick').indexOf(text) === -1;
+        });
+    }
+    document.addEventListener('click', function(e) {
+        var picker = dashIconPicker();
+        if (!picker || !e.target.closest) return;
+        var toggle = e.target.closest('[data-dash-icon-toggle]');
+        if (toggle) {
+            var reopen = dashIconFor !== toggle || picker.hidden;
+            dashIconClose();
+            if (!reopen) return;
+            var current = toggle.closest('[data-dash-card]').getAttribute('data-icon') || '';
+            picker.querySelectorAll('[data-dash-icon-pick]').forEach(function(b) {
+                b.classList.toggle('is-current', b.getAttribute('data-dash-icon-pick') === current);
+            });
+            toggle.parentElement.appendChild(picker);
+            picker.hidden = false;
+            dashIconFor = toggle;
+            toggle.setAttribute('aria-expanded', 'true');
+            var search = picker.querySelector('[data-dash-icon-search]');
+            search.value = '';
+            dashIconFilter('');
+            search.focus({ preventScroll: true });
+            return;
+        }
+        var pick = e.target.closest('[data-dash-icon-pick]');
+        if (pick && dashIconFor) {
+            var name = pick.getAttribute('data-dash-icon-pick'), button = dashIconFor;
+            var shown = picker.querySelector('[data-dash-icon-pick="' + (name || button.getAttribute('data-default-icon')) + '"] svg');
+            button.closest('[data-dash-card]').setAttribute('data-icon', name);
+            if (shown) {
+                var svg = shown.cloneNode(true);
+                svg.setAttribute('width', '20');
+                svg.setAttribute('height', '20');
+                button.replaceChildren(svg);
+            }
+            dashDirty = true;
+            dashIconClose();
+            button.focus({ preventScroll: true });
+            return;
+        }
+        if (!e.target.closest('[data-dash-iconpicker]')) dashIconClose();
+    });
+    document.addEventListener('input', function(e) {
+        if (e.target.closest && e.target.closest('[data-dash-icon-search]')) dashIconFilter(e.target.value);
+    });
+    document.addEventListener('keydown', function(e) {
+        if (e.key !== 'Escape' || !dashIconFor) return;
+        e.preventDefault();
+        var button = dashIconFor;
+        dashIconClose();
+        button.focus({ preventScroll: true });
+    });
+
     // The section's cards as its settings stand, from the server (the same partial the page shows).
     var dashPreviewTimers = new WeakMap();
     function dashPreview(card) {

@@ -38,7 +38,7 @@
             {% for h in cve.affected_hosts %}{% if h.system_id not in sys_ids %}{% set _ = sys_ids.append(h.system_id) %}{% endif %}{% endfor %}
             {% if cve.affected_hosts %}
             <span class="badge badge-danger text-sm">
-                {{ icon('alert-triangle','14') }} Affects {{ sys_ids | length }} System{{ 's' if sys_ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+                {{ icon('triangle-alert','14') }} Affects {{ sys_ids | length }} System{{ 's' if sys_ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% else %}
             <span class="badge badge-success text-sm">{{ icon('shield-check','14') }} No Matches</span>

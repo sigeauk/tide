@@ -20,10 +20,10 @@
     <p class="metric-sub">{{ metrics.covered_ttps }} covered</p>
 {% endcall %}
 
-{% call metric_card('gaps', keys, link) %}
+{% call metric_card('gaps', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {% if metrics.uncovered_ttps < 20 %}success{% elif metrics.uncovered_ttps < 50 %}warning{% else %}danger{% endif %}">{{ metrics.uncovered_ttps }}</p>
     <p class="metric-label">Coverage Gaps</p>
-    <p class="metric-sub">TTPs without rules</p>
+    <div class="metric-tip" role="tooltip">TTPs without rules</div>
 {% endcall %}
 
 {% call metric_card('fully_covered', keys, link) %}

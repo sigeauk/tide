@@ -1,0 +1,31 @@
+{% extends "pages/admin/settings_layout.html" %}
+{#
+  Settings & Administration -> Documentation: the README (app.services.docs.readme), with a
+  contents list of its sections. Context: doc ({html, contents}) or None when the file is missing.
+#}
+{% from "macros/icons.html" import icon %}
+{% block title %}Documentation - TIDE{% endblock %}
+{% block settings_subtitle %}The TIDE guide for version {{ env.tide_version }}: installing, running and using TIDE, and what's new.{% endblock %}
+
+{% block settings_tab_content %}
+{% if doc %}
+<div class="docs-layout">
+    <nav class="docs-toc" aria-label="Contents">
+        <p class="docs-toc__title">Contents</p>
+        <ul class="docs-toc__list">
+            {% for h in doc.contents %}
+            <li class="docs-toc__item docs-toc__item--h{{ h.level }}"><a href="#{{ h.id }}">{{ h.name }}</a></li>
+            {% endfor %}
+        </ul>
+    </nav>
+    <article class="card card-padded doc-markdown">
+        {{ doc.html | safe }}
+    </article>
+</div>
+{% else %}
+<div class="card card-padded empty-state">
+    {{ icon('book-open', '24') }}
+    <p>The guide isn't included in this installation.</p>
+</div>
+{% endif %}
+{% endblock %}

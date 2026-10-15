@@ -1,6 +1,5 @@
-{% extends "base.html" %}
+{% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
-{% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/diagnostics_ui.html" import check_list %}
 {% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry %}
 {% block title %}Diagnostics - TIDE{% endblock %}
@@ -17,22 +16,18 @@
 {%- elif n >= 1048576 -%}{{ '%.0f' | format(n / 1048576) }} MB{%- else -%}{{ '%.0f' | format(n / 1024) }} KB{%- endif -%}
 {%- endmacro %}
 
-{% block content %}
-{{ breadcrumb(items=[('Home', '/'), ('Management', '/management'), ('Diagnostics', none)]) }}
+{% block settings_subtitle %}{% if full %}A snapshot of this install and its clients, and checks that look for known problems.{% else %}A snapshot of {{ clients[0].name }}, and checks that look for known problems in its data.{% endif %} Checks and look-ups only read data.{% endblock %}
 
-<div class="page-header">
-    <h1 class="page-title-hero">Diagnostics</h1>
-    <p class="page-subtitle">{% if full %}A snapshot of this install and its clients, and checks that look for known problems.{% else %}A snapshot of {{ clients[0].name }}, and checks that look for known problems in its data.{% endif %} Checks and look-ups only read data.</p>
-</div>
+{% block settings_tab_content %}
 
 {% set behind = snap.schema.database < snap.schema.release %}
 {% set dest_count = snap.clients | map(attribute='destinations') | map('length') | sum %}
 {% set offline = snap.clients | map(attribute='destinations') | sum(start=[]) | selectattr('reachable', 'sameas', false) | list | length %}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ snap.version }}</p>
         <p class="metric-label">TIDE version</p>
-        <p class="metric-sub">running now</p>
+        <div class="metric-tip" role="tooltip">Running now</div>
     </div>
     <div class="metric-card">
         <p class="metric-value {{ 'danger' if behind else 'success' }}">{{ snap.schema.database }}</p>
@@ -40,10 +35,10 @@
         <p class="metric-sub">{{ 'release expects ' ~ snap.schema.release if behind else 'up to date' }}</p>
     </div>
     {% if full %}
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value {{ 'danger' if not snap.super_admins }}">{{ snap.super_admins }}</p>
         <p class="metric-label">Super admins</p>
-        <p class="metric-sub">active, with Platform Admin</p>
+        <div class="metric-tip" role="tooltip">Active, with Platform Admin</div>
     </div>
     {% else %}
     <div class="metric-card">
@@ -52,15 +47,16 @@
         <p class="metric-sub">{{ clients[0].name }} only</p>
     </div>
     {% endif %}
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ snap.clients | length }}</p>
         <p class="metric-label">Clients</p>
-        <p class="metric-sub">each with its own database</p>
+        <div class="metric-tip" role="tooltip">Each with its own database</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value {{ 'warning' if offline }}">{{ dest_count }}</p>
         <p class="metric-label">Destinations</p>
-        <p class="metric-sub">{{ offline ~ ' unreachable at last sync' if offline else 'linked SIEM spaces' }}</p>
+        {% if offline %}<p class="metric-sub">{{ offline }} unreachable at last sync</p>{% endif %}
+        <div class="metric-tip" role="tooltip">Linked SIEM spaces</div>
     </div>
     <div class="metric-card">
         <p class="metric-value {{ 'danger' if snap.errors.count }}">{{ snap.errors.count if snap.errors.available else '—' }}</p>
@@ -222,7 +218,7 @@
 </section>
 
 <section class="card card-padded diag-section" aria-label="Recent errors">
-    <h2 class="section-title">{{ icon('alert-triangle', '16') }} Recent errors</h2>
+    <h2 class="section-title">{{ icon('triangle-alert', '16') }} Recent errors</h2>
     {% if not snap.errors.available %}
     <p class="text-muted">No log file to read.</p>
     {% elif not snap.errors.entries %}

@@ -18,35 +18,35 @@
 </div>
 
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ report.related_indicators|length }}</p>
         <p class="metric-label">Indicators</p>
-        <p class="metric-sub">{{ icon_text('crosshair','Referenced IOCs','14') }}</p>
+        <div class="metric-tip" role="tooltip">Referenced IOCs</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ report.related_actors|length }}</p>
         <p class="metric-label">Actors named</p>
-        <p class="metric-sub">{{ icon_text('users','Attribution','14') }}</p>
+        <div class="metric-tip" role="tooltip">Attribution</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ (report.labels or [])|length }}</p>
         <p class="metric-label">Labels</p>
-        <p class="metric-sub">{{ icon_text('tag','STIX labels','14') }}</p>
+        <div class="metric-tip" role="tooltip">STIX labels</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ report.published or '—' }}</p>
         <p class="metric-label">Published</p>
-        <p class="metric-sub">{{ icon_text('calendar','Publication date','14') }}</p>
+        <div class="metric-tip" role="tooltip">Publication date</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ source_labels.get(report.source_id, '—') if report.source_id else '—' }}</p>
         <p class="metric-label">Source</p>
-        <p class="metric-sub">{{ icon_text('database','Originating feed','14') }}</p>
+        <div class="metric-tip" role="tooltip">Originating feed</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ tlp_ceiling|upper }}</p>
         <p class="metric-label">TLP ceiling</p>
-        <p class="metric-sub">{{ icon_text('shield','Your viewing limit','14') }}</p>
+        <div class="metric-tip" role="tooltip">Your viewing limit</div>
     </div>
 </div>
 

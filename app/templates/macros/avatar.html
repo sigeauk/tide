@@ -1,0 +1,16 @@
+{# A user's picture, or their initial when they have none (User.label, User.avatar_version). #}
+{% macro avatar(user, size='') -%}
+<span class="user-avatar{{ ' user-avatar--' ~ size if size }}{{ ' user-avatar--img' if user.avatar_version }}" aria-hidden="true">
+    {%- if user.avatar_version %}<img src="/api/settings/profile/avatar?v={{ user.avatar_version }}" alt="">{% else %}{{ user.initial }}{% endif -%}
+</span>
+{%- endmacro %}
+
+{# The sidebar's name and picture. With oob, a profile change swaps it in place
+   (partials/profile_identity.html). #}
+{% macro sidebar_identity(user, oob=false) -%}
+<span id="sidebar-identity" class="user-identity"{{ ' hx-swap-oob="true"' | safe if oob }}>
+    {{ avatar(user) }}
+    <span class="nav-label user-name">{{ user.label }}</span>
+</span>
+{%- endmacro %}
+

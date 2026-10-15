@@ -843,6 +843,7 @@ a:hover { color: var(--color-primary); }
   transform: translateY(-50%) !important;
 }
 
+
 .sidebar-footer {
   padding: 0.5rem;
   border-top: var(--border-card);
@@ -880,9 +881,17 @@ a:hover { color: var(--color-primary); }
   font-size: 0.75rem;
   font-weight: 600;
   flex-shrink: 0;
+  overflow: hidden;
 }
+.user-avatar--lg { width: 36px; height: 36px; font-size: var(--fs-base); }
+.user-avatar--xl { width: 64px; height: 64px; font-size: 1.5rem; border: 2px solid var(--color-border); }
+.user-avatar--img { background: var(--color-bg-layer-3); }
+.user-avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 
-.user-info { cursor: default; }
+/* The sidebar's account group trigger: picture and name. */
+.user-info { cursor: pointer; }
+.user-identity { display: contents; }
+.user-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* ── Sidebar: Toggle-only expansion (disable hover expand) ── */
 .sidebar { width: var(--sidebar-width-collapsed) !important; }
@@ -2632,7 +2641,6 @@ a:hover { color: var(--color-primary); }
 .source-pill.src-enterprise { background: var(--color-info-glow);    border-color: var(--color-info);    color: var(--color-info-text); }
 .source-pill.src-ics        { background: var(--color-warning-glow); border-color: var(--color-warning); color: var(--color-warning-text); }
 .source-pill.src-mobile     { background: var(--color-primary-muted); border-color: var(--color-primary); color: var(--color-primary); }
-.source-pill.src-pre        { background: var(--color-danger-glow);  border-color: var(--color-danger);  color: var(--color-danger-text); }
 .source-pill.src-opencti    { background: var(--color-success-glow); border-color: var(--color-success); color: var(--color-success-text); }
 
 .source-pill-row {
@@ -3388,51 +3396,12 @@ body.light {
 
 
 /* ================================================================
- * USER MENU DROPDOWN  (Layer 4)
+ * ACCOUNT GROUP  (sidebar foot: Settings, theme, Log Out — a nav-group like the others)
  * ================================================================ */
-.user-menu-container { position: relative; }
+button.nav-child { border: 0; background: none; width: 100%; font: inherit; font-size: 0.85rem; text-align: left; }
+/* Collapsed sidebar: at the foot, the flyout opens upwards from the account button. */
+.sidebar:not(.expanded) .sidebar-footer .nav-group__items { top: auto; bottom: 0; }
 
-.user-menu {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  right: 0;
-  background: var(--color-bg-layer-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  padding: 0.5rem;
-  margin-bottom: 0.5rem;
-  display: none;
-  z-index: 200;
-  min-width: 180px;
-}
-
-.user-menu.show { display: block; }
-
-.user-menu-item {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  font-size: 0.875rem;
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  text-decoration: none;
-  border: none;
-  background: transparent;
-  width: 100%;
-  text-align: left;
-}
-
-.user-menu-item:hover {
-  background: var(--color-bg-action);
-  color: var(--color-text);
-}
-
-.user-menu-item svg,
 .theme-btn svg {
   width: 18px;
   height: 18px;
@@ -3441,10 +3410,170 @@ body.light {
   stroke-width: 2;
 }
 
-.user-menu-divider {
-  height: 1px;
-  background: var(--color-border-muted);
-  margin: 0.5rem 0;
+
+
+/* ================================================================
+ * SETTINGS & ADMINISTRATION  (pages/admin/settings_layout.html)
+ * One page, a tab each for Profile & Preferences, Management, Diagnostics, Documentation.
+ * ================================================================ */
+.settings-hub__header { margin-bottom: 1rem; }
+.settings-hub__tabs { flex-wrap: wrap; }
+.settings-hub__tabs .settings-tab { text-decoration: none; white-space: nowrap; }
+.settings-hub__tabs .settings-tab:focus-visible { outline: 2px solid var(--color-focus-ring); outline-offset: -2px; }
+
+/* Profile & Preferences: Profile, Sign-in and Appearance side by side, the same size. */
+.profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+.profile-grid > .preference-card { height: 100%; }
+@media (max-width: 1100px) { .profile-grid { grid-template-columns: 1fr; } }
+
+/* Brand colour: a hue someone picked replaces the accent; without one the theme's own stays.
+   The defaults are hue 212 at these saturations and lightnesses. */
+body.brand-custom {
+  --color-primary:       hsl(var(--brand-hue) 100% 67%);
+  --color-primary-hover: hsl(var(--brand-hue) 100% 74%);
+  --color-primary-muted: hsl(var(--brand-hue) 56% 23%);
+}
+body.light.brand-custom {
+  --color-primary:       hsl(var(--brand-hue) 92% 45%);
+  --color-primary-hover: hsl(var(--brand-hue) 94% 35%);
+  --color-primary-muted: hsl(var(--brand-hue) 100% 93%);
+}
+.hue-picker .btn { margin-left: 0.5rem; }
+.hue-picker .btn[hidden] { display: none; }
+.profile-api-keys { margin-top: 1.25rem; }
+
+.profile-grid > .preference-card { padding: 1.25rem; }
+.profile-grid .preference-header { margin-bottom: 1rem; padding-bottom: 0.75rem; }
+.profile-grid .preference-body { gap: 1rem; }
+
+.profile-identity__row { display: flex; align-items: center; gap: 1rem; }
+.profile-identity__who { display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; flex: 1; }
+.profile-identity__name-line { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.profile-identity__name { font-size: var(--fs-lg); font-weight: 700; color: var(--color-text); overflow-wrap: anywhere; }
+.profile-identity__edit {
+  display: inline-flex;
+  padding: 0.25rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.profile-identity__edit:hover, .profile-identity__edit:focus-visible { color: var(--color-primary); background: var(--color-bg-surface-hover); }
+.profile-identity__name-form { display: none; gap: 0.4rem; align-items: center; }
+.profile-identity__name-form .form-input { flex: 1; min-width: 0; padding-top: 0.3rem; padding-bottom: 0.3rem; }
+.profile-identity.is-editing .profile-identity__name-line { display: none; }
+.profile-identity.is-editing .profile-identity__name-form { display: flex; }
+.profile-identity__actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.25rem; }
+.profile-identity__actions form { margin: 0; }
+.profile-identity__actions label.btn { cursor: pointer; }
+.profile-identity__actions label.btn:focus-within { outline: 2px solid var(--color-focus-ring); outline-offset: 2px; }
+.profile-identity__message { margin: 0.75rem 0 0; font-size: var(--fs-md); }
+
+.profile-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.5rem 1.25rem;
+  margin: 0 0 0.75rem;
+  font-size: var(--fs-md);
+}
+.profile-facts dt { color: var(--color-text-muted); }
+.profile-facts dd { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; color: var(--color-text); min-width: 0; overflow-wrap: anywhere; }
+.profile-credentials { margin-top: 0.5rem; }
+.profile-credentials > .preferences-grid { margin-top: 1rem; }
+
+@media (max-width: 768px) {
+  .profile-credentials > .preferences-grid--two { grid-template-columns: 1fr; }
+}
+
+/* Documentation: the README with its contents beside it. The page's overflow-x: hidden would make
+   .main-content a scroll container that never scrolls, so the contents couldn't stick; clip keeps
+   the overflow hidden without that. */
+.main-content:has(.docs-layout) { overflow-x: clip; }
+.docs-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+.docs-toc {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  background: var(--color-bg-surface);
+  border: var(--border-card);
+  border-radius: var(--radius-lg);
+  padding: 0.75rem;
+}
+.docs-toc__title { margin: 0 0 0.5rem; padding: 0 0.5rem; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); }
+.docs-toc__list { list-style: none; margin: 0; padding: 0; }
+.docs-toc__item a {
+  display: block;
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  font-size: var(--fs-md);
+  text-decoration: none;
+  line-height: 1.35;
+}
+.docs-toc__item a:hover { background: var(--color-bg-surface-hover); color: var(--color-primary); }
+.docs-toc__item--h2 { margin-top: 0.15rem; }
+.docs-toc__item--h2 > a { font-weight: 600; color: var(--color-text); }
+.docs-toc__item--h3 > a { padding-left: 1.25rem; font-size: var(--fs-sm); }
+
+.doc-markdown { color: var(--color-text); line-height: 1.65; font-size: var(--fs-base); min-width: 0; }
+.doc-markdown > :first-child { margin-top: 0; }
+.doc-markdown h1, .doc-markdown h2, .doc-markdown h3, .doc-markdown h4 { color: var(--color-text); line-height: 1.3; scroll-margin-top: 1rem; }
+.doc-markdown h1 { font-size: var(--fs-2xl); color: var(--color-primary); margin: 0 0 1rem; }
+.doc-markdown h2 { font-size: var(--fs-xl); margin: 2.25rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--color-border-muted); }
+.doc-markdown h3 { font-size: var(--fs-lg); margin: 1.75rem 0 0.5rem; }
+.doc-markdown h4 { font-size: var(--fs-base); margin: 1.25rem 0 0.5rem; }
+.doc-markdown p { margin: 0.6rem 0; color: var(--color-text-secondary); }
+.doc-markdown li { color: var(--color-text-secondary); margin: 0.3rem 0; }
+.doc-markdown strong { color: var(--color-text); }
+.doc-markdown ul, .doc-markdown ol { margin: 0.6rem 0; padding-left: 1.5rem; }
+.doc-markdown a { color: var(--color-primary); text-underline-offset: 2px; }
+.doc-markdown code {
+  font-family: var(--font-mono);
+  font-size: 0.875em;
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.1rem 0.35rem;
+  overflow-wrap: anywhere;
+}
+.doc-markdown pre {
+  background: var(--color-bg-inset);
+  border: 1px solid var(--color-border-muted);
+  border-radius: var(--radius-md);
+  padding: 1rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+.doc-markdown pre code { background: none; border: 0; padding: 0; font-size: inherit; overflow-wrap: normal; }
+.doc-markdown blockquote {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid var(--color-info);
+  background: var(--color-info-bg);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+}
+.doc-markdown blockquote p { margin: 0.25rem 0; color: var(--color-text); }
+.doc-markdown table { display: block; overflow-x: auto; border-collapse: collapse; margin: 1rem 0; font-size: var(--fs-md); }
+.doc-markdown th, .doc-markdown td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--color-border-muted); vertical-align: top; }
+.doc-markdown th { background: var(--color-bg-layer-3); color: var(--color-text); font-weight: 600; }
+.doc-markdown hr { border: 0; border-top: 1px solid var(--color-border-muted); margin: 2rem 0; }
+
+@media (max-width: 1100px) {
+  .docs-layout { grid-template-columns: 1fr; }
+  .docs-toc { position: static; max-height: 18rem; }
 }
 
 
@@ -3615,13 +3744,28 @@ body.light {
 .dash-picker__default { font-size: 0.7rem; font-weight: 600; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
 
 /* A section: its cards open their page, filtered as the section is */
-a.metric-card--link { display: block; color: inherit; text-decoration: none; }
+a.metric-card--link { display: block; color: inherit; text-decoration: none; cursor: pointer; }
 a.metric-card--link:hover { border-top-color: var(--color-primary); background: var(--color-bg-action-hover); }
 a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
 .dash-section-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.4rem; margin: 0; padding: 1rem; color: var(--color-text-muted); }
 
 /* A section in the editor: its name, which cards it shows and its page's filters */
-.dash-card__icon { display: inline-flex; color: var(--color-text-secondary); }
+.dash-card__icon { display: inline-flex; vertical-align: -0.15em; }
+/* A section's icon in the editor, and the icon picker it opens */
+.dash-iconwrap { position: relative; flex-shrink: 0; }
+.dash-iconbtn { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; padding: 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg-action); color: var(--color-text-secondary); cursor: pointer; }
+.dash-iconbtn:hover, .dash-iconbtn[aria-expanded="true"] { color: var(--color-text); border-color: var(--color-primary); }
+.dash-iconbtn:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.dash-iconpicker { position: absolute; top: calc(100% + 4px); left: 0; z-index: 60; width: min(24rem, 80vw); padding: 0.5rem; background: var(--color-bg-action); border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); }
+.dash-iconpicker[hidden] { display: none; }
+.dash-iconpicker__search { width: 100%; margin-bottom: 0.4rem; }
+.dash-iconpicker__default { width: 100%; margin-bottom: 0.4rem; padding: 0.35rem 0.5rem; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); font: inherit; font-size: 0.8rem; text-align: left; cursor: pointer; }
+.dash-iconpicker__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.25rem, 1fr)); gap: 0.25rem; max-height: 15rem; overflow-y: auto; }
+.dash-iconpicker__opt { display: grid; place-items: center; height: 2.25rem; padding: 0; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: pointer; }
+.dash-iconpicker__opt[hidden] { display: none; }
+.dash-iconpicker__opt:hover, .dash-iconpicker__default:hover { color: var(--color-text); background: var(--color-bg-action-hover); }
+.dash-iconpicker__opt:focus-visible, .dash-iconpicker__default:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 1px; }
+.dash-iconpicker .is-current { border-color: var(--color-primary); color: var(--color-primary); }
 .dash-name-input { flex: 1 1 auto; min-width: 0; font-weight: 700; }
 .dash-settings { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1rem; padding: 0.75rem; background: var(--color-bg-base); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 .dash-settings__group { margin: 0; padding: 0; border: 0; min-width: 0; }
@@ -4116,7 +4260,7 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
   color: var(--color-primary);
 }
 
-/* .theme-btn svg merged with .user-menu-item svg above */
+/* .theme-btn svg: see ACCOUNT GROUP */
 
 .hue-picker {
   display: flex;
@@ -7877,6 +8021,8 @@ body.is-resizing-slide-panel {
 }
 .metric-card--tip:hover .metric-tip,
 .metric-card--tip:focus-within .metric-tip { display: block; }
+/* A one-line tip (what the card counts) sizes to its words; a breakdown keeps its column width */
+.metric-tip:not(:has(> *)) { min-width: 0; max-width: 16rem; text-align: center; }
 .metrics-grid > .metric-card--tip:nth-last-child(-n+2) .metric-tip { left: auto; right: 0; transform: none; }
 .metrics-grid > .metric-card--tip:first-child .metric-tip { left: 0; transform: none; }
 .metric-tip__row { display: flex; align-items: baseline; gap: 0.5rem; padding: 0.1rem 0; }

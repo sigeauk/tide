@@ -23,35 +23,35 @@
 
 {# ── Metric strip (6 cards, matching Threat Landscape) ───── #}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.total }}</p>
         <p class="metric-label">Tracked actors</p>
-        <p class="metric-sub">{{ icon_text('users','Across this tenant','14') }}</p>
+        <div class="metric-tip" role="tooltip">Across this tenant</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.intrusion_sets }}</p>
         <p class="metric-label">Intrusion sets</p>
-        <p class="metric-sub">{{ icon_text('shield','STIX intrusion-set','14') }}</p>
+        <div class="metric-tip" role="tooltip">STIX intrusion-set</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.threat_actors }}</p>
         <p class="metric-label">Threat actors</p>
-        <p class="metric-sub">{{ icon_text('user','STIX threat-actor','14') }}</p>
+        <div class="metric-tip" role="tooltip">STIX threat-actor</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.origins }}</p>
         <p class="metric-label">Distinct origins</p>
-        <p class="metric-sub">{{ icon_text('globe','Attributed countries','14') }}</p>
+        <div class="metric-tip" role="tooltip">Attributed countries</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.with_aliases }}</p>
         <p class="metric-label">With aliases</p>
-        <p class="metric-sub">{{ icon_text('tags','Known by other names','14') }}</p>
+        <div class="metric-tip" role="tooltip">Known by other names</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value {{ 'success' if metrics.linked > 0 else '' }}">{{ metrics.linked }}</p>
         <p class="metric-label">Linked to indicators</p>
-        <p class="metric-sub">{{ icon_text('link','STIX relationships','14') }}</p>
+        <div class="metric-tip" role="tooltip">STIX relationships</div>
     </div>
 </div>
 

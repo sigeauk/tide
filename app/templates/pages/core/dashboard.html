@@ -106,6 +106,14 @@
 {% endif %}
 
 {% if editing %}
+{# The icon picker, one for the page: a section's icon button moves it beside itself (app.js). #}
+<div class="dash-iconpicker" role="dialog" aria-label="Choose an icon" data-dash-iconpicker hidden>
+    <input type="search" class="form-input dash-iconpicker__search" placeholder="Search icons…" aria-label="Search icons" data-dash-icon-search>
+    <button name="Default Icon" type="button" class="dash-iconpicker__default" data-dash-icon-pick="">Default icon for this section</button>
+    <div class="dash-iconpicker__grid">
+        {% for name in icon_names %}<button type="button" class="dash-iconpicker__opt" data-dash-icon-pick="{{ name }}" title="{{ name }}" aria-label="{{ name }}">{{ icon(name, '18') }}</button>{% endfor %}
+    </div>
+</div>
 {# What Add puts on the page: a copy of one of these. A section's figures load once it is added. #}
 {% for kind, card in new_cards %}
 <template data-dash-template="{{ kind }}">

@@ -20,35 +20,35 @@
 
 {# ── Metric strip (6 cards) ─────────────────────────────── #}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.total }}</p>
         <p class="metric-label">Total reports</p>
-        <p class="metric-sub">{{ icon_text('file-text','Across this tenant','14') }}</p>
+        <div class="metric-tip" role="tooltip">Across this tenant</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.sources }}</p>
         <p class="metric-label">Distinct sources</p>
-        <p class="metric-sub">{{ icon_text('database','Feeds contributing','14') }}</p>
+        <div class="metric-tip" role="tooltip">Feeds contributing</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.labels }}</p>
         <p class="metric-label">Unique labels</p>
-        <p class="metric-sub">{{ icon_text('tag','STIX labels seen','14') }}</p>
+        <div class="metric-tip" role="tooltip">STIX labels seen</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.recent_30d }}</p>
         <p class="metric-label">Published 30d</p>
-        <p class="metric-sub">{{ icon_text('clock','Last 30 days','14') }}</p>
+        <div class="metric-tip" role="tooltip">Last 30 days</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.linked_actors }}</p>
         <p class="metric-label">Naming actors</p>
-        <p class="metric-sub">{{ icon_text('users','Reports → actors','14') }}</p>
+        <div class="metric-tip" role="tooltip">Reports that name at least one actor</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ metrics.linked_indicators }}</p>
         <p class="metric-label">Citing indicators</p>
-        <p class="metric-sub">{{ icon_text('link','Reports → IOCs','14') }}</p>
+        <div class="metric-tip" role="tooltip">Reports that cite at least one indicator</div>
     </div>
 </div>
 

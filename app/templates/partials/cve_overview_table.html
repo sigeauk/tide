@@ -166,15 +166,15 @@
             {% for h in cve.affected_hosts %}{% if h.system_id not in ns_sys.ids %}{% set ns_sys.ids = ns_sys.ids + [h.system_id] %}{% endif %}{% endfor %}
             {% if coverage_status == 'detected' %}
             <span class="status-pill status-chip status-chip--success" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% elif coverage_status == 'partial' %}
             <span class="status-pill status-chip status-chip--warning" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% else %}
             <span class="status-pill status-chip status-chip--danger" title="Affects {{ ns_sys.ids | length }} system(s) / {{ cve.affected_hosts | length }} host(s)">
-                {{ icon('alert-triangle','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
+                {{ icon('triangle-alert','10') }} {{ ns_sys.ids | length }} System{{ 's' if ns_sys.ids | length != 1 }} / {{ cve.affected_hosts | length }} Host{{ 's' if cve.affected_hosts | length != 1 }}
             </span>
             {% endif %}
         </div>

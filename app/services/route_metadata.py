@@ -47,12 +47,13 @@ _REGISTRY: dict = {
     "/systems":        [_HOME, ("Systems", None)],
     "/cve-overview":   [_HOME, ("CVE Catalogue", None)],
     "/clients":        [_HOME, ("Clients", None)],
-    "/management":     [_HOME, ("Management", None)],
     "/cti/indicators": [_HOME, ("CTI", None), ("Indicators", None)],
     "/cti/actors":     [_HOME, ("CTI", None), ("Actors", None)],
     "/cti/reports":    [_HOME, ("CTI", None), ("Reports", None)],
-    "/settings":       [_HOME, ("Settings", None)],
-    "/preferences":    [_HOME, ("Preferences", None)],
+    "/settings":            [_HOME, ("Settings", None)],
+    "/settings/diagnostics": [_HOME, ("Settings", "/settings"), ("Diagnostics", None)],
+    "/settings/docs":        [_HOME, ("Settings", "/settings"), ("Documentation", None)],
+    "/settings/management":  [_HOME, ("Settings", "/settings"), ("Management", None)],
     "/presentation":   [_HOME, ("Presentation", None)],
 }
 

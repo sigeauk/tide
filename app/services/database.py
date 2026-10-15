@@ -102,7 +102,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 85
+SCHEMA_VERSION = 86
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -3745,6 +3745,27 @@ class DatabaseService:
             self._set_schema_version(conn, 85)
             logger.info("Migration 85: dropped sync_history's secondary indexes.")
 
+        # ── Migration 86: profile name and picture; the Documentation page ──
+        # display_name is the name a user chooses for themselves (full_name is refreshed from SSO at
+        # each sign-in, so it can't hold a choice). avatar holds their picture (PNG, JPEG, WebP or
+        # GIF, checked by its bytes); avatar_updated_at versions its URL. page:documentation guards
+        # Settings & Administration -> Documentation: readable by every built-in role.
+        if current_version < 86:
+            for col, typ in (("display_name", "VARCHAR"), ("avatar", "BLOB"), ("avatar_type", "VARCHAR"),
+                             ("avatar_updated_at", "TIMESTAMP")):
+                conn.execute(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col} {typ}")
+            role_ids = [r[0] for r in conn.execute(
+                "SELECT id FROM roles WHERE name IN ('ADMIN', 'ANALYST', 'ENGINEER')").fetchall()]
+            for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
+                for rid in role_ids:
+                    conn.execute(
+                        "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                        "VALUES (?, ?, 'page:documentation', true, false) ON CONFLICT DO NOTHING",
+                        [rid, cid],
+                    )
+            self._set_schema_version(conn, 86)
+            logger.info("Migration 86: added users.display_name and avatar; page:documentation readable by every role.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -4176,11 +4197,13 @@ class DatabaseService:
         "id", "username", "email", "full_name", "password_hash", "keycloak_id",
         "auth_provider", "is_active", "is_superadmin", "change_on_next_login",
         "created_at", "updated_at", "last_login", "sessions_valid_after",
+        "display_name", "avatar_updated_at",
     ]
     _USER_SELECT = (
         "SELECT id, username, email, full_name, password_hash, keycloak_id, "
         "auth_provider, is_active, is_superadmin, change_on_next_login, "
-        "created_at, updated_at, last_login, sessions_valid_after FROM users"
+        "created_at, updated_at, last_login, sessions_valid_after, "
+        "display_name, avatar_updated_at FROM users"
     )
 
     def get_user_by_username(self, username: str) -> Optional[Dict]:
@@ -4263,7 +4286,7 @@ class DatabaseService:
         allowed = {
             "username", "email", "full_name", "password_hash", "is_active",
             "keycloak_id", "auth_provider", "change_on_next_login", "last_login",
-            "is_superadmin", "sessions_valid_after",
+            "is_superadmin", "sessions_valid_after", "display_name",
         }
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
@@ -4275,6 +4298,21 @@ class DatabaseService:
                 f"UPDATE users SET {set_clause}, updated_at = now() WHERE id = ?", values
             )
         return True
+
+    def get_user_avatar(self, user_id: str) -> Optional[Tuple[bytes, str]]:
+        """The user's picture and its media type, or None."""
+        with self.get_shared_connection() as conn:
+            row = conn.execute("SELECT avatar, avatar_type FROM users WHERE id = ?", [user_id]).fetchone()
+        return (bytes(row[0]), row[1]) if row and row[0] else None
+
+    def set_user_avatar(self, user_id: str, data: Optional[bytes], media_type: Optional[str]) -> None:
+        """Store the user's picture, or remove it with ``data=None``."""
+        with self.get_shared_connection() as conn:
+            conn.execute(
+                "UPDATE users SET avatar = ?, avatar_type = ?, avatar_updated_at = "
+                "CASE WHEN ? IS NULL THEN NULL ELSE now() END, updated_at = now() WHERE id = ?",
+                [data, media_type, data, user_id],
+            )
 
     def delete_user(self, user_id: str):
         with self.get_shared_connection() as conn:
@@ -8292,7 +8330,7 @@ class DatabaseService:
             if r[0] and r[2]
         ]
 
-    _MITRE_DOMAIN_ORDER = ("enterprise", "ics", "mobile", "pre")
+    _MITRE_DOMAIN_ORDER = ("enterprise", "ics", "mobile")
 
     def _sort_mitre_sources(self, sources: List[str]) -> List[str]:
         order = {d: i for i, d in enumerate(self._MITRE_DOMAIN_ORDER)}
@@ -8406,7 +8444,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1
@@ -8677,7 +8714,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1
@@ -8700,7 +8736,6 @@ class DatabaseService:
                         WHEN 'enterprise' THEN 0
                         WHEN 'ics' THEN 1
                         WHEN 'mobile' THEN 2
-                        WHEN 'pre' THEN 3
                         ELSE 9
                     END
                     LIMIT 1
@@ -9056,7 +9091,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1
@@ -9337,7 +9371,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1
@@ -9509,7 +9542,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1
@@ -9686,7 +9718,6 @@ class DatabaseService:
                     WHEN 'enterprise' THEN 0
                     WHEN 'ics' THEN 1
                     WHEN 'mobile' THEN 2
-                    WHEN 'pre' THEN 3
                     ELSE 9
                 END
                 LIMIT 1

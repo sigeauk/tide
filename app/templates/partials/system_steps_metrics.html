@@ -16,32 +16,32 @@
     <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</p>
 {% endcall %}
 
-{% call metric_card('techniques', keys, link) %}
+{% call metric_card('techniques', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ t.total }}</p>
     <p class="metric-label">Techniques</p>
-    <p class="metric-sub">across this system's baselines</p>
+    <div class="metric-tip" role="tooltip">Across this system's baselines</div>
 {% endcall %}
 
-{% call metric_card('no_coverage', keys, link) %}
+{% call metric_card('no_coverage', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value danger">{{ t.none }}</p>
     <p class="metric-label">No coverage</p>
-    <p class="metric-sub">nothing catching this yet</p>
+    <div class="metric-tip" role="tooltip">Nothing catching this yet</div>
 {% endcall %}
 
-{% call metric_card('known_gaps', keys, link) %}
+{% call metric_card('known_gaps', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value warning">{{ t.gap }}</p>
     <p class="metric-label">Known gaps</p>
-    <p class="metric-sub">accepted, with a reason</p>
+    <div class="metric-tip" role="tooltip">Accepted, with a reason</div>
 {% endcall %}
 
-{% call metric_card('unmapped', keys, link) %}
+{% call metric_card('unmapped', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ t.unmapped }}</p>
     <p class="metric-label">Unmapped</p>
-    <p class="metric-sub">no rule chosen for them</p>
+    <div class="metric-tip" role="tooltip">No rule chosen for them</div>
 {% endcall %}
 
-{% call metric_card('not_counted', keys, link) %}
+{% call metric_card('not_counted', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {% if t.uncounted %}warning{% endif %}">{{ t.uncounted }}</p>
     <p class="metric-label">Not counted</p>
-    <p class="metric-sub">rule is only where this system isn't measured</p>
+    <div class="metric-tip" role="tooltip">Rule is only where this system isn't measured</div>
 {% endcall %}

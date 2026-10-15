@@ -1,6 +1,7 @@
 """Diagnostics page: a snapshot, read-only checks and look-ups.
 
-  GET /diagnostics                  the page: snapshot, the checks ready to run, look-ups
+  GET /settings/diagnostics         the page (Settings & Administration's Diagnostics tab): snapshot,
+                                    the checks ready to run, look-ups. GET /diagnostics redirects there.
   GET /api/diagnostics/run          run one check or all of them, for one client or every client
   GET /api/diagnostics/lookup       everything TIDE holds for a rule, user or destination
   GET/POST /api/diagnostics/fix/... preview, apply and undo a fix (app.services.diagnostic_fixes)
@@ -73,7 +74,12 @@ def _required(db, user, active_client) -> Scope:
     return scope
 
 
-@router.get("/diagnostics", response_class=HTMLResponse)
+@router.get("/diagnostics")
+def redirect_diagnostics():
+    return RedirectResponse(url="/settings/diagnostics", status_code=302)
+
+
+@router.get("/settings/diagnostics", response_class=HTMLResponse)
 def page_diagnostics(request: Request, db: DbDep, user: CurrentUser, client_id: ActiveClient):
     scope = _scope(db, user, client_id)
     if scope is None:

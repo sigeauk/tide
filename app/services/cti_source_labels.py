@@ -40,13 +40,9 @@ _DISPLAY_MAP = {
     "mitre:ics": "MITRE ICS",
     "mitre: ics": "MITRE ICS",
     "mitre-ics": "MITRE ICS",
-    "mitre:pre": "MITRE PRE",
-    "mitre: pre": "MITRE PRE",
-    "mitre-pre": "MITRE PRE",
     "enterprise": "MITRE Enterprise",
     "mobile": "MITRE Mobile",
     "ics": "MITRE ICS",
-    "pre": "MITRE PRE",
 }
 
 

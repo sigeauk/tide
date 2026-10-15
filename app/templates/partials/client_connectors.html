@@ -14,7 +14,7 @@
     <span class="badge badge-neutral badge--xs">{{ client_connectors | length }}</span>
     <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
         <button  name="Open Edit Connectors Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-connectors-modal">
-            {{ icon('edit-2', '14') }} Edit
+            {{ icon('pencil', '14') }} Edit
         </button>
     </div>
     <span id="connectors-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
@@ -53,7 +53,7 @@
     <p>No CTI connectors linked to this client yet.</p>
     <p class="text-sm">
         Register connectors in
-        <a name="Management Connectors" href="/management?tab=connectors" class="text-primary">Management &rsaquo; Connectors</a>,
+        <a name="Management Connectors" href="/settings/management#mgmt-sub-connectors" class="text-primary">Management &rsaquo; Connectors</a>,
         then link them here.
     </p>
 </div>
@@ -112,7 +112,7 @@
                 All registered connectors are already linked to this client, or none have been
                 registered yet.
                 Register connectors in the
-                <a name="Connectors" href="/management?tab=connectors" class="text-primary">Connectors</a>
+                <a name="Connectors" href="/settings/management#mgmt-sub-connectors" class="text-primary">Connectors</a>
                 tab.
             </p>
             {% endif %}

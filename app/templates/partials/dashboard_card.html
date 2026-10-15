@@ -35,16 +35,22 @@
 {% elif kind == 'section' and card.source in sources %}
 {% set src = sources[card.source] %}
 {% set shown_name = card.name or view.default_name or src.label %}
+{% set shown_icon = card.icon or src.icon %}
 <section class="overview-section dash-card dash-w-{{ card.w }}" data-dash-card data-type="section"
-         data-source="{{ card.source }}" data-w="{{ card.w }}" aria-label="{{ shown_name }}">
+         data-source="{{ card.source }}" data-icon="{{ card.icon or '' }}" data-w="{{ card.w }}" aria-label="{{ shown_name }}">
     <div class="dash-card__head">
         {% if editing %}
-        <span class="dash-card__icon" title="{{ src.label }}">{{ icon(src.icon, '20') }}</span>
+        {# The section's icon: opens the shared icon picker (pages/core/dashboard.html). #}
+        <span class="dash-iconwrap">
+            <button name="Choose Section Icon" type="button" class="dash-iconbtn" data-dash-icon-toggle
+                    aria-haspopup="dialog" aria-expanded="false" title="Choose this section's icon" aria-label="Choose this section's icon"
+                    data-default-icon="{{ src.icon }}">{{ icon(shown_icon, '20') }}</button>
+        </span>
         <input type="text" class="form-input dash-name-input" data-dash-name maxlength="{{ name_limit }}"
                value="{{ card.name }}" placeholder="{{ view.default_name or src.label }}" aria-label="Section name">
         {{ card_tools(shown_name, card.w) }}
         {% else %}
-        <h2>{{ icon(src.icon, '20') }} {{ shown_name }}</h2>
+        <h2><span class="dash-card__icon" data-icon-name="{{ shown_icon }}">{{ icon(shown_icon, '20') }}</span> {{ shown_name }}</h2>
         {% endif %}
     </div>
     {% if editing %}

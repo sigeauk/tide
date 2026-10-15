@@ -9,7 +9,7 @@
       {% endif %}
       <div class="rm-header__main">
         <h2 class="rm-title" id="rf-title">
-          {% if mode == 'edit' %}{{ icon_text('edit-2', modal_title) }}{% else %}{{ icon_text('plus-circle', modal_title) }}{% endif %}
+          {% if mode == 'edit' %}{{ icon_text('pencil', modal_title) }}{% else %}{{ icon_text('plus-circle', modal_title) }}{% endif %}
         </h2>
         {% if mode == 'edit' and rule %}<div class="rm-header__badges"><span class="rm-header__meta">{{ rule.name }}</span></div>{% endif %}
       </div>

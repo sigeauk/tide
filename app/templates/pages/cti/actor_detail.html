@@ -22,35 +22,35 @@
 
 {# ── Quick stats strip (no UUID, no raw STIX ids) ────────── #}
 <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ (actor.aliases or [])|length }}</p>
         <p class="metric-label">Aliases</p>
-        <p class="metric-sub">{{ icon_text('tags','Also known as','14') }}</p>
+        <div class="metric-tip" role="tooltip">Also known as</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ actor.related_indicators|length }}</p>
         <p class="metric-label">Indicators</p>
-        <p class="metric-sub">{{ icon_text('crosshair','Linked observables','14') }}</p>
+        <div class="metric-tip" role="tooltip">Linked observables</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ actor.related_reports|length }}</p>
         <p class="metric-label">Reports</p>
-        <p class="metric-sub">{{ icon_text('file-text','Mentions','14') }}</p>
+        <div class="metric-tip" role="tooltip">Reports that mention this actor</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ actor.first_seen or '—' }}</p>
         <p class="metric-label">First seen</p>
-        <p class="metric-sub">{{ icon_text('clock','Earliest sighting','14') }}</p>
+        <div class="metric-tip" role="tooltip">Earliest sighting</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ actor.last_seen or '—' }}</p>
         <p class="metric-label">Last seen</p>
-        <p class="metric-sub">{{ icon_text('clock','Most recent','14') }}</p>
+        <div class="metric-tip" role="tooltip">Most recent</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ actor.origin or '—' }}</p>
         <p class="metric-label">Origin</p>
-        <p class="metric-sub">{{ icon_text('map-pin','Attributed region','14') }}</p>
+        <div class="metric-tip" role="tooltip">Attributed region</div>
     </div>
 </div>
 

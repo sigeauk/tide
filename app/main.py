@@ -811,6 +811,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/management": "page:management",
         # Superadmin only (the routes require it); the resource is for the Role Templates matrix.
         "/diagnostics": "page:diagnostics",
+        "/settings/diagnostics": "page:diagnostics",
+        "/settings/docs": "page:documentation",
         "/api/diagnostics": "page:diagnostics",
     }
 
@@ -857,6 +859,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/clients/switch",
         "/api/settings/profile/email",
         "/api/settings/profile/password",
+        "/api/settings/profile/display-name",
+        "/api/settings/profile/avatar",
     }
 
     @staticmethod
@@ -2105,43 +2109,26 @@ def create_app() -> FastAPI:
         )
     
     @app.get("/dashboard", response_class=HTMLResponse)
-    def dashboard_page(request: Request, user: CurrentUser):
+    def dashboard_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
         """The dashboard this user last opened, else the client's default."""
-        return _dashboard_page(request, user, None)
+        return _dashboard_page(request, user, db, client_id, None)
 
     @app.get("/dashboard/{dashboard_id}", response_class=HTMLResponse)
-    def dashboard_page_one(request: Request, dashboard_id: str, user: CurrentUser):
+    def dashboard_page_one(request: Request, dashboard_id: str, user: CurrentUser, db: DbDep, client_id: ActiveClient):
         """One of the client's dashboards; ?edit=1 opens its editor, for users who can change it."""
-        return _dashboard_page(request, user, dashboard_id)
+        return _dashboard_page(request, user, db, client_id, dashboard_id)
 
-    def _dashboard_page(request: Request, user, dashboard_id: Optional[str]):
-        from app.services.database import get_database_service
+    def _dashboard_page(request: Request, user, db, client_id: str, dashboard_id: Optional[str]):
         from app.services import dashboards
         from app.api.dashboard import page_context
-        db = get_database_service()
-
-        # Resolve active client for tenant-scoped metrics
-        # (mirrors the resolution chain in deps.get_active_client)
-        _cid = request.cookies.get("active_client_id")
-        if not _cid and user:
-            with db.get_shared_connection() as conn:
-                row = conn.execute(
-                    "SELECT client_id FROM user_clients WHERE user_id = ? AND is_default = true LIMIT 1",
-                    [user.id],
-                ).fetchone()
-                if row:
-                    _cid = row[0]
-        if not _cid:
-            _cid = db.get_default_client_id()
-        _activate_page_tenant(request, user, db, _cid)
 
         user_id = user.id if user else None
-        dashboard = dashboards.resolve(db, _cid, user_id, dashboard_id)
+        dashboard = dashboards.resolve(db, client_id, user_id, dashboard_id)
         if dashboard is None:                       # deleted, or another client's
             return RedirectResponse(url="/dashboard", status_code=302)
-        dashboards.remember(db, _cid, user_id, dashboard["id"])
+        dashboards.remember(db, client_id, user_id, dashboard["id"])
         editing = request.query_params.get("edit") == "1" and bool(user and user.can_write("page:dashboard"))
-        ctx = page_context(db, _cid, user, dashboard, editing)
+        ctx = page_context(db, client_id, user, dashboard, editing)
         ctx.update({"user": user, "active_page": "dashboard"})
         return render_template("pages/core/dashboard.html", request, ctx)
     
@@ -2549,53 +2536,38 @@ def create_app() -> FastAPI:
             }
         )
     
-    @app.get("/preferences", response_class=HTMLResponse)
-    def preferences_page(request: Request, user: CurrentUser):
-        """User preferences page."""
-        return render_template(
-            "pages/admin/preferences.html",
-            request,
-            {
-                "user": user,
-                "active_page": "preferences",
-                "page_title": "User Preferences",
-                "page_subtitle": "Customize your TIDE experience.",
-            }
-        )
-    
+    # Settings & Administration (/settings/*): one page with a tab each for Profile & Preferences,
+    # Management, Diagnostics and Documentation (pages/admin/settings_layout.html). Each tab keeps
+    # its own access rule; the old addresses redirect to their tab.
+    @app.get("/preferences")
+    def preferences_page():
+        return RedirectResponse(url="/settings", status_code=302)
+
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
-        """Settings page - configure integrations, logging, and system health."""
-        import os
-        from app import sigma_helper as sigma_mod
-        from app.inventory_engine import list_classifications
-        app_settings = db.get_all_settings()
-        env_settings = get_settings()
-
-        # Check actual repo/data connectivity on disk
-        repo_status = {
-            "mitre_enterprise": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "enterprise-attack.json")),
-            "mitre_mobile": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "mobile-attack.json")),
-            "mitre_ics": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "ics-attack.json")),
-            "mitre_pre": os.path.isfile(os.path.join(env_settings.mitre_repo_path, "pre-attack.json")),
-            "sigma": os.path.isdir(os.path.join(env_settings.sigma_repo_path, "rules")),
-            "elastic_detection": os.path.isdir(env_settings.elastic_repo_path),
-        }
-
+    def settings_page(request: Request, user: CurrentUser, db: DbDep):
+        """Profile & Preferences: your name and picture, theme, sign-in and API keys."""
+        db_user = db.get_user_by_id(user.id) if user else None
         return render_template(
             "pages/admin/settings.html",
             request,
             {
                 "user": user,
                 "active_page": "settings",
-                "app_settings": app_settings,
-                "env": env_settings,
-                "repo_status": repo_status,
-                "sigma_indices": sigma_mod.get_elastic_indices(),
-                "classifications": list_classifications(client_id=client_id),
+                "account": db_user or {},
+                "sso": {"realm": settings.keycloak_realm},
             }
         )
-    
+
+    @app.get("/settings/docs", response_class=HTMLResponse)
+    def docs_page(request: Request, user: CurrentUser):
+        """Documentation: the README, rendered."""
+        from app.services import docs
+        return render_template(
+            "pages/admin/docs.html",
+            request,
+            {"user": user, "active_page": "docs", "doc": docs.readme(settings.tide_version)},
+        )
+
     @app.get("/clients", response_class=HTMLResponse)
     def clients_page(request: Request, user: CurrentUser, db: DbDep):
         """Client management page (admin only)."""
@@ -2740,11 +2712,15 @@ def create_app() -> FastAPI:
             }
         )
     
-    @app.get("/management", response_class=HTMLResponse)
+    @app.get("/management")
+    def management_redirect(request: Request):
+        query = f"?{request.url.query}" if request.url.query else ""
+        return RedirectResponse(url=f"/settings/management{query}", status_code=302)
+
+    @app.get("/settings/management", response_class=HTMLResponse)
     def management_page(request: Request, user: CurrentUser, db: DbDep):
         """Management hub — admin-only area for Clients, SIEMs, Users, Permissions."""
         if user and not user.is_admin():
-            from fastapi.responses import RedirectResponse
             return RedirectResponse(url="/", status_code=302)
         tab = request.query_params.get("tab", "clients")
         # The Management page now uses collapsible sections; only the

@@ -9,7 +9,7 @@
     <span class="badge badge-neutral badge--xs">{{ system_summaries | length if system_summaries is defined else client_systems | length }}</span>
     <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
         <button  name="Open Edit Systems Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-systems-modal">
-            {{ icon('edit-2', '14') }} Edit
+            {{ icon('pencil', '14') }} Edit
         </button>
     </div>
     <span id="systems-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>

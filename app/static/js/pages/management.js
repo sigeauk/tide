@@ -45,9 +45,9 @@
 
     // ── Tenants & Users tab bar ──
     function activateTab(e, btn) {
-        document.querySelectorAll('.settings-tab').forEach(function (t) { t.classList.remove('active'); });
+        btn.parentElement.querySelectorAll('.settings-tab').forEach(function (t) { t.classList.remove('active'); });
         btn.classList.add('active');
-        history.replaceState(null, '', '/management?tab=' + btn.dataset.tab);
+        history.replaceState(null, '', '/settings/management?tab=' + btn.dataset.tab);
     }
 
     // ── SIEM dialog: fields per type ──

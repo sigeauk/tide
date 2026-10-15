@@ -7,7 +7,7 @@
 <div class="page-header flex items-start justify-between">
     <div>
         <div class="flex items-center gap-sm mb-xs">
-            <a name="Clients" href="/management?tab=clients" class="text-muted fs-base">&larr; Clients</a>
+            <a name="Clients" href="/settings/management?tab=clients" class="text-muted fs-base">&larr; Clients</a>
         </div>
         <h1 class="page-title-hero">{{ client.name }}</h1>
         <span class="system-card__classification mt-xs">{{ client.slug }}</span>
@@ -17,11 +17,11 @@
     </div>
     <div class="flex gap-sm shrink-0 items-start pt-sm">
         <button  name="Edit Client" class="btn btn-secondary btn-sm" data-click="el.show" data-target="edit-client-modal">
-            {{ icon('edit-2', '14') }} Edit
+            {{ icon('pencil', '14') }} Edit
         </button>
         {% if not client.is_default %}
         <button name="Delete" class="btn btn-danger btn-sm"
-                data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" data-after="/management?tab=clients">
+                data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" data-after="/settings/management?tab=clients">
             {{ icon('trash-2', '14') }} Delete
         </button>
         {% endif %}

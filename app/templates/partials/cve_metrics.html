@@ -6,33 +6,33 @@
 #}
 {% from "macros/icons.html" import icon_text %}
 
-{% call metric_card('total', keys, link) %}
+{% call metric_card('total', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ stats.total_kev }}</p>
     <p class="metric-label">Total CVEs</p>
-    <p class="metric-sub">{{ icon_text('database','CISA catalogue','14') }}</p>
+    <div class="metric-tip" role="tooltip">CISA catalogue</div>
 {% endcall %}
-{% call metric_card('matched', keys, link) %}
+{% call metric_card('matched', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.matched_count > 0 else '' }}">{{ stats.matched_count }}</p>
     <p class="metric-label">CVEs Matched</p>
-    <p class="metric-sub">{{ icon_text('alert-triangle','In your systems','14') }}</p>
+    <div class="metric-tip" role="tooltip">In your systems</div>
 {% endcall %}
-{% call metric_card('affected_devices', keys, link) %}
+{% call metric_card('affected_devices', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.affected_hosts > 0 else '' }}">{{ stats.affected_hosts }}</p>
     <p class="metric-label">Affected Devices</p>
-    <p class="metric-sub">{{ icon_text('server','Devices with matches','14') }}</p>
+    <div class="metric-tip" role="tooltip">Devices with matches</div>
 {% endcall %}
-{% call metric_card('ransomware', keys, link) %}
+{% call metric_card('ransomware', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'warning' if stats.ransomware_count > 0 else '' }}">{{ stats.ransomware_count }}</p>
     <p class="metric-label">Ransomware CVEs</p>
-    <p class="metric-sub">{{ icon_text('zap','Known ransomware use','14') }}</p>
+    <div class="metric-tip" role="tooltip">Known ransomware use</div>
 {% endcall %}
-{% call metric_card('detected', keys, link) %}
+{% call metric_card('detected', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if stats.detected_count > 0 else '' }}">{{ stats.detected_count }}</p>
     <p class="metric-label">Detected</p>
-    <p class="metric-sub">{{ icon_text('shield-check','Marked as detected','14') }}</p>
+    <div class="metric-tip" role="tooltip">Marked as detected</div>
 {% endcall %}
-{% call metric_card('ransom_undetected', keys, link) %}
+{% call metric_card('ransom_undetected', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if stats.ransomware_undetected > 0 else 'success' }}">{{ stats.ransomware_undetected }}</p>
     <p class="metric-label">Ransom Undetected</p>
-    <p class="metric-sub">{{ icon_text('alert-circle','Ransom without coverage','14') }}</p>
+    <div class="metric-tip" role="tooltip">Ransom without coverage</div>
 {% endcall %}

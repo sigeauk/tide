@@ -4,6 +4,7 @@ Top-level items (standalone + group headers) share identical styling.
 Children are indented, slightly muted, icon-free.
 -->
 {% from "macros/icons.html" import icon %}
+{% from "macros/avatar.html" import sidebar_identity %}
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
         <img src="/static/icons/tide 48x48.png?v={{ cache_bust }}" alt="TIDE" class="sidebar-logo">
@@ -175,46 +176,25 @@ Children are indented, slightly muted, icon-free.
     </nav>
     
     <div class="sidebar-footer">
-        {% if user and user.is_admin() %}
-        <a name="Management" href="/management" class="nav-item {% if active_page == 'management' %}active{% endif %}" data-tooltip="Management">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
-            </svg>
-            <span class="nav-label">Management</span>
-        </a>
-        {% endif %}
-        {% if user and (user.is_superadmin or user.is_support()) %}
-        <a name="Diagnostics" href="/diagnostics" class="nav-item {% if active_page == 'diagnostics' %}active{% endif %}" data-tooltip="Diagnostics">
-            {{ icon('activity', '18', 'nav-icon-svg') }}
-            <span class="nav-label">Diagnostics</span>
-        </a>
-        {% endif %}
-        {% if not user or user.can_read('page:settings') %}
-        <a name="Settings" href="/settings" class="nav-item {% if active_page == 'settings' %}active{% endif %}" data-tooltip="Settings">
-            <svg class="nav-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
-            </svg>
-            <span class="nav-label">Settings</span>
-        </a>
-        {% endif %}
-        
         {% if user %}
-        <div class="user-menu-container">
-            <button  name="Toggle User Menu" class="nav-item user-info" data-tooltip="{{ user.username or 'Guest' }}" data-click="nav.userMenu">
-                <span class="user-avatar">{{ user.username[0] | upper if user.username else '?' }}</span>
-                <span class="nav-label user-name">{{ user.username or 'Guest' }}</span>
+        {# Account: a group like the others above. Settings (Settings & Administration), the theme
+           to switch to, and sign-out. #}
+        {% set settings_pages = ('settings', 'management', 'diagnostics', 'docs') %}
+        <div class="nav-group collapsed" id="nav-group-account">
+            <button name="Account" type="button" class="nav-item nav-group__trigger user-info" data-click="nav.group" data-group="nav-group-account"
+                    data-tooltip="{{ user.label }}">
+                {{ sidebar_identity(user) }}
+                <svg class="nav-group__chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
             </button>
-            
-            <!-- User Menu Dropdown -->
-            <div class="user-menu" id="user-menu">
-                <button name="Dark Mode" class="user-menu-item" data-click="nav.theme">
-                    <svg viewBox="0 0 24 24" id="theme-icon"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-                    <span id="theme-label">Dark Mode</span>
+            <div class="nav-group__items">
+                <a name="Settings" href="/settings" class="nav-child {% if active_page in settings_pages %}active{% endif %}">
+                    <span class="nav-label">Settings</span>
+                </a>
+                <button name="Theme" type="button" class="nav-child" data-click="nav.theme">
+                    <span class="nav-label" id="theme-label">Light Mode</span>
                 </button>
-                <div class="user-menu-divider"></div>
-                <a name="Log Out" href="/logout" class="user-menu-item" hx-boost="false">
-                    <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/></svg>
-                    Log Out
+                <a name="Log Out" href="/logout" class="nav-child" hx-boost="false">
+                    <span class="nav-label">Log Out</span>
                 </a>
             </div>
         </div>

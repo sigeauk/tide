@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+{% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
 {% block title %}Management - TIDE{% endblock %}
 
@@ -9,7 +9,9 @@
 <script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
 {% endblock %}
 
-{% block content %}
+{% block settings_subtitle %}Tenants, users, integrations, Sigma assets and classifications.{% endblock %}
+
+{% block settings_tab_content %}
 {# Each integration's own "Verify TLS certificate" box, off by default (app/services/tls.py). #}
 {% macro tls_verify_row(dom_id) %}
 <div>
@@ -19,13 +21,6 @@
     <span class="form-hint">Leave off for a self-signed certificate. When on, the certificate must come from a public CA or from a CA certificate installed in the container.</span>
 </div>
 {% endmacro %}
-<div class="page-header">
-    <div>
-        <h1 class="page-title-hero">Management</h1>
-        <p class="page-subtitle">Centralized administration for tenants, users, integrations, Sigma assets, and classifications.</p>
-    </div>
-</div>
-
 {# ------------------------------------------------------------------ #}
 {# Tenants & Users \u2014 two sub-tabs (Clients / Users). The legacy        #}
 {# "permissions" tab now lives in its own top-level "Role Templates"  #}

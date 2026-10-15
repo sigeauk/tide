@@ -1,9 +1,11 @@
 /*
- * Preferences (pages/admin/preferences.html): theme, brand hue and the per-browser preferences,
- * all kept in localStorage.
+ * Settings & Administration -> Profile & Preferences (pages/admin/settings.html): the theme and
+ * brand colour, kept in localStorage (window.setTheme / window.setBrandHue in app.js).
  */
 (function () {
     'use strict';
+
+    var DEFAULT_HUE = '212';   // the theme's own accent (body.brand-custom in style.css)
 
     function $(id) { return document.getElementById(id); }
 
@@ -13,38 +15,38 @@
         if (light) light.classList.toggle('active', theme === 'light');
     }
 
-    TIDE.page('#hue-slider', function (hueSlider) {
+    // The slider shows the hue in use; "Default" and no Reset while it is the theme's own.
+    function showHue(hue) {
+        $('hue-slider').value = hue === null ? DEFAULT_HUE : hue;
+        $('hue-value').textContent = hue === null ? 'Default' : hue;
+        $('hue-reset').hidden = hue === null;
+    }
+
+    // The pencil beside your name (and Cancel, or Esc) swaps it for the name form and back.
+    function nameEdit() {
+        var card = $('profile-identity'), input = $('profile-display-name');
+        if (card.classList.toggle('is-editing')) { input.focus(); input.select(); }
+        else input.value = input.defaultValue;
+    }
+
+    TIDE.page('#hue-slider', function () {
         themeButtons(localStorage.getItem('theme') || 'dark');
-        var hue = localStorage.getItem('brand-hue') || '240';
-        hueSlider.value = hue;
-        var hueValue = $('hue-value');
-        if (hueValue) hueValue.textContent = hue;
-        ['notify-sync', 'notify-validation'].forEach(function (key) {
-            var val = localStorage.getItem('pref-' + key), el = $(key);
-            if (val !== null && el) el.checked = val === 'true';
-        });
-        ['cards-per-row', 'page-size'].forEach(function (key) {
-            var val = localStorage.getItem('pref-' + key), el = $(key);
-            if (val && el) el.value = val;
-        });
+        showHue(localStorage.getItem('brand-hue'));
     });
 
     TIDE.actions('prefs', {
-        theme: function (e, btn) {
-            var theme = btn.dataset.theme;
-            document.body.classList.toggle('light', theme === 'light');
-            localStorage.setItem('theme', theme);
-            themeButtons(theme);
-        },
+        theme: function (e, btn) { window.setTheme(btn.dataset.theme === 'light'); },
         hue: function (e, input) {
-            $('hue-value').textContent = input.value;
-            document.documentElement.style.setProperty('--brand-hue', input.value);
-            localStorage.setItem('brand-hue', input.value);
+            window.setBrandHue(input.value);
+            showHue(input.value);
         },
-        // data-pref is the key; a checkbox saves whether it's ticked, anything else its value.
-        save: function (e, el) {
-            localStorage.setItem('pref-' + el.dataset.pref, el.type === 'checkbox' ? el.checked : el.value);
-            showToast('Preference saved', 'success');
+        hueReset: function () {
+            window.setBrandHue(null);
+            showHue(null);
+        },
+        nameEdit: function () { nameEdit(); },
+        nameKey: function (e) {
+            if (e.key === 'Escape' && $('profile-identity').classList.contains('is-editing')) nameEdit();
         },
     });
 })();

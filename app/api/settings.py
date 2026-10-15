@@ -5,12 +5,14 @@ Handles reading/writing app settings, API key management, user management, and t
 
 import logging
 from html import escape
+from typing import Optional
 
-from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, File, Request, Form, UploadFile
+from fastapi.responses import HTMLResponse, Response
 
 from app.api.deps import (ActiveClient, DbDep, CurrentUser, RequireUser, RequireAdmin, admin_client_ids, can_manage_user,
                           require_client_member, require_manageable_user)
+from app.models.auth import User
 from app.services.database import SUPPORT_ROLE
 from app.services.log_context import audit_admin
 
@@ -320,6 +322,76 @@ async def update_profile_password(request: Request, db: DbDep, user: RequireUser
                             httponly=True, secure=get_settings().app_url.startswith("https://"),
                             samesite="lax", max_age=86400)
     return response
+
+
+# ── Profile name and picture (self-service; any account, SSO included) ──────
+
+AVATAR_MAX_BYTES = 256 * 1024
+DISPLAY_NAME_MAX = 64
+
+
+def _avatar_type(data: bytes) -> Optional[str]:
+    """The picture's media type, judged by its bytes, never by its name or the browser's claim.
+    SVG is refused: it can carry script."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    return None
+
+
+def _profile_identity(request: Request, user, message: str = "", ok: bool = True) -> HTMLResponse:
+    """The Profile card, plus the sidebar's name and picture out of band, so both show the change."""
+    return request.app.state.templates.TemplateResponse(
+        request, "partials/profile_identity.html", {"user": user, "message": message, "ok": ok, "oob": True})
+
+
+@router.post("/profile/display-name", response_class=HTMLResponse)
+async def update_profile_display_name(request: Request, db: DbDep, user: RequireUser):
+    """Set the name TIDE shows for you; empty goes back to your full name or username."""
+    form = await request.form()
+    name = " ".join(str(form.get("display_name", "")).split())
+    if len(name) > DISPLAY_NAME_MAX:
+        return _profile_identity(request, user, f"A display name can be up to {DISPLAY_NAME_MAX} characters.", ok=False)
+    db.update_user(user.id, display_name=name or None)
+    user.display_name = name or None
+    return _profile_identity(request, user, "Display name saved." if name else "Display name cleared.")
+
+
+@router.get("/profile/avatar")
+def get_profile_avatar(db: DbDep, user: RequireUser):
+    """Your own picture. Its URL carries ?v=<version>, so it can be cached until it changes."""
+    found = db.get_user_avatar(user.id)
+    if not found:
+        return Response(status_code=404)
+    data, media_type = found
+    return Response(content=data, media_type=media_type, headers={
+        "Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/profile/avatar", response_class=HTMLResponse)
+async def upload_profile_avatar(request: Request, db: DbDep, user: RequireUser, avatar: UploadFile = File(...)):
+    """Set your picture: PNG, JPEG, WebP or GIF, up to 256 KB."""
+    data = await avatar.read(AVATAR_MAX_BYTES + 1)
+    if len(data) > AVATAR_MAX_BYTES:
+        return _profile_identity(request, user, "That picture is larger than 256 KB.", ok=False)
+    media_type = _avatar_type(data)
+    if not media_type:
+        return _profile_identity(request, user, "Choose a PNG, JPEG, WebP or GIF picture.", ok=False)
+    db.set_user_avatar(user.id, data, media_type)
+    user.avatar_version = User._profile(db.get_user_by_id(user.id))["avatar_version"]
+    return _profile_identity(request, user, "Picture saved.")
+
+
+@router.delete("/profile/avatar", response_class=HTMLResponse)
+def delete_profile_avatar(request: Request, db: DbDep, user: RequireUser):
+    db.set_user_avatar(user.id, None, None)
+    user.avatar_version = None
+    return _profile_identity(request, user, "Picture removed.")
 
 
 # ── User Management (ADMIN only) ────────────────────────────────────────────

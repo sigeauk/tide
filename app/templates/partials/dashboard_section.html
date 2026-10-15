@@ -82,20 +82,12 @@
     </div>
     {% endif %}
 {% elif src == 'repositories' %}
-    {% set repos = [
-        ('mitre_enterprise', 'MITRE Enterprise ATT&CK', env.mitre_source, 'Active', 'Missing'),
-        ('mitre_mobile', 'MITRE Mobile ATT&CK', env.mitre_mobile_source, 'Active', 'Missing'),
-        ('mitre_ics', 'MITRE ICS ATT&CK', env.mitre_ics_source, 'Active', 'Missing'),
-        ('mitre_pre', 'MITRE PRE-ATT&CK', env.mitre_pre_source, 'Active', 'Missing'),
-        ('sigma', 'Sigma Rules', env.sigma_repo_url, 'Cloned', 'Not Found'),
-        ('elastic', 'Elastic Detection Rules', env.elastic_repo_url, 'Cloned', 'Not Found'),
-    ] %}
-    {% for key, name, source, yes, no in repos if key in metric_keys %}
-    {% set present = view.repo_status[key] %}
-    <div class="integration-card">
-        <div class="integration-card-name">{{ name }}</div>
-        <div class="integration-card-url" title="{{ source }}">{{ source | truncate(50, True, '...') }}</div>
-        <span class="integration-card-status status-{{ 'active' if present else 'inactive' }}">{{ yes if present else no }}</span>
+    {# Built-in data: present or not; what it is (version, date, where from) on hover. #}
+    {% for item in view['items'] if item.key in metric_keys %}
+    <div class="integration-card metric-card--tip" tabindex="0">
+        <div class="integration-card-name">{{ item.name }}</div>
+        <span class="integration-card-status status-{{ 'active' if item.present else 'inactive' }}">{{ 'Available' if item.present else 'Missing' }}</span>
+        <div class="metric-tip" role="tooltip">{{ item.tip }}</div>
     </div>
     {% endfor %}
 {% endif %}

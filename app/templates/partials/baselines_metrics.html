@@ -6,39 +6,39 @@
 {% from "macros/metrics.html" import metric_card %}
 {% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
 {% if baselines_overview or (baselines_rollup and baselines_rollup.baselines) %}
-{% call metric_card('templates', keys, link) %}
+{% call metric_card('templates', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ baselines_overview | length }}</p>
     <p class="metric-label">Templates</p>
-    <p class="metric-sub">{{ icon_text('clipboard-list','Baseline templates','14') }}</p>
+    <div class="metric-tip" role="tooltip">Baseline templates</div>
 {% endcall %}
-{% call metric_card('techniques', keys, link) %}
+{% call metric_card('techniques', keys, link, 'metric-card--tip', tip=true) %}
     {% set ns_tactics = namespace(total=0) %}
     {% for bl in baselines_overview %}{% set ns_tactics.total = ns_tactics.total + bl.tactic_count %}{% endfor %}
     <p class="metric-value">{{ ns_tactics.total }}</p>
     <p class="metric-label">Techniques Defined</p>
-    <p class="metric-sub">{{ icon_text('crosshair','Baseline techniques','14') }}</p>
+    <div class="metric-tip" role="tooltip">Baseline techniques</div>
 {% endcall %}
 {# Coverage lives on each system's own baselines, not on the templates they came from. #}
 {% set ru = baselines_rollup or {'baselines': 0, 'rules_mapped': 0, 'red': 0, 'green': 0} %}
-{% call metric_card('system_baselines', keys, link) %}
+{% call metric_card('system_baselines', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ ru.baselines }}</p>
     <p class="metric-label">System Baselines</p>
-    <p class="metric-sub">{{ icon_text('layers','Baselines on systems','14') }}</p>
+    <div class="metric-tip" role="tooltip">Baselines on systems</div>
 {% endcall %}
-{% call metric_card('rules_mapped', keys, link) %}
+{% call metric_card('rules_mapped', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.rules_mapped > 0 else '' }}">{{ ru.rules_mapped }}</p>
     <p class="metric-label">Rules Mapped</p>
-    <p class="metric-sub">{{ icon_text('shield-check','Detection rules','14') }}</p>
+    <div class="metric-tip" role="tooltip">Detection rules</div>
 {% endcall %}
-{% call metric_card('uncovered', keys, link) %}
+{% call metric_card('uncovered', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if ru.red > 0 else 'success' }}">{{ ru.red }}</p>
     <p class="metric-label">Uncovered</p>
-    <p class="metric-sub">{{ icon_text('alert-triangle','System baselines with gaps','14') }}</p>
+    <div class="metric-tip" role="tooltip">System baselines with gaps</div>
 {% endcall %}
-{% call metric_card('fully_covered', keys, link) %}
+{% call metric_card('fully_covered', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.green > 0 else '' }}">{{ ru.green }}</p>
     <p class="metric-label">Fully Covered</p>
-    <p class="metric-sub">{{ icon_text('shield-check','All techniques monitored','14') }}</p>
+    <div class="metric-tip" role="tooltip">All techniques monitored</div>
 {% endcall %}
 {% else %}
 <div class="metric-card metric-card--empty">

@@ -5,32 +5,32 @@
 #}
 {% set t = totals %}
 
-<div class="metric-card">
+<div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ t.templates }}</p>
     <p class="metric-label">Templates</p>
-    <p class="metric-sub">baselines to apply to systems</p>
+    <div class="metric-tip" role="tooltip">Baselines to apply to systems</div>
 </div>
 
-<div class="metric-card">
+<div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ t.total }}</p>
     <p class="metric-label">Techniques</p>
-    <p class="metric-sub">across every template</p>
+    <div class="metric-tip" role="tooltip">Across every template</div>
 </div>
 
-<div class="metric-card">
+<div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ t.tactics }}</p>
     <p class="metric-label">Tactics</p>
-    <p class="metric-sub">kill-chain phases covered</p>
+    <div class="metric-tip" role="tooltip">Kill-chain phases covered</div>
 </div>
 
-<div class="metric-card">
+<div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value {% if t.unmapped %}warning{% endif %}">{{ t.unmapped }}</p>
     <p class="metric-label">No ATT&amp;CK</p>
-    <p class="metric-sub">techniques with no ATT&amp;CK id yet</p>
+    <div class="metric-tip" role="tooltip">Techniques with no ATT&amp;CK id yet</div>
 </div>
 
-<div class="metric-card">
+<div class="metric-card metric-card--tip" tabindex="0">
     <p class="metric-value">{{ system_baselines }}</p>
     <p class="metric-label">System baselines</p>
-    <p class="metric-sub">copies systems keep of their own</p>
+    <div class="metric-tip" role="tooltip">Copies systems keep of their own</div>
 </div>

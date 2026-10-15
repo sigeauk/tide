@@ -72,7 +72,7 @@
 
     {% if result %}
     <p class="diag-access__result diag-access__result--{{ 'ok' if result.ok else 'refused' }}" role="{{ 'status' if result.ok else 'alert' }}">
-        {{ icon('check-circle' if result.ok else 'alert-triangle', '14') }} {{ result.message }}
+        {{ icon('check-circle' if result.ok else 'triangle-alert', '14') }} {{ result.message }}
     </p>
     {% endif %}
 </div>

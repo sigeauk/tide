@@ -9,7 +9,7 @@
     <span class="badge badge-neutral badge--xs">{{ client_opencti | length }}</span>
     <div   name="Edit Item" class="client-section-toggle__actions" data-stop-click>
         <button  name="Open Edit Opencti Modal" class="btn btn-info btn-sm" data-click="el.show" data-target="edit-opencti-modal">
-            {{ icon('edit-2', '14') }} Edit
+            {{ icon('pencil', '14') }} Edit
         </button>
     </div>
     <span id="opencti-chev" class="client-section-toggle__chevron" style="transform:rotate(90deg);">{{ icon('chevron-right', '16') }}</span>
@@ -91,7 +91,7 @@
             {% elif not available_opencti %}
             <p class="text-muted fs-base text-center">
                 All configured OpenCTI instances are already linked, or none have been registered yet.
-                Register instances in the <a name="Threat Intel" href="/management?tab=threat-intel" class="text-primary">Threat Intel</a> tab.
+                Register instances in the <a name="Threat Intel" href="/settings/management#mgmt-sub-connectors" class="text-primary">Threat Intel</a> tab.
             </p>
             {% endif %}
             <div class="flex justify-end">

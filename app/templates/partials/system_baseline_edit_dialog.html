@@ -7,7 +7,7 @@
 <div name="Edit System Baseline Dialog" class="modal-overlay" data-rm-overlay>
     <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sys-bl-edit-title">
         <div class="modal-header">
-            <h3 class="modal-title" id="sys-bl-edit-title">{{ icon('edit-2', '16') }} Edit baseline</h3>
+            <h3 class="modal-title" id="sys-bl-edit-title">{{ icon('pencil', '16') }} Edit baseline</h3>
             <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
         </div>
         <form class="sys-dialog__form" hx-put="/api/systems/{{ system.id }}/baselines/{{ baseline.id }}"

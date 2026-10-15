@@ -403,7 +403,7 @@ def tab_threat_intel(request: Request, db: DbDep, user: RequireSuperadmin):
         '<div class="text-secondary p-md">'
         'Threat Intel (legacy OpenCTI GraphQL) was retired in 5.0.0. '
         'Add OpenCTI as an <code>opencti_taxii</code> connector under '
-        '<a href="/management#mgmt-sub-connectors" class="text-primary">Management → Connectors</a> '
+        '<a href="/settings/management#mgmt-sub-connectors" class="text-primary">Management → Connectors</a> '
         'instead.</div>'
     )
 

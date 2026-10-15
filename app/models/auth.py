@@ -71,8 +71,28 @@ class User(BaseModel):
     # `roles` reflects the *active* tenant only; this map is the source of truth.
     client_roles: Dict[str, List[str]] = Field(default_factory=dict)
 
+    # Profile: the name and picture the user chose (Settings & Administration -> Profile).
+    # avatar_version changes with each new picture, so its URL can be cached.
+    display_name: Optional[str] = None
+    avatar_version: Optional[str] = None
+
     # Session info
     authenticated_at: Optional[datetime] = None
+
+    @property
+    def label(self) -> str:
+        """The name to show for this user: their chosen name, else their full name, else username."""
+        return self.display_name or self.name or self.username
+
+    @property
+    def initial(self) -> str:
+        return (self.label or "?")[0].upper()
+
+    @staticmethod
+    def _profile(db_user: dict) -> dict:
+        stamp = db_user.get("avatar_updated_at")
+        return {"display_name": db_user.get("display_name") or None,
+                "avatar_version": str(int(stamp.timestamp())) if stamp else None}
     
     @classmethod
     def from_token(cls, token: TokenData, db_user: dict = None, db_roles: List[str] = None,
@@ -92,6 +112,7 @@ class User(BaseModel):
                 client_roles=client_roles or {},
                 tlp_max=token.tide_tlp_max,
                 authenticated_at=datetime.now(),
+                **cls._profile(db_user),
             )
         return cls(
             id=token.sub,
@@ -120,6 +141,7 @@ class User(BaseModel):
             is_superadmin=bool(db_user.get("is_superadmin", False)),
             client_roles=client_roles or {},
             authenticated_at=datetime.now(),
+            **cls._profile(db_user),
         )
     
     @classmethod

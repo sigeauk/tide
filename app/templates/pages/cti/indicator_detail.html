@@ -23,32 +23,32 @@
     <div class="metric-card">
         <p class="metric-value fs-lg">{{ tlp_v|upper }}</p>
         <p class="metric-label">TLP marking</p>
-        <p class="metric-sub">{{ icon_text('shield','Ceiling ' ~ tlp_ceiling|upper,'14') }}</p>
+        <p class="metric-sub">Ceiling {{ tlp_ceiling|upper }}</p>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ indicator.confidence if indicator.confidence is not none else '—' }}</p>
         <p class="metric-label">Confidence</p>
-        <p class="metric-sub">{{ icon_text('check-circle','Reporter score','14') }}</p>
+        <div class="metric-tip" role="tooltip">Reporter score</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ (indicator.mitre_techniques or [])|length }}</p>
         <p class="metric-label">MITRE TTPs</p>
-        <p class="metric-sub">{{ icon_text('grid-3x3','Linked techniques','14') }}</p>
+        <div class="metric-tip" role="tooltip">Linked techniques</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ indicator.related_actors|length }}</p>
         <p class="metric-label">Related actors</p>
-        <p class="metric-sub">{{ icon_text('users','Attribution edges','14') }}</p>
+        <div class="metric-tip" role="tooltip">Actors this indicator is attributed to</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value">{{ indicator.related_reports|length }}</p>
         <p class="metric-label">Citing reports</p>
-        <p class="metric-sub">{{ icon_text('file-text','Reports → IOC','14') }}</p>
+        <div class="metric-tip" role="tooltip">Reports that cite this indicator</div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card metric-card--tip" tabindex="0">
         <p class="metric-value fs-lg">{{ indicator.last_seen or '—' }}</p>
         <p class="metric-label">Last seen</p>
-        <p class="metric-sub">{{ icon_text('clock','Most recent','14') }}</p>
+        <div class="metric-tip" role="tooltip">Most recent</div>
     </div>
 </div>
 

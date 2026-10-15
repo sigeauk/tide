@@ -8,7 +8,7 @@
 {% macro shown(r) -%}
 <code class="diag-reveal{% if r.odd %} diag-reveal--odd{% endif %}"
       title="Exactly as stored.{% if r.odd %} It holds spaces at its ends or characters you cannot normally see.{% endif %}">{{ r.text }}</code>
-{%- if r.odd %} <span class="status-pill status-warning" title="Spaces at the start or end, doubled spaces, or invisible characters">{{ icon('alert-triangle', '11') }} Hidden characters</span>{% endif %}
+{%- if r.odd %} <span class="status-pill status-warning" title="Spaces at the start or end, doubled spaces, or invisible characters">{{ icon('triangle-alert', '11') }} Hidden characters</span>{% endif %}
 {%- endmacro %}
 
 {% macro when(v) %}{{ v.strftime('%Y-%m-%d %H:%M') if v else '—' }}{% endmacro %}

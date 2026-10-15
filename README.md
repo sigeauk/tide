@@ -2,6 +2,14 @@
 
 TIDE is a **standalone, containerised platform** for detection engineering. It brings your SIEM's detection rules, MITRE ATT&CK, CTI feeds and your systems together, so you can see which threats your rules cover, where the gaps are, and how good each rule is. A person makes every coverage decision, and every decision is recorded and can be reversed. It runs without internet access.
 
+This guide is also inside TIDE: click your name at the bottom of the sidebar, then **Settings → Documentation**.
+
+<!-- whats-new -->
+## What's new
+
+Every change in each release is listed in [CHANGELOG.md](CHANGELOG.md), which comes with each release beside this README. Inside TIDE, **Documentation** shows the changes in the current major version here.
+<!-- /whats-new -->
+
 ---
 
 ## Architecture Overview
@@ -47,7 +55,7 @@ TIDE is multi-tenant: each **client** has its own data, users and roles, and its
 
 ### Dashboard
 - The selected client's figures at a glance, on as many named dashboards as it needs; one is the default, and each person sees the one they opened last.
-- A dashboard is made of sections. Each shows the figures from one page (Rule Health, a system, Threat Landscape, Baselines, Asset Inventory or CVE Overview), or the state of the connected services and repositories. Add a section as often as you like, choose which figures it shows, and filter it as its page is filtered: Rule Health by SIEM, status, state, score, validation date and search, and a system's section by system.
+- A dashboard is made of sections. Each shows the figures from one page (Rule Health, a system, Threat Landscape, Baselines, Asset Inventory or CVE Overview), or the state of the connected services and of the data built into TIDE (ATT&CK, Sigma, the CISA KEV catalogue and the ATT&CK mappings). Add a section as often as you like, choose which figures it shows, and filter it as its page is filtered: Rule Health by SIEM, status, state, score, validation date and search, and a system's section by system.
 - Clicking a figure opens its page, filtered the same way, to see what is behind it.
 
 ### Systems, Baselines and Risks
@@ -72,9 +80,12 @@ TIDE is multi-tenant: each **client** has its own data, users and roles, and its
 - **Indicators, Actors and Reports** from your CTI feeds (OpenCTI, Mandiant, CrowdStrike and other TAXII sources), kept per client. Indicators can be sent to a SIEM as egress targets.
 
 ### Administration
-- **Management** (super admins): clients, users and roles, SIEMs, CTI connectors, GitLab and Keycloak instances, Sigma pipelines and templates, classifications, data export and import, and a read-only query tool.
+Click your name at the bottom of the sidebar, then **Settings**, to open **Settings & Administration**: one page with a tab for each of these. You see only the tabs your role allows.
+
+- **Profile & Preferences** (everyone): your display name and picture, how you sign in, the light or dark theme, and your API keys.
+- **Management** (admins): clients, users and roles, SIEMs, CTI connectors, GitLab and Keycloak instances, Sigma pipelines and templates, classifications, data export and import, and a read-only query tool. A client's admins manage their own clients; SIEMs and other integrations are set up by super admins.
 - **Diagnostics** (super admins and Support): checks for known problems, sync history, look-ups and access.
-- **Settings**: your profile and API keys; client admins manage their client's users here.
+- **Documentation** (everyone): this guide.
 
 ---
 
@@ -101,6 +112,7 @@ TIDE is multi-tenant: each **client** has its own data, users and roles, and its
 ```
 
 **Key Points:**
+
 - The Docker image is **`sigeauk/tide`**, one tag per release.
 - TIDE reads and writes detection rules in your **Elastic** SIEMs (Kibana). Splunk and Sentinel SIEMs can be recorded but don't sync yet.
 - GitLab instances can be recorded and linked to clients; publishing reports to them is planned.
@@ -123,34 +135,34 @@ TIDE needs no internet access once its images are on the host. SIEMs, CTI connec
 
 1. **Get the files.** Put `docker-compose.yml`, `.env.example` and the `nginx/` folder in one directory on the host, for example `/opt/tide`.
 2. **Get the images.** With internet access, `docker compose pull`. Without it, save the images on a connected machine, copy the file across, and load it:
-   ```bash
-   # connected machine
-   docker save sigeauk/tide:<version> nginx:alpine | gzip > tide-images.tar.gz
-   # TIDE host
-   docker load < tide-images.tar.gz
-   ```
+
+        # connected machine
+        docker save sigeauk/tide:<version> nginx:alpine | gzip > tide-images.tar.gz
+        # TIDE host
+        docker load < tide-images.tar.gz
+
 3. **Add certificates** to a `certs/` folder next to `docker-compose.yml`:
-   - `server.crt` and `server.key`: the certificate nginx presents to users' browsers.
-   - `ca.crt`: your internal CA, which TIDE then trusts when it connects to your SIEMs, Keycloak, GitLab and CTI feeds (see [TLS certificates](#tls-certificates)). It must exist; if you have no internal CA, copy `server.crt` to `ca.crt`.
+    - `server.crt` and `server.key`: the certificate nginx presents to users' browsers.
+    - `ca.crt`: your internal CA, which TIDE then trusts when it connects to your SIEMs, Keycloak, GitLab and CTI feeds (see [TLS certificates](#tls-certificates)). It must exist; if you have no internal CA, copy `server.crt` to `ca.crt`.
 4. **Create `.env`:** `cp .env.example .env`, then set at least:
-   - `TIDE_VERSION`: the release to run, for example `6.1.0`.
-   - `APP_URL`: the address users open TIDE at, for example `https://tide.example.local`.
-   - `SESSION_SECRET`: a long random string. TIDE won't start without it. `.env.example` shows two ways to make one offline.
-   - `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`: the first administrator account. They are used once, on first start; if not set, the account is `admin` / `TIDEadmin`.
+    - `TIDE_VERSION`: the release to run, for example `6.1.0`.
+    - `APP_URL`: the address users open TIDE at, for example `https://tide.example.local`.
+    - `SESSION_SECRET`: a long random string. TIDE won't start without it. `.env.example` shows two ways to make one offline.
+    - `BOOTSTRAP_ADMIN_USERNAME` and `BOOTSTRAP_ADMIN_PASSWORD`: the first administrator account. They are used once, on first start; if not set, the account is `admin` / `TIDEadmin`.
 5. **Start TIDE:** `docker compose up -d`. `docker compose ps` shows `tide-app` as healthy within a minute. The first start takes longer while TIDE builds its databases.
 
 ### First sign-in and setup
 
-1. Open `APP_URL` and sign in with the bootstrap account. Change its password straight away in **Settings → Profile**.
+1. Open `APP_URL` and sign in with the bootstrap account. Change its password straight away: click your name at the bottom of the sidebar, then **Settings → Profile & Preferences → Sign-in**.
 2. **Add your SIEMs:** Management → Integrations → SIEMs → New SIEM. Use **Test Connection** before saving.
 3. **Create a client** for each team or customer whose data must stay separate: Management → Tenants & Users → Clients → New Client. A **Primary Client** already exists and can be used for the first one.
 4. **Link destinations to the client.** Open the client, then **Linked SIEMs → Edit → Add SIEM**. Pick the SIEM and one of its Kibana spaces, give the destination a name (for example "Prod"), and click **Link SIEM**. Add one destination for each SIEM and space whose rules this client should see.
-5. **Add users.** Create local users or assign single sign-on users to the client, with their roles, in Management → Tenants & Users → Users, or in the client's **Assigned Users**. Client admins can do the same for their own client in Settings → Users.
+5. **Add users.** Create local users or assign single sign-on users to the client, with their roles, in Management → Tenants & Users → Users, or in the client's **Assigned Users**. Client admins can do the same for their own clients from Management.
 6. **Load the rules:** switch to the client, open **Rule Health**, and click **⋮ → Sync**. See [Syncing rules](#syncing-rules).
 7. **Optional:**
-   - CTI: add connectors in Management → Integrations → Connectors, then link them to the client from the client page (**Linked CTI Connectors → Edit**). See [CTI connectors](#cti-connectors).
-   - Single sign-on: set the `KEYCLOAK_*` values in `.env` (see below) and run `docker compose up -d` again.
-   - Rule-log export: see [Rule-log export](#rule-log-export).
+    - CTI: add connectors in Management → Integrations → Connectors, then link them to the client from the client page (**Linked CTI Connectors → Edit**). See [CTI connectors](#cti-connectors).
+    - Single sign-on: set the `KEYCLOAK_*` values in `.env` (see below) and run `docker compose up -d` again.
+    - Rule-log export: see [Rule-log export](#rule-log-export).
 
 ### Upgrading
 
@@ -270,7 +282,7 @@ Each SIEM can write a daily export of its rules' scores, for your SIEM or log pl
 
 ## Design System
 
-All colours, surfaces, spacing and type sizes are CSS custom properties defined once at the top of `app/static/css/style.css` (`:root`). The dark theme is the default; the light theme overrides the same properties under `body.light`. Each person picks a theme in **Preferences**, and it is remembered in their browser.
+All colours, surfaces, spacing and type sizes are CSS custom properties defined once at the top of `app/static/css/style.css` (`:root`). The dark theme is the default; the light theme overrides the same properties under `body.light`. Each person picks a theme in **Profile & Preferences**, or from the menu under their name, and it is remembered in their browser.
 
 | Token group | Examples | Use |
 |-------------|----------|-----|
@@ -369,7 +381,7 @@ Since v4, each client (tenant) has its own isolated database. API keys inherit t
 
 ### Authentication
 
-Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are created in the TIDE UI under **Settings → API Key Management**. Only the SHA-256 hash of the key is stored — the raw key is shown once at creation time.
+Every request must include an API key in the `X-TIDE-API-KEY` header. Keys are created in the TIDE UI under **Settings → Profile & Preferences → API Key Management**. Only the SHA-256 hash of the key is stored — the raw key is shown once at creation time.
 
 The API key inherits the tenant access of its creator: to give it more tenants, assign the owning user to those clients in Management. A key stops working while its owner is deactivated. Each user sees and revokes their own keys; a client admin also those of users they manage, and a super admin all of them.
 
@@ -457,7 +469,7 @@ Replace `<TENANT_CLIENT_ID>` with the full UUID returned by `GET /api/external/c
 
 > ⚠️ **Replace `your-tide-host` with the actual hostname of your TIDE deployment** (e.g. `tide.example.local`, or `tide` if it resolves on your network). Leaving the literal placeholder will cause curl to fail with `Could not resolve host` (exit code 6) and return no output.
 >
-> Replace `YOUR_KEY_HERE` with the API key shown once at creation time in **Settings → API Key Management**.
+> Replace `YOUR_KEY_HERE` with the API key shown once at creation time in **Settings → Profile & Preferences → API Key Management**.
 >
 > Add `-k` if your TIDE instance uses a self-signed certificate.
 
@@ -590,7 +602,7 @@ curl -s -k -X POST https://tide.example.local/api/external/query \
 |---------|--------------|-----|
 | curl exits with code **6** (`Could not resolve host`) and no JSON | URL still contains the literal `your-tide-host` placeholder | Replace `your-tide-host` with your real TIDE hostname |
 | curl exits with code **60** (SSL certificate problem) | Self-signed cert on TIDE | Add `-k` to the curl command |
-| `401 Unauthorized` | Missing/invalid `X-TIDE-API-KEY` header | Re-generate the key in **Settings → API Key Management** |
+| `401 Unauthorized` | Missing/invalid `X-TIDE-API-KEY` header | Re-generate the key in **Settings → Profile & Preferences → API Key Management** |
 | `403 Forbidden` on a query | `client_id` truncated, mistyped, or not assigned to your user | Use the exact full UUID from `GET /api/external/clients` |
 | `400 Bad Request` mentioning a keyword | SQL contains a blocked keyword (`DROP`, `INSERT`, `PRAGMA`, etc.) | Rewrite as a `SELECT`/`WITH` query only |
 

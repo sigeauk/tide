@@ -265,7 +265,7 @@
           <form id="sm-cov-watch" data-cov-form class="sm-gapform" hx-post="{{ step_url }}/coverage"
                 hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hidden>
             <input type="hidden" id="sm-cov-watch-kind" name="kind" value="{{ ae.kind or 'dashboard' }}">
-            {% if ae.message %}<p class="inline-error" role="alert">{{ icon('alert-triangle', '12') }} {{ ae.message }}</p>{% endif %}
+            {% if ae.message %}<p class="inline-error" role="alert">{{ icon('triangle-alert', '12') }} {{ ae.message }}</p>{% endif %}
             <label class="rm-label" for="sm-cov-title">Title</label>
             <input id="sm-cov-title" name="title" class="form-input" required value="{{ ae.title or '' }}"
                    placeholder="e.g. SOC wallboard – PowerShell activity">
@@ -328,7 +328,7 @@
             {% set gap_label = 'Not applicable' if gap.override_type == 'na' else 'Known gap' %}
             <div class="rm-item rm-item--{{ 'na' if gap.override_type == 'na' else 'gap' }}">
               <div class="rm-item__main">
-                <div class="rm-item__name">{{ icon('minus-circle' if gap.override_type == 'na' else 'alert-triangle', '13') }} {{ gap_label }}</div>
+                <div class="rm-item__name">{{ icon('minus-circle' if gap.override_type == 'na' else 'triangle-alert', '13') }} {{ gap_label }}</div>
                 <p class="rm-item__text">{{ gap.reason }}</p>
                 <div class="rm-item__meta">
                   {% if gap.created_by %}{{ tag(gap.created_by, title='Marked by') }}{% endif %}
@@ -366,7 +366,7 @@
               {# Update: this card's own form, in place of its body (the history keeps the change). #}
               <form class="rm-item__main sm-gapform" data-watch-form hx-put="{{ step_url }}/coverage/{{ w.id }}"
                     hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"{% if not we %} hidden{% endif %}>
-                {% if we.message %}<p class="inline-error" role="alert">{{ icon('alert-triangle', '12') }} {{ we.message }}</p>{% endif %}
+                {% if we.message %}<p class="inline-error" role="alert">{{ icon('triangle-alert', '12') }} {{ we.message }}</p>{% endif %}
                 <label class="rm-label" for="sm-watch-kind-{{ w.id }}">Type</label>
                 <select id="sm-watch-kind-{{ w.id }}" name="kind" class="form-input form-select">
                   {% for k, v in rl.coverage_kind.items() %}<option value="{{ k }}"{% if (we.kind or w.kind) == k %} selected{% endif %}>{{ v }}</option>{% endfor %}
@@ -401,7 +401,7 @@
             {% set t = d.telemetry %}
             <div class="rm-item{% if d.unresolved or not d.counts or (t and t.missing) %} rm-item--warn{% endif %}">
               {% call rule_card(d, e) %}
-                {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('alert-triangle', '10') }} Needs relinking</span>{% endif %}
+                {% if d.unresolved %}<span class="text-warning" title="{{ d.unresolved_reason }} Use Relink in this card's menu to point it at the rule.">{{ icon('triangle-alert', '10') }} Needs relinking</span>{% endif %}
                 {% if not d.counts %}<span class="text-warning" title="Its destination is not one this system counts toward coverage">Not counted</span>{% endif %}
               {% endcall %}
               {% set unmap_url = '/api/baselines/tactics/detections/' ~ d.id ~ '?step_id=' ~ step.id ~ '&system_id=' ~ system_id %}
