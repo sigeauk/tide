@@ -548,11 +548,12 @@ async def lifespan(app: FastAPI):
     # tenant DB" model. Other scheduled jobs (rule-log export below) are
     # unchanged.
     
-    # Schedule rule log export job
+    # Schedule rule log export and backup jobs
     try:
         _schedule_rule_log_job(db)
+        _schedule_backup_job()
         scheduler.start()
-        logger.info("Scheduler started (rule-log export only; sync is per-tenant on demand)")
+        logger.info("Scheduler started (rule-log export and backups; sync is per-tenant on demand)")
     except Exception as exc:
         logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True)
 
@@ -610,9 +611,9 @@ def background_services() -> list:
         ("CTI connector scheduler", cti["running"],
          cti["error"] or f"last checked for due connectors: {last}",
          "Connectors with a sync interval won't sync on their own; their Sync buttons still work."),
-        ("Rule-log export schedule", bool(scheduler.running),
-         f"{len(scheduler.get_jobs())} export job(s) scheduled" if scheduler.running else "not started",
-         "Rule logs won't be exported on their schedule; Export now still works."),
+        ("Rule-log export and backup schedule", bool(scheduler.running),
+         f"{len(scheduler.get_jobs())} job(s) scheduled" if scheduler.running else "not started",
+         "Rule logs won't be exported and backups won't run on their schedule; Export now and Back up now still work."),
     ]
 
 
@@ -734,6 +735,35 @@ def reschedule_rule_log_job():
     _schedule_rule_log_job()
 
 
+def _schedule_backup_job():
+    """(Re)schedule the daily backup (Management -> Backups, app.services.backups), or remove it
+    when backups are off. CLAUDE.md Hard Stop 6 (c)."""
+    from app.services import backups
+    try:
+        if scheduler.get_job("tide_backup"):
+            scheduler.remove_job("tide_backup")
+        schedule = backups.get_schedule()
+        if not schedule["enabled"]:
+            logger.info("Scheduled backups are off")
+            return
+        hour, minute = (int(x) for x in schedule["time"].split(":"))
+        scheduler.add_job(_run_scheduled_backup, "cron", hour=hour, minute=minute, id="tide_backup", replace_existing=True)
+        logger.info(f"Backup scheduled daily at {hour:02d}:{minute:02d}, keeping {schedule['keep']}")
+    except Exception as e:
+        logger.warning(f"Could not schedule backups: {e}")
+
+
+def _run_scheduled_backup():
+    from app.services import backups
+    from app.services.database import get_database_service
+    backups.run_now(get_database_service(), trigger="scheduled", by="schedule")
+
+
+def reschedule_backup_job():
+    """Called when the backup settings are saved."""
+    _schedule_backup_job()
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     """
     Middleware to enforce authentication on protected routes.
@@ -813,6 +843,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/diagnostics": "page:diagnostics",
         "/settings/diagnostics": "page:diagnostics",
         "/settings/docs": "page:documentation",
+        "/settings/changelog": "page:documentation",
         "/api/diagnostics": "page:diagnostics",
     }
 
@@ -1929,7 +1960,8 @@ def create_app() -> FastAPI:
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
         enabled_q = qp.get("enabled") or ""
-        state_q = [s for s in qp.getlist("state") if s]
+        from app.services.database import normalize_rule_states
+        state_q = normalize_rule_states(qp.getlist("state"))
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
         validated_from_q = qp.get("validated_from") or ""
@@ -2559,13 +2591,33 @@ def create_app() -> FastAPI:
         )
 
     @app.get("/settings/docs", response_class=HTMLResponse)
-    def docs_page(request: Request, user: CurrentUser):
-        """Documentation: the README, rendered."""
+    @app.get("/settings/docs/{slug}", response_class=HTMLResponse)
+    def docs_page(request: Request, user: CurrentUser, slug: str = ""):
+        """Documentation: the README, What's new and the documents in docs/, one page each."""
+        from fastapi import HTTPException
+        from app.services import docs
+        from app.services.route_metadata import set_crumbs
+        if slug not in docs.PAGES_BY_SLUG:
+            raise HTTPException(status_code=404, detail="No such documentation page")
+        title = docs.PAGES_BY_SLUG[slug].title
+        set_crumbs(request, [("Home", "/"), ("Settings", "/settings"),
+                             ("Documentation", "/settings/docs" if slug else None)] + ([(title, None)] if slug else []))
+        return render_template(
+            "pages/admin/docs.html",
+            request,
+            {"user": user, "active_page": "docs", "doc": docs.page(slug, settings.tide_version),
+             "doc_pages": docs.PAGES, "doc_slug": slug},
+        )
+
+    @app.get("/settings/changelog", response_class=HTMLResponse)
+    def changelog_page(request: Request, user: CurrentUser):
+        """Changelog: every change in this major version, from the CHANGELOG."""
         from app.services import docs
         return render_template(
             "pages/admin/docs.html",
             request,
-            {"user": user, "active_page": "docs", "doc": docs.readme(settings.tide_version)},
+            {"user": user, "active_page": "changelog", "doc": docs.page(docs.CHANGELOG.slug, settings.tide_version),
+             "doc_pages": None, "doc_slug": docs.CHANGELOG.slug},
         )
 
     @app.get("/clients", response_class=HTMLResponse)

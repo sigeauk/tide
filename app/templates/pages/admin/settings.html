@@ -133,7 +133,7 @@
                 <li>Blocked keywords include <code>DROP</code>, <code>DELETE</code>, <code>INSERT</code>, <code>UPDATE</code>, <code>INSTALL</code>, and other mutating/admin operations</li>
                 <li>Maximum SQL length: <code>4000</code> characters</li>
                 <li>Queries run against isolated tenant databases — each API key can only access tenants assigned to its owner</li>
-                <li>Tenant DB is opened read-only; no writes are possible even if SQL validation were bypassed</li>
+                <li>Each query is also parsed by DuckDB before it runs, and may read only that tenant database's own tables and views: no files, other databases or SIEM settings</li>
                 <li>Keys are stored as SHA-256 hashes; raw key is shown only once at creation</li>
             </ul>
         </details>

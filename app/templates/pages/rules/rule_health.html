@@ -157,13 +157,13 @@
         <button type="button" id="rh-state-btn"
             class="btn btn-secondary form-input form-select tide-filter-btn"
             data-click="filterDropdown.toggle" data-target="rh-state-dropdown">
-            <span id="rh-state-label">{% set state_names = {'live': 'Live', 'offline': 'SIEM offline', 'deprecated': 'Deprecated'} %}{% for s in state %}{{ state_names.get(s | lower, s) }}{{ ', ' if not loop.last }}{% else %}All states{% endfor %}</span>
+            <span id="rh-state-label">{% set state_names = {'unlinked': 'Live', 'linked': 'Linked', 'offline': 'SIEM offline', 'deprecated': 'Deprecated'} %}{% for s in state %}{{ state_names.get(s | lower, s) }}{{ ', ' if not loop.last }}{% else %}All states{% endfor %}</span>
             {{ icon('chevron-down', '14') }}
         </button>
         <div id="rh-state-dropdown" class="tide-filter-dropdown" style="display:none;">
-            {% set state_opts = [('live', 'Live'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')] %}
+            {% set state_opts = [('unlinked', 'Live'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')] %}
             {% for opt, opt_label in state_opts %}
-            <label class="rh-checkbox-row" title="{{ {'live': 'Still found at the last successful sync', 'offline': 'Its SIEM could not be reached before the last sync; shown from TIDE\'s last copy', 'deprecated': 'Not found at the last successful sync'}[opt] }}">
+            <label class="rh-checkbox-row" title="{{ {'unlinked': 'Found at the last successful sync, with no copy linked in another destination', 'linked': 'Found at the last successful sync, with a copy linked in another destination', 'offline': 'Its SIEM could not be reached before the last sync; shown from TIDE\'s last copy', 'deprecated': 'Not found at the last successful sync'}[opt] }}">
                 <input type="checkbox" name="state" value="{{ opt }}" {% if opt in state %}checked{% endif %}
                     hx-get="/api/rules"
                     hx-trigger="change"

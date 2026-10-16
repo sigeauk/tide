@@ -25,6 +25,7 @@ from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
 from app.services import builtin_data
+from app.services.database import normalize_rule_states
 from app.services.tenant_manager import tenant_context_for
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,8 @@ class Source:
     page: str = ""                           # where a card goes; "" = its cards are not links
 
 
-RULE_STATES = (("live", "Live"), ("offline", "SIEM offline"), ("deprecated", "Deprecated"))
+# The State filter, one choice per card badge; a saved "live" (before 6.1.4) reads as Live + Linked.
+RULE_STATES = (("unlinked", "Live"), ("linked", "Linked"), ("offline", "SIEM offline"), ("deprecated", "Deprecated"))
 
 SOURCES: Dict[str, Source] = {
     "rule_health": Source("Rule Health", "shield-check", (
@@ -129,7 +131,7 @@ def _clean_filters(source: str, raw) -> dict:
         if value in (None, "", []):
             continue
         if key == "state":
-            states = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+            states = normalize_rule_states([value] if isinstance(value, str) else value if isinstance(value, list) else [])
             picked = [s for s, _ in RULE_STATES if s in states]
             if picked:
                 out[key] = picked

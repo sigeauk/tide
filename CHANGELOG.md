@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.1.4] - 2026-10-16
+
+### Added
+- **Scheduled backups.** A new **Backups** section in **Settings → Management** (super admins) backs up TIDE every day at the time you choose, and keeps the number of backups you choose; **Back up now** makes one straight away. Each backup copies every database, the key to the stored credentials and your Sigma pipelines and templates, while TIDE keeps running. Backups hold only live data, so they are usually far smaller than the `data` folder, whose database files never shrink. The panel shows the last result (or why it failed), the backups kept, and the commands to restore one. Backups are off until you turn them on.
+  - **When upgrading:** backups are saved on the host in `backups/` next to `docker-compose.yml`, or the folder `BACKUP_PATH` in `.env` names. Use the `docker-compose.yml` from this release (it maps that folder) and run `docker compose up -d`; until then the panel warns that the folder isn't mapped. Put backups on another disk if you can.
+- **Filter Rule Health by Linked, and leave linked rules out.** The **State** filter now has the same four choices as the badge on each rule: **Live**, **Linked**, **SIEM offline** and **Deprecated**, and every rule is in exactly one. **Live** alone now shows live rules with no copy linked in another destination, for example to find rules that are safe to move. Tick **Live** and **Linked** together for every live rule, as **Live** showed before. Saved Dashboard sections and bookmarked links filtered by **Live** keep showing every live rule. Dashboard Rule Health sections offer the same four choices.
+
+### Changed
+- **Without a picture, your avatar shows your first and last initials**, for example "JS" for Jane Smith, rather than one letter.
+- **The guide is split into short documents, and the release notes have their own tab.** The README now covers what TIDE does and how to install it. Configuration (settings, certificates, single sign-on, users and roles), Operations (syncing, coverage, backups and upgrades, moving hosts, disk space, Diagnostics and troubleshooting) and the External Query API each have their own document, in a `docs` folder beside the README. In TIDE they are tabs under **Settings → Documentation**, and links between them open the right tab. The release notes moved to a new **Settings → Changelog** tab. Single sign-on now has step-by-step Keycloak set-up. The README's design-system, project-structure and old v3 API migration sections are gone.
+- **Documentation is easier to find your way around.** Headings are in the accent colour. In the contents list, each section's subsections fold away until you click its arrow, and the whole list folds to give the page the full width. Both are remembered in your browser.
+
+### Fixed
+- **Rule Health's table no longer jumps when a filter is applied.** For a moment after a short list loaded, the Rule column shrank to half its width and then sprang back.
+- **Status labels are centred.** The text in labels such as **Reachable**, **Enabled** and the SIEM name on a rule sat slightly high, with more space below it than above.
+- **Diagnostics lists each client's destinations evenly.** Every row is the same height, with its text and **Reachable** label lined up.
+- **Management → Query no longer fails with "database does not exist"** when another TIDE process, such as a maintenance command, starts while a query runs. Starting it cleared every query's working copy, including ones in use.
+- **The API key panel no longer says a client's database is opened read-only for queries.** It isn't: queries are kept to reading by the checks described there, which the panel and the API document now explain correctly.
+- **Diagnostics' "Rule mappings that need relinking" says which system each one is on.** Each system has its own copy of a baseline, so after you relinked a technique on one system, the same technique on another system was still listed and looked like the one you had just fixed. Each finding now names its system, and the destination it was mapped from.
+
 ## [6.1.3] - 2026-10-15
 
 ### Added
@@ -955,7 +975,7 @@ This is a major release introducing full Cyber Threat Intelligence (CTI) ingest 
 
 - **Per-tenant Role Templates on the Client Detail page.** The previously-global permissions matrix now lives per tenant. Changing a checkbox here scopes the change to *this* client only — a tenant admin in DC can no longer cascade changes into Marvel. The ADMIN role is intentionally read-only here to preserve full access.
 - **One-click "Remove" button on each assigned-user row.**
-- **Tenant-scoped roles** (Migration 34/35). Granting `darral` ENGINEER in DC no longer makes them ENGINEER in Marvel. The default tenant for new users is the client they were just assigned to.
+- **Tenant-scoped roles** (Migration 34/35). Granting a user ENGINEER on one client no longer makes them ENGINEER on another. The default tenant for new users is the client they were just assigned to.
 - **Keycloak group → TIDE role passthrough.** Login maps Keycloak `groups` / `realm_access.roles` to one of `ADMIN`, `ENGINEER`, `ANALYST` (highest wins) for the Primary tenant only. Manual per-tenant role assignments in other tenants are preserved across logins.
 - **Keycloak `superadmin` group → platform super-admin.** A new `users.is_superadmin` flag drives platform-wide access; the bootstrap `admin` account is promoted on upgrade.
 - **Offline-fallback bcrypt cache for SSO users.** After a successful Keycloak sign-in, the local password hash is cached so subsequent logins work even when Keycloak is offline.

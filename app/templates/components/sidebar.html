@@ -179,7 +179,7 @@ Children are indented, slightly muted, icon-free.
         {% if user %}
         {# Account: a group like the others above. Settings (Settings & Administration), the theme
            to switch to, and sign-out. #}
-        {% set settings_pages = ('settings', 'management', 'diagnostics', 'docs') %}
+        {% set settings_pages = ('settings', 'management', 'diagnostics', 'docs', 'changelog') %}
         <div class="nav-group collapsed" id="nav-group-account">
             <button name="Account" type="button" class="nav-item nav-group__trigger user-info" data-click="nav.group" data-group="nav-group-account"
                     data-tooltip="{{ user.label }}">

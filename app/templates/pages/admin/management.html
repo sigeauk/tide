@@ -66,6 +66,17 @@
         <div class="loading-note">Loading&hellip;</div>
     </div>
 </details>
+
+<details class="mgmt-section" id="mgmt-backups-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('save', '18') }}
+        <span class="mgmt-section__title">Backups</span>
+        <span class="mgmt-section__hint">Daily copies of every database, and how to restore one</span>
+    </summary>
+    <div class="mgmt-section__body" name="Open Backups" hx-get="/api/management/backups" hx-trigger="load" hx-swap="innerHTML">
+        <div class="loading-note">Loading&hellip;</div>
+    </div>
+</details>
 {% endif %}
 
 {# Role Templates have been moved to the Client Detail page \u2014 they are now

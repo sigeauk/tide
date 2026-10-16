@@ -1,0 +1,85 @@
+{#
+  Management -> Backups (super admins): the last result, the daily schedule, Back up now, the
+  backups kept, and how to restore one (app.services.backups). While a backup runs the panel
+  reloads itself every 2 s until it ends.
+  Context: schedule, backups, run, last, mapped, disk, host_folder, restore, size, message, ok.
+#}
+{% from "macros/icons.html" import icon %}
+{% set newest = backups[0] if backups else none %}
+<div id="backups-panel" class="backups"
+     {% if run %}hx-get="/api/management/backups" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+
+    <div class="backups__status" role="status">
+        {% if run %}
+        <span class="status-pill status-info">{{ icon('loader', '12') }} Backing up</span>
+        <span class="text-secondary">Started {{ run.started.strftime('%H:%M:%S') }} by {{ run.by }}.</span>
+        {% elif last and not last.ok %}
+        <span class="status-pill status-danger">Last backup failed</span>
+        <span class="text-secondary">{{ last.at.strftime('%Y-%m-%d %H:%M') }}: {{ last.error }}</span>
+        {% elif newest %}
+        <span class="status-pill status-success">Last backup</span>
+        <span class="text-secondary">{{ newest.created.strftime('%Y-%m-%d %H:%M') }} · {{ size(newest.size) }} · {{ newest.clients }} client{{ 's' if newest.clients != 1 }}</span>
+        {% else %}
+        <span class="status-pill status-muted">No backups yet</span>
+        {% endif %}
+    </div>
+
+    {% if not mapped %}
+    <div class="alert alert-warning backups__alert">
+        The backups folder isn't mapped to the host, so backups would be lost when the container is recreated.
+        Add <code>- ${BACKUP_PATH:-./backups}:/app/backups</code> under <code>tide-app</code> → <code>volumes</code> in
+        <code>docker-compose.yml</code> (it's in the file shipped with this release), then run <code>docker compose up -d</code>.
+    </div>
+    {% endif %}
+
+    <div class="backups__controls">
+        <form name="Save Backup Schedule" class="backups__form" hx-post="/api/management/backups/schedule"
+              hx-target="#backups-panel" hx-swap="outerHTML">
+            <label class="check-label">
+                <input type="checkbox" name="enabled" {% if schedule.enabled %}checked{% endif %}> Back up every day at
+            </label>
+            <input type="time" name="time" value="{{ schedule.time }}" class="form-input backups__time" required aria-label="Time of day">
+            <label class="backups__keep-label">keeping the newest
+                <input type="number" name="keep" min="1" max="90" value="{{ schedule.keep }}" class="form-input backups__keep" required>
+            </label>
+            <button name="Save" type="submit" class="btn btn-primary btn-sm">Save</button>
+        </form>
+        <button name="Back Up Now" type="button" class="btn btn-secondary btn-sm"
+                hx-post="/api/management/backups/run" hx-target="#backups-panel" hx-swap="outerHTML"
+                {% if run %}disabled{% endif %}>{{ icon('save', '14') }} Back up now</button>
+    </div>
+    <p class="form-hint">
+        Server time. Saved on the host in <code>{{ host_folder }}/</code>{% if disk %} ({{ size(disk.free) }} free){% endif %}.
+        Each backup holds every client's data and the key to the stored SIEM and connector credentials, so protect that folder as you would <code>data/</code>.
+    </p>
+    {% if message %}
+    <p class="backups__message {{ 'text-success' if ok else 'text-danger' }}">{{ message }}</p>
+    {% endif %}
+
+    {% if backups %}
+    <div class="diag-table-wrap backups__list"><table class="diag-table">
+        <thead><tr><th>Backup</th><th>Made</th><th>By</th><th>Clients</th><th>Size</th><th>TIDE</th></tr></thead>
+        <tbody>
+        {% for b in backups %}
+        <tr>
+            <td><code>{{ b.name }}</code></td>
+            <td class="diag-nowrap">{{ b.created.strftime('%Y-%m-%d %H:%M') }}</td>
+            <td>{{ 'Schedule' if b.trigger == 'scheduled' else b.by }}</td>
+            <td>{{ b.clients }}</td>
+            <td class="diag-nowrap">{{ size(b.size) }}</td>
+            <td>{{ b.tide_version }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table></div>
+    {% endif %}
+
+    <details class="backups__restore">
+        <summary class="cursor-pointer fw-600">How to restore a backup</summary>
+        <p class="text-secondary">On the host, in TIDE's folder. Your current databases are moved to a <code>data-before-restore-&lt;date&gt;</code> folder, not deleted.
+            Restore a backup into the same TIDE version, or an older backup into a newer TIDE (it upgrades the databases as it starts).</p>
+        <pre class="code-block">{% for line in restore %}{{ line }}
+{% endfor %}</pre>
+        {% if newest %}<p class="form-hint">Shown for the newest backup; use any backup's name from the list above.</p>{% endif %}
+    </details>
+</div>

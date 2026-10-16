@@ -75,10 +75,11 @@ RUN curl -sSL -o /opt/repos/cisa/known_exploited_vulnerabilities.json \
         https://raw.githubusercontent.com/center-for-threat-informed-defense/mappings-explorer/refs/heads/main/mappings/nist_800_53/attack-16.1/nist_800_53-rev5/enterprise/nist_800_53-rev5_attack-16.1-enterprise.json || \
     echo "WARN: mappings-explorer downloads failed — mapping pages will be incomplete at runtime"
 
-# Copy application code, VERSION, and the README and CHANGELOG (shown in Settings & Administration -> Documentation)
+# Copy application code, VERSION, and the guide: README, docs/ and CHANGELOG (shown in Settings -> Documentation)
 COPY app/ /app/app/
 COPY VERSION /app/VERSION
 COPY README.md CHANGELOG.md /app/
+COPY docs/ /app/docs/
 
 ENV PYTHONPATH="/app"
 

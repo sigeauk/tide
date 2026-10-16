@@ -24,6 +24,8 @@ services:
     volumes:
       - ./data:/app/data
       - ${RULE_LOG_PATH:-./data/log/rules}:/mnt/rule-logs
+      # Backups (Settings -> Management -> Backups). Point BACKUP_PATH at another disk if you can.
+      - ${BACKUP_PATH:-./backups}:/app/backups
       - ./certs/ca.crt:/usr/local/share/ca-certificates/tide-ca.crt:ro
     expose:
       - "8000"

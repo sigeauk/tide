@@ -1,23 +1,52 @@
 {% extends "pages/admin/settings_layout.html" %}
 {#
-  Settings & Administration -> Documentation: the README (app.services.docs.readme), with a
-  contents list of its sections. Context: doc ({html, contents}) or None when the file is missing.
+  Settings & Administration -> Documentation (a page of the guide: the README or a document from
+  docs/, with the guide's pages as sub-tabs) and -> Changelog (doc_pages None), each with a contents
+  list of its sections (app.services.docs.page).
+  Context: doc ({html, contents, title, slug}) or None when its file is missing; doc_pages, doc_slug.
 #}
 {% from "macros/icons.html" import icon %}
-{% block title %}Documentation - TIDE{% endblock %}
-{% block settings_subtitle %}The TIDE guide for version {{ env.tide_version }}: installing, running and using TIDE, and what's new.{% endblock %}
+{% block title %}{{ doc.title if doc and doc_slug else 'Documentation' }} - TIDE{% endblock %}
+{% block settings_subtitle %}{% if doc_pages %}The TIDE guide for version {{ env.tide_version }}: installing, configuring and running TIDE, and its API.{% else %}Every change in TIDE {{ env.tide_version.split('.')[0] }}, newest release first.{% endif %}{% endblock %}
 
 {% block settings_tab_content %}
+{% if doc_pages %}
+<nav class="settings-tabs settings-tabs--inline docs-pages" aria-label="Documents">
+    {% for p in doc_pages %}
+    <a name="{{ p.title }}" href="/settings/docs{{ '/' ~ p.slug if p.slug }}" class="settings-tab {% if p.slug == doc_slug %}active{% endif %}"
+       {% if p.slug == doc_slug %}aria-current="page"{% endif %}>{{ p.title }}</a>
+    {% endfor %}
+</nav>
+{% endif %}
+
 {% if doc %}
+{% set page_key = doc_slug or 'readme' %}
 <div class="docs-layout">
-    <nav class="docs-toc" aria-label="Contents">
-        <p class="docs-toc__title">Contents</p>
-        <ul class="docs-toc__list">
-            {% for h in doc.contents %}
-            <li class="docs-toc__item docs-toc__item--h{{ h.level }}"><a href="#{{ h.id }}">{{ h.name }}</a></li>
-            {% endfor %}
-        </ul>
-    </nav>
+    {# Contents: the whole list folds away, and each section folds its subsections; both remembered
+       per browser (data-remember, per page). A section's name still jumps to it. #}
+    <details class="docs-toc" open data-remember="docs-contents">
+        <summary class="docs-toc__title">Contents {{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
+        <nav aria-label="Contents">
+            <ul class="docs-toc__list">
+                {% for h in doc.contents %}
+                <li class="docs-toc__item">
+                    {% if h.children %}
+                    <details class="docs-toc__group" data-remember="docs-toc-{{ page_key }}-{{ h.id }}">
+                        <summary><a href="#{{ h.id }}">{{ h.name }}</a>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
+                        <ul class="docs-toc__list docs-toc__sub">
+                            {% for c in h.children %}
+                            <li class="docs-toc__item"><a href="#{{ c.id }}">{{ c.name }}</a></li>
+                            {% endfor %}
+                        </ul>
+                    </details>
+                    {% else %}
+                    <a class="docs-toc__section" href="#{{ h.id }}">{{ h.name }}</a>
+                    {% endif %}
+                </li>
+                {% endfor %}
+            </ul>
+        </nav>
+    </details>
     <article class="card card-padded doc-markdown">
         {{ doc.html | safe }}
     </article>
@@ -25,7 +54,7 @@
 {% else %}
 <div class="card card-padded empty-state">
     {{ icon('book-open', '24') }}
-    <p>The guide isn't included in this installation.</p>
+    <p>This part of the guide isn't included in this installation.</p>
 </div>
 {% endif %}
 {% endblock %}

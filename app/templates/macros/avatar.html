@@ -1,7 +1,7 @@
-{# A user's picture, or their initial when they have none (User.label, User.avatar_version). #}
+{# A user's picture, or their initials when they have none (User.label, User.avatar_version). #}
 {% macro avatar(user, size='') -%}
 <span class="user-avatar{{ ' user-avatar--' ~ size if size }}{{ ' user-avatar--img' if user.avatar_version }}" aria-hidden="true">
-    {%- if user.avatar_version %}<img src="/api/settings/profile/avatar?v={{ user.avatar_version }}" alt="">{% else %}{{ user.initial }}{% endif -%}
+    {%- if user.avatar_version %}<img src="/api/settings/profile/avatar?v={{ user.avatar_version }}" alt="">{% else %}{{ user.initials }}{% endif -%}
 </span>
 {%- endmacro %}
 

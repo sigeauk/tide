@@ -52,6 +52,7 @@ _REGISTRY: dict = {
     "/cti/reports":    [_HOME, ("CTI", None), ("Reports", None)],
     "/settings":            [_HOME, ("Settings", None)],
     "/settings/diagnostics": [_HOME, ("Settings", "/settings"), ("Diagnostics", None)],
+    "/settings/changelog":   [_HOME, ("Settings", "/settings"), ("Changelog", None)],
     "/settings/docs":        [_HOME, ("Settings", "/settings"), ("Documentation", None)],
     "/settings/management":  [_HOME, ("Settings", "/settings"), ("Management", None)],
     "/presentation":   [_HOME, ("Presentation", None)],

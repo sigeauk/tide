@@ -297,6 +297,15 @@ a:hover { color: var(--color-primary); }
   box-sizing: border-box;
 }
 .status-pill[title] { cursor: help; }
+/* Pills are capitals, but a line box keeps room for descenders below them, so the text sat high,
+   with more space underneath. Trim the line box to the capitals where the browser can; elsewhere
+   shift the text down the pixel that room takes at this size. */
+@supports (text-box: trim-both cap alphabetic) {
+  .status-pill { text-box: trim-both cap alphabetic; }
+}
+@supports not (text-box: trim-both cap alphabetic) {
+  .status-pill { padding-top: calc(0.125rem + 1px); padding-bottom: calc(0.125rem - 1px); }
+}
 
 .status-pill.status-enabled {
   background: var(--color-success-bg);
@@ -3490,16 +3499,35 @@ body.light.brand-custom {
   .profile-credentials > .preferences-grid--two { grid-template-columns: 1fr; }
 }
 
+/* Management -> Backups (partials/backups_panel.html) */
+.backups { display: flex; flex-direction: column; gap: 0.85rem; }
+.backups__status { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; font-size: var(--fs-md); }
+.backups__alert { margin: 0; }
+.backups__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem; }
+.backups__form { display: flex; align-items: center; flex-wrap: wrap; gap: 0.6rem; margin: 0; font-size: var(--fs-md); }
+.backups__keep-label { display: flex; align-items: center; gap: 0.5rem; }
+.backups__time { width: 7.5rem; }
+.backups__keep { width: 4.5rem; }
+.backups .form-hint { margin: 0; }
+.backups__message { margin: 0; font-size: var(--fs-md); }
+.backups__restore > p { margin: 0.6rem 0; font-size: var(--fs-md); }
+.backups__restore .code-block { margin: 0.5rem 0; }
+
 /* Documentation: the README with its contents beside it. The page's overflow-x: hidden would make
    .main-content a scroll container that never scrolls, so the contents couldn't stick; clip keeps
    the overflow hidden without that. */
 .main-content:has(.docs-layout) { overflow-x: clip; }
+/* The guide's documents (Overview, What's new, Configuration, ...), as tabs above it. */
+.docs-pages { flex-wrap: wrap; }
+.docs-pages .settings-tab { text-decoration: none; white-space: nowrap; }
 .docs-layout {
   display: grid;
   grid-template-columns: 240px minmax(0, 1fr);
   gap: 1.5rem;
   align-items: start;
 }
+/* Contents folded away: it shrinks to its heading and the guide takes the width. */
+.docs-layout:has(> .docs-toc:not([open])) { grid-template-columns: max-content minmax(0, 1fr); }
 .docs-toc {
   position: sticky;
   top: 1rem;
@@ -3510,7 +3538,17 @@ body.light.brand-custom {
   border-radius: var(--radius-lg);
   padding: 0.75rem;
 }
-.docs-toc__title { margin: 0 0 0.5rem; padding: 0 0.5rem; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); }
+.docs-toc summary { list-style: none; cursor: pointer; }
+.docs-toc summary::-webkit-details-marker { display: none; }
+.docs-toc__chev { flex-shrink: 0; color: var(--color-text-muted); transition: transform var(--transition-fast); }
+details:not([open]) > summary > .docs-toc__chev { transform: rotate(-90deg); }
+.docs-toc__title {
+  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  padding: 0 0.5rem; font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--color-text-muted);
+}
+.docs-toc[open] > .docs-toc__title { margin-bottom: 0.5rem; }
+.docs-toc__title:hover, .docs-toc__title:hover .docs-toc__chev { color: var(--color-primary); }
 .docs-toc__list { list-style: none; margin: 0; padding: 0; }
 .docs-toc__item a {
   display: block;
@@ -3522,14 +3560,20 @@ body.light.brand-custom {
   line-height: 1.35;
 }
 .docs-toc__item a:hover { background: var(--color-bg-surface-hover); color: var(--color-primary); }
-.docs-toc__item--h2 { margin-top: 0.15rem; }
-.docs-toc__item--h2 > a { font-weight: 600; color: var(--color-text); }
-.docs-toc__item--h3 > a { padding-left: 1.25rem; font-size: var(--fs-sm); }
+/* A section: its name jumps to it, the chevron (or the rest of the row) folds its subsections. */
+.docs-toc > nav > .docs-toc__list > .docs-toc__item { margin-top: 0.15rem; }
+.docs-toc__group > summary { display: flex; align-items: center; gap: 0.25rem; padding-right: 0.35rem; border-radius: var(--radius-sm); }
+.docs-toc__group > summary:hover { background: var(--color-bg-surface-hover); }
+.docs-toc__group > summary > a { flex: 1; min-width: 0; }
+.docs-toc__group > summary > a:hover { background: none; }
+.docs-toc__group > summary > a, .docs-toc__section { font-weight: 600; color: var(--color-text); }
+.docs-toc__group > summary:hover > .docs-toc__chev { color: var(--color-primary); }
+.docs-toc__sub a { padding-left: 1.25rem; font-size: var(--fs-sm); }
 
 .doc-markdown { color: var(--color-text); line-height: 1.65; font-size: var(--fs-base); min-width: 0; }
 .doc-markdown > :first-child { margin-top: 0; }
-.doc-markdown h1, .doc-markdown h2, .doc-markdown h3, .doc-markdown h4 { color: var(--color-text); line-height: 1.3; scroll-margin-top: 1rem; }
-.doc-markdown h1 { font-size: var(--fs-2xl); color: var(--color-primary); margin: 0 0 1rem; }
+.doc-markdown h1, .doc-markdown h2, .doc-markdown h3, .doc-markdown h4 { color: var(--color-primary); line-height: 1.3; scroll-margin-top: 1rem; }
+.doc-markdown h1 { font-size: var(--fs-2xl); margin: 0 0 1rem; }
 .doc-markdown h2 { font-size: var(--fs-xl); margin: 2.25rem 0 0.75rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--color-border-muted); }
 .doc-markdown h3 { font-size: var(--fs-lg); margin: 1.75rem 0 0.5rem; }
 .doc-markdown h4 { font-size: var(--fs-base); margin: 1.25rem 0 0.5rem; }
@@ -3572,7 +3616,7 @@ body.light.brand-custom {
 .doc-markdown hr { border: 0; border-top: 1px solid var(--color-border-muted); margin: 2rem 0; }
 
 @media (max-width: 1100px) {
-  .docs-layout { grid-template-columns: 1fr; }
+  .docs-layout, .docs-layout:has(> .docs-toc:not([open])) { grid-template-columns: 1fr; }
   .docs-toc { position: static; max-height: 18rem; }
 }
 
@@ -8266,6 +8310,9 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .diag-table tbody tr:hover td { background: var(--color-bg-surface-hover); }
 /* Same columns for every client, whatever its values, so the tables line up. */
 .diag-table--fixed { table-layout: fixed; }
+/* A client's destinations: one line each, so every row is the same height with its text and
+   Reachable pill on one centre line (whole-pixel padding: 0.55rem rounded to 37 or 38 px). */
+.diag-table--fixed td { vertical-align: middle; padding-top: 0.5rem; padding-bottom: 0.5rem; }
 .diag-col-dest  { width: 20%; }
 .diag-col-siem  { width: 16%; }
 .diag-col-space { width: 16%; }

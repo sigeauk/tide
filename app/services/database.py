@@ -90,6 +90,20 @@ def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
         return text
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
+def normalize_rule_states(states) -> List[str]:
+    """The State filter's choices as the filter reads them: "unlinked" (Live), "linked", "offline",
+    "deprecated" -- one per badge, so each rule has exactly one. "live" is the State filter before
+    Live and Linked were split (6.1.4): in saved dashboards and bookmarks it still means every live
+    rule, so it reads as both."""
+    out: List[str] = []
+    for s in states or []:
+        s = str(s).strip().lower()
+        for v in (("unlinked", "linked") if s == "live" else (s,)):
+            if v and v not in out:
+                out.append(v)
+    return out
+
+
 def rule_state(rule, offline_scopes) -> str:
     """A rule's lifecycle state for the State filter and badge: "deprecated", "offline" or "live".
 
@@ -5067,9 +5081,18 @@ class DatabaseService:
             if needs_state_filter:
                 # Deprecated (not found at the last good sync), else offline (its SIEM failed the
                 # reachability check before the last sync, so the row is kept from cache), else live.
-                wanted_states = {s.strip().lower() for s in filters.state if s and s.strip()}
+                # A live rule is "linked" when it has a copy linked in rule_links, else "unlinked":
+                # the four match the card's badge, so each rule is in exactly one.
+                wanted_states = set(normalize_rule_states(filters.state))
                 offline = self.get_offline_scopes()
-                rules = [r for r in rules if rule_state(r, offline) in wanted_states]
+                linked = self.linked_rule_keys() if wanted_states & {"linked", "unlinked"} else set()
+
+                def _badge(r):
+                    s = rule_state(r, offline)
+                    if s != "live":
+                        return s
+                    return "linked" if (r.rule_id, r.siem_id, r.space) in linked else "unlinked"
+                rules = [r for r in rules if _badge(r) in wanted_states]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
@@ -5803,6 +5826,17 @@ class DatabaseService:
     def _key_arrays(keys) -> List[List[str]]:
         keys = list(keys)
         return [[k[0] for k in keys], [k[1] for k in keys], [k[2] for k in keys]]
+
+    def linked_rule_keys(self) -> Set[Tuple[str, str, str]]:
+        """Every (rule_id, siem_id, space) on either side of a rule link, in the active tenant."""
+        with self.get_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT rule_a_id, siem_a_id, space_a FROM rule_links "
+                    "UNION SELECT rule_b_id, siem_b_id, space_b FROM rule_links").fetchall()
+            except duckdb.CatalogException:
+                return set()   # a tenant DB Migration 74 has not reached yet: nothing is linked
+        return {(str(r), str(si), str(sp)) for r, si, sp in rows}
 
     def get_rule_links_bulk(
         self, items: List[Tuple[str, str, str]]
@@ -10035,7 +10069,7 @@ class DatabaseService:
         
         df['enabled'] = df['enabled'].apply(lambda x: 1 if x else 0)
         
-        # Parse author - handle list format like "['darral']" -> "darral"
+        # Parse author - handle list format like "['jsmith']" -> "jsmith"
         def parse_author(val):
             if not val or val == '-':
                 return '-'

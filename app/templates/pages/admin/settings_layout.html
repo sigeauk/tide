@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {#
   Settings & Administration: one page with a tab each for Profile & Preferences, Management,
-  Diagnostics and Documentation. Each tab is its own page (pages/admin/settings.html,
+  Diagnostics, Documentation and Changelog. Each tab is its own page (pages/admin/settings.html,
   management.html, diagnostics.html, docs.html) that extends this one and fills
   settings_tab_content; the route's active_page marks its tab. A tab shows only to those
   its route lets in, as the sidebar did before.
@@ -20,7 +20,8 @@
     {% set tabs = [('settings', '/settings', 'user', 'Profile & Preferences', true),
                    ('management', '/settings/management', 'users', 'Management', user and user.is_admin()),
                    ('diagnostics', '/settings/diagnostics', 'activity', 'Diagnostics', user and (user.is_superadmin or user.is_support())),
-                   ('docs', '/settings/docs', 'book-open', 'Documentation', not user or user.can_read('page:documentation'))] %}
+                   ('docs', '/settings/docs', 'book-open', 'Documentation', not user or user.can_read('page:documentation')),
+                   ('changelog', '/settings/changelog', 'file-text', 'Changelog', not user or user.can_read('page:documentation'))] %}
     {% for key, href, ico, label, shown in tabs if shown %}
     <a name="{{ label }}" href="{{ href }}" class="settings-tab {% if active_page == key %}active{% endif %}"
        {% if active_page == key %}aria-current="page"{% endif %}>{{ icon(ico, '16') }} {{ label }}</a>

@@ -4519,19 +4519,46 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
 # _check_query can neither change TIDE's data nor read anything but that copy. The copy is reused
 # for _SNAPSHOT_TTL seconds (each target has its own), because copying a multi-GB tenant database
 # for every query made the page take tens of seconds per query. Old copies are removed when a
-# later query finds them, and at startup; there is no timer.
+# later query finds them, and at startup; there is no timer. Each process keeps its copies in a
+# folder of its own (its pid): another process starting (a maintenance script, a test) clears only
+# folders whose process has gone, never copies a running query is reading.
 import threading as _threading_q
 import tempfile as _tempfile_q
 import shutil as _shutil_q
 
 _SNAPSHOT_TTL = 300
-_SNAPSHOT_ROOT = _os_q.path.join(_tempfile_q.gettempdir(), "tide_query_snapshots")
+_SNAPSHOT_PARENT = _os_q.path.join(_tempfile_q.gettempdir(), "tide_query_snapshots")
+_SNAPSHOT_ROOT = _os_q.path.join(_SNAPSHOT_PARENT, str(_os_q.getpid()))
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        _os_q.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _clear_stale_snapshots() -> None:
+    """Remove copies left by processes that have ended (and any from before per-process folders),
+    and this process's own folder should a dead process have had the same pid."""
+    try:
+        names = _os_q.listdir(_SNAPSHOT_PARENT)
+    except OSError:
+        return
+    me = _os_q.getpid()
+    for name in names:
+        if name.isdigit() and int(name) != me and _pid_alive(int(name)):
+            continue
+        _shutil_q.rmtree(_os_q.path.join(_SNAPSHOT_PARENT, name), ignore_errors=True)
 _SNAPSHOT_CONFIG = {"enable_external_access": False, "lock_configuration": True,
                     "autoinstall_known_extensions": False, "autoload_known_extensions": False}
 _snapshots: dict = {}                       # live path -> {"file", "dir", "taken", "readers", "retired"}
 _snapshots_lock = _threading_q.Lock()       # guards _snapshots
 _snapshot_build_locks: dict = {}            # live path -> Lock: one copy at a time per target
-_shutil_q.rmtree(_SNAPSHOT_ROOT, ignore_errors=True)   # leftovers from before a restart
+_clear_stale_snapshots()   # leftovers from before a restart, or from processes that have ended
 
 
 def _snapshot_connect(file: str):
@@ -5666,3 +5693,50 @@ async def import_data(
     logger.info("Data import into tenant %s by %s: %s", tenant, user.username, " | ".join(lines))
     body = "".join(f"<div>{_esc(l)}</div>" for l in lines) or "Nothing to import."
     return HTMLResponse(f'<div class="alert alert-success">{body}</div>')
+
+
+# ── Backups (super admins): schedule, run now, list, how to restore (app.services.backups) ──
+
+def _backups_panel(request: Request, message: str = "", ok: bool = True):
+    from app.services import backups
+    found = backups.list_backups()
+    return request.app.state.templates.TemplateResponse(request, "partials/backups_panel.html", {
+        "schedule": backups.get_schedule(), "backups": found, "run": backups.running(),
+        "last": backups.last_result(), "mapped": backups.folder_is_mapped(), "disk": backups.disk(),
+        "host_folder": backups.host_folder(), "restore": backups.restore_steps(found[0]["name"] if found else "<backup>"),
+        "size": backups.size, "message": message, "ok": ok,
+    })
+
+
+@router.get("/backups", response_class=HTMLResponse)
+def backups_panel(request: Request, user: RequireSuperadmin):
+    return _backups_panel(request)
+
+
+@router.post("/backups/schedule", response_class=HTMLResponse)
+async def backups_schedule(request: Request, user: RequireSuperadmin):
+    from app.services import backups
+    from app.services.log_context import audit_admin
+    form = await request.form()
+    try:
+        keep = int(str(form.get("keep", "")).strip())
+    except ValueError:
+        return _backups_panel(request, "Enter how many backups to keep as a number.", ok=False)
+    try:
+        schedule = backups.save_schedule(form.get("enabled") == "on", str(form.get("time", "")).strip(), keep)
+    except ValueError as exc:
+        return _backups_panel(request, str(exc), ok=False)
+    from app.main import reschedule_backup_job
+    reschedule_backup_job()
+    removed = backups.prune(schedule["keep"])
+    audit_admin("backup_schedule", user, **schedule)
+    note = f"Backups run every day at {schedule['time']}." if schedule["enabled"] else "Scheduled backups are off."
+    return _backups_panel(request, note + (f" Removed {len(removed)} older backup(s)." if removed else ""))
+
+
+@router.post("/backups/run", response_class=HTMLResponse)
+def backups_run(request: Request, db: DbDep, user: RequireSuperadmin):
+    from app.services import backups
+    if not backups.start(db, trigger="manual", by=user.username):
+        return _backups_panel(request, "A backup is already running.", ok=False)
+    return _backups_panel(request)

@@ -85,8 +85,11 @@ class User(BaseModel):
         return self.display_name or self.name or self.username
 
     @property
-    def initial(self) -> str:
-        return (self.label or "?")[0].upper()
+    def initials(self) -> str:
+        """For a picture-less avatar: the first and last name's initials ("Jane Smith" -> "JS"),
+        or one letter for a one-word name ("hulk" -> "H")."""
+        words = (self.label or "?").split()
+        return (words[0][0] + (words[-1][0] if len(words) > 1 else "")).upper()
 
     @staticmethod
     def _profile(db_user: dict) -> dict:

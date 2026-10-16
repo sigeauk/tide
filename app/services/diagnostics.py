@@ -122,6 +122,33 @@ def _links_missing_rule(conn, ctx):
     return ["rule", "destination", "missing copy was at", "missing rule id"], sorted(out)
 
 
+def _mappings_need_relink(conn, ctx):
+    """Mappings whose rule TIDE can't find where the mapping says, named by the system they are on.
+    Each system has its own copy of a baseline, so the same baseline and technique on two systems
+    are two mappings: relinking one leaves the other listed. A baseline technique's window flags
+    exactly these as Needs relinking (same match: rule id, SIEM and space)."""
+    if not {"step_detections", "playbook_steps", "playbooks", "detection_rules"} <= _tables(conn):
+        return [], []
+    names = {(sid, sp): name for sid, sp, name in ctx.get("scopes", [])}
+    owned = "system_id" in {r[1] for r in conn.execute("PRAGMA table_info('playbooks')").fetchall()}
+    systems = "LEFT JOIN systems sy ON sy.id = p.system_id" if owned and "systems" in _tables(conn) else ""
+    rows = conn.execute(
+        f"SELECT {'sy.name' if systems else 'NULL'}, {'p.system_id' if owned else 'NULL'}, p.name, s.title, "
+        "COALESCE(NULLIF(d.note, ''), d.rule_ref), "
+        "d.siem_id, d.space FROM step_detections d "
+        f"JOIN playbook_steps s ON s.id = d.step_id JOIN playbooks p ON p.id = s.playbook_id {systems} "
+        "WHERE COALESCE(d.source, 'manual') = 'siem' AND (d.siem_id IS NULL OR NOT EXISTS ("
+        "SELECT 1 FROM detection_rules r WHERE r.rule_id = d.rule_ref AND r.siem_id = d.siem_id "
+        "AND r.space = COALESCE(d.space, 'default')))"
+    ).fetchall()
+    out = []
+    for system, system_id, baseline, technique, rule, siem_id, space in rows:
+        where = ("no destination recorded" if not siem_id
+                 else names.get((siem_id, space or "default")) or f"{space or 'default'} (not linked)")
+        out.append((system or ("a template" if not system_id else "a deleted system"), baseline, technique, rule, where))
+    return ["system", "baseline", "technique", "rule", "mapped at"], sorted(out)
+
+
 def _orphaned_baseline_rows(conn, ctx):
     tables = _tables(conn)
     rows = []
@@ -231,15 +258,11 @@ CHECKS: List[Check] = [
     Check(
         "mappings_need_relink", "Rule mappings that need relinking", "client", "warning",
         "A baseline technique is mapped to a rule TIDE can no longer find where the mapping says (moved, "
-        "renamed in the SIEM, deleted, or mapped before destinations were recorded). It does not count.",
-        "Open the technique and use Relink on the mapping, or remove it.",
-        _query("SELECT p.name AS baseline, s.title AS technique, COALESCE(NULLIF(d.note, ''), d.rule_ref) AS rule, "
-               "COALESCE(d.space, 'no destination recorded') AS space FROM step_detections d "
-               "JOIN playbook_steps s ON s.id = d.step_id JOIN playbooks p ON p.id = s.playbook_id "
-               "WHERE COALESCE(d.source, 'manual') = 'siem' AND (d.siem_id IS NULL OR NOT EXISTS ("
-               "SELECT 1 FROM detection_rules r WHERE r.rule_id = d.rule_ref AND r.siem_id = d.siem_id "
-               "AND r.space = COALESCE(d.space, 'default'))) ORDER BY 1, 2",
-               needs=("step_detections", "playbook_steps", "playbooks", "detection_rules")),
+        "renamed in the SIEM, deleted, or mapped before destinations were recorded). It does not count. "
+        "Each system has its own copy of a baseline, so the same technique on another system is listed "
+        "until it is relinked there too.",
+        "Open the technique on the system named, and use Relink on the mapping, or remove it.",
+        _mappings_need_relink,
     ),
     Check(
         "links_missing_rule", "Rule links to a rule that is gone", "client", "info",

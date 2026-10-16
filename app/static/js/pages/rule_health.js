@@ -437,6 +437,11 @@
     }
     window.addEventListener('resize', relayout);
     // A grid reload replaces the table, and infinite scroll adds rows: re-apply to both.
+    // Arrange a swapped-in table before the browser paints it (afterSwap, the same task as the
+    // insert): left to afterSettle, a short list's "All rules loaded" row spanned hidden columns
+    // for a frame, the browser invented a column, and the Rule column jumped. afterSettle stays
+    // for content settled later.
+    document.addEventListener('htmx:afterSwap', function () { applyTable(); });
     document.addEventListener('htmx:afterSettle', function () { closeColMenu(); applyTable(); });
 
     TIDE.page('.rule-browser-page', function (page) {
