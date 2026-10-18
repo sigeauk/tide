@@ -1,8 +1,10 @@
 {#
   Compare a rule with a linked rule (and Merge one over the other). `diffs` comes from
-  services/rule_diff.build_rule_diff (None when one of the two copies no longer exists).
+  services/rule_diff.build_rule_diff (None when one of the two copies no longer exists). Each
+  differing section has a tick: Merge takes the ticked sections only, or, with all of them ticked,
+  copies the whole rule over as before.
 #}
-{% macro seg(segments) %}{% for text, changed in segments %}{% if changed %}<mark class="rd-mark">{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}{% endmacro %}
+{% from "macros/rule_diff.html" import diff_fields %}
 <div class="modal-overlay" data-click="backdrop.remove">
   <div class="modal-content rd-root modal-980" data-view="inline" data-stop-click>
     <div class="modal-header">
@@ -36,42 +38,7 @@
         <button type="button" data-rd-view="side">Side by side</button>
       </div>
     </div>
-    <div class="rd-fields">
-      {% for d in diffs %}
-      <div class="rd-field">
-        <div class="rd-label">{{ d.label }}</div>
-        {% if d.kind == 'scalar' %}
-        <div class="rd-inline rd-scalar">
-          <span class="rd-pill rd-old">{{ d.old }}</span>&rarr;<span class="rd-pill rd-new">{{ d.new }}</span>
-        </div>
-        <div class="rd-side rd-cols">
-          <div><div class="rd-colhead">This rule</div><span class="rd-pill rd-old">{{ d.old }}</span></div>
-          <div><div class="rd-colhead">Linked rule</div><span class="rd-pill rd-new">{{ d.new }}</span></div>
-        </div>
-        {% elif d.kind == 'list' %}
-        <div class="rd-inline rd-chips">
-          {% for item in d.removed %}<span class="rd-pill rd-old" title="Only on this rule">&minus; {{ item }}</span>{% endfor %}
-          {% for item in d.added %}<span class="rd-pill rd-new" title="Only on the linked rule">+ {{ item }}</span>{% endfor %}
-        </div>
-        <div class="rd-side rd-cols">
-          <div><div class="rd-colhead">This rule only</div><div class="rd-chips">{% for item in d.removed %}<span class="rd-pill rd-old">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
-          <div><div class="rd-colhead">Linked rule only</div><div class="rd-chips">{% for item in d.added %}<span class="rd-pill rd-new">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
-        </div>
-        {% else %}
-        <div class="rd-inline rd-lines">
-          {% for row in d.inline %}<div class="rd-line {{ row.type }}">{{ seg(row.segments) }}</div>{% endfor %}
-        </div>
-        <div class="rd-side rd-lines">
-          <div class="rd-srow"><div class="rd-colhead rd-cell left">This rule</div><div class="rd-colhead rd-cell right">Linked rule</div></div>
-          {% for row in d.side %}
-            {% if row.type == 'gap' %}<div class="rd-srow gap">{{ seg(row.segments) }}</div>
-            {% else %}<div class="rd-srow {{ row.type }}"><div class="rd-cell left {{ row.type }}">{% if row.left %}{{ seg(row.left) }}{% endif %}</div><div class="rd-cell right {{ row.type }}">{% if row.right %}{{ seg(row.right) }}{% endif %}</div></div>{% endif %}
-          {% endfor %}
-        </div>
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
+    {{ diff_fields(diffs, 'This rule', 'Linked rule', select='rm-merge-section' if source and target else none) }}
     {% else %}
     <p class="empty-state-text">The two rules are identical in every field compared.</p>
     {% endif %}
@@ -79,7 +46,9 @@
     <div class="rm-merge border-t mt-md pt-md">
       <p class="rd-label mb-sm">Merge</p>
       <p class="text-muted fs-md mb-sm">
-        Merging copies one side's content over the other, in the other's own SIEM, keeping the other's own enabled/disabled state. Deleting is a separate choice — pick either side, both, or neither.
+        Merging copies one side's content over the other, in the other's own SIEM, keeping the other's own enabled/disabled state.
+        {% if diffs %}Untick a section above to leave it as the other side has it; with every section ticked, the whole rule is copied.{% endif %}
+        Deleting is a separate choice — pick either side, both, or neither.
       </p>
       {% set src_label = source.name ~ ' (' ~ source_dest_name ~ ')' %}
       {% set tgt_label = target.name ~ ' (' ~ link.destination_name ~ ')' %}

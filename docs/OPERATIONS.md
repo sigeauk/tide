@@ -31,7 +31,7 @@ Everything TIDE keeps is in `data/`, next to `docker-compose.yml`:
 | `log/` | TIDE's log, and the rule-log exports. |
 | `diagnostics-backups/` | A copy of a client's database taken before each Diagnostics fix (the last three). |
 
-ATT&CK, NIST 800-53 and the SigmaHQ rules are built into the image, not kept in `data/`. They update when you upgrade TIDE.
+ATT&CK, NIST 800-53, the SigmaHQ rules and Elastic's detection rules and hunting queries are built into the image, not kept in `data/`. They update when you upgrade TIDE.
 
 ---
 
@@ -158,6 +158,8 @@ docker compose logs -f tide-app
 ```
 
 TIDE upgrades its databases as it starts; the log says `Migrations complete` when it's done.
+
+4. Review rule updates. Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
 
 ---
 

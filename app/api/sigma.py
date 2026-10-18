@@ -4,6 +4,8 @@ Provides endpoints for rule browsing, conversion, validation, and SIEM deploymen
 """
 
 import json
+import os
+from html import escape
 from urllib.parse import quote
 
 import yaml
@@ -20,6 +22,22 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sigma", tags=["sigma"])
 
+# A backend's query language, for colouring the converted query (highlight_query).
+_QUERY_LANGUAGE = {"elasticsearch": "lucene", "eql": "eql", "esql": "esql", "splunk": "lucene",
+                   "microsoft365defender": "kuery"}
+
+
+def rules_list_context(query: str = "", technique: str = "", category: str = "", level: str = "",
+                       status: str = "", limit: int = 100, offset: int = 0) -> dict:
+    """The rule browser's rows (``partials/sigma_rules_list.html``), ``limit`` of them from
+    ``offset`` on, and how many match; shared with the page route."""
+    matches = sigma.search_rules(query=query, technique_filter=technique, category_filter=category,
+                                 level_filter=level, status_filter=status, limit=0)
+    rows = matches[offset:offset + limit]
+    shown = offset + len(rows)
+    return {"rules": rows, "matching": len(matches), "total_count": len(sigma.load_all_rules()),
+            "offset": offset, "next_offset": shown if shown < len(matches) else 0}
+
 
 @router.get("/rules", response_class=HTMLResponse)
 def search_rules(
@@ -33,34 +51,17 @@ def search_rules(
     level: str = Query(""),
     status: str = Query(""),
     selected: str = Query(""),
-    limit: int = Query(100, le=500),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
 ):
-    """
-    Search Sigma rules and return HTML partial.
-    """
-    results = sigma.search_rules(
-        query=query,
-        technique_filter=technique,
-        category_filter=category,
-        level_filter=level,
-        status_filter=status,
-        limit=limit
-    )
-    
-    # Coverage data for MITRE pills
-    covered_ttps = db.get_all_covered_ttps(client_id=client_id)
-    ttp_rule_counts = db.get_ttp_rule_counts(client_id=client_id)
-    
-    templates = request.app.state.templates
-    return templates.TemplateResponse(
+    """The rule browser's list, filtered; from ``offset`` on, the next rows as it is scrolled."""
+    return request.app.state.templates.TemplateResponse(
         request,
         "partials/sigma_rules_list.html",
         {
-            "rules": results,
-            "total_count": len(sigma.load_all_rules()),
-            "filtered_count": len(results),
-            "covered_ttps": covered_ttps,
-            "ttp_rule_counts": ttp_rule_counts,
+            **rules_list_context(query, technique, category, level, status, limit, offset),
+            "covered_ttps": db.get_all_covered_ttps(client_id=client_id),
+            "ttp_rule_counts": db.get_ttp_rule_counts(client_id=client_id),
             "selected_rule_id": selected,
         }
     )
@@ -82,6 +83,89 @@ def get_rule_yaml(
     return HTMLResponse(content="# Rule not found", status_code=404)
 
 
+def _rule_detail(request: Request, db, client_id: str, yaml_content: str, backend: str, pipeline: str,
+                 index_pattern: str, pipeline_file: str, template_file: str, sigma_id: str = "",
+                 file_path: str = "") -> HTMLResponse:
+    """The Sigma page's detail pane (partials/sigma_rule_detail.html) for one rule's YAML: laid out for
+    reading, its query converted with the page's settings, and its Source. ``sigma_id`` names a
+    SigmaHQ rule; a rule of your own has none and carries its YAML in the pane, for Convert."""
+    from app.api.rules import _render_guide_markdown
+    from app.services import rule_origins
+
+    def empty(text: str) -> HTMLResponse:
+        return HTMLResponse(f'<div class="empty-output"><p>{text}</p></div>')
+
+    if not yaml_content.strip():
+        return empty("Select a rule to see what it detects.")
+    try:
+        rule = next(iter(yaml.safe_load_all(yaml_content)), None)
+    except yaml.YAMLError as exc:
+        return empty(f"The YAML could not be read: {escape(str(exc))[:300]}")
+    if not isinstance(rule, dict):
+        return empty("The YAML is not a Sigma rule.")
+    view = sigma.rule_view(rule)
+    ok, converted = sigma.convert_sigma_rule(
+        yaml_content=yaml_content, backend=backend, pipeline=pipeline, output_format="default",
+        index_pattern=index_pattern, pipeline_file=pipeline_file, template_file=template_file,
+    )
+    return request.app.state.templates.TemplateResponse(
+        request, "partials/sigma_rule_detail.html",
+        {
+            "v": view, "can_convert": True, "hunting": False, "source": yaml_content, "file_path": file_path,
+            "sigma_id": sigma_id, "own_yaml": "" if sigma_id else yaml_content,
+            "deployed": rule_origins.deployed_for_client(db, client_id, "sigma", sigma_id) if sigma_id else [],
+            "query": converted if ok else "", "query_error": "" if ok else converted,
+            "query_language": _QUERY_LANGUAGE.get(backend, "lucene"),
+            "query_target": sigma.get_available_backends().get(backend, backend),
+            "description_html": _render_guide_markdown(view["description"]) if view["description"] else "",
+            "covered_ttps": db.get_all_covered_ttps(client_id=client_id),
+            "ttp_rule_counts": db.get_ttp_rule_counts(client_id=client_id),
+        },
+    )
+
+
+@router.get("/rules/{rule_id}/view", response_class=HTMLResponse)
+def view_rule(
+    request: Request,
+    rule_id: str,
+    user: CurrentUser,
+    db: DbDep,
+    client_id: ActiveClient,
+    backend: str = Query("elasticsearch"),
+    pipeline: str = Query("none"),
+    index_pattern: str = Query(""),
+    pipeline_file: str = Query(""),
+    template_file: str = Query(""),
+):
+    """One SigmaHQ rule in the Sigma page's detail pane, converted with the page's settings."""
+    rule = sigma.get_rule_by_id(rule_id)
+    if not rule:
+        return HTMLResponse('<div class="empty-output"><p>This rule is not in the Sigma rules built into TIDE.</p></div>',
+                            status_code=404)
+    path = str(rule.get("_file_path") or "")
+    rel = path[path.find("/rules") + 1:] if "/rules" in path else os.path.basename(path)
+    return _rule_detail(request, db, client_id, str(rule.get("_raw_yaml") or ""), backend, pipeline,
+                        index_pattern, pipeline_file, template_file, sigma_id=rule_id, file_path=rel)
+
+
+@router.post("/render", response_class=HTMLResponse)
+def render_rule(
+    request: Request,
+    user: CurrentUser,
+    db: DbDep,
+    client_id: ActiveClient,
+    yaml_content: str = Form(""),
+    backend: str = Form("elasticsearch"),
+    pipeline: str = Form("none"),
+    index_pattern: str = Form(""),
+    pipeline_file: str = Form(""),
+    template_file: str = Form(""),
+):
+    """A Sigma rule of your own (Add your own Sigma rule), shown like SigmaHQ's in the detail pane."""
+    return _rule_detail(request, db, client_id, yaml_content, backend, pipeline, index_pattern,
+                        pipeline_file, template_file)
+
+
 def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern: str, username: str) -> dict:
     """The Create Rule form's pre-fill for a converted Sigma rule: its title, description,
     query, level, authors (the rule's, then the converting user), tags and ATT&CK ids. Created
@@ -93,6 +177,7 @@ def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern:
         if author and author.lower() not in {a.lower() for a in authors}:
             authors.append(author)
     return {
+        "sigma_id": str(sigma_rule.get("id") or "").strip(),
         "name": str(sigma_rule.get("title") or "").strip(),
         "description": str(sigma_rule.get("description") or "").strip(),
         "query": query,
@@ -117,7 +202,8 @@ def rule_form_prefill(sigma_rule: dict, query: str, backend: str, index_pattern:
 def convert_rule(
     request: Request,
     user: CurrentUser,
-    yaml_content: str = Form(...),
+    yaml_content: str = Form(""),
+    sigma_id: str = Form(""),
     backend: str = Form("elasticsearch"),
     pipeline: str = Form("none"),
     output_format: str = Form("default"),
@@ -127,9 +213,12 @@ def convert_rule(
     template_file: str = Form(""),
 ):
     """
-    Convert a Sigma rule to target query language.
-    Returns HTML partial with the result.
+    Convert a Sigma rule to target query language: its YAML (a rule of your own), or a SigmaHQ rule
+    by ``sigma_id``. Returns HTML partial with the result.
     """
+    if not yaml_content.strip() and sigma_id:
+        found = sigma.get_rule_by_id(sigma_id)
+        yaml_content = str((found or {}).get("_raw_yaml") or "")
     if not yaml_content.strip():
         return HTMLResponse(
             '<div class="alert alert-warning">Please enter a Sigma rule YAML</div>'
@@ -231,6 +320,7 @@ def deploy_to_siem(
     pipeline_file: str = Form(""),
     template_file: str = Form(""),
     siem_id: str = Form(""),
+    resolution: str = Form(""),
 ):
     """
     Deploy a converted Sigma rule to Elastic SIEM.
@@ -292,6 +382,35 @@ def deploy_to_siem(
             '</div>'
         )
 
+    # The space may already hold a rule with this Sigma rule's id (an earlier deploy, or another
+    # rule). It is never overwritten unasked: identical (index patterns and enabled state aside)
+    # needs nothing; otherwise the user chooses to update it or to deploy a separate copy under a
+    # new rule id (``resolution``).
+    rule_id_override = ""
+    if resolution != "update":
+        from app.elastic_helper import find_rule_in_space
+        from app.services.rule_diff import conflict_differences
+        payload, error = sigma.deploy_payload(yaml_content, enabled, index_pattern or None, pipeline_file,
+                                              template_file, user.username)
+        if payload is None:
+            return HTMLResponse(f'<div class="alert alert-danger">{escape(error)}</div>')
+        state, live = find_rule_in_space(payload.get("rule_id", ""), target_space, target_siem["kibana_url"],
+                                         target_siem["api_token_enc"])
+        if state == "unknown":
+            return HTMLResponse('<div class="alert alert-danger">Could not check whether this space already has '
+                                'the rule: its SIEM did not answer. Nothing was deployed.</div>')
+        if state == "found" and resolution != "new_id":
+            diffs = conflict_differences(live, payload)
+            prebuilt = bool(live.get("immutable") or (live.get("rule_source") or {}).get("type") == "external")
+            return request.app.state.templates.TemplateResponse(
+                request, "partials/sigma_deploy_conflict.html",
+                {"existing": live, "diffs": diffs, "prebuilt": prebuilt,
+                 "destination": target_siem.get("name") or target_space},
+            )
+        if state == "found":
+            import uuid
+            rule_id_override = str(uuid.uuid4())
+
     success, message, new_rule_id = sigma.send_rule_to_siem(
         yaml_content=yaml_content,
         space=target_space,
@@ -302,6 +421,7 @@ def deploy_to_siem(
         pipeline_file=pipeline_file,
         template_file=template_file,
         username=user.username,
+        rule_id_override=rule_id_override,
     )
 
     if success:
@@ -313,6 +433,15 @@ def deploy_to_siem(
                 sync_single_rule(db, client_id, new_rule_id, siem_id, target_space, user.id, user.username)
             except Exception:
                 logger.exception("Post-deploy targeted sync failed for %s", new_rule_id)
+            try:
+                sigma_id = str((yaml.safe_load(yaml_content) or {}).get("id") or "")
+            except yaml.YAMLError:
+                sigma_id = ""
+            from app.services import rule_origins
+            rule_origins.record_for_client(
+                db, client_id, (new_rule_id, siem_id, target_space), "sigma", sigma_id, "deployed", user.username,
+                convert_options={"pipeline_file": pipeline_file, "template_file": template_file,
+                                 "index_pattern": index_pattern})
         return HTMLResponse(f'<div class="alert alert-success">{message}</div>')
     else:
         return HTMLResponse(f'<div class="alert alert-danger">{message}</div>')

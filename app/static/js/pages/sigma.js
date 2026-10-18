@@ -1,8 +1,11 @@
 /*
- * Sigma Converter (pages/rules/sigma.html, partials/sigma_rules_list.html, sigma_convert_result.html):
- * the YAML editor (CodeMirror, kept on window.sigmaYamlEditor), the rule browser, the backend /
- * format / pipeline selects and the ordered Custom Pipelines and Templates pickers, Convert and
- * Deploy, and opening a converted rule in the create-rule window.
+ * Sigma Rules (pages/rules/sigma.html, partials/sigma_rules_list.html, sigma_rule_detail.html,
+ * sigma_convert_result.html). Laid out like the Elastic Rules and Hunting pages: a row opens its rule
+ * in the detail pane through library.js. This keeps the conversion settings across the top (target,
+ * format, pipeline, the ordered Custom Pipelines and Templates pickers) in the hidden fields of
+ * #sigma-settings, which the open rule's view and Convert send, and shows the open rule again when
+ * they change. Add your own Sigma rule (⋮) opens a YAML editor (CodeMirror, window.sigmaYamlEditor)
+ * and shows that rule the same way. A conversion's create-rule payload opens the rule window.
  */
 (function () {
     'use strict';
@@ -24,7 +27,7 @@
     }
 
     var selection = { pipeline: [], template: [] };   // ordered selections in the two pickers
-    var selectedRuleId = '';
+    var ownYaml = '';                                  // the rule of your own on show, if any
 
     function savedIndices() {
         try { return JSON.parse(localStorage.getItem('sigma-indices') || '[]'); } catch (_e) { return []; }
@@ -58,6 +61,7 @@
         });
         document.querySelectorAll(menu + ' .pipeline-option:not(.selected) .pipeline-option-badge').forEach(function (b) { b.textContent = ''; });
         syncPicker(kind);
+        refreshDetail();
     }
 
     // Rebuild a picker from the saved-pipelines/-templates API, so edits on Management show without a reload.
@@ -112,138 +116,121 @@
         });
     });
 
-    function syncDeploySiemId() {
-        var sel = $('deploy-space-select'), siem = $('deploy-siem-id');
-        if (!sel || !siem) return;
-        var opt = sel.options[sel.selectedIndex];
-        siem.value = (opt && opt.dataset) ? (opt.dataset.siemId || '') : '';
-    }
-
-    // ── Rule browser ──
-    function setSelectedRule(ruleId, syncHiddenField) {
-        selectedRuleId = ruleId || '';
-        document.querySelectorAll('#rules-list [data-rule-id]').forEach(function (row) {
-            var isSelected = !!ruleId && row.getAttribute('data-rule-id') === ruleId;
-            row.classList.toggle('sigma-rule-selected', isSelected);
-            var summaryOrBtn = row.querySelector('.rule-item-btn');
-            if (summaryOrBtn) summaryOrBtn.classList.toggle('sigma-rule-selected', isSelected);
+    // ── The settings the view and Convert send ──
+    function settings() {
+        var pairs = { 'form-backend': 'backend-select', 'form-pipeline': 'pipeline-select', 'form-format': 'format-select' };
+        Object.keys(pairs).forEach(function (hidden) {
+            if ($(hidden) && $(pairs[hidden])) $(hidden).value = $(pairs[hidden]).value;
         });
-        if (syncHiddenField !== false) {
-            var hidden = $('selected-rule-id');
-            if (hidden) hidden.value = ruleId || '';
-        }
+        syncPicker('pipeline');
+        syncPicker('template');
+        var values = {};
+        document.querySelectorAll('#sigma-settings input[type="hidden"]').forEach(function (i) { values[i.name] = i.value; });
+        return values;
     }
 
-    // One expanded rule card at a time.
-    function bindAccordion() {
-        var ruleList = $('rules-list');
-        if (!ruleList) return;
-        ruleList.querySelectorAll('details.sigma-rule-card--expandable').forEach(function (card) {
-            if (card._sigmaAccordionBound) return;
-            card._sigmaAccordionBound = true;
-            card.addEventListener('toggle', function () {
-                if (!card.open) return;
-                ruleList.querySelectorAll('details.sigma-rule-card--expandable[open]').forEach(function (other) {
-                    if (other !== card) other.open = false;
-                });
-            });
-        });
-    }
-    document.addEventListener('htmx:afterSwap', function (event) {
-        var target = event.detail && event.detail.target;
-        if (!target || target.id !== 'rules-list') return;
-        bindAccordion();
-        if (selectedRuleId) setSelectedRule(selectedRuleId, false);
-    });
-
-    function loadRule(ruleId, opts) {
-        opts = opts || {};
-        var editor = window.sigmaYamlEditor;
-        if (!editor) { console.error('YAML editor not initialized'); return; }
-        fetch('/api/sigma/rule/' + ruleId)
-            .then(function (response) { return response.text(); })
-            .then(function (yaml) {
-                setSelectedRule(ruleId, true);
-                editor.setValue(yaml);
-                var ta = $('yaml-editor');
-                if (ta) ta.value = yaml;
-                // Force refresh to ensure syntax highlighting is applied
-                setTimeout(function () { editor.refresh(); }, 10);
-                var convertTarget = $('sigma-convert-response');
-                if (convertTarget) convertTarget.innerHTML = '';
-                $('validation-result').innerHTML = '';
-                if (opts.convertAfterLoad) {
-                    var convertForm = $('convert-form');
-                    if (convertForm) setTimeout(function () { convertForm.requestSubmit(); }, 0);
-                }
-            })
-            .catch(function (err) { console.error('Failed to load rule:', err); });
-    }
-
-    // ── The editor and the page's selects ──
-    function initPage(retryCount) {
-        retryCount = retryCount || 0;
-        if (typeof CodeMirror === 'undefined' || !CodeMirror.modes || !CodeMirror.modes.yaml) {
-            if (retryCount === 0) {
-                if (typeof CodeMirror === 'undefined') {
-                    loadScript('/static/js/vendor/codemirror.min.js')
-                        .then(function () { return loadScript('/static/js/vendor/codemirror-yaml.min.js'); })
-                        .catch(function (e) { console.error('[Sigma] CodeMirror load error:', e); });
-                } else {
-                    loadScript('/static/js/vendor/codemirror-yaml.min.js')
-                        .catch(function (e) { console.error('[Sigma] YAML mode load error:', e); });
-                }
-                if (typeof Prism === 'undefined') {
-                    loadScript('/static/js/vendor/prism.min.js')
-                        .then(function () { return loadScript('/static/js/vendor/prism-json.min.js'); })
-                        .catch(function (e) { console.error('[Sigma] Prism load error:', e); });
-                }
-            }
-            if (retryCount < 50) setTimeout(function () { initPage(retryCount + 1); }, 100);   // up to 5 s
-            else console.error('[Sigma] CodeMirror failed to load after multiple retries');
+    // The open rule again (a SigmaHQ one, or yours), converted with the settings as they are now.
+    function refreshDetail() {
+        if (!window.htmx || !$('sigma-detail')) return;
+        var values = settings();
+        if (ownYaml) {
+            values.yaml_content = ownYaml;
+            htmx.ajax('POST', '/api/sigma/render', { target: '#sigma-detail', swap: 'innerHTML', values: values });
             return;
         }
+        var selected = ($('selected-rule-id') || {}).value || '';
+        if (selected) {
+            htmx.ajax('GET', '/api/sigma/rules/' + encodeURIComponent(selected) + '/view',
+                { target: '#sigma-detail', swap: 'innerHTML', values: values });
+        }
+    }
 
-        var ta = $('yaml-editor');
-        if (!ta) return;
-        var editor = CodeMirror.fromTextArea(ta, {
-            mode: 'yaml', theme: 'material-darker', lineNumbers: true, lineWrapping: true,
-            tabSize: 2, indentWithTabs: false, autofocus: false,
+    // A row opened: that is the rule on show now, not one of your own.
+    document.addEventListener('click', function (e) {
+        if (e.target.closest && e.target.closest('#rules-list [data-item-id]')) ownYaml = '';
+    }, true);
+
+    // ── Add your own Sigma rule ──
+    function editor() {
+        if (window.sigmaYamlEditor) return Promise.resolve(window.sigmaYamlEditor);
+        var ready = (typeof CodeMirror === 'undefined')
+            ? loadScript('/static/js/vendor/codemirror.min.js').then(function () { return loadScript('/static/js/vendor/codemirror-yaml.min.js'); })
+            : (CodeMirror.modes && CodeMirror.modes.yaml ? Promise.resolve() : loadScript('/static/js/vendor/codemirror-yaml.min.js'));
+        return ready.then(function () {
+            var ta = $('yaml-editor');
+            var cm = CodeMirror.fromTextArea(ta, {
+                mode: 'yaml', theme: 'material-darker', lineNumbers: true, lineWrapping: true,
+                tabSize: 2, indentWithTabs: false, autofocus: true,
+            });
+            cm.on('change', function () { ta.value = cm.getValue(); });   // Validate sends the textarea
+            window.sigmaYamlEditor = cm;
+            return cm;
         });
-        window.sigmaYamlEditor = editor;
-        // Refresh a few times so syntax highlighting survives late CSS
-        [50, 200, 500].forEach(function (ms) { setTimeout(function () { editor.refresh(); }, ms); });
-        // Keep the textarea in step for form submission
-        editor.on('change', function () { ta.value = editor.getValue(); });
+    }
+
+    function openOwn() {
+        var modal = $('sigma-own-modal');
+        if (!modal) return;
+        modal.style.display = 'flex';
+        editor().then(function (cm) {
+            if (ownYaml && !cm.getValue()) cm.setValue(ownYaml);
+            setTimeout(function () { cm.refresh(); cm.focus(); }, 10);
+        }).catch(function (e) { console.error('[Sigma] YAML editor failed to load:', e); });
+    }
+
+    function showOwn() {
+        var cm = window.sigmaYamlEditor, yaml = cm ? cm.getValue() : (($('yaml-editor') || {}).value || '');
+        if (!yaml.trim()) {
+            $('validation-result').innerHTML = '<div class="alert alert-warning">Paste or write a Sigma rule first.</div>';
+            return;
+        }
+        ownYaml = yaml;
+        // Nothing in the browser is open now.
+        var hidden = $('selected-rule-id');
+        if (hidden) hidden.value = '';
+        document.querySelectorAll('#rules-list .sigma-rule-selected').forEach(function (el) { el.classList.remove('sigma-rule-selected'); });
+        var url = new URL(window.location.href);
+        url.searchParams.delete('rule');
+        history.replaceState(history.state, '', url);
+        $('sigma-own-modal').style.display = 'none';
+        refreshDetail();
+        var scroller = $('sigma-detail');
+        if (scroller) scroller.scrollTop = 0;
+    }
+
+    function clearEditor() {
+        if (window.sigmaYamlEditor) window.sigmaYamlEditor.setValue('');
+        var ta = $('yaml-editor');
+        if (ta) ta.value = '';
+        $('validation-result').innerHTML = '';
+    }
+
+    // ── The page ──
+    TIDE.page('#sigma-settings', function () {
+        window.sigmaYamlEditor = null;   // the previous visit's editor is gone with its page
+        ownYaml = '';
+        selection = { pipeline: [], template: [] };
 
         // Saved index patterns (Preferences) apply only when no template is selected:
         // a template's vars.index_names wins.
         var idxField = $('form-index-pattern'), saved = savedIndices();
         if (idxField && saved.length) idxField.value = saved.join(', ');
-        try {
-            // Restore the saved space only if it is one of the rendered options; a stale value
-            // would otherwise blank the SIEM dropdown and the operator couldn't deploy.
-            var savedSpace = localStorage.getItem('pref-sigma-default-space'), spaceSelect = $('deploy-space-select');
-            if (spaceSelect && savedSpace && Array.prototype.some.call(spaceSelect.options, function (o) { return o.value === savedSpace; })) {
-                spaceSelect.value = savedSpace;
-            }
-        } catch (_e) { /* storage blocked */ }
-        var deploySelect = $('deploy-space-select');
-        if (deploySelect) deploySelect.addEventListener('change', syncDeploySiemId);
-        syncDeploySiemId();
 
-        var ruleBrowser = $('rule-browser');
-        if (ruleBrowser) ruleBrowser.classList.add('open');
-        bindAccordion();
-
-        selection = { pipeline: [], template: [] };
         refreshPicker('pipeline');
         refreshPicker('template');
+        ['pipeline', 'template'].forEach(function (kind) {
+            var menu = $(kind + '-multiselect');
+            if (menu) menu.addEventListener('click', function (e) {
+                var opt = e.target.closest('.pipeline-option');
+                if (!opt) return;
+                e.preventDefault();
+                toggleOption(kind, opt);
+            });
+        });
 
         var backendSelect = $('backend-select');
         if (backendSelect) backendSelect.addEventListener('change', function () {
             var backend = this.value;
-            $('form-backend').value = backend;
             // This backend's output formats
             fetch('/api/sigma/formats/' + backend, { credentials: 'same-origin' })
                 .then(function (response) {
@@ -253,87 +240,18 @@
                     }
                     return response.text();
                 })
-                .then(function (html) {
-                    var formatSelect = $('format-select');
-                    formatSelect.innerHTML = html;
-                    if (formatSelect.options[0]) $('form-format').value = formatSelect.options[0].value;
-                })
+                .then(function (html) { $('format-select').innerHTML = html; settings(); })
                 .catch(function (err) { console.error('Failed to load formats:', err); });
+            refreshDetail();
         });
-        var formatSelect = $('format-select');
-        if (formatSelect) formatSelect.addEventListener('change', function () { $('form-format').value = this.value; });
         var pipelineSelect = $('pipeline-select');
-        if (pipelineSelect) pipelineSelect.addEventListener('change', function () { $('form-pipeline').value = this.value; });
+        if (pipelineSelect) pipelineSelect.addEventListener('change', refreshDetail);
+        var formatSelect = $('format-select');
+        if (formatSelect) formatSelect.addEventListener('change', settings);
 
-        ['pipeline', 'template'].forEach(function (kind) {
-            $(kind + '-multiselect').addEventListener('click', function (e) {
-                var opt = e.target.closest('.pipeline-option');
-                if (!opt) return;
-                e.preventDefault();
-                toggleOption(kind, opt);
-            });
-            syncPicker(kind);
-        });
-
-        // Re-sync the hidden fields just before each submit, so navigating away and back
-        // doesn't leave stale values.
-        var convertForm = $('convert-form');
-        if (convertForm) convertForm.addEventListener('htmx:configRequest', function () {
-            ta.value = editor.getValue();
-            syncPicker('pipeline');
-            syncPicker('template');
-            $('form-pipeline').value = $('pipeline-select').value;
-            $('form-backend').value = $('backend-select').value;
-            $('form-format').value = $('format-select').value;
-        });
-        var deployForm = $('deploy-form');
-        if (deployForm) deployForm.addEventListener('htmx:configRequest', fillDeployForm);
-
-        // Opened from another page with a rule (?selected=…): load it.
-        var prefill = $('sigma-prefill-config'), ruleId = prefill ? prefill.dataset.ruleId || '' : '';
-        selectedRuleId = ruleId;
-        if (ruleId) loadRule(ruleId, { convertAfterLoad: false });
-    }
-
-    // Everything the deploy request needs, from the page's state.
-    function fillDeployForm() {
-        if (window.sigmaYamlEditor) $('deploy-yaml').value = window.sigmaYamlEditor.getValue();
-        var rawQuery = $('raw-query-store');
-        if (rawQuery) $('deploy-query').value = rawQuery.value;
-        syncDeploySiemId();
-        $('deploy-pipeline-file').value = syncPicker('pipeline');
-        $('deploy-template-file').value = syncPicker('template');
-        // Index patterns from Preferences only when no template is selected.
-        var idx = selection.template.length ? '' : savedIndices().join(', ');
-        $('deploy-index-pattern').value = idx;
-        var formIdx = $('form-index-pattern');
-        if (formIdx) formIdx.value = idx;
-    }
-
-    function clearEditor() {
-        var editor = window.sigmaYamlEditor;
-        if (!editor) return;
-        editor.setValue('');
-        var convertTarget = $('sigma-convert-response');
-        if (convertTarget) convertTarget.innerHTML = '';
-        $('validation-result').innerHTML = '';
-    }
-
-    function downloadQuery() {
-        var original = ($('raw-query-store') || {}).value || '';
-        var url = URL.createObjectURL(new Blob([original], { type: 'text/plain' }));
-        var a = document.createElement('a');
-        a.href = url;
-        a.download = 'sigma_query.ndjson';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    TIDE.page('.sigma-workbench', function () {
-        window.sigmaYamlEditor = null;   // the previous visit's editor is gone with its page
-        initPage(0);
+        // Opened with a rule (?rule=…): show it with these settings.
+        var detail = $('sigma-detail');
+        if (detail && detail.getAttribute('data-rule-id')) refreshDetail();
     });
 
     // A converted rule with a create-rule payload opens it in the shared rule window.
@@ -349,9 +267,8 @@
     TIDE.actions('sigma', {
         pipelineMenu: function () { toggleMenu('pipeline'); },
         templateMenu: function () { toggleMenu('template'); },
+        ownRule: openOwn,
+        showOwn: showOwn,
         clear: clearEditor,
-        download: downloadQuery,
-        deploy: fillDeployForm,
-        openRule: function (e, el) { loadRule(el.closest('[data-rule-id]').dataset.ruleId); },
     });
 })();

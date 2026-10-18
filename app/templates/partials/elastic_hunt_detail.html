@@ -1,0 +1,83 @@
+{#
+  One bundled Elastic hunting query in the Hunting page's detail pane (GET /api/hunting/elastic/{id}).
+  Its queries can be run on one of the tenant's SIEMs, with the page's settings row
+  (components/hunt_run.html); hunting queries
+  are not deployed as rules. Context: hunt (elastic_hunts_index row), kinds (each query's language:
+  esql / eql / osquery), run, notes_html, source, covered_ttps, ttp_rule_counts.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/hunt_run.html" import run_button, save_button, run_result %}
+<div class="lib-detail__head">
+    <h2 class="lib-detail__title">{{ hunt.name }}</h2>
+    <div class="lib-detail__pills">
+        <span class="status-pill status-info">Hunting</span>
+        <span class="status-pill status-muted">Elastic</span>
+        {% for lang in hunt.languages or [] %}<span class="status-pill status-muted">{{ lang }}</span>{% endfor %}
+    </div>
+</div>
+
+<div class="lib-detail__body">
+    <div class="lib-detail__desc">{{ description_html }}</div>
+
+    <dl class="rm-facts">
+        <div><dt>Platform</dt><dd>{{ hunt.platform | replace('_', ' ') }}</dd></div>
+        {% if hunt.author %}<div><dt>Author</dt><dd>{{ hunt.author }}</dd></div>{% endif %}
+    </dl>
+    {% if hunt.integrations %}
+    <div class="rm-chips">
+        <span class="rm-chips__label">Integrations</span>
+        {% for name in hunt.integrations %}<span class="rm-chip">{{ name }}</span>{% endfor %}
+    </div>
+    {% endif %}
+
+    <section class="lib-detail__section">
+        <h3 class="lib-detail__h">MITRE ATT&CK</h3>
+        {% if hunt.techniques %}
+        <div class="mitre-pills-wrap">
+            {% for tid in hunt.techniques %}
+            {% if tid.startswith('T') %}{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}
+            {% else %}<span class="mitre-pill mitre-neutral mitre-sm" title="MITRE ATLAS">{{ tid }}</span>{% endif %}
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted text-sm">No techniques.</p>
+        {% endif %}
+    </section>
+
+    {% for query in hunt.queries or [] %}
+    {% set _kind = kinds[loop.index0] %}
+    <section class="lib-detail__section">
+        <div class="lib-detail__h-row">
+            <h3 class="lib-detail__h">Query{% if hunt.queries | length > 1 %} {{ loop.index }} of {{ hunt.queries | length }}{% endif %}<span class="lib-detail__h-note">{{ {'esql': 'ES|QL', 'eql': 'EQL', 'osquery': 'Osquery SQL'}[_kind] }}</span></h3>
+            <span class="lib-detail__tools">
+                {{ run_button('elastic', hunt.hunt_id, loop.index0, _kind, run) }}
+                {{ save_button('elastic', hunt.hunt_id, loop.index0, _kind, run) }}
+                <button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#elastic-hunt-query-{{ loop.index }}">{{ icon_text('copy', 'Copy', '12') }}</button>
+            </span>
+        </div>
+        <pre class="query-display rm-query" id="elastic-hunt-query-{{ loop.index }}">{{ query | highlight_query('eql' if _kind == 'eql' else 'esql') }}</pre>
+        {{ run_result(loop.index0) }}
+    </section>
+    {% endfor %}
+
+    {% if notes_html %}
+    <details class="rm-fold lib-detail__fold" open>
+        <summary>Notes<span class="rm-fold__count">{{ notes_html | length }}</span></summary>
+        <div class="rm-prose">{% for note in notes_html %}{{ note }}{% endfor %}</div>
+    </details>
+    {% endif %}
+    {% if hunt.refs %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>References<span class="rm-fold__count">{{ hunt.refs | length }}</span></summary>
+        <ul class="rm-links">{% for ref in hunt.refs %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if source %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Source</summary>
+        <p class="lib-detail__path" title="Where it is in Elastic's detection-rules repository">{{ hunt.file_path }}</p>
+        <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('toml') }}</pre>
+    </details>
+    {% endif %}
+</div>

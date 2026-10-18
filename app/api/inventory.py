@@ -2156,6 +2156,14 @@ def api_template_technique_sigma(request: Request, tactic_id: str, user: Current
     return _sigma_suggestions(request, tactic_id, q, f"/api/baselines/tactics/{tactic_id}")
 
 
+@router.get("/api/baselines/tactics/{tactic_id}/elastic", response_class=HTMLResponse)
+def api_template_technique_elastic(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
+                                   q: str = Query("")):
+    """Elastic rules for a template's technique (see _elastic_suggestions)."""
+    _template_step_or_404(tactic_id, client_id)
+    return _elastic_suggestions(request, user, tactic_id, q, f"/api/baselines/tactics/{tactic_id}")
+
+
 @router.get("/api/baselines/tactics/{tactic_id}/sigma/convert", response_class=HTMLResponse)
 def api_template_sigma_convert_form(request: Request, tactic_id: str, user: CurrentUser, client_id: ActiveClient,
                                     sigma_id: str = Query(...)):
@@ -2478,6 +2486,39 @@ def api_system_technique_sigma(request: Request, system_id: str, step_id: str, u
     """Sigma rules for a system's technique (see _sigma_suggestions)."""
     _system_step_or_404(system_id, step_id, client_id)
     return _sigma_suggestions(request, step_id, q, f"/api/systems/{system_id}/steps/{step_id}")
+
+
+@router.get("/api/systems/{system_id}/steps/{step_id}/elastic", response_class=HTMLResponse)
+def api_system_technique_elastic(request: Request, system_id: str, step_id: str, user: CurrentUser,
+                                 client_id: ActiveClient, q: str = Query("")):
+    """Elastic rules for a system's technique (see _elastic_suggestions)."""
+    _system_step_or_404(system_id, step_id, client_id)
+    return _elastic_suggestions(request, user, step_id, q, f"/api/systems/{system_id}/steps/{step_id}")
+
+
+def _elastic_suggestions(request: Request, user, step_id: str, q: str, technique_url: str):
+    """Elastic's bundled rules suggested for a technique from its ATT&CK techniques, or, with
+    ``q``, any that match. Deprecated rules are left out. Potential rules -- never coverage; each
+    can be deployed to a linked destination."""
+    from app.services import elastic_rules as er
+    from app.services.database import get_database_service
+    step = get_playbook_step(step_id)
+    ids = [t.technique_id for t in step.techniques] or ([step.technique_id] if step.technique_id else [])
+    q = q.strip()
+    rules, seen = [], set()
+    with get_database_service().get_shared_connection() as conn:
+        if er.index_ready(conn):
+            batches = [er.search_rules(conn, q=q, limit=50, deployable=True)[0]] if q else [
+                er.search_rules(conn, technique=tid, limit=25, deployable=True)[0] for tid in ids]
+            for batch in batches:
+                for r in batch:
+                    if r["rule_id"] not in seen:
+                        seen.add(r["rule_id"])
+                        rules.append(r)
+    return _render("partials/technique_elastic.html", request, {
+        "rules": rules[:50 if q else 25], "query": q, "technique_ids": ids, "technique_url": technique_url,
+        "can_deploy": not user or user.can_write("page:elastic"),
+    })
 
 
 def _sigma_suggestions(request: Request, step_id: str, q: str, technique_url: str):

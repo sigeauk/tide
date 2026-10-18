@@ -133,6 +133,30 @@
                 </details>
                 {% endif %}
 
+                {% if elastic_related_rules %}
+                <details class="rm-fold" name="technique-panel">
+                    <summary><span>Elastic rules <span class="rm-fold__count">{{ elastic_related_count }}</span></span></summary>
+                    <div class="rm-about">
+                        <p class="text-muted sm-sigma__note">
+                            {% if elastic_related_count > elastic_related_rules | length %}The first {{ elastic_related_rules | length }} are shown.{% endif %}
+                            <a href="/elastic?technique={{ technique.id | urlencode }}">Open all on the Elastic Rules page</a>, where each can be deployed.
+                        </p>
+                        <ul class="sm-sigma">
+                            {% for erule in elastic_related_rules %}
+                            <li class="sm-sigma__item">
+                                <a class="sm-sigma__title" href="/elastic?technique={{ technique.id | urlencode }}&rule={{ erule.rule_id | urlencode }}"
+                                   title="{{ erule.description | truncate(400) }}">{{ erule.name }}</a>
+                                <span class="sm-sigma__meta">
+                                    {% if erule.severity %}<span class="sev-pill sev-{{ erule.severity }}">{{ erule.severity | upper }}</span>{% endif %}
+                                    <span class="text-muted">{{ 'building block' if erule.status == 'building_block' else erule.rule_type | replace('_', ' ') }}</span>
+                                </span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </details>
+                {% endif %}
+
                 <details class="rm-fold" name="technique-panel" open>
                     <summary><span>Detection rules <span class="rm-fold__count">{{ total_rule_count }}</span>{% if search %} <span class="rm-fold__count">filtered by "{{ search }}"</span>{% endif %}</span></summary>
                     <div class="rm-about">

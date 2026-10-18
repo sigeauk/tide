@@ -1,60 +1,64 @@
+{#
+  Sigma Rules: SigmaHQ's detection rules, bundled in the image, laid out like the Elastic Rules and
+  Hunting pages: the conversion settings in a row across the top, a filtered browser on the left, the
+  open rule on the right (GET /api/sigma/rules/{id}/view, library.js) with its query converted with
+  those settings. ?rule= opens one on arrival. A rule of your own is pasted in from the ⋮ menu
+  (Add your own Sigma rule) and shown the same way (POST /api/sigma/render). sigma.js.
+#}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
 
-{% block title %}Sigma Convert | TIDE{% endblock %}
+{% block title %}Sigma Rules | TIDE{% endblock %}
 
 {% block head %}
-<!-- CodeMirror for YAML editing with syntax highlighting (bundled locally) -->
+<!-- CodeMirror for the YAML of a rule of your own (bundled locally) -->
 <link rel="stylesheet" href="/static/css/vendor/codemirror.min.css">
 <link rel="stylesheet" href="/static/css/vendor/codemirror-material-darker.min.css">
 <script defer src="/static/js/vendor/codemirror.min.js"></script>
 <script defer src="/static/js/vendor/codemirror-yaml.min.js"></script>
-<!-- Prism.js for JSON output highlighting (bundled locally) -->
-<link rel="stylesheet" href="/static/css/vendor/prism-tomorrow.min.css">
-<script defer src="/static/js/vendor/prism.min.js"></script>
-<script defer src="/static/js/vendor/prism-json.min.js"></script>
 {% endblock %}
 
 {% block content %}
 <div class="page-header flex items-start justify-between gap-md">
-    <div>
-        <h1 class="page-title-hero">Sigma Converter</h1>
-        <p class="page-subtitle">Convert Sigma detection rules into SIEM-specific queries for deployment.</p>
+    <div class="page-header__text">
+        <h1 class="page-title-hero">Sigma Rules</h1>
+        <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE. Pick one to see it converted for your SIEM with the settings below; Convert opens it in the rule form to deploy.</p>
     </div>
-    <div class="flex items-center gap-sm shrink-0">
-        <button name="Create Rule"
-            class="btn btn-success btn-h38"
-            hx-get="/api/rules/create-form"
-            hx-target="#modal-container"
-            hx-swap="innerHTML">
-            {{ icon('plus', '16') }}
-            <span>Create Rule</span>
+    <div class="rh-more" data-more>
+        <button name="Sigma Actions" type="button" class="btn btn-secondary rh-more__btn" data-more-toggle
+                aria-haspopup="menu" aria-expanded="false" title="Add a Sigma rule of your own">
+            {{ icon('more-vertical', '18') }}<span class="sr-only">More actions</span>
         </button>
+        <div class="rh-more__menu" role="menu" hidden>
+            <button name="Add Your Own Sigma Rule" type="button" role="menuitem" class="rh-more__item" data-click="sigma.ownRule">
+                {{ icon('file-code', '15') }}<span>Add your own Sigma rule</span>
+            </button>
+        </div>
     </div>
 </div>
 
-<!-- Compact horizontal selects -->
-<div class="sigma-header-row">
+{# How a rule is converted: the open rule's query follows these, and Convert uses them. #}
+<div class="sigma-header-row lib-settings" id="sigma-settings">
     <div class="sigma-select-group">
-        <label>Target</label>
+        <label for="backend-select">Target</label>
         <select name="Backend Select" id="backend-select" class="sigma-select">
             {% for key, label in backends.items() %}
             <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
             {% endfor %}
         </select>
     </div>
-    
+
     <div class="sigma-select-group">
-        <label>Format</label>
+        <label for="format-select">Format</label>
         <select name="Format Select" id="format-select" class="sigma-select">
             {% for key, label in formats.items() %}
             <option value="{{ key }}">{{ label }}</option>
             {% endfor %}
         </select>
     </div>
-    
+
     <div class="sigma-select-group">
-        <label>Pipeline</label>
+        <label for="pipeline-select">Pipeline</label>
         <select name="Pipeline Select" id="pipeline-select" class="sigma-select sigma-select--wide">
             {% for key, label in pipelines.items() %}
             <option value="{{ key }}">{{ label }}</option>
@@ -66,11 +70,11 @@
         <label title="Custom pipelines — click to toggle, applied in selection order">Custom Pipelines</label>
         <button name="None selected" type="button" id="pipeline-dropdown-btn" class="sigma-select sigma-dropdown-btn" data-click="sigma.pipelineMenu">
             <span id="pipeline-dropdown-label">None selected</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            {{ icon('chevron-down', '12') }}
         </button>
         <div id="pipeline-multiselect" class="pipeline-multiselect pipeline-multiselect--menu" style="display:none;">
             {% for pl in pipeline_files %}
-            <button   name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ pl.filename }}">
+            <button name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ pl.filename }}">
                 <span class="pipeline-option-check">&#10003;</span>
                 <span class="pipeline-option-name">{{ pl.display }}</span>
                 <span class="pipeline-option-badge"></span>
@@ -83,11 +87,11 @@
         <label title="Template postprocessing pipelines — click to toggle">Templates</label>
         <button name="None selected" type="button" id="template-dropdown-btn" class="sigma-select sigma-dropdown-btn" data-click="sigma.templateMenu">
             <span id="template-dropdown-label">None selected</span>
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            {{ icon('chevron-down', '12') }}
         </button>
         <div id="template-multiselect" class="pipeline-multiselect pipeline-multiselect--menu" style="display:none;">
             {% for tpl in template_files %}
-            <button   name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
+            <button name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
                 <span class="pipeline-option-check">&#10003;</span>
                 <span class="pipeline-option-name">{{ tpl.display }}</span>
                 <span class="pipeline-option-badge"></span>
@@ -96,58 +100,42 @@
         </div>
     </div>
 
+    {# What the view and Convert send (sigma.js keeps them in step with the controls above) #}
+    <input type="hidden" id="form-backend" name="backend" value="elasticsearch">
+    <input type="hidden" id="form-pipeline" name="pipeline" value="none">
+    <input type="hidden" id="form-format" name="output_format" value="kibana_ndjson">
+    <input type="hidden" id="form-index-pattern" name="index_pattern" value="">
+    <input type="hidden" id="form-pipeline-file" name="pipeline_file" value="">
+    <input type="hidden" id="form-template-file" name="template_file" value="">
 </div>
 
-<div class="sigma-workbench">
+<div class="sigma-workbench lib-workbench" data-library="rule">
     <div class="rule-browser open" id="rule-browser">
         <div class="rule-browser-header">
-            <span>{{ icon('search', '16') }} Rule Browser</span>
+            <span>{{ icon('search', '16') }} Rule browser</span>
+            <span class="text-muted text-sm">{{ total_count }} from SigmaHQ</span>
         </div>
         <div class="rule-browser-content">
-            <div class="browser-filters">
+            <form class="browser-filters" id="sigma-filters" hx-get="/api/sigma/rules"
+                  hx-target="#rules-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
-                    <label>Search</label>
-                    <input type="text" id="rule-search" 
-                           placeholder="Title, description, technique..."
-                           hx-get="/api/sigma/rules"
-                           hx-trigger="keyup changed delay:300ms"
-                           hx-target="#rules-list"
-                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
-                           name="q">
+                    <label for="rule-search">Search</label>
+                    <input type="text" id="rule-search" name="q" placeholder="Title, description, technique…">
                 </div>
                 <div class="browser-filter">
-                    <label>MITRE Technique</label>
-                    <input type="text" id="technique-filter" 
-                           placeholder="e.g., T1059"
-                           hx-get="/api/sigma/rules"
-                           hx-trigger="keyup changed delay:300ms"
-                           hx-target="#rules-list"
-                           hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
-                           name="technique"
-                           value="{{ technique_filter }}">
+                    <label for="technique-filter">MITRE Technique</label>
+                    <input type="text" id="technique-filter" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
                 <div class="browser-filter">
-                    <label>Category</label>
-                    <select id="category-filter"
-                            hx-get="/api/sigma/rules"
-                            hx-trigger="change"
-                            hx-target="#rules-list"
-                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
-                            name="category">
+                    <label for="category-filter">Category</label>
+                    <select id="category-filter" name="category">
                         <option value="">All</option>
-                        {% for cat in categories %}
-                        <option value="{{ cat }}">{{ cat | title }}</option>
-                        {% endfor %}
+                        {% for cat in categories %}<option value="{{ cat }}">{{ cat | title }}</option>{% endfor %}
                     </select>
                 </div>
                 <div class="browser-filter">
-                    <label>Level</label>
-                    <select id="level-filter"
-                            hx-get="/api/sigma/rules"
-                            hx-trigger="change"
-                            hx-target="#rules-list"
-                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
-                            name="level">
+                    <label for="level-filter">Level</label>
+                    <select id="level-filter" name="level">
                         <option value="">All</option>
                         <option value="critical">Critical</option>
                         <option value="high">High</option>
@@ -157,13 +145,8 @@
                     </select>
                 </div>
                 <div class="browser-filter">
-                    <label>Status</label>
-                    <select id="status-filter"
-                            hx-get="/api/sigma/rules"
-                            hx-trigger="change"
-                            hx-target="#rules-list"
-                            hx-include="#rule-search, #technique-filter, #category-filter, #level-filter, #status-filter, #selected-rule-id"
-                            name="status">
+                    <label for="status-filter">Status</label>
+                    <select id="status-filter" name="status">
                         <option value="">All</option>
                         <option value="stable">Stable</option>
                         <option value="test">Test</option>
@@ -172,150 +155,47 @@
                         <option value="unsupported">Unsupported</option>
                     </select>
                 </div>
-            </div>
-            <div id="rules-list">
+                <input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
+            </form>
+            <div id="rules-list" class="lib-list">
                 {% include "partials/sigma_rules_list.html" %}
             </div>
         </div>
     </div>
 
-    <!-- Main layout -->
-    <div class="sigma-main">
-    <!-- Left: YAML Editor Panel -->
-    <div class="sigma-panel">
-        <div class="sigma-panel-header">
-            <span class="header-title">{{ icon('file-text', '16') }} rule.yml</span>
-        </div>
-        
-        <!-- Panel Body: Code Area -->
-        <div class="sigma-panel-body">
-            <form name="Submit Convert" id="convert-form" hx-post="/api/sigma/convert" hx-target="#sigma-convert-response" hx-swap="innerHTML" class="sigma-form-body">
-                <div class="code-editor-container">
-                    <textarea 
-                        id="yaml-editor" 
-                        name="yaml_content"
-                        class="yaml-editor"
-                        spellcheck="false"
-                        placeholder="title: Example Rule
-id: 12345678-1234-1234-1234-123456789abc
-status: experimental
-logsource:
-    category: process_creation
-    product: windows
-detection:
-    selection:
-        CommandLine|contains: 'suspicious'
-    condition: selection
-level: medium"></textarea>
-                </div>
-                
-                <!-- Hidden fields for form submission -->
-                <input type="hidden" id="form-backend" name="backend" value="elasticsearch">
-                <input type="hidden" id="form-pipeline" name="pipeline" value="none">
-                <input type="hidden" id="form-format" name="output_format" value="kibana_ndjson">
-                <input type="hidden" id="form-index-pattern" name="index_pattern" value="">
-                <input type="hidden" id="form-custom-pipeline" name="custom_pipeline_yaml" value="">
-                <input type="hidden" id="form-pipeline-file" name="pipeline_file" value="">
-                <input type="hidden" id="form-template-file" name="template_file" value="">
-            </form>
-            <div id="validation-result"></div>
-        </div>
-        
-        <!-- Left Footer: Action Buttons -->
-        <div class="sigma-panel-footer">
-            <button  name="Convert" type="submit" form="convert-form" class="btn btn-primary btn-sm">
-                {{ icon_text('refresh-cw', 'Convert', '14') }}
-            </button>
-            <button name="Submit Validate" type="button" class="btn btn-secondary btn-sm" 
-                    hx-post="/api/sigma/validate"
-                    hx-target="#validation-result"
-                    hx-include="#yaml-editor">
-                {{ icon_text('check-circle', 'Validate', '14') }}
-            </button>
-            <button  name="Clear" type="button" class="btn btn-secondary btn-sm" data-click="sigma.clear">
-                {{ icon_text('trash-2', 'Clear', '14') }}
-            </button>
-        </div>
-    </div>
-    
-    <!-- Right: Query Output Panel (Mirror of Left) -->
-    <div class="sigma-panel">
-        <div class="sigma-panel-header">
-            <span class="header-title">{{ icon('zap', '16') }} Query Output</span>
-            <span class="header-info" id="output-info" style="display: none;">
-                {{ icon('info', '12') }}
-                <span id="output-info-text"></span>
-            </span>
-        </div>
-        
-        <!-- Panel Body: Output Area -->
-        <div class="sigma-panel-body">
-            <div id="query-output-container">
-                <div class="query-output-box">
-                    <div class="empty-output">
-                        {{ icon('terminal', '32') }}
-                        <p>Select a rule or paste YAML, then click Convert</p>
-                    </div>
-                </div>
+    <div class="sigma-panel lib-detail-panel">
+        <div id="sigma-detail" class="lib-detail" data-rule-id="{{ selected_rule_id | default('', true) }}">
+            <div class="empty-output">
+                {{ icon('sigma', '32') }}
+                <p>Select a rule to see what it detects.</p>
             </div>
         </div>
-        
-        <!-- Right Footer: Deploy Controls (Single Line, Right-Aligned) -->
-        <div class="sigma-panel-footer footer-right" id="deploy-footer">
-            <form name="Submit Deploy" id="deploy-form" hx-post="/api/sigma/deploy" hx-target="#deploy-result" hx-swap="innerHTML" class="sigma-deploy-form">
-                <input type="hidden" name="yaml_content" id="deploy-yaml">
-                <input type="hidden" name="raw_query" id="deploy-query">
-                <input type="hidden" name="siem_id" id="deploy-siem-id">
-                
-                <button  name="Download" type="button" class="btn btn-secondary btn-sm" data-click="sigma.download">
-                    {{ icon_text('download', 'Download', '14') }}
-                </button>
-                
-                <div class="filter-group">
-                    <label>SIEM</label>
-                    {# Default to the first linked destination. Falls back to the placeholder
-                       when no targets exist so the operator always sees explanatory text
-                       instead of a blank box. #}
-                    {% set _default_target = deploy_targets[0] if deploy_targets else None %}
-                    <select id="deploy-space-select" name="space">
-                        {% if not deploy_targets %}
-                        <option value="" disabled selected>No SIEMs linked — link one in Management</option>
-                        {% else %}
-                        <option value="" disabled {% if not _default_target %}selected{% endif %}>Select target SIEM / space…</option>
-                        {% for target in deploy_targets %}
-                        <option value="{{ target.space }}" data-siem-id="{{ target.siem_id }}"
-                                {% if _default_target and target.siem_id == _default_target.siem_id and target.space == _default_target.space %}selected{% endif %}>{{ target.label }}</option>
-                        {% endfor %}
-                        {% endif %}
-                    </select>
-                </div>
-
-                <input type="hidden" name="index_pattern" id="deploy-index-pattern">
-                <input type="hidden" name="pipeline_file" id="deploy-pipeline-file">
-                <input type="hidden" name="template_file" id="deploy-template-file">
-                
-                <label class="checkbox-group">
-                    <input type="checkbox" name="enabled" value="true">
-                    <span>Enable</span>
-                </label>
-                
-                <button  name="Deploy" type="submit" class="btn btn-primary btn-sm" data-click="sigma.deploy">
-                    {{ icon_text('rocket', 'Deploy', '14') }}
-                </button>
-            </form>
-        </div>
-        <div id="deploy-result"></div>
     </div>
+</div>
+
+{# Add your own Sigma rule (⋮ menu): paste or write its YAML, check it, then show it like the others #}
+<div name="Add Your Own Sigma Rule Modal" id="sigma-own-modal" class="modal-overlay" style="display:none;"
+     role="dialog" aria-modal="true" aria-labelledby="sigma-own-title" data-click="backdrop.hide">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title" id="sigma-own-title">{{ icon('file-code', '16') }} Add your own Sigma rule</h3>
+            <button name="Close" type="button" class="btn btn-icon" data-click="el.hide" data-target="sigma-own-modal">&#x2715;</button>
+        </div>
+        <p class="rule-help">Paste or write a Sigma rule. <strong>Show rule</strong> lays it out on the page like SigmaHQ's, converted with the settings there; Convert then opens it in the rule form to deploy.</p>
+        <div class="code-editor-container sigma-own-editor">
+            <textarea id="yaml-editor" name="yaml_content" class="yaml-editor" spellcheck="false"></textarea>
+        </div>
+        <div id="validation-result"></div>
+        <div class="modal-actions">
+            <button name="Clear" type="button" class="btn btn-secondary btn-sm" data-click="sigma.clear">{{ icon_text('trash-2', 'Clear', '14') }}</button>
+            <button name="Submit Validate" type="button" class="btn btn-secondary btn-sm"
+                    hx-post="/api/sigma/validate" hx-target="#validation-result" hx-include="#yaml-editor">{{ icon_text('check-circle', 'Validate', '14') }}</button>
+            <button name="Show Own Rule" type="button" class="btn btn-primary btn-sm" data-click="sigma.showOwn">{{ icon_text('eye', 'Show rule', '14') }}</button>
+        </div>
     </div>
 </div>
 
 <div id="sigma-convert-response" aria-hidden="true"></div>
-<input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
-<div id="sigma-prefill-config"
-    data-rule-id="{{ selected_rule_id | default('', true) }}"
-    data-autoconvert="0"
-    style="display:none;"></div>
-
 
 <!-- Slide panel for technique details -->
 <div id="slide-panel-container"></div>

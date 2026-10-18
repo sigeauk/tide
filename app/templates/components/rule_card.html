@@ -1,14 +1,17 @@
 {% from "macros/icons.html" import icon, icon_text %}
-{% from "macros/rule_ui.html" import state_badge %}
-{% from "components/mitre_pill.html" import mitre_pill, mitre_pills_row %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge %}
+{% from "components/mitre_pill.html" import mitre_pill %}
 {#
   Rule Card — THE one rule card (Rule Health grid, MITRE side panel, validate refresh).
   Read-only summary: the whole card is the control (click / Enter opens the Rule
   modal, which holds every action). No buttons on the card face.
-    top-left  : title                       top-right : SIEM pill, MITRE pills beneath it
-    body      : score ring | severity + a state badge ONLY for Migrated / Deprecated (production and staging are shown by the SIEM pill)
-    footer    : validation status (left) · author (right). The card's left edge is coloured
-                by validation status (green valid · amber due soon · red expired · grey never).
+    head   : score ring | title (2 lines), and beneath it one line of plain facts: the
+             destination (dot = enabled / disabled), severity, ATT&CK techniques (two, then +n)
+    flags  : only when there is something to notice: Linked / Deprecated / SIEM offline, and an
+             upstream update or a retired upstream rule
+    footer : validation status (left) · author (right). The card's left edge is coloured by the
+             destination's colour, else by validation status (green valid · amber due soon ·
+             red expired · grey never).
   Context: rule, lifecycle_states, space_labels, space_labels_by_pair (see
   app.api.rules.build_rule_card_context); optional search, oob.
 #}
@@ -42,23 +45,30 @@
     </label>
 
     <div class="rc-head">
-        <div class="rc-main">
-            <div class="rc-title" title="{{ rule.name }}">{{ rule.name }}</div>
-            <div class="score-ring score-ring--{{ score_class }}" style="--score: {{ rule_score }}"
-                 title="Score {{ rule_score }}%" role="img" aria-label="Score {{ rule_score }} percent">
-                <span class="score-ring__value">{{ rule_score }}</span>
-            </div>
+        <div class="score-ring score-ring--{{ score_class }}" style="--score: {{ rule_score }}"
+             title="Score {{ rule_score }}%" role="img" aria-label="Score {{ rule_score }} percent">
+            <span class="score-ring__value">{{ rule_score }}</span>
         </div>
-        <div class="rc-side">
-            <div class="status-pill rc-siem {% if is_on %}status-enabled{% else %}status-disabled{% endif %}"
-                 title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ siem_label }}">
-                {{ icon('shield-check', '11') }} <span class="status-pill__text">{{ siem_label }}</span>
+        <div class="rc-heading">
+            <div class="rc-title" title="{{ rule.name }}">{{ rule.name }}</div>
+            <div class="rc-meta">
+                <span class="rc-dest{% if is_on %} rc-dest--on{% endif %}" title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ siem_label }}">{{ siem_label }}</span>
+                <span class="rc-sev rc-sev--{{ sev_value }}" title="Severity">{{ sev_value | title }}</span>
+                {% if rule.mitre_ids %}
+                {% for mid in rule.mitre_ids[:2] %}{{ mitre_pill(mid, neutral=true, clickable=true, size='sm', search_filter=current_search) }}{% endfor %}
+                {% if rule.mitre_ids | length > 2 %}<span class="rc-more" title="{{ rule.mitre_ids[2:] | join(', ') }}">+{{ rule.mitre_ids | length - 2 }}</span>{% endif %}
+                {% else %}
+                <span class="rc-none">No ATT&CK</span>
+                {% endif %}
             </div>
-            {{ mitre_pills_row(rule.mitre_ids, clickable=true, size='sm', neutral=true, search_filter=current_search, max_visible=4) }}
-            <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
-            {{ state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") }}
         </div>
     </div>
+
+    {% set _state = state_badge(lifecycle_state, lifecycle_titles.get(lifecycle_key, "") if lifecycle_titles is defined else "") %}
+    {% set _upstream = upstream_badge(upstream_states.get(lifecycle_key) if upstream_states is defined else none, only_news=true) %}
+    {% if _state | trim or _upstream | trim %}
+    <div class="rc-flags">{{ _state }}{{ _upstream }}</div>
+    {% endif %}
 
     <div class="rc-foot">
         <span class="rc-foot__val text-{{ val_class }}" title="{% if rule.validation_date %}Validated {{ rule.validation_date.strftime('%Y-%m-%d') }}{% if rule.validated_by %} by {{ rule.validated_by }}{% endif %}{% else %}Never validated{% endif %}">

@@ -1,0 +1,158 @@
+{#
+  One Sigma rule, rendered for reading like an Elastic rule (partials/elastic_rule_detail.html): on the
+  Sigma page (GET /api/sigma/rules/{id}/view, or POST /api/sigma/render for a rule of your own, with
+  Convert) and on the Hunting page (a SigmaHQ threat-hunting rule, with Run).
+  Context: v (sigma_helper.rule_view), description_html, can_convert, hunting, source (its YAML),
+  file_path, covered_ttps, ttp_rule_counts; with can_convert, sigma_id (a SigmaHQ rule, with deployed:
+  where this client has copies of it) or own_yaml
+  (a rule of your own, sent with Convert), query (converted with the page's settings), query_error,
+  query_language and query_target; on the Hunting page, hunt_id, run (components/hunt_run.html) and
+  query (the rule as ES|QL).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/hunt_run.html" import run_button, save_button, run_result %}
+{% from "components/library_deployed.html" import deployed_section %}
+{% set _status_class = {'stable': 'success', 'test': 'info', 'experimental': 'warning', 'deprecated': 'danger', 'unsupported': 'danger'} %}
+{% set _level = {'informational': 'informational', 'low': 'low', 'medium': 'medium', 'high': 'high', 'critical': 'critical'} %}
+<div class="lib-detail__head">
+    <div class="lib-detail__h-row">
+        <h2 class="lib-detail__title">{{ v.title }}</h2>
+        {% if can_convert %}
+        <button name="Convert Sigma Rule" type="button" class="btn btn-primary btn-sm"
+                hx-post="/api/sigma/convert" hx-include="#sigma-settings{% if own_yaml %}, #sigma-own-yaml{% endif %}"
+                {% if sigma_id %}hx-vals='{{ {"sigma_id": sigma_id} | tojson }}'{% endif %}
+                hx-target="#sigma-convert-response" hx-swap="innerHTML"
+                title="Convert it for your SIEM with the settings above; the rule form opens filled in, to change and deploy">{{ icon_text('zap', 'Convert', '14') }}</button>
+        {% if own_yaml %}<textarea id="sigma-own-yaml" name="yaml_content" hidden>{{ own_yaml }}</textarea>{% endif %}
+        {% endif %}
+    </div>
+    <div class="lib-detail__pills">
+        {% if hunting %}<span class="status-pill status-info">Hunting</span>{% endif %}
+        {% if v.status %}<span class="status-pill status-{{ _status_class.get(v.status, 'muted') }}">{{ v.status }}</span>{% endif %}
+        {% if v.level in _level %}<span class="sev-pill sev-{{ v.level }}">{{ v.level | title }}</span>{% endif %}
+        {% for key, value in v.logsource.items() %}<span class="status-pill status-muted" title="Log source {{ key }}">{{ value }}</span>{% endfor %}
+    </div>
+</div>
+
+<div class="lib-detail__body">
+    {% if v.status in ('deprecated', 'unsupported') %}
+    <div class="alert alert-warning">SigmaHQ marks this rule {{ v.status }}.</div>
+    {% endif %}
+
+    {% if description_html %}<div class="lib-detail__desc">{{ description_html }}</div>{% endif %}
+
+    <dl class="rm-facts">
+        {% if v.modified %}<div><dt>Modified</dt><dd>{{ v.modified }}</dd></div>{% endif %}
+        {% if v.date %}<div><dt>Created</dt><dd>{{ v.date }}</dd></div>{% endif %}
+        {% if v.author %}<div><dt>Author</dt><dd>{{ v.author }}</dd></div>{% endif %}
+    </dl>
+    {% if v.logsource_definition %}<p class="text-muted text-sm">{{ v.logsource_definition }}</p>{% endif %}
+
+    {% if sigma_id %}{{ deployed_section(deployed | default([]), "Not in any of this client's SIEMs. Convert opens it in the rule form to deploy.") }}{% endif %}
+
+    <section class="lib-detail__section">
+        <h3 class="lib-detail__h">MITRE ATT&CK</h3>
+        {% if v.techniques %}
+        <div class="mitre-pills-wrap">
+            {% for tid in v.techniques %}{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}{% endfor %}
+        </div>
+        {% if v.tactics %}<p class="text-muted text-sm">{{ v.tactics | join(' · ') }}</p>{% endif %}
+        {% else %}
+        <p class="text-muted text-sm">No ATT&CK techniques.</p>
+        {% endif %}
+    </section>
+
+    <section class="lib-detail__section">
+        <h3 class="lib-detail__h">Detection</h3>
+        {% for search in v.detection.searches %}
+        <div class="sigma-det">
+            <div class="sigma-det__name">{{ search.name }}</div>
+            {% for group in search.groups %}
+            {% if not loop.first %}<div class="sigma-det__or">or</div>{% endif %}
+            <div class="sigma-det__group">
+                {% for clause in group %}
+                <div class="sigma-det__clause">
+                    <span class="sigma-det__field">{{ clause.field }}</span>
+                    {% if clause.modifiers %}<span class="sigma-det__mod">{{ clause.modifiers | join(' · ') }}</span>{% endif %}
+                    <span class="sigma-det__values">{% for value in clause['values'] %}<span class="rm-chip rm-chip--mono">{{ value }}</span>{% endfor %}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <p class="text-muted text-sm">No detection section.</p>
+        {% endfor %}
+        {% if v.detection.condition %}
+        <div class="sigma-det__condition"><span class="lib-detail__h">Condition</span>
+            {% for c in v.detection.condition %}<code>{{ c }}</code>{% endfor %}
+            {% if v.detection.timeframe %}<span class="text-muted text-sm">within {{ v.detection.timeframe }}</span>{% endif %}
+        </div>
+        {% endif %}
+    </section>
+
+    {% if can_convert %}
+    <section class="lib-detail__section">
+        <div class="lib-detail__h-row">
+            <h3 class="lib-detail__h">Query<span class="lib-detail__h-note">{{ query_target }}</span></h3>
+            {% if query %}<button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#sigma-query">{{ icon_text('copy', 'Copy', '12') }}</button>{% endif %}
+        </div>
+        {% if query %}
+        <pre class="query-display rm-query" id="sigma-query">{{ query | highlight_query(query_language) }}</pre>
+        {% else %}
+        <p class="text-muted text-sm">It does not convert with the target and pipelines chosen above: {{ query_error }}</p>
+        {% endif %}
+    </section>
+    {% elif hunting and run is defined %}
+    {# A threat-hunting rule, converted to ES|QL to run on one of the tenant's SIEMs #}
+    <section class="lib-detail__section">
+        <div class="lib-detail__h-row">
+            <h3 class="lib-detail__h">Query<span class="lib-detail__h-note">ES|QL, with the Sigma pipeline and index pattern above</span></h3>
+            <span class="lib-detail__tools">
+                {{ run_button('sigma', hunt_id, 0, 'esql', run) }}
+                {{ save_button('sigma', hunt_id, 0, 'esql', run) }}
+                {% if query %}<button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#sigma-hunt-query">{{ icon_text('copy', 'Copy', '12') }}</button>{% endif %}
+            </span>
+        </div>
+        {% if query %}
+        <pre class="query-display rm-query" id="sigma-hunt-query">{{ query | highlight_query('esql') }}</pre>
+        {% else %}
+        <p class="text-muted text-sm">It does not convert to ES|QL: {{ query_error }}</p>
+        {% endif %}
+        {{ run_result(0) }}
+    </section>
+    {% endif %}
+
+    {% if v.fields %}
+    <div class="rm-chips">
+        <span class="rm-chips__label">Fields</span>
+        {% for f in v.fields %}<span class="rm-chip rm-chip--mono">{{ f }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if v.falsepositives %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>False positives<span class="rm-fold__count">{{ v.falsepositives | length }}</span></summary>
+        <ul class="rm-prose">{% for fp in v.falsepositives %}<li>{{ fp }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if v.references %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>References<span class="rm-fold__count">{{ v.references | length }}</span></summary>
+        <ul class="rm-links">{% for ref in v.references %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if v.tags %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Tags<span class="rm-fold__count">{{ v.tags | length }}</span></summary>
+        <div class="rm-chips lib-detail__fold-body">{% for tag in v.tags %}<span class="rm-chip">{{ tag }}</span>{% endfor %}</div>
+    </details>
+    {% endif %}
+    {% if source %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Source</summary>
+        {% if file_path %}<p class="lib-detail__path" title="Where it is in the SigmaHQ repository">{{ file_path }}</p>{% endif %}
+        <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('yaml') }}</pre>
+    </details>
+    {% endif %}
+</div>

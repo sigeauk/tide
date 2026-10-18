@@ -99,7 +99,7 @@ def get_promotion_rule_diff(
 def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
                      user_id: str, username: str, direction: str, delete_which: str,
                      target_rule_id: Optional[str] = None, target_siem_id: Optional[str] = None,
-                     target_space: Optional[str] = None):
+                     target_space: Optional[str] = None, sections: Optional[list] = None):
     """Merge two linked rules: one side's content overwrites the other's, in the other's own
     SIEM (blocking). ``direction`` is ``"source_over_target"`` (this rule's content overwrites
     the linked rule) or ``"target_over_source"`` (the reverse) -- "source" always means this
@@ -109,7 +109,8 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
     content, so e.g. merging source over target and then deleting *target* is allowed even
     though it looks unusual; it's the caller's call, not this function's to second-guess.
     Merging never switches a detection on or off -- whichever side is overwritten keeps its own
-    enabled state.
+    enabled state. ``sections`` (Compare's ticked sections, rule_diff keys) limits the merge to
+    those fields, written to the rule as Kibana holds it now; None copies the whole rule over.
 
     Returns ``(status_code, message, refresh_scope, survivor)``; 200 means merged. ``survivor`` is
     ``(rule_id, siem_id, space)`` of the copy to show afterwards: the one that received the merge,
@@ -147,35 +148,60 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
     if not donor_siem_row or not dest_siem_row:
         return 400, "Both destinations must still be linked to this client to merge.", None, None
 
-    payload = copy.deepcopy(donor_rule.raw_data)
-    payload["enabled"] = bool((dest_rule.raw_data or {}).get("enabled", False))
-    try:
-        result = promote_rule_to_production(
-            rule_data=payload,
-            source_space=donor_space,
-            target_space=dest_space,
-            source_kibana_url=donor_siem_row.get("kibana_url"),
-            source_api_key=donor_siem_row.get("api_token_enc"),
-            target_kibana_url=dest_siem_row.get("kibana_url"),
-            target_api_key=dest_siem_row.get("api_token_enc"),
-            delete_source=False,
-            on_target_recreated=db.kibana_recreate_hook(client_id, dest_id, dest_siem, dest_space, username, user_id),
+    hook = db.kibana_recreate_hook(client_id, dest_id, dest_siem, dest_space, username, user_id)
+    if sections is None:
+        payload = copy.deepcopy(donor_rule.raw_data)
+        payload["enabled"] = bool((dest_rule.raw_data or {}).get("enabled", False))
+        try:
+            result = promote_rule_to_production(
+                rule_data=payload,
+                source_space=donor_space,
+                target_space=dest_space,
+                source_kibana_url=donor_siem_row.get("kibana_url"),
+                source_api_key=donor_siem_row.get("api_token_enc"),
+                target_kibana_url=dest_siem_row.get("kibana_url"),
+                target_api_key=dest_siem_row.get("api_token_enc"),
+                delete_source=False,
+                on_target_recreated=hook,
+                # The linked rule is overwritten in place: its rule_id is usually not the donor's.
+                overwrite_rule_id=(dest_rule.raw_data or {}).get("rule_id") or dest_id,
+            )
+        except Exception as exc:
+            logger.exception("Merging '%s' onto '%s' failed", donor_rule.name, dest_rule.name)
+            return 500, f"Error: {exc}", None, None
+        success, message = result[:2]
+        if not success:
+            return 400, f"Could not merge: {message}", None, None
+        merged = f'Merged: updated to match "{donor_rule.name}".'
+        friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".'
+    elif sections:
+        from app.elastic_helper import apply_rule_changes
+        from app.services.rule_diff import build_rule_diff, section_changes
+        labels = {d["key"]: d["label"] for d in build_rule_diff(dest_rule.raw_data or {}, donor_rule.raw_data)}
+        changes, remove = section_changes(dest_rule.raw_data or {}, donor_rule.raw_data, sections)
+        outcome, message, _live = apply_rule_changes(
+            dest_id, changes, remove, space=dest_space, kibana_url=dest_siem_row.get("kibana_url"),
+            api_key=dest_siem_row.get("api_token_enc"), cached=dest_rule.raw_data or {}, on_recreated=hook,
         )
-    except Exception as exc:
-        logger.exception("Merging '%s' onto '%s' failed", donor_rule.name, dest_rule.name)
-        return 500, f"Error: {exc}", None, None
-    success, message = result[:2]
-    if not success:
-        return 400, f"Could not merge: {message}", None, None
-    db.record_rule_history(
-        rule_id=dest_id, siem_id=dest_siem, space=dest_space, client_id=client_id,
-        action="link_synced", actor_user_id=user_id, actor_name=username,
-        detail={"message": f'Merged: updated to match "{donor_rule.name}".', "source_rule_id": donor_id,
-                "source_siem_id": donor_siem, "source_space": donor_space},
-    )
+        if outcome == "conflict":
+            return 409, (f'Someone changed {message} on "{dest_rule.name}" in Kibana since TIDE last synced it. '
+                         "Sync it, then compare again."), None, None
+        if outcome != "updated":
+            return 400, f"Could not merge: {message}", None, None
+        taken = ", ".join(labels.get(s, s) for s in sections)
+        merged = f'Merged {taken} from "{donor_rule.name}".'
+        friendly = f'Merged — "{dest_rule.name}" took {taken} from "{donor_rule.name}".'
+    else:
+        merged, friendly = "", "Nothing was merged."
+    if merged:
+        db.record_rule_history(
+            rule_id=dest_id, siem_id=dest_siem, space=dest_space, client_id=client_id,
+            action="link_synced", actor_user_id=user_id, actor_name=username,
+            detail={"message": merged, "source_rule_id": donor_id, "source_siem_id": donor_siem,
+                    "source_space": donor_space, "sections": sections},
+        )
 
-    friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".'
-    refresh_scope = (dest_siem, dest_space, dest_id)
+    refresh_scope = (dest_siem, dest_space, dest_id) if merged else None
     survivor = dest
     to_delete = source if delete_which == "source" else (target if delete_which == "target" else None)
     if to_delete:
@@ -233,10 +259,12 @@ async def merge_linked_rule(
     delete_which = str(form.get("delete_which") or "none")
     if delete_which not in {"none", "source", "target"}:
         delete_which = "none"
+    # Only the ticked sections (Compare unticked some), else the whole rule.
+    sections = [str(s) for s in form.getlist("section")] if form.get("by_section") else None
     username = user.name or user.username if user else "Unknown"
     status, message, refresh_scope, survivor = await _run_in_context(
         _merge_rule_sync, db, client_id, rule_id, siem_id, space, user.id, username, direction, delete_which,
-        target_rule_id, target_siem_id, target_space,
+        target_rule_id, target_siem_id, target_space, sections,
     )
     if status != 200:
         return HTMLResponse(f'<div class="empty-state-text text-danger">{escape(message)}</div>', status_code=status)
@@ -342,20 +370,122 @@ async def _run_in_context(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(None, lambda: ctx.run(fn, *args))
 
 
+def _target_clash(db, client_id: str, rule, target_siem_id: str, target_space: str, target_siem_row: dict):
+    """What the target destination holds under this rule's rule id: ``(state, tide_row, live_rule)``,
+    state ``"none"``, ``"found"`` or ``"unknown"`` (its SIEM did not answer).
+
+    Elastic is the authority on what is in the target space, not TIDE's own table: a rule created
+    there outside TIDE, or since the last sync, is invisible to detection_rules but every bit as
+    real, and it is exactly the copy nobody would expect a Move to destroy. TIDE's row is still
+    consulted: only it can name the local rule and tell whether the two are already linked.
+    """
+    from app.elastic_helper import find_rule_in_space
+
+    existing = db.get_rule_by_id(rule.rule_id, target_space, siem_id=target_siem_id, client_id=client_id)
+    live_state, live = find_rule_in_space(
+        rule.rule_id, target_space, target_siem_row.get("kibana_url"), target_siem_row.get("api_token_enc"),
+    )
+    if live_state == "unknown":
+        return "unknown", existing, None
+    return ("found" if existing or live_state == "found" else "none"), existing, live
+
+
+def move_conflict(db, client_id: str, rule_id: str, source_siem_id: str, source_space: str,
+                  target_siem_id: str, target_space: str) -> Optional[Dict[str, Any]]:
+    """The clash a Move or copy onto ``(target_siem_id, target_space)`` meets, for the conflict
+    dialog: the rule there under the same rule id, how the two differ (index patterns and the
+    enabled state aside), and whether they are already linked. None when there is no clash."""
+    from app.services.rule_diff import conflict_differences
+
+    rule = db.get_rule_by_id(rule_id, source_space, siem_id=source_siem_id, client_id=client_id)
+    target_siem_row = next(
+        (s for s in (db.get_client_siems(client_id) or []) if s.get("id") == target_siem_id
+         and str(s.get("space") or "default").lower() == str(target_space).lower()), None)
+    if not rule or not target_siem_row:
+        return None
+    state, existing, live = _target_clash(db, client_id, rule, target_siem_id, target_space, target_siem_row)
+    if state != "found":
+        return None
+    target_raw = live or (existing.raw_data if existing else None) or {}
+    diffs = conflict_differences(rule.raw_data or {}, target_raw)
+    links = db.get_rule_links_bulk([(rule_id, source_siem_id, source_space)]).get((rule_id, source_siem_id, source_space), [])
+    already_linked = bool(existing) and any(
+        l["rule_id"] == existing.rule_id and l["siem_id"] == target_siem_id
+        and str(l["space"]).lower() == str(target_space).lower() for l in links)
+    return {
+        "rule": rule, "target_name": target_siem_row.get("name") or target_space,
+        "clashing_name": existing.name if existing else (live or {}).get("name") or "A rule",
+        "diffs": diffs, "identical": not diffs, "already_linked": already_linked, "in_tide": bool(existing),
+    }
+
+
+def _settle_onto_identical(db, user_id: str, username: str, client_id: str, rule, source_key: tuple,
+                           target_key: tuple, target_name: str, existing, delete_source: bool,
+                           source_siem_row: dict):
+    """The target already holds this rule, unchanged (index patterns and enabled state aside): a
+    copy links the two; a move deletes this one and points its baseline mappings at that one.
+    Nothing is written to the target."""
+    from app.api.rules import sync_single_rule
+    from app.services import rule_origins
+
+    if not existing:
+        try:
+            sync_single_rule(db, client_id, *target_key, user_id, username)
+        except Exception:
+            logger.exception("Move: sync of the identical rule at the target failed")
+    if delete_source:
+        from app.elastic_helper import delete_detection_rule
+        ok, msg = delete_detection_rule(rule.rule_id, source_key[2], source_siem_row.get("kibana_url"),
+                                        source_siem_row.get("api_token_enc"))
+        if not ok:
+            return 502, f"Could not delete this copy from its SIEM ({msg}), so nothing was changed.", rule.name, None, None
+        db.set_rule_deprecated(*source_key, True)
+        db.remap_rule_references(rule.rule_id, target_key[0], client_id, source_key[1], source_key[2],
+                                 target_key[1], target_key[2], actor=username)
+        message = (f'{target_name} already had "{rule.name}" unchanged, so it now lives there only: this copy '
+                   f"was deleted and its baseline mappings point at {target_name}.")
+    else:
+        linked = db.create_rule_link(*source_key, *target_key, username)
+        message = (f'{target_name} already had "{rule.name}" unchanged; the two are now linked.' if linked
+                   else f'{target_name} already had "{rule.name}" unchanged, and the two were already linked.')
+    with db.get_connection() as conn:
+        if not rule_origins.get(conn, target_key):
+            rule_origins.copy(conn, source_key, target_key, "copied", username)
+    db.record_rule_history(
+        rule_id=rule.rule_id, siem_id=source_key[1], space=source_key[2], client_id=client_id,
+        action="moved", actor_user_id=user_id, actor_name=username,
+        detail={"message": message, "target_siem_id": target_key[1], "target_space": target_key[2],
+                "target_rule_id": target_key[0], "delete_source": delete_source, "resolution": "link"},
+    )
+    return 200, message, rule.name, target_key[0], (target_key[1], target_key[2])
+
+
 def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str,
                     source_siem_id: str, source_space: str, target_siem_id: str, target_space: str,
-                    delete_source: bool, validation_mode: str = "keep"):
+                    delete_source: bool, validation_mode: str = "keep", resolution: str = ""):
     """Move (``delete_source``) or copy-and-link a rule to another destination (blocking).
 
     Copying (``delete_source=False``) always records a link between the two rows, regardless of
     whether they end up sharing an id -- see CHANGELOG on the promotion identity fix this replaces.
 
+    The target may already hold a rule under this one's rule id (a rule's portable rule_id is
+    shared by every copy of it, and two rules made independently can coincide). Writing there would
+    silently overwrite it, so that is never done: without a ``resolution`` the move stops with 409
+    (``move_conflict`` describes the clash for the dialog). ``resolution="link"``, when the two are
+    identical apart from index patterns and the enabled state, links them (copy) or keeps the one
+    there (move). ``resolution="new_id"`` copies this rule under a new rule id, recording this one as
+    the copy's parent (rule_origins keeps where it came from). Merge stays the way to overwrite.
+
     Returns ``(status_code, message, rule_name, target_rule_id, target_scope)``; 200 means moved.
     ``target_scope`` is ``(target_siem_id, target_space)`` on success, else ``None`` -- the caller
     uses it to refresh just the destination row instead of the whole client.
     """
+    import copy
+    import uuid
     from app.elastic_helper import promote_rule_to_production
+    from app.services import rule_origins
     from app.services.database import validation_for, validation_key
+    from app.services.rule_diff import conflict_differences
 
     rule = db.get_rule_by_id(rule_id, source_space, siem_id=source_siem_id, client_id=client_id)
     if not rule:
@@ -375,28 +505,11 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
     if (source_siem_id, str(source_space).lower()) == (target_siem_id, str(target_space).lower()):
         return 400, "Choose a different destination to move to.", rule.name, None, None
 
-    # A rule's portable rule_id is shared by design across every copy of the same rule -- that's
-    # exactly how linking recognises "these are the same detection." But it means the target
-    # destination can already hold a *different* rule that happens to share this one's rule_id
-    # (any two rules originally created independently in different spaces could coincide here,
-    # and every copy of an already-linked rule definitely does). Moving into that destination
-    # would silently overwrite it in Elastic -- no warning, no choice of which side wins -- since
-    # promote_rule_to_production PUTs onto a matching rule_id instead of creating a new one.
-    # Refuse and point at Merge, which makes that overwrite an explicit, named decision instead.
-    #
-    # Elastic is the authority on what is in the target space, not TIDE's own table: a rule
-    # created there outside TIDE, or since the last sync, is invisible to detection_rules but
-    # every bit as real, and it is exactly the copy nobody would expect a Move to destroy.
-    # TIDE's row is still consulted first -- only it can name the local rule and tell whether
-    # the two are already linked, which decides what the message tells the user to do instead.
-    from app.elastic_helper import find_rule_in_space
-
     target_name = target_siem_row.get("name") or target_space
-    existing_at_target = db.get_rule_by_id(rule.rule_id, target_space, siem_id=target_siem_id, client_id=client_id)
-    live_state, live_rule = find_rule_in_space(
-        rule.rule_id, target_space, target_siem_row.get("kibana_url"), target_siem_row.get("api_token_enc"),
-    )
-    if live_state == "unknown":
+    source_key = (rule_id, source_siem_id, source_space)
+    state, existing_at_target, live_rule = _target_clash(db, client_id, rule, target_siem_id, target_space,
+                                                         target_siem_row)
+    if state == "unknown":
         return (
             400,
             f"Could not check whether {target_name} already holds this rule — its SIEM did not answer. "
@@ -404,63 +517,66 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             f"Check the connection under Management and try again.",
             rule.name, None, None,
         )
-    if existing_at_target or live_state == "found":
-        clashing_name = (
-            existing_at_target.name if existing_at_target
-            else (live_rule or {}).get("name") or "A rule"
-        )
-        source_links = db.get_rule_links_bulk([(rule_id, source_siem_id, source_space)]).get(
-            (rule_id, source_siem_id, source_space), [],
-        )
-        already_linked = bool(existing_at_target) and any(
-            l["rule_id"] == existing_at_target.rule_id and l["siem_id"] == target_siem_id
-            and str(l["space"]).lower() == str(target_space).lower()
-            for l in source_links
-        )
-        if already_linked:
-            how = ("use Merge from the Compare view instead — it shows the difference first and "
-                   "lets you choose which side wins")
-        elif existing_at_target:
-            how = ("link the two first (Add link, in the rule window's Linked panel), then use "
-                   "Merge to choose which side wins")
-        else:
-            # Live in Elastic, absent from TIDE: there is no row to link to yet.
-            how = ("sync this client first so TIDE can see it, then link the two and use Merge "
-                   "to choose which side wins")
-        return (
-            400,
-            f'"{clashing_name}" already exists at {target_name} with this same rule id. '
-            f'Moving here would silently overwrite it. If these are meant to be the same rule, {how}.',
-            rule.name, None, None,
-        )
+    new_rule_id = None
+    if state == "found":
+        target_raw = live_rule or (existing_at_target.raw_data if existing_at_target else None) or {}
+        identical = not conflict_differences(rule.raw_data, target_raw)
+        if resolution == "link" and identical:
+            return _settle_onto_identical(
+                db, user_id, username, client_id, rule, source_key,
+                (existing_at_target.rule_id if existing_at_target else rule.rule_id, target_siem_id, target_space),
+                target_name, existing_at_target, delete_source, source_siem_row)
+        if resolution != "new_id":
+            clashing_name = (existing_at_target.name if existing_at_target
+                             else (live_rule or {}).get("name") or "A rule")
+            verdict = ("It is the same rule apart from index patterns and whether it is enabled."
+                       if identical else "The two rules differ.")
+            return 409, (f'"{clashing_name}" already exists at {target_name} with this same rule id. '
+                         f"{verdict}"), rule.name, None, None
+        new_rule_id = str(uuid.uuid4())
 
+    rule_data = rule.raw_data
+    if new_rule_id:
+        rule_data = copy.deepcopy(rule.raw_data)
+        rule_data["rule_id"] = new_rule_id
+        rule_data.pop("id", None)
     try:
         result = promote_rule_to_production(
-            rule_data=rule.raw_data,
+            rule_data=rule_data,
             source_space=source_space,
             target_space=target_space,
             source_kibana_url=source_siem_row.get("kibana_url"),
             source_api_key=source_siem_row.get("api_token_enc"),
             target_kibana_url=target_siem_row.get("kibana_url"),
             target_api_key=target_siem_row.get("api_token_enc"),
-            delete_source=delete_source,
+            delete_source=delete_source and not new_rule_id,
         )
     except Exception as e:
         logger.exception(f"Exception moving rule '{rule.name}'")
         return 500, f"Error: {e}", rule.name, None, None
 
     success, _kibana_message = result[:2]
-    target_rule_id = result[2] if len(result) > 2 else rule_id
+    target_rule_id = result[2] if len(result) > 2 else (new_rule_id or rule_id)
     if not success:
         logger.error(f"Failed to move rule '{rule.name}': {_kibana_message}")
         return 400, f"Move failed: {_kibana_message}", rule.name, None, None
+    if new_rule_id and delete_source:
+        # promote_rule_to_production deletes the source by the payload's rule id, which is the
+        # copy's new one: delete the original by its own, once the copy exists.
+        from app.elastic_helper import delete_detection_rule
+        ok, msg = delete_detection_rule(rule.rule_id, source_space, source_siem_row.get("kibana_url"),
+                                        source_siem_row.get("api_token_enc"))
+        if not ok:
+            delete_source = False
+            logger.warning("Move: copied '%s' under a new rule id but could not delete the source: %s", rule.name, msg)
 
     # Validation is stored under Kibana's own rule id, which the copy keeps, so "keep" needs no
-    # work: the copy is already validated exactly like the source.
+    # work: the copy is already validated exactly like the source. A copy under a new rule id is
+    # a different rule and starts unvalidated.
     key = validation_key(rule.rule_id, rule.raw_data)
     validated_before = bool(validation_for(db._load_validation_data(), key, rule.name))
     if validation_mode == "stamp" or (validation_mode == "new_only" and not validated_before):
-        db.save_validation(key, rule.name, username)
+        db.save_validation(validation_key(target_rule_id) if new_rule_id else key, rule.name, username)
 
     # Bring the new copy into TIDE's own tables *before* trying to link to it -- a fresh copy
     # from promote_rule_to_production only exists in Kibana until this runs, and create_rule_link
@@ -472,8 +588,15 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
         sync_single_rule(db, client_id, target_rule_id, target_siem_id, target_space, user_id, username)
     except Exception:
         logger.exception("Move: post-move sync of the new copy failed; link may not be created")
+    # The copy keeps where the rule came from (Elastic's or the Sigma rules); under a new rule id
+    # it also records this rule as the one it was copied from.
+    with db.get_connection() as conn:
+        rule_origins.copy(conn, source_key, (target_rule_id, target_siem_id, target_space),
+                          "copied", username, parent=bool(new_rule_id))
 
     dest_name = target_name
+    under = (f" under a new rule id, because {dest_name} already has a different rule with this one's id"
+             if new_rule_id else "")
     db.set_rule_deprecated(rule_id, source_siem_id, source_space, delete_source)
     if delete_source:
         # A true move: baseline references follow the rule to its new home.
@@ -481,7 +604,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             rule_id, target_rule_id, client_id,
             source_siem_id, source_space, target_siem_id, target_space, actor=username,
         )
-        friendly_message = f'Moved "{rule.name}" to {dest_name}.'
+        friendly_message = f'Moved "{rule.name}" to {dest_name}{under}.'
     else:
         # Both copies stay live -- link them so the rule window shows each from the other,
         # regardless of whether Kibana happened to give the copy the same portable id.
@@ -489,7 +612,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             rule_id, source_siem_id, source_space,
             target_rule_id, target_siem_id, target_space, username,
         )
-        friendly_message = f'Copied "{rule.name}" to {dest_name}.'
+        friendly_message = f'Copied "{rule.name}" to {dest_name}{under}.'
         if not link_id:
             logger.warning(
                 "Move: copied '%s' to %s but could not record a link (target not found in "
@@ -503,10 +626,11 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
         detail={
             "message": friendly_message, "target_siem_id": target_siem_id, "target_space": target_space,
             "target_rule_id": target_rule_id, "delete_source": delete_source,
+            "resolution": "new_id" if new_rule_id else "",
         },
     )
     logger.info(f"Moved rule '{rule.name}' from {source_space} to {target_space} by {username} "
-                f"(delete_source={delete_source})")
+                f"(delete_source={delete_source}, new_rule_id={bool(new_rule_id)})")
     return 200, friendly_message, rule.name, target_rule_id, (target_siem_id, target_space)
 
 
@@ -524,6 +648,9 @@ async def move_rule(
 
     Copying (leaving "Delete source after move" unticked) keeps the source live and links the
     two rows; moving deletes the source once the copy is confirmed in the target.
+
+    When the target already holds this rule id the answer is the conflict dialog (409, header
+    ``X-Tide-Move-Conflict``); its choices come back here with ``resolution`` (see _move_rule_sync).
     """
     form = await request.form()
     target_siem_id, target_space = _parse_scope_pair(str(form.get("target_scope") or ""))
@@ -531,13 +658,35 @@ async def move_rule(
         return _toast("danger", "Choose a target destination.", 400)
     delete_source = str(form.get("delete_source") or "").lower() in {"1", "true", "on", "yes"}
     validation_mode = str(form.get("validation") or "keep")
+    resolution = str(form.get("resolution") or "")
     username = user.name or user.username if user else "Unknown"
     status, message, _name, target_rule_id, target_scope = await _run_in_context(
         _move_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space,
-        target_siem_id, target_space, delete_source, validation_mode,
+        target_siem_id, target_space, delete_source, validation_mode, resolution,
     )
+    if form.get("reply") == "row":
+        # A conflict resolved from bulk Move's list: the outcome replaces that rule's row.
+        from html import escape
+        kind = "success" if status == 200 else "danger"
+        response = HTMLResponse(f'<li class="bulk-conflict text-{kind}">{escape(message)}</li>')
+        if status == 200:
+            response.headers["HX-Trigger"] = "refreshRules"
+        return response
     # _move_rule_sync already syncs the target row itself (it has to, to link to it) -- no need
     # to sync it again here.
+    if status == 409:
+        conflict = await _run_in_context(move_conflict, db, client_id, rule_id, siem_id, space,
+                                         target_siem_id, target_space)
+        if conflict:
+            response = request.app.state.templates.TemplateResponse(
+                request, "components/move_conflict.html",
+                {**conflict, "message": message, "source_siem_id": siem_id, "source_space": space,
+                 "target_scope": f"{target_siem_id}|{target_space}", "delete_source": delete_source,
+                 "validation": validation_mode},
+                status_code=409,
+            )
+            response.headers["X-Tide-Move-Conflict"] = "1"
+            return response
     if status != 200:
         return _toast("danger", message, status)
     # The rule window stays open (#62): on the moved copy when the source is gone, else on this rule.

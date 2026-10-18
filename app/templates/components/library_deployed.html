@@ -1,0 +1,29 @@
+{#
+  In your SIEMs: where this client has a library rule (the Sigma and Elastic Rules pages' detail
+  pane), from rule_origins.deployed_for_client. Each opens in the rule window; it says how the copy got
+  there (Kibana's prebuilt install, or your copy), its version and whether it is up to date.
+  deployed_section(deployed, none_text).
+#}
+{% macro deployed_section(deployed, none_text) -%}
+<section class="lib-detail__section">
+    <h3 class="lib-detail__h">In your SIEMs</h3>
+    {% if deployed %}
+    <ul class="lib-deployed">
+        {% for d in deployed %}
+        {% set _st = d.status %}
+        <li>
+            <button name="Open Deployed Rule" type="button" class="lib-deployed__item"
+                    hx-get="/api/rules/{{ d.rule_id }}/history-modal?space={{ d.space | urlencode }}&siem_id={{ d.siem_id | urlencode }}"
+                    hx-target="#modal-container" hx-swap="innerHTML" title="Open it: {{ d.name }}">
+                <span class="rc-dest{% if d.enabled %} rc-dest--on{% endif %}" title="{{ 'Enabled' if d.enabled else 'Disabled' }} in {{ d.destination }}">{{ d.destination }}</span>
+                <span class="lib-deployed__how">{{ 'Kibana prebuilt' if _st and _st.prebuilt else 'Your copy' }}{% set _v = (_st.installed_version if _st and _st.prebuilt else (_st.from_version if _st else none)) %}{% if _v %}, version {{ _v }}{% endif %}{% if d.name %} · {{ d.name }}{% endif %}</span>
+                {% if _st %}<span class="lib-deployed__state lib-deployed__state--{{ _st.state }}" title="{{ _st.title }}">{{ _st.label }}</span>{% endif %}
+            </button>
+        </li>
+        {% endfor %}
+    </ul>
+    {% else %}
+    <p class="text-muted text-sm">{{ none_text }}</p>
+    {% endif %}
+</section>
+{%- endmacro %}

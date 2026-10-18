@@ -75,8 +75,8 @@ SOURCES: Dict[str, Source] = {
     "repositories": Source("Built-in data", "database", builtin_data.ITEMS),
 }
 # A Built-in data section saved before 6.1.3 (when it was Repositories, with Elastic) showing every
-# card it had then also shows the three it gained; only those lists still name Elastic. Its old
-# label, which 6.1.2 saved as its name, gives way to the new one.
+# card it had then also shows the ones added since. Its old label, which 6.1.2 saved as its name,
+# gives way to the new one.
 _REPOSITORIES_BEFORE_6_1_3 = ("mitre_enterprise", "mitre_mobile", "mitre_ics", "mitre_pre", "sigma")
 TEXT_CARDS = {"title": 120, "text": 2000}      # type -> most characters
 NAME_LIMIT = 80                                # a section's or a dashboard's name

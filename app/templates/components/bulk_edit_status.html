@@ -6,7 +6,7 @@
         <div class="bulk-progress__fill" style="--pct: {{ pct }}%"></div>
     </div>
     <p class="text-secondary mb-sm">
-        {{ job.done }} of {{ job.total }} · <span class="text-success">{{ job.ok }} done</span>{% if job.failed %} · <span class="text-danger">{{ job.failed }} failed</span>{% endif %}
+        {{ job.done }} of {{ job.total }} · <span class="text-success">{{ job.ok }} done</span>{% if job.failed %} · <span class="text-danger">{{ job.failed }} failed</span>{% endif %}{% if job.conflicts %} · <span class="text-warning">{{ job.conflicts | length }} to decide</span>{% endif %}
     </p>
     {% if job.state == 'running' %}
         <p class="text-muted mb-md fs-md overflow-hidden ellipsis nowrap">Working on: {{ job.current }}</p>
@@ -24,6 +24,30 @@
         {% if job.errors %}
         <ul class="text-danger mb-md bulk-errors">
             {% for e in job.errors %}<li>{{ e }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if job.conflicts %}
+        {# Moves stopped because the target already has the rule id: nothing was written. Each asks
+           here, one at a time; the choice goes to the same Move as the rule window's. #}
+        {% set o = job.opts %}
+        <p class="mb-sm"><strong>{{ job.conflicts | length }} rule{{ '' if job.conflicts | length == 1 else 's' }} not moved:</strong>
+            {{ o.target_name }} already has a rule with the same rule id. Choose for each:</p>
+        <ul class="mb-md bulk-conflicts">
+            {% for c in job.conflicts %}
+            <li class="bulk-conflict" id="bulk-conflict-{{ loop.index }}">
+                <span class="bulk-conflict__name"><strong>{{ c.name }}</strong>
+                    <span class="text-muted">{% if c.identical %}the same rule is already there{% else %}a different rule there has its id ({{ c.differences }} difference{{ '' if c.differences == 1 else 's' }}){% endif %}</span></span>
+                <span class="bulk-conflict__actions">
+                    {% set vals = {"target_scope": o.target_siem_id ~ '|' ~ o.target_space, "delete_source": 'true' if o.delete_source else 'false',
+                                   "validation": o.validation_mode, "resolution": 'link' if c.identical else 'new_id', "reply": 'row'} %}
+                    <button name="Resolve Conflict" type="button" class="btn btn-secondary btn-sm"
+                            hx-post="/api/promotion/{{ c.rule_id }}/move?siem_id={{ c.siem_id | urlencode }}&space={{ c.space | urlencode }}"
+                            hx-vals='{{ vals | tojson }}' hx-target="#bulk-conflict-{{ loop.index }}" hx-swap="outerHTML">
+                        {% if c.identical %}{{ 'Move onto it' if o.delete_source else 'Link them' }}{% else %}{{ 'Move' if o.delete_source else 'Copy' }} under a new rule id{% endif %}</button>
+                    <button name="Skip Conflict" type="button" class="btn btn-secondary btn-sm" data-click="el.hide" data-target="bulk-conflict-{{ loop.index }}">Skip</button>
+                </span>
+            </li>
+            {% endfor %}
         </ul>
         {% endif %}
         <div class="modal-actions">

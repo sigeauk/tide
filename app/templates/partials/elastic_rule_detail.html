@@ -1,0 +1,142 @@
+{#
+  One bundled Elastic rule in the Elastic Rules page's detail pane (GET /api/elastic/rules/{id}).
+  Context: rule (elastic_rules_index row), body (its [rule] table as Elastic packages it), builds
+  (elastic_rules.stack_builds), deployed (where this client has it: rule_origins.deployments, with
+  destination), commit, guide_html, setup_html, source, status_labels, covered_ttps, ttp_rule_counts,
+  can_deploy (Deploy opens the Create Rule form filled in with it, GET /api/elastic/rules/{id}/deploy-form).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% from "components/library_deployed.html" import deployed_section %}
+{% set _status_class = {'production': 'success', 'building_block': 'info', 'deprecated': 'danger'} %}
+<div class="lib-detail__head">
+    <div class="lib-detail__h-row">
+        <h2 class="lib-detail__title">{{ rule.name }}</h2>
+        {% if can_deploy %}
+        <button name="Deploy Elastic Rule" type="button" class="btn btn-primary btn-sm"
+                hx-get="/api/elastic/rules/{{ rule.rule_id }}/deploy-form" hx-include="#elastic-settings"
+                hx-target="#modal-container" hx-swap="innerHTML"
+                title="Open it in the rule form, set to deploy where chosen above, to change it first">{{ icon_text('rocket', 'Deploy', '14') }}</button>
+        {% endif %}
+    </div>
+    <div class="lib-detail__pills">
+        <span class="status-pill status-{{ _status_class.get(rule.status, 'muted') }}">{{ status_labels.get(rule.status, rule.status) }}</span>
+        {% if rule.severity %}<span class="sev-pill sev-{{ rule.severity }}">{{ rule.severity | title }}</span>{% endif %}
+        <span class="status-pill status-muted">{{ rule.rule_type | replace('_', ' ') }}</span>
+    </div>
+</div>
+
+<div class="lib-detail__body">
+    {% if rule.status == 'deprecated' %}
+    <div class="alert alert-warning">
+        Elastic deprecated this rule{% if rule.deprecated_on %} on {{ rule.deprecated_on }}{% endif %}.{% if rule.deprecated_reason %} {{ rule.deprecated_reason }}{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="lib-detail__desc">{{ description_html }}</div>
+
+    {# Elastic builds some rules again for newer Elastic versions under another version number
+       (builds): the page shows the rule as Elastic's repository has it, and TIDE deploys and
+       compares the build for each SIEM's Elastic version. #}
+    {% set _shown = rule.version if rule.version is not none else none %}
+    {% set _tip %}{% if _shown is none %}Elastic has not released this rule yet: it has no version number.{% else %}Shown here: version {{ _shown }}, the rule as Elastic's repository had it{% if commit.date %} on {{ commit.date }}{% endif %}.{% for b in builds %} Elastic {{ b.stack }} and later get it as version {{ b.version }}{% if b.changes %}, with {{ b.changes | join(' and ') }}{% endif %}.{% endfor %}{% if builds %} Both are the current rule: TIDE deploys and compares the one for each SIEM's Elastic version.{% endif %}{% endif %}{% endset %}
+    <dl class="rm-facts">
+        <div class="lib-tip" data-tooltip="{{ _tip | trim }}" tabindex="0"><dt>Version</dt>
+            <dd>{{ _shown if _shown is not none else 'Not released yet' }}{% for b in builds %}<span class="lib-fact-note"> · {{ b.version }} on Elastic {{ b.stack }}+</span>{% endfor %}</dd></div>
+        {% if rule.language %}<div><dt>Language</dt><dd>{{ rule.language }}</dd></div>{% endif %}
+        {% if rule.risk_score is not none %}<div><dt>Risk score</dt><dd>{{ rule.risk_score }}</dd></div>{% endif %}
+        {% if body.interval %}<div><dt>Runs every</dt><dd>{{ body.interval }}</dd></div>{% endif %}
+        {% if body['from'] %}<div><dt>Looks back</dt><dd>{{ body['from'] }}</dd></div>{% endif %}
+        <div><dt>Updated</dt><dd>{{ rule.updated or 'Unknown' }}</dd></div>
+        {% if rule.min_stack_version %}<div><dt>Needs Elastic</dt><dd>{{ rule.min_stack_version }} or later</dd></div>{% endif %}
+    </dl>
+
+    {# Already deployed? Where this client has the rule: Kibana's prebuilt install, TIDE's copies #}
+    {{ deployed_section(deployed, "Not in any of this client's SIEMs." ~ (" Deploy puts a copy in one." if can_deploy else "")) }}
+
+    {% if body.index %}
+    <div class="rm-chips">
+        <span class="rm-chips__label">Indexes</span>
+        {% for idx in body.index %}<span class="rm-chip rm-chip--mono">{{ idx }}</span>{% endfor %}
+    </div>
+    {% endif %}
+    {% if rule.integrations %}
+    <div class="rm-chips">
+        <span class="rm-chips__label">Integrations</span>
+        {% for name in rule.integrations %}<span class="rm-chip">{{ name }}</span>{% endfor %}
+    </div>
+    {% endif %}
+
+    <section class="lib-detail__section">
+        <h3 class="lib-detail__h">MITRE ATT&CK</h3>
+        {% if rule.techniques %}
+        <div class="mitre-pills-wrap">
+            {% for tid in rule.techniques %}{{ mitre_pill(tid, covered=(tid in covered_ttps), rule_count=ttp_rule_counts.get(tid, 0), clickable=true, size='sm') }}{% endfor %}
+        </div>
+        {% if rule.tactics %}<p class="text-muted text-sm">{{ rule.tactics | join(' · ') }}</p>{% endif %}
+        {% else %}
+        <p class="text-muted text-sm">No ATT&CK techniques.</p>
+        {% endif %}
+    </section>
+
+    <section class="lib-detail__section">
+        <div class="lib-detail__h-row">
+            <h3 class="lib-detail__h">{{ 'Machine learning job' if rule.rule_type == 'machine_learning' else 'Query' }}</h3>
+            {% if body.query %}<button name="Copy Query" type="button" class="btn btn-secondary btn-sm" data-rm-copy="#elastic-query">{{ icon_text('copy', 'Copy', '12') }}</button>{% endif %}
+        </div>
+        {% if body.query %}
+        <pre class="query-display rm-query" id="elastic-query">{{ body.query | highlight_query(rule.language) }}</pre>
+        {% elif body.machine_learning_job_id %}
+        <p class="rm-chip rm-chip--mono">{{ body.machine_learning_job_id | join(', ') if body.machine_learning_job_id is not string else body.machine_learning_job_id }}</p>
+        {% if body.anomaly_threshold is not none %}<p class="text-muted text-sm">Alerts at an anomaly score of {{ body.anomaly_threshold }} or more.</p>{% endif %}
+        {% endif %}
+        {% if body.threshold %}
+        <p class="text-muted text-sm">Alerts when {{ body.threshold.value }} or more events share {{ (body.threshold.field or []) | join(', ') or 'the query' }}{% for c in body.threshold.cardinality or [] %}, with {{ c.value }} or more distinct {{ c.field }}{% endfor %}.</p>
+        {% endif %}
+        {% if body.new_terms %}
+        {% set _window = (body.new_terms.history_window_start or [{}])[0].value %}
+        <p class="text-muted text-sm">Alerts on a value of {{ (body.new_terms.value or []) | join(' + ') }} not seen{% if _window %} since {{ _window }}{% endif %}.</p>
+        {% endif %}
+        {% if body.threat_index %}
+        <p class="text-muted text-sm">Matches indicators in {{ body.threat_index | join(', ') }}.</p>
+        {% endif %}
+    </section>
+
+    {% if guide_html %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Investigation guide</summary>
+        <div class="rm-prose">{{ guide_html }}</div>
+    </details>
+    {% endif %}
+    {% if setup_html %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Setup</summary>
+        <div class="rm-prose">{{ setup_html }}</div>
+    </details>
+    {% endif %}
+    {% if body.false_positives %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>False positives<span class="rm-fold__count">{{ body.false_positives | length }}</span></summary>
+        <ul class="rm-prose">{% for fp in body.false_positives %}<li>{{ fp }}</li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if body.references %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>References<span class="rm-fold__count">{{ body.references | length }}</span></summary>
+        <ul class="rm-links">{% for ref in body.references %}<li><a href="{{ ref }}" target="_blank" rel="noopener noreferrer">{{ icon('external-link', '12') }} {{ ref }}</a></li>{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if rule.tags %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Tags<span class="rm-fold__count">{{ rule.tags | length }}</span></summary>
+        <div class="rm-chips lib-detail__fold-body">{% for tag in rule.tags %}<span class="rm-chip">{{ tag }}</span>{% endfor %}</div>
+    </details>
+    {% endif %}
+    {% if source %}
+    <details class="rm-fold lib-detail__fold">
+        <summary>Source</summary>
+        <p class="lib-detail__path" title="Where it is in Elastic's detection-rules repository">{{ rule.file_path }}</p>
+        <pre class="query-display rm-query lib-detail__source">{{ source | highlight_source('toml') }}</pre>
+    </details>
+    {% endif %}
+</div>

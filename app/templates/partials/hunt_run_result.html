@@ -1,0 +1,52 @@
+{#
+  What a hunting query run found (POST /api/hunting/{source}/{id}/run; app/services/hunt_runner.py):
+  a header with how many hits, where, over what time and how long it took (and Copy, as tab-separated
+  rows), then the first rows. Context: result {ok, error, note, columns, numeric, rows, total,
+  at_least, ms}, siem_label, when (the time range's label; "As the query says" when it sets its own),
+  n (the query's number), ran_query (the query as run, when it was converted from a Sigma rule).
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% set _when = (' · ' ~ when | lower) if when and when != 'As the query says' else ' · over the time the query sets' %}
+{% if not result.ok %}
+<div class="hunt-hits hunt-hits--error">
+    <div class="hunt-hits__head">{{ icon('alert-circle', '16') }}<strong>The query did not run</strong><span class="hunt-hits__meta">on {{ siem_label }}</span></div>
+    <p class="hunt-hits__text">{{ result.error }}</p>
+</div>
+{% elif result.note %}
+<div class="hunt-hits hunt-hits--empty">
+    <div class="hunt-hits__head">{{ icon('database', '16') }}<strong>Nothing to search</strong><span class="hunt-hits__meta">on {{ siem_label }}</span></div>
+    <p class="hunt-hits__text">{{ result.note }}</p>
+</div>
+{% elif not result.total %}
+<div class="hunt-hits hunt-hits--empty">
+    <div class="hunt-hits__head">{{ icon('search-x', '16') }}<strong>No hits</strong><span class="hunt-hits__meta">on {{ siem_label }}{{ _when }} · {{ '%.1f' % (result.ms / 1000) }} s</span></div>
+    <p class="hunt-hits__text">The query ran and found nothing.</p>
+</div>
+{% else %}
+<div class="hunt-hits">
+    <div class="hunt-hits__head">
+        <span class="hunt-hits__count">{{ '%s+' % result.total if result.at_least else result.total }}</span>
+        <strong>{{ 'hit' if result.total == 1 else 'hits' }}</strong>
+        <span class="hunt-hits__meta">on {{ siem_label }}{{ _when }} · {{ '%.1f' % (result.ms / 1000) }} s{% if result.total > result.rows | length %} · the first {{ result.rows | length }} shown{% endif %}</span>
+        <button name="Copy Hits" type="button" class="btn btn-secondary btn-sm hunt-hits__copy" data-rm-copy="#hunt-hits-tsv-{{ n }}"
+                title="Copy the rows shown, tab-separated, to paste into a spreadsheet">{{ icon_text('copy', 'Copy', '12') }}</button>
+    </div>
+    <div class="hunt-hits__table">
+        <table>
+            <thead><tr>{% for col in result.columns %}<th{% if result.numeric[loop.index0] %} class="is-num"{% endif %}>{{ col }}</th>{% endfor %}</tr></thead>
+            <tbody>
+                {% for row in result.rows %}<tr>{% for cell in row %}<td{% if result.numeric[loop.index0] %} class="is-num"{% endif %}{% if cell | length > 60 %} title="{{ cell }}"{% endif %}>{{ cell if cell != '' else '—' }}</td>{% endfor %}</tr>{% endfor %}
+            </tbody>
+        </table>
+    </div>
+    <pre id="hunt-hits-tsv-{{ n }}" hidden>{{ result.columns | join('\t') }}
+{% for row in result.rows %}{{ row | join('\t') }}
+{% endfor %}</pre>
+</div>
+{% endif %}
+{% if ran_query %}
+<details class="hunt-run-result__query">
+    <summary>The query that ran</summary>
+    <pre class="query-display rm-query">{{ ran_query | highlight_query('esql') }}</pre>
+</details>
+{% endif %}

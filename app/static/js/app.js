@@ -1757,6 +1757,52 @@ console.debug('TIDE app.js loading...');
         return div.innerHTML.replace(/"/g, '&quot;');
     }
 
+    // POST a Move (the Move dialog, the conflict dialog's choices): the response's HTML, whether it
+    // worked, the rule window to show after it, and whether it is the conflict dialog instead.
+    function tidePostMove(ruleId, siemId, space, params) {
+        var url = '/api/promotion/' + encodeURIComponent(ruleId) + '/move?siem_id=' + encodeURIComponent(siemId) + '&space=' + encodeURIComponent(space);
+        return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(params).toString() })
+            .then(function (r) {
+                return r.text().then(function (html) {
+                    return { ok: r.ok, html: html, show: window.tideRuleWindowFrom(r), conflict: r.headers.get('X-Tide-Move-Conflict') === '1' };
+                });
+            });
+    }
+    // The rule window stays open (#62) -- on the moved copy, or on this rule after a copy -- and the
+    // list behind refreshes where it is, instead of reloading the page.
+    function tideMoveDone(res) {
+        var toasts = document.getElementById('toast-container');
+        if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
+        if (window.htmx) htmx.trigger(document.body, 'refreshRules');
+        window.tideShowRuleAfterAction(res.show);
+    }
+    // A choice in the conflict dialog (components/move_conflict.html): the same Move, with a resolution.
+    window.tideMoveResolve = function (btn) {
+        var root = btn.closest('[data-move-conflict]');
+        var err = root.querySelector('[data-move-conflict-error]');
+        var label = btn.innerHTML;
+        btn.disabled = true;
+        btn.textContent = 'Working...';
+        err.hidden = true;
+        tidePostMove(root.dataset.ruleId, root.dataset.siemId, root.dataset.space, {
+            target_scope: root.dataset.targetScope, delete_source: root.dataset.deleteSource,
+            validation: root.dataset.validation, resolution: btn.dataset.resolution,
+        }).then(function (res) {
+            if (res.ok) { tideMoveDone(res); return; }
+            var tmp = document.createElement('div');
+            tmp.innerHTML = res.html;
+            err.textContent = (tmp.textContent || '').trim() || 'That could not be done.';
+            err.hidden = false;
+            btn.disabled = false;
+            btn.innerHTML = label;
+        }).catch(function (e) {
+            err.textContent = 'Error: ' + e.message;
+            err.hidden = false;
+            btn.disabled = false;
+            btn.innerHTML = label;
+        });
+    };
+
     window.showMoveDialog = function (ruleId, ruleName, siemId, space, deleteSourceDefault, targets) {
         var host = document.getElementById('modal-container');
         if (!host) return;
@@ -1798,21 +1844,19 @@ console.debug('TIDE app.js loading...');
             err.hidden = true;
             go.disabled = true;
             go.textContent = 'Moving...';
-            var body = new URLSearchParams();
-            body.set('target_scope', target);
-            body.set('delete_source', overlay.querySelector('[data-move-delete]').checked ? 'true' : 'false');
-            var url = '/api/promotion/' + encodeURIComponent(ruleId) + '/move?siem_id=' + encodeURIComponent(siemId) + '&space=' + encodeURIComponent(space);
-            fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() })
-                .then(function (r) { return r.text().then(function (html) { return { ok: r.ok, html: html, show: window.tideRuleWindowFrom(r) }; }); })
+            tidePostMove(ruleId, siemId, space, {
+                target_scope: target,
+                delete_source: overlay.querySelector('[data-move-delete]').checked ? 'true' : 'false',
+            })
                 .then(function (res) {
                     if (res.ok) {
-                        // The rule window stays open (#62) -- on the moved copy, or on this rule after a
-                        // copy -- and the list behind refreshes where it is, instead of reloading the page.
-                        var toasts = document.getElementById('toast-container');
-                        if (toasts) toasts.insertAdjacentHTML('beforeend', res.html);
                         overlay.remove();
-                        if (window.htmx) htmx.trigger(document.body, 'refreshRules');
-                        window.tideShowRuleAfterAction(res.show);
+                        tideMoveDone(res);
+                    } else if (res.conflict) {
+                        // The target already holds this rule id: the conflict dialog takes over.
+                        overlay.remove();
+                        host.innerHTML = res.html;
+                        if (window.htmx) htmx.process(host);
                     } else {
                         // The body is the server's toast markup; read its text so the reason
                         // shows in the dialog rather than behind it.
@@ -1959,8 +2003,20 @@ console.debug('TIDE app.js loading...');
         var winner = direction === 'source_over_target' ? sourceName : targetName;
         var loser = direction === 'source_over_target' ? targetName : sourceName;
         var esc = function (s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
-        var body = '<p class="mb-md"><strong>' + esc(loser) + '</strong> will be overwritten with the content of <strong>' +
-                   esc(winner) + '</strong>. Its own enabled/disabled state is kept.</p>';
+        // Sections ticked in the comparison: all of them copies the whole rule; fewer copies only those.
+        var boxes = Array.prototype.slice.call(document.querySelectorAll('input[name="rm-merge-section"]'));
+        var picked = boxes.filter(function (b) { return b.checked; });
+        var sections = boxes.length && picked.length < boxes.length ? picked.map(function (b) { return b.value; }) : null;
+        if (sections && !sections.length && deleteWhich === 'none') {
+            if (typeof showToast === 'function') showToast('Tick at least one section to merge.', 'error');
+            return;
+        }
+        var body = sections
+            ? '<p class="mb-md">' + (sections.length ? 'Only ' + picked.map(function (b) { return '<strong>' + esc(b.parentNode.textContent.trim()) + '</strong>'; }).join(', ') +
+              ' of <strong>' + esc(loser) + '</strong> will be replaced with <strong>' + esc(winner) + '</strong>\'s. The rest stays as it is.'
+              : 'Nothing is merged.') + '</p>'
+            : '<p class="mb-md"><strong>' + esc(loser) + '</strong> will be overwritten with the content of <strong>' +
+              esc(winner) + '</strong>. Its own enabled/disabled state is kept.</p>';
         var doomed = deleteWhich === 'source' ? sourceName : (deleteWhich === 'target' ? targetName : null);
         if (doomed) {
             body += '<p class="inline-error"><strong>' + esc(doomed) +
@@ -1971,10 +2027,10 @@ console.debug('TIDE app.js loading...');
             body: body,
             confirmLabel: doomed ? 'Merge and delete' : 'Merge',
             danger: !!doomed,
-        }).then(function (ok) { if (ok) tideRunMerge(root, direction, deleteWhich); });
+        }).then(function (ok) { if (ok) tideRunMerge(root, direction, deleteWhich, sections); });
     };
 
-    function tideRunMerge(root, direction, deleteWhich) {
+    function tideRunMerge(root, direction, deleteWhich, sections) {
         root.disabled = true;
         root.textContent = 'Merging...';
         var qs = 'siem_id=' + encodeURIComponent(root.dataset.siemId) + '&space=' + encodeURIComponent(root.dataset.space) +
@@ -1982,6 +2038,10 @@ console.debug('TIDE app.js loading...');
                  '&target_siem_id=' + encodeURIComponent(root.dataset.targetSiemId) +
                  '&target_space=' + encodeURIComponent(root.dataset.targetSpace);
         var body = new URLSearchParams({ direction: direction, delete_which: deleteWhich });
+        if (sections) {
+            body.append('by_section', '1');
+            sections.forEach(function (s) { body.append('section', s); });
+        }
         fetch('/api/promotion/' + encodeURIComponent(root.dataset.ruleId) + '/merge?' + qs, {
             method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
         })

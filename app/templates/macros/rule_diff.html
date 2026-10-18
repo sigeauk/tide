@@ -1,0 +1,60 @@
+{#
+  The field-by-field comparison of two rules (services/rule_diff.build_rule_diff), shared by Compare
+  (components/rule_migration_diff.html) and an upstream update's review (components/rule_update_diff.html).
+  ``select`` names a checkbox per section, ticked, for choosing which sections to take; the on/off
+  state is never taken, so it has none.
+#}
+{% macro seg(segments) %}{% for text, changed in segments %}{% if changed %}<mark class="rd-mark">{{ text }}</mark>{% else %}{{ text }}{% endif %}{% endfor %}{% endmacro %}
+
+{% macro diff_fields(diffs, old_label='This rule', new_label='Linked rule', select=none) %}
+<div class="rd-fields">
+  {% for d in diffs %}
+  <div class="rd-field">
+    <div class="rd-label">
+      {% if select and d.key != 'enabled' %}
+      <label class="rd-take" title="Tick to take this section"><input type="checkbox" name="{{ select }}" value="{{ d.key }}" checked> {{ d.label }}</label>
+      {% else %}{{ d.label }}{% endif %}
+    </div>
+    {% if d.kind == 'scalar' %}
+    <div class="rd-inline rd-scalar">
+      <span class="rd-pill rd-old">{{ d.old }}</span>&rarr;<span class="rd-pill rd-new">{{ d.new }}</span>
+    </div>
+    <div class="rd-side rd-cols">
+      <div><div class="rd-colhead">{{ old_label }}</div><span class="rd-pill rd-old">{{ d.old }}</span></div>
+      <div><div class="rd-colhead">{{ new_label }}</div><span class="rd-pill rd-new">{{ d.new }}</span></div>
+    </div>
+    {% elif d.kind == 'list' and ((d.removed + d.added) | map('string') | map('length') | max) > 60 %}
+    {# Long items (false positives, references, filters) read as lines, not chips. #}
+    <div class="rd-inline rd-lines rd-lines--list">
+      {% for item in d.removed %}<div class="rd-line del" title="Only on {{ old_label | lower }}">{{ item }}</div>{% endfor %}
+      {% for item in d.added %}<div class="rd-line add" title="Only on {{ new_label | lower }}">{{ item }}</div>{% endfor %}
+    </div>
+    <div class="rd-side rd-cols">
+      <div><div class="rd-colhead">{{ old_label }} only</div><div class="rd-lines rd-lines--list">{% for item in d.removed %}<div class="rd-line del">{{ item }}</div>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+      <div><div class="rd-colhead">{{ new_label }} only</div><div class="rd-lines rd-lines--list">{% for item in d.added %}<div class="rd-line add">{{ item }}</div>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+    </div>
+    {% elif d.kind == 'list' %}
+    <div class="rd-inline rd-chips">
+      {% for item in d.removed %}<span class="rd-pill rd-old" title="Only on {{ old_label | lower }}">&minus; {{ item }}</span>{% endfor %}
+      {% for item in d.added %}<span class="rd-pill rd-new" title="Only on {{ new_label | lower }}">+ {{ item }}</span>{% endfor %}
+    </div>
+    <div class="rd-side rd-cols">
+      <div><div class="rd-colhead">{{ old_label }} only</div><div class="rd-chips">{% for item in d.removed %}<span class="rd-pill rd-old">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+      <div><div class="rd-colhead">{{ new_label }} only</div><div class="rd-chips">{% for item in d.added %}<span class="rd-pill rd-new">{{ item }}</span>{% else %}<span class="text-secondary">&mdash;</span>{% endfor %}</div></div>
+    </div>
+    {% else %}
+    <div class="rd-inline rd-lines">
+      {% for row in d.inline %}<div class="rd-line {{ row.type }}">{{ seg(row.segments) }}</div>{% endfor %}
+    </div>
+    <div class="rd-side rd-lines">
+      <div class="rd-srow"><div class="rd-colhead rd-cell left">{{ old_label }}</div><div class="rd-colhead rd-cell right">{{ new_label }}</div></div>
+      {% for row in d.side %}
+        {% if row.type == 'gap' %}<div class="rd-srow gap">{{ seg(row.segments) }}</div>
+        {% else %}<div class="rd-srow {{ row.type }}"><div class="rd-cell left {{ row.type }}">{% if row.left %}{{ seg(row.left) }}{% endif %}</div><div class="rd-cell right {{ row.type }}">{% if row.right %}{{ seg(row.right) }}{% endif %}</div></div>{% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endmacro %}

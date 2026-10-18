@@ -14,7 +14,7 @@ TIDE shows which threats your SIEM's detection rules cover, where the gaps are, 
 - **CTI:** indicators, actors and reports from OpenCTI, Mandiant, CrowdStrike and other TAXII feeds.
 - **Multi-tenancy:** each client (team or customer) has its own database, users, roles and SIEM destinations. Nothing is shared between clients.
 - **Dashboards and diagnostics:** dashboards built from the figures you choose, and built-in checks that find known problems and say how to fix them.
-- **Offline by design:** ATT&CK, NIST 800-53, SigmaHQ and the CISA KEV catalogue are built into the image.
+- **Offline by design:** ATT&CK, NIST 800-53, SigmaHQ, Elastic's detection rules and the CISA KEV catalogue are built into the image.
 
 ---
 

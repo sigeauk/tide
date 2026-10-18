@@ -19,7 +19,7 @@
         <div id="sync-status"></div>
         <div class="rh-more">
             <button name="More Actions" id="rh-more-btn" type="button" class="btn btn-secondary rh-more__btn"
-                aria-haspopup="menu" aria-expanded="false" title="Sync, create a rule, bulk edit">
+                aria-haspopup="menu" aria-expanded="false" title="Sync, cards or table, create a rule, bulk edit">
                 {{ icon('more-vertical', '18') }}
                 <span class="sr-only">More actions</span>
             </button>
@@ -60,6 +60,15 @@
                     {% endif %}
                 </div>
                 <div class="rh-more__sep" role="separator"></div>
+                <button name="Cards View" type="button" role="menuitem" class="rh-more__item"
+                    data-rh-view="cards" aria-pressed="{{ 'false' if view == 'table' else 'true' }}">
+                    {{ icon('layout-grid', '15') }}<span>Show as cards</span>
+                </button>
+                <button name="Table View" type="button" role="menuitem" class="rh-more__item"
+                    data-rh-view="table" aria-pressed="{{ 'true' if view == 'table' else 'false' }}">
+                    {{ icon('table', '15') }}<span>Show as table</span>
+                </button>
+                <div class="rh-more__sep" role="separator"></div>
                 <button name="Create Rule" type="button" role="menuitem" class="rh-more__item"
                     hx-get="/api/rules/create-form" hx-target="#modal-container" hx-swap="innerHTML">
                     {{ icon('plus', '15') }}<span>Create rule</span>
@@ -86,7 +95,7 @@
         </div>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -175,7 +184,34 @@
             {% endfor %}
         </div>
     </div>
-    
+
+    <div class="filter-group relative">
+        <label class="form-label">Upstream</label>
+        <button type="button" id="rh-upstream-btn"
+            class="btn btn-secondary form-input form-select tide-filter-btn"
+            data-click="filterDropdown.toggle" data-target="rh-upstream-dropdown">
+            <span id="rh-upstream-label">{% set upstream_names = dict(upstream_options) %}{% for u in upstream %}{{ upstream_names.get(u, u) }}{{ ', ' if not loop.last }}{% else %}Any{% endfor %}</span>
+            {% set _updates = (upstream_counts | default({})).get('update', 0) %}
+            {% set _prebuilt = upstream_prebuilt_updates | default(0) %}
+            {% if _updates and not upstream %}<span class="rh-filter-count" title="{{ _updates }} of your rules have an update from Elastic or Sigma{% if _prebuilt %}: {{ _prebuilt }} {{ 'is an Elastic prebuilt rule' if _prebuilt == 1 else 'are Elastic prebuilt rules' }}, which Kibana updates itself (Rules → Rule updates), and {{ _updates - _prebuilt }} you can review in TIDE{% endif %}. Tick Update available to see them.">{{ _updates }} update{{ 's' if _updates != 1 }}</span>{% endif %}
+            {{ icon('chevron-down', '14') }}
+        </button>
+        <div id="rh-upstream-dropdown" class="tide-filter-dropdown" style="display:none;">
+            {% for opt, opt_label in upstream_options %}
+            <label class="rh-checkbox-row" title="{{ {'update': 'Came from Elastic\'s or the Sigma rules, which have a newer version of it', 'current': 'Came from Elastic\'s or the Sigma rules and matches their current version', 'retired': 'Elastic or Sigma has deprecated the rule it came from', 'removed': 'The rule it came from is no longer in the rules built into TIDE', 'own': 'Did not come from Elastic\'s or the Sigma rules'}[opt] }}">
+                <input type="checkbox" name="upstream" value="{{ opt }}" {% if opt in upstream %}checked{% endif %}
+                    hx-get="/api/rules"
+                    hx-trigger="change"
+                    hx-target="#rules-grid"
+                    hx-swap="innerHTML"
+                    hx-include="{{ rh_filter_include }}">
+                <span>{{ opt_label }}</span>
+                {% if opt != 'own' %}<span class="rh-checkbox-count">{{ (upstream_counts | default({})).get(opt, 0) }}</span>{% endif %}
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+
     <div class="filter-group relative">
         <label class="form-label">Score</label>
         <button type="button" id="rh-score-btn"
@@ -259,12 +295,8 @@
         </select>
     </div>
 
-    <div class="filter-group">
-        <label class="form-label">View</label>
-        <div class="rh-viewtoggle" role="group" aria-label="Rule view">
-            <button type="button" name="Cards View" data-rh-view="cards" aria-pressed="{{ 'false' if view == 'table' else 'true' }}" title="Cards">{{ icon('layout-grid', '16') }}<span class="sr-only">Cards</span></button>
-            <button type="button" name="Table View" data-rh-view="table" aria-pressed="{{ 'true' if view == 'table' else 'false' }}" title="Table">{{ icon('table', '16') }}<span class="sr-only">Table</span></button>
-        </div>
+    {# Cards or table: chosen in the ⋮ menu (Show as cards / Show as table), carried with the filters #}
+    <div class="hidden">
         <input type="hidden" id="rh-view" name="view" value="{{ view }}">
         <input type="hidden" id="rh-sort-col" name="sort_col" value="{{ sort_col | default('') }}">
         <input type="hidden" id="rh-sort-dir" name="sort_dir" value="{{ sort_dir | default('') }}">

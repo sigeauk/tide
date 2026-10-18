@@ -27,3 +27,13 @@
 <span class="tide-lifecycle tide-lifecycle-{{ css_state }}" title="{{ title or meta[state] }}">{{ state }}</span>
 {%- endif -%}
 {%- endmacro %}
+
+{% macro upstream_badge(up, only_news=false) -%}
+{#- The Elastic or Sigma rule a rule came from (rule_origins.statuses): its source, and unless it is
+   up to date, its state. ``only_news`` shows it only when there is something to act on (an update
+   available, or retired upstream): the rule card. Nothing for the tenant's own rules. -#}
+{%- if up and (not only_news or up.state in ['update', 'retired']) -%}
+{%- set cls = {'update': 'info', 'current': 'success', 'retired': 'warning', 'removed': 'muted'}[up.state] -%}
+<span class="status-pill status-{{ cls }} upstream-badge" title="{{ up.title }}">{{ up.source }}{% if up.state != 'current' %} · {{ up.label }}{% endif %}</span>
+{%- endif -%}
+{%- endmacro %}

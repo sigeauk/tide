@@ -1,0 +1,9 @@
+{#
+  The end of a library list with more to show (the Sigma, Elastic and Hunting pages): when it
+  scrolls into view it loads the next rows in its place, with the list's filters as they are now.
+  Context: next_offset (0 when there are no more), url, filters (the hx-include selector), what.
+#}
+{% if next_offset %}
+<div class="lib-more" hx-get="{{ url }}" hx-include="{{ filters }}" hx-vals='{"offset": {{ next_offset | int }}}'
+     hx-trigger="intersect once" hx-swap="outerHTML" role="status">Loading more {{ what }}…</div>
+{% endif %}

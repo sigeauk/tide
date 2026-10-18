@@ -45,6 +45,8 @@
         // Compare: another linked rule; Merge.
         compareTarget: function (e, sel) { window.tideSwitchCompareTarget(sel.dataset.ruleId, sel.dataset.siemId, sel.dataset.space, sel.value); },
         merge: function (e, btn) { window.tideMergeLinked(btn); },
+        // Move onto a destination that already has this rule id: link, or a new rule id.
+        moveResolve: function (e, btn) { window.tideMoveResolve(btn); },
     });
 
     TIDE.actions('ui', {

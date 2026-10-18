@@ -1,0 +1,121 @@
+{#
+  Elastic Rules: Elastic's detection rules from github.com/elastic/detection-rules, bundled in the
+  image (app/services/elastic_rules.py), laid out like the Sigma and Hunting pages: Deploy's settings
+  across the top, a filtered browser on the left and the open rule on the right (library.js). ?rule=
+  opens one on arrival. Their hunting queries are on the Hunting page.
+#}
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+
+{% block title %}Elastic Rules | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header__text">
+        <h1 class="page-title-hero">Elastic Rules</h1>
+        <p class="page-subtitle">Elastic's detection rules, built into TIDE{% if source.date %} from Elastic's repository as of {{ source.date }}{% endif %}. Their hunting queries are on the <a href="/hunting">Hunting</a> page.</p>
+    </div>
+</div>
+
+{% if not facets.rule_count %}
+<div class="empty-output">
+    {{ icon('package', '32') }}
+    <p>Elastic's rules are not in this TIDE image. They are added when the image is built; install a newer TIDE release to get them.</p>
+</div>
+{% else %}
+{# Where and how Deploy puts a rule (the rule form opens with these chosen), like the Sigma page's
+   conversion settings and the Hunting page's run settings #}
+<div class="sigma-header-row lib-settings" id="elastic-settings">
+    {% if destinations %}
+    <div class="sigma-select-group">
+        <label for="elastic-deploy-to">Deploy to</label>
+        <select id="elastic-deploy-to" name="scope_pair" class="sigma-select sigma-select--wide">
+            {% for d in destinations %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+        </select>
+    </div>
+    <div class="sigma-select-group">
+        <label for="elastic-deploy-as">Deploy as</label>
+        <select id="elastic-deploy-as" name="enabled" class="sigma-select">
+            <option value="false">Disabled</option>
+            <option value="true">Enabled</option>
+        </select>
+    </div>
+    {% else %}
+    <p class="text-muted text-sm lib-settings__note">Link a SIEM to this client to deploy Elastic's rules to it.</p>
+    {% endif %}
+</div>
+
+<div class="sigma-workbench lib-workbench" data-library="rule">
+    <div class="rule-browser open">
+        <div class="rule-browser-header">
+            <span>{{ icon('search', '16') }} Rule browser</span>
+            <span class="text-muted text-sm">{{ facets.rule_count }} from Elastic</span>
+        </div>
+        <div class="rule-browser-content">
+            <form class="browser-filters" id="elastic-filters" hx-get="/api/elastic/rules"
+                  hx-target="#elastic-list" hx-trigger="input delay:300ms, submit">
+                <div class="browser-filter browser-filter--wide">
+                    <label for="elastic-q">Search</label>
+                    <input type="text" id="elastic-q" name="q" placeholder="Name, description, rule id, tag…">
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-technique">MITRE Technique</label>
+                    <input type="text" id="elastic-technique" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-platform">Platform</label>
+                    <select id="elastic-platform" name="platform">
+                        <option value="">All</option>
+                        {% for p in facets.platforms %}<option value="{{ p }}">{{ p | replace('_', ' ') }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-integration">Integration</label>
+                    <select id="elastic-integration" name="integration">
+                        <option value="">All</option>
+                        {% for i in facets.integrations %}<option value="{{ i }}">{{ i }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-type">Type</label>
+                    <select id="elastic-type" name="type">
+                        <option value="">All</option>
+                        {% for t in facets.types %}<option value="{{ t }}">{{ t | replace('_', ' ') }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-severity">Severity</label>
+                    <select id="elastic-severity" name="severity">
+                        <option value="">All</option>
+                        {% for s in severities %}<option value="{{ s }}">{{ s | title }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label for="elastic-status">Status</label>
+                    <select id="elastic-status" name="status">
+                        <option value="">All</option>
+                        {% for value, label in statuses %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+                    </select>
+                </div>
+                <input type="hidden" name="selected" value="{{ selected_id }}">
+            </form>
+            <div id="elastic-list" class="lib-list">
+                {% include "partials/elastic_rules_list.html" %}
+            </div>
+        </div>
+    </div>
+
+    <div class="sigma-panel lib-detail-panel">
+        <div id="elastic-detail" class="lib-detail"
+             {% if selected_id %}hx-get="/api/elastic/rules/{{ selected_id }}" hx-trigger="load"{% endif %}>
+            <div class="empty-output">
+                {{ icon('shield', '32') }}
+                <p>Select a rule to see what it detects.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div id="slide-panel-container"></div>
+{% endblock %}

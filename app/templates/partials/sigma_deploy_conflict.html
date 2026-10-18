@@ -1,0 +1,30 @@
+{#
+  A Sigma deploy stopped because the space already holds a rule with this rule id (POST
+  /api/sigma/deploy). Nothing was written. Identical (index patterns and enabled state aside):
+  nothing to do. Otherwise: update that rule with this conversion, or deploy a separate copy under
+  a new rule id; each resends the deploy form with a resolution. An Elastic prebuilt rule is never
+  updated from here.
+  Context: existing (the rule in Kibana), diffs (rule_diff.conflict_differences), prebuilt, destination.
+#}
+{% from "macros/icons.html" import icon_text %}
+{% from "macros/rule_diff.html" import diff_fields %}
+{% if not diffs %}
+<div class="alert alert-success"><p>{{ destination }} already has <strong>{{ existing.name }}</strong> exactly as converted
+  (apart from index patterns and whether it is enabled), so nothing was deployed.</p></div>
+{% else %}
+<div class="alert alert-warning rd-root sigma-deploy-conflict" data-view="inline">
+  <p>{{ destination }} already has <strong>{{ existing.name }}</strong> under this rule id{% if prebuilt %}, installed by Kibana as one of Elastic's prebuilt rules{% endif %},
+    and it differs from this conversion in {{ diffs | length }} section{{ '' if diffs | length == 1 else 's' }}. Nothing was deployed.</p>
+  {{ diff_fields(diffs, destination ~ ' now', 'This conversion') }}
+  <div class="modal-actions">
+    {% if not prebuilt %}
+    <button name="Update Existing" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/sigma/deploy" hx-include="#deploy-form" hx-vals='{"resolution": "update"}' hx-target="#deploy-result"
+            title="Overwrite the rule in {{ destination }} with this conversion">{{ icon_text('refresh-cw', 'Update it', '13') }}</button>
+    {% endif %}
+    <button name="Deploy As New" type="button" class="btn btn-primary btn-sm"
+            hx-post="/api/sigma/deploy" hx-include="#deploy-form" hx-vals='{"resolution": "new_id"}' hx-target="#deploy-result"
+            title="Deploy this beside it, under a rule id of its own">{{ icon_text('copy', 'Deploy as a new rule', '13') }}</button>
+  </div>
+</div>
+{% endif %}

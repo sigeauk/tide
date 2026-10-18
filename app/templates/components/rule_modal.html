@@ -95,6 +95,14 @@
                     {{ icon('git-branch', '14') }}<span>Compare</span>
                 </button>
                 {% endif %}
+                {% if upstream and upstream.state in ('update', 'current') %}
+                <button name="Compare With Upstream" type="button" role="menuitem" class="rh-more__item"
+                        title="Compare this rule with the {{ upstream.source }} rule it came from, and merge the new version into it section by section"
+                        hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}"
+                        hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
+                    {{ icon('git-branch', '14') }}<span>Compare with {{ upstream.source }}{% if upstream.state == 'update' %} (update){% endif %}</span>
+                </button>
+                {% endif %}
                 {% if rule.deprecated %}
                 <button name="Restore Rule" type="button" role="menuitem" class="rh-more__item"
                         title="Recreate this rule in its SIEM (disabled) and make it active again"
@@ -510,6 +518,41 @@
                             <dd title="The id Elastic itself enforces as unique per space, and what TIDE stores this rule under.">{{ _portable_rule_id }}</dd>
                         </div>
                     </dl>
+                </div>
+
+                {# Upstream: the Elastic or Sigma rule this came from (rule_origins) and whether a newer
+                   version of it is built into TIDE; Review update opens the section-by-section dialog. #}
+                <div class="rm-panel rm-panel--upstream" data-fold="upstream" data-section="upstream" data-section-label="Upstream">
+                    <div class="rm-panel__head">
+                        {{ collapse_ctl('Upstream') }}
+                        <h3 class="rm-panel__title">Upstream</h3>
+                        {{ drag_ctl('Upstream') }}
+                    </div>
+                    {% if upstream %}
+                    {% set _up_class = {'update': 'info', 'current': 'success', 'retired': 'warning', 'removed': 'muted'}[upstream.state] %}
+                    <div class="rm-upstream">
+                        <span class="status-pill status-{{ _up_class }}" title="{{ upstream.title }}">{{ upstream.label }}</span>
+                        <p class="rm-upstream__from">From {{ upstream.source }}:
+                            <a href="{{ '/elastic' if upstream.origin == 'elastic' else '/sigma' }}?rule={{ upstream.upstream_id | urlencode }}"
+                               title="Open it in the {{ upstream.source }} library">{{ upstream.name or upstream.upstream_id }}</a>{% if upstream.prebuilt %}, installed by Kibana{% endif %}</p>
+                        <p class="text-muted rm-upstream__note">{{ upstream.title }}</p>
+                        {% if upstream.parent %}
+                        <p class="text-muted rm-upstream__note">Copied from
+                            <button type="button" class="rm-item__open" data-rule-open
+                                    hx-get="/api/rules/{{ upstream.parent[0] }}/history-modal?space={{ upstream.parent[2] | urlencode }}&siem_id={{ upstream.parent[1] | urlencode }}"
+                                    hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                                    title="Open the rule it was copied from">{{ upstream.parent_name or 'a rule no longer in TIDE' }}</button>
+                        </p>
+                        {% endif %}
+                        {% if upstream.state == 'update' %}
+                        <button name="Review Update" type="button" class="btn btn-secondary btn-sm"
+                                hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}"
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', 'Review update', '13') }}</button>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <p class="rm-empty">Your own rule: it did not come from Elastic's rules or the Sigma rules.</p>
+                    {% endif %}
                 </div>
 
                 <div class="rm-panel rm-panel--linked" data-fold="linked" data-section="linked" data-section-label="Linked">

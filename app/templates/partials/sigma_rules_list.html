@@ -1,72 +1,54 @@
+{#
+  The Sigma Rules page's rule browser list (GET /api/sigma/rules), with the same rows as the Elastic
+  Rules and Hunting pages: each opens the rule in the detail pane, converted with the page's
+  settings (#sigma-settings). Context: rules, matching, total_count, offset, next_offset,
+  selected_rule_id, covered_ttps, ttp_rule_counts. With an offset, only the next rows: the list's
+  last row loads them when it scrolls into view (components/library_more.html).
+#}
 {% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
-<!-- Sigma Rules List Partial -->
+{% set _more = offset | default(0) > 0 %}
+{% if not _more %}
 <div class="rules-count">
-    {% if filtered_count != total_count %}
-    Showing {{ filtered_count }} of {{ total_count }} rules
-    {% else %}
-    {{ total_count }} rules
-    {% endif %}
+    {% if matching != total_count %}{{ matching }} of {{ total_count }} rules match
+    {% else %}{{ total_count }} rules{% endif %}
 </div>
 
 <div class="rules-list-container">
-    {% if rules %}
-        {% for rule in rules %}
-        {% set _status = (rule.status | default('experimental')) | lower %}
-        {% set _tech_count = rule._techniques|length %}
-        {% set _is_selected = (selected_rule_id | default('', true)) == rule.id %}
-        {% if _tech_count > 1 %}
-        <details class="sigma-rule-card sigma-rule-card--expandable cve-card-item{% if _is_selected %} sigma-rule-selected{% endif %}" data-rule-id="{{ rule.id }}">
-            <summary name="Open Sigma Rule" class="rule-item-btn" data-click="sigma.openRule">
-                <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
-                    <span class="rule-item-id-summary">
-                        {{ mitre_pill(rule._techniques[0], covered=(rule._techniques[0] in covered_ttps), rule_count=ttp_rule_counts.get(rule._techniques[0], 0), clickable=true, size='sm') }}
-                        <span class="mitre-pill mitre-more mitre-sm">+{{ _tech_count - 1 }}</span>
-                    </span>
-                    <span class="rule-item-id-expanded">
-                        {% for tech in rule._techniques[1:] %}
-                        <span class="rule-item-expanded-pill">
-                            {{ mitre_pill(tech, covered=(tech in covered_ttps), rule_count=ttp_rule_counts.get(tech, 0), clickable=true, size='sm') }}
-                        </span>
-                        {% endfor %}
-                    </span>
-                </span>
-                <span class="rule-item-body cve-card-item__body">
-                    <span class="rule-item-title cve-card-item__name" title="{{ rule.title }}">
-                        {{ rule.title[:100] }}{% if rule.title|length > 100 %}...{% endif %}
-                    </span>
-                </span>
-                <span class="rule-item-right cve-card-item__right">
-                    <span class="sigma-status-text sigma-status-{{ _status }}">{{ _status | upper }}</span>
-                </span>
-            </summary>
-        </details>
-        {% else %}
-        <button name="Open Sigma Rule" class="rule-item-btn sigma-rule-card cve-card-item cve-card-item--available{% if _is_selected %} sigma-rule-selected{% endif %}" data-rule-id="{{ rule.id }}" data-click="sigma.openRule">
-            <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
-                {% if _tech_count == 1 %}
-                <span class="rule-item-id-summary">
-                    {{ mitre_pill(rule._techniques[0], covered=(rule._techniques[0] in covered_ttps), rule_count=ttp_rule_counts.get(rule._techniques[0], 0), clickable=true, size='sm') }}
-                </span>
-                {% else %}
-                <span class="rule-no-tech">No ATT&CK</span>
-                {% endif %}
+{% endif %}
+    {% for rule in rules %}
+    {% set _techs = rule._techniques or [] %}
+    {% set _status = (rule.status | default('experimental')) | lower %}
+    <button name="Open Sigma Rule" type="button"
+            class="rule-item-btn sigma-rule-card cve-card-item cve-card-item--available{% if (selected_rule_id | default('', true)) == rule.id %} sigma-rule-selected{% endif %}"
+            data-item-id="{{ rule.id }}" data-rule-id="{{ rule.id }}" data-click="library.open"
+            hx-get="/api/sigma/rules/{{ rule.id }}/view" hx-include="#sigma-settings" hx-target="#sigma-detail" hx-swap="innerHTML">
+        <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
+            {% if _techs %}
+            <span class="rule-item-id-summary">
+                {{ mitre_pill(_techs[0], covered=(_techs[0] in covered_ttps), rule_count=ttp_rule_counts.get(_techs[0], 0), clickable=true, size='sm') }}
+                {% if _techs | length > 1 %}<span class="mitre-pill mitre-more mitre-sm" title="{{ _techs[1:] | join(', ') }}">+{{ _techs | length - 1 }}</span>{% endif %}
             </span>
-            <span class="rule-item-body cve-card-item__body">
-                <span class="rule-item-title cve-card-item__name" title="{{ rule.title }}">
-                    {{ rule.title[:100] }}{% if rule.title|length > 100 %}...{% endif %}
-                </span>
-            </span>
-            <span class="rule-item-right cve-card-item__right">
-                <span class="sigma-status-text sigma-status-{{ _status }}">{{ _status | upper }}</span>
-            </span>
-        </button>
-        {% endif %}
-        {% endfor %}
+            {% else %}
+            <span class="rule-no-tech">No ATT&CK</span>
+            {% endif %}
+        </span>
+        <span class="rule-item-body cve-card-item__body">
+            <span class="rule-item-title cve-card-item__name" title="{{ rule.title }}">{{ rule.title }}</span>
+        </span>
+        <span class="rule-item-right cve-card-item__right">
+            <span class="sigma-status-text sigma-status-{{ _status }}">{{ _status | title }}</span>
+        </span>
+    </button>
     {% else %}
-        <div class="empty-output empty-output--short">
-            {{ icon('search-x', '24') }}
-            <p class="text-sm">No rules found</p>
-        </div>
+    {% if not _more %}
+    <div class="empty-output empty-output--short">
+        {{ icon('search-x', '24') }}
+        <p class="text-sm">No rules found</p>
+    </div>
     {% endif %}
+    {% endfor %}
+    {% with url="/api/sigma/rules", filters="#sigma-filters", what="rules" %}{% include "components/library_more.html" %}{% endwith %}
+{% if not _more %}
 </div>
+{% endif %}

@@ -39,6 +39,7 @@
                 <th data-col="state" class="rt-th--sortable" data-sort-col="state" data-sort-default="asc" title="Sort by state (production, migrated, staging, deprecated)">State {{ sort_arrow(sort_dir if sort_col == 'state' else '') }}</th>
                 <th data-col="severity" class="rt-th--sortable" data-sort-col="severity" data-sort-default="desc" title="Sort by severity">Severity {{ sort_arrow(sort_dir if sort_col == 'severity' else '') }}</th>
                 <th data-col="validated" class="rt-th--sortable" data-sort-select="rh-sort-validated" data-sort-default="desc" title="Sort by validation date">Validated {{ sort_arrow(sort_validated if not sort_col else '') }}</th>
+                <th data-col="upstream" title="The Elastic or Sigma rule it came from, and whether there is a newer version">Upstream</th>
                 <th data-col="author" class="rt-th--sortable" data-sort-col="author" data-sort-default="asc" title="Sort by author">Author {{ sort_arrow(sort_dir if sort_col == 'author' else '') }}</th>
                 <th data-col="mitre">MITRE</th>
                 <th data-col="lang" class="rt-th--sortable" data-sort-col="language" data-sort-default="asc" title="Sort by query language">Lang {{ sort_arrow(sort_dir if sort_col == 'language' else '') }}</th>

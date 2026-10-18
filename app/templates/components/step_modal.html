@@ -452,6 +452,26 @@
           {% endif %}
         </div>
 
+        {# Elastic rules: Elastic's bundled rules suggested from this technique's ATT&CK ids, or any
+           the search finds. Never coverage; each can be deployed, then mapped under Coverage. #}
+        <div class="rm-panel" data-fold="tw-elastic" data-section="elastic" data-section-label="Elastic rules">
+          <div class="rm-panel__head">
+            {{ collapse_ctl('Elastic rules') }}
+            <h3 class="rm-panel__title">Elastic rules</h3>
+            {% if not new %}{{ drag_ctl('Elastic rules') }}{% endif %}
+          </div>
+          {% if new %}
+          <p class="rm-empty">Suggested from its ATT&amp;CK techniques once it is created.</p>
+          {% else %}
+          <input type="search" id="sm-elastic-search" class="form-input sm-sigma__search" name="q" placeholder="Search Elastic rules…"
+                 aria-label="Search Elastic rules" hx-get="{{ step_url }}/elastic" hx-trigger="input changed delay:300ms, search"
+                 hx-target="#sm-elastic-candidates" hx-swap="innerHTML">
+          <div id="sm-elastic-candidates" hx-get="{{ step_url }}/elastic" hx-trigger="load" hx-swap="innerHTML">
+            <p class="rm-empty">Looking for Elastic rules…</p>
+          </div>
+          {% endif %}
+        </div>
+
         {# Risks: this system's priority and category for the technique (one of each). What covers
            it is added under Coverage. #}
         <div class="rm-panel" data-fold="tw-risks" data-section="risks" data-section-label="Risks">

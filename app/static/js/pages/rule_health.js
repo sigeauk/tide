@@ -42,6 +42,17 @@
             ? checked.map(function (c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
             : 'All states';
     }
+    function updateUpstreamLabel() {
+        var label = $('rh-upstream-label');
+        if (!label) return;
+        var checked = Array.prototype.slice.call(document.querySelectorAll("#rh-upstream-dropdown input[name='upstream']:checked"));
+        label.textContent = checked.length
+            ? checked.map(function (c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
+            : 'Any';
+        // "N updates" on the button only while nothing is ticked
+        var count = document.querySelector('#rh-upstream-btn .rh-filter-count');
+        if (count) count.hidden = checked.length > 0;
+    }
     function updateScoreLabel() {
         var label = $('rh-score-label');
         if (!label) return;
@@ -69,6 +80,7 @@
     document.addEventListener('change', function (e) {
         if (!e.target.matches) return;
         if (e.target.matches("#rh-state-dropdown input[name='state']")) updateStateLabel();
+        if (e.target.matches("#rh-upstream-dropdown input[name='upstream']")) updateUpstreamLabel();
         if (e.target.closest('#rh-score-dropdown')) updateScoreLabel();
         if (e.target.closest('#rh-validated-dropdown')) updateValidatedLabel();
     });
@@ -167,7 +179,7 @@
     var MIN_W = 48;
     var COLUMNS = [
         ['score', 'Score'], ['name', 'Rule'], ['siem', 'SIEM'], ['state', 'State'], ['severity', 'Severity'],
-        ['validated', 'Validated'], ['author', 'Author'], ['mitre', 'MITRE'], ['lang', 'Lang'],
+        ['validated', 'Validated'], ['upstream', 'Upstream'], ['author', 'Author'], ['mitre', 'MITRE'], ['lang', 'Lang'],
     ];
     var TITLES = {};
     COLUMNS.forEach(function (c) { TITLES[c[0]] = c[1]; });

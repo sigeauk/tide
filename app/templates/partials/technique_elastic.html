@@ -1,0 +1,43 @@
+{#
+  The technique window's Elastic rules section: Elastic's bundled rules suggested from the
+  technique's ATT&CK ids, or, with a query from the section's search, any that match. Deprecated
+  rules are left out. Potential rules, never coverage. Each rule's "…" menu deploys it to a linked
+  destination (it is not mapped to the technique: that is the next step, from Coverage) or opens it
+  on the Elastic Rules page.
+  Context: rules, query, technique_ids, technique_url (the technique window's own URL), can_deploy.
+#}
+{% from "macros/icons.html" import icon %}
+<p class="text-muted sm-sigma__note">Elastic's rules you can deploy. They do not count as coverage until deployed and mapped under Coverage.</p>
+{% if rules %}
+<div class="sm-sigma__group">{% if query %}Matching “{{ query }}”{% else %}Suggested for {{ technique_ids | join(', ') }}{% endif %}</div>
+<ul class="sm-sigma">
+  {% for r in rules %}
+  <li class="sm-sigma__item">
+    <span class="sm-sigma__title" title="{{ r.description | truncate(400) }}">{{ r.name }}</span>
+    <span class="sm-sigma__meta">
+      {% if r.severity %}<span class="sev-pill sev-{{ r.severity }}">{{ r.severity | upper }}</span>{% endif %}
+      <span class="text-muted">{{ 'building block' if r.status == 'building_block' else r.rule_type | replace('_', ' ') }}</span>
+      <span class="rh-more" data-more>
+        <button name="Elastic Rule Actions" type="button" class="rm-iconbtn" data-more-toggle
+                aria-haspopup="menu" aria-expanded="false" title="Rule actions" aria-label="Actions for {{ r.name }}">{{ icon('more-horizontal', '14') }}</button>
+        <span class="rh-more__menu" role="menu" hidden>
+          {% if can_deploy %}
+          <button name="Deploy Elastic Rule" type="button" role="menuitem" class="rh-more__item"
+                  hx-get="/api/elastic/rules/{{ r.rule_id }}/deploy-form?technique_url={{ technique_url | urlencode }}"
+                  hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+                  title="Deploy it to one of this client's destinations">{{ icon('rocket', '14') }}<span>Deploy</span></button>
+          {% endif %}
+          <a name="Open in Elastic Rules" role="menuitem" class="rh-more__item"
+             href="/elastic?rule={{ r.rule_id | urlencode }}{% if technique_ids %}&technique={{ technique_ids[0] | urlencode }}{% endif %}"
+             title="Open it on the Elastic Rules page">{{ icon('external-link', '14') }}<span>Open in Elastic Rules</span></a>
+        </span>
+      </span>
+    </span>
+  </li>
+  {% endfor %}
+</ul>
+{% elif query %}
+<p class="text-muted sm-muted">No Elastic rules match “{{ query }}”.</p>
+{% else %}
+<p class="text-muted sm-muted">{% if technique_ids %}No Elastic rules found for {{ technique_ids | join(', ') }}.{% else %}Map an ATT&amp;CK technique to see suggested Elastic rules.{% endif %}</p>
+{% endif %}

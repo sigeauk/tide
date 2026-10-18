@@ -86,6 +86,7 @@ def matching_rule_ids(
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
     state: List[str] = Query([]),
+    upstream: List[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validated_from: Optional[str] = Query(None),
@@ -102,6 +103,7 @@ def matching_rule_ids(
         space=space or None,
         enabled=None if not enabled else enabled.lower() == "true",
         state=[s for s in state if s],
+        upstream=[u for u in upstream if u],
         min_score=_int(min_score),
         max_score=_int(max_score),
         validated_from=_parse_date_bound(validated_from, end_of_day=False),
@@ -306,6 +308,15 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
             job["done"] += 1
             if status == 200:
                 job["ok"] += 1
+            elif status == 409 and action == "move":
+                # The target already holds this rule id: nothing was written. Asked about at the end,
+                # one rule at a time (link, or a new rule id), once the others have moved.
+                from app.api.promotion import move_conflict
+                clash = await _run_in_context(move_conflict, db, client_id, item["rule_id"], item["siem_id"],
+                                              item["space"], opts["target_siem_id"], opts["target_space"])
+                job["conflicts"].append({**item, "name": name or label(item),
+                                         "identical": bool(clash and clash["identical"]),
+                                         "differences": len(clash["diffs"]) if clash else 0})
             else:
                 job["failed"] += 1
                 if len(job["errors"]) < 10:
@@ -359,11 +370,14 @@ async def bulk_edit_start(
         if not target_siem_id or not target_space:
             return HTMLResponse('<div class="toast toast-danger">Choose a target destination.</div>', status_code=400)
         opts["target_siem_id"], opts["target_space"] = target_siem_id, target_space
+        opts["target_name"] = next(
+            (s.get("name") or target_space for s in (db.get_client_siems(client_id) or [])
+             if s.get("id") == target_siem_id and str(s.get("space") or "default") == target_space), target_space)
 
     job = {
         "state": "running", "action": action, "label": ACTIONS[action], "total": len(parsed),
         "done": 0, "ok": 0, "failed": 0, "errors": [], "current": "", "cancel": False,
-        "started": time.time(),
+        "started": time.time(), "conflicts": [], "opts": opts,
     }
     _EDIT_JOBS[client_id] = job
     asyncio.get_running_loop().create_task(

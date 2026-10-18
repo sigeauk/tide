@@ -1,6 +1,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
-{# In edit mode, Close/Cancel return to the Rule modal instead of dismissing everything. #}
-{% set back_url = ("/api/rules/" ~ rule.rule_id ~ "/history-modal?space=" ~ (space | urlencode) ~ (("&siem_id=" ~ (siem_id | urlencode)) if siem_id else "")) if (mode == "edit" and rule) else "" %}
+{# In edit mode, Close/Cancel return to the Rule modal instead of dismissing everything; a form opened from
+   another window (deploying an Elastic rule from a technique window) names it in cancel_url. #}
+{% set back_url = cancel_url if cancel_url else ("/api/rules/" ~ rule.rule_id ~ "/history-modal?space=" ~ (space | urlencode) ~ (("&siem_id=" ~ (siem_id | urlencode)) if siem_id else "")) if (mode == "edit" and rule) else "" %}
 <div   name="Dismiss Rule Form Modal" class="modal-overlay" data-click="backdrop.remove">
   <div class="modal-content rule-modal rule-form-modal" role="dialog" aria-modal="true" aria-labelledby="rf-title">
     <header class="rm-header">
@@ -22,6 +23,7 @@
     <form   name="Create Rule Form" hx-post="{{ form_action }}" hx-target="#modal-container" hx-swap="innerHTML" hx-sync="this:drop"
           hx-disabled-elt="find button[type='submit']" class="rule-create-form" data-mode="{{ mode }}">
       <input type="hidden" name="type" value="{{ form_values.type | default('query') }}">
+      {% if sigma_id %}<input type="hidden" name="sigma_id" value="{{ sigma_id }}">{% endif %}
       <div class="rule-accordion-stack flex flex-col gap-ms">
         <details class="rule-accordion" open>
           <summary>Create Rule</summary>
@@ -57,7 +59,7 @@
             <div class="form-section">
               <label for="rule-language">Query Language *</label>
               {% if rule_type_label %}
-                <div class="scope-note">This is a {{ rule_type_label }} rule. Its {{ rule_type_label }} settings aren't shown here and stay as they are in Kibana; change them there.</div>
+                <div class="scope-note">{{ type_note or ("This is a " ~ rule_type_label ~ " rule. Its " ~ rule_type_label ~ " settings aren't shown here and stay as they are in Kibana; change them there.") }}</div>
               {% endif %}
               <select class="rule-form-select" id="rule-language" name="language" required>
                 <option value="kuery" {% if form_values.language == 'kuery' %}selected{% endif %}>KQL (Kibana Query Language)</option>
@@ -72,9 +74,10 @@
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
             </div>
             <div class="form-section">
-              <label for="rule-query">Query{% if mode != 'edit' %} *{% endif %}</label>
+              {% set _query_required = mode != 'edit' and form_values.type != 'machine_learning' %}
+              <label for="rule-query">Query{% if _query_required %} *{% endif %}</label>
               {# Not required when editing: a KQL rule can match on filters alone, with an empty query. #}
-              <textarea class="rule-form-textarea mono" id="rule-query" name="query"{% if mode != 'edit' %} required{% endif %} rows="6">{{ form_values.query }}</textarea>
+              <textarea class="rule-form-textarea mono" id="rule-query" name="query"{% if _query_required %} required{% endif %} rows="6">{{ form_values.query }}</textarea>
             </div>
           </div>
         </details>
@@ -184,6 +187,10 @@
           <label for="rule-reason">Reason for Change *</label>
           <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Why you're changing this rule. Recorded in its History.">{{ form_values.reason }}</textarea>
         </div>
+        {% endif %}
+        {% if min_stack_version %}
+        <label class="rm-form-confirm"><input type="checkbox" name="confirm_version" value="1">
+          Deploy even if the destination runs an Elastic older than {{ min_stack_version }}, which this rule needs</label>
         {% endif %}
         {# Why the form wasn't saved: a field to fill in (rule_form.js) or the server's refusal. #}
         <div id="rule-form-error" class="rm-form-error" aria-live="assertive"></div>

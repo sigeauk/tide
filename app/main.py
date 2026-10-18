@@ -18,7 +18,7 @@ import os
 import re
 import time
 import uuid
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from urllib.parse import urlencode
 
 try:
@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -802,6 +802,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/baselines": "page:baselines",
         "/rules": "page:rules",
         "/sigma": "page:sigma",
+        "/elastic": "page:elastic",
+        "/hunting": "page:hunting",
         "/threats": "page:threats",
         "/heatmap": "page:heatmap",
         "/mitre": "page:mitre",
@@ -833,6 +835,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/rules": "page:rules",
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
+        "/api/elastic": "page:elastic",
+        "/api/hunting": "page:hunting",
         "/api/inventory": "page:systems",
         # Known gap / N/A marks on a system's techniques.
         "/api/blind-spots": "page:systems",
@@ -873,6 +877,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/rules": "page:rules",
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
+        "/api/elastic": "page:elastic",
         "/api/inventory": "page:systems",
         # Known gap / N/A marks on a system's techniques.
         "/api/blind-spots": "page:systems",
@@ -1224,6 +1229,8 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url="/api/docs" if settings.debug else None,
         redoc_url="/api/redoc" if settings.debug else None,
+        # Swagger UI's OAuth2 redirect page lives with the docs (FastAPI's default is /docs/...).
+        swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
     )
     
     # Add authentication middleware
@@ -1473,6 +1480,9 @@ def create_app() -> FastAPI:
     
     templates.env.filters["highlight_query"] = highlight_query
 
+    from app.services.source_highlight import highlight as _highlight_source
+    templates.env.filters["highlight_source"] = _highlight_source
+
     # --- Markdown filter for description fields ---
     import markdown as _md_lib
     import re as _re
@@ -1672,6 +1682,14 @@ def create_app() -> FastAPI:
     # --- Helper function to render templates with global context ---
     # --- Helper function to render templates with global context ---
 
+    def _upstream_counts(statuses: dict) -> dict:
+        """Rule Health's Upstream filter: rules per upstream state, and how many of the updates are
+        Elastic prebuilt rules, which Kibana updates itself."""
+        return {
+            "upstream_counts": Counter(s["state"] for s in statuses.values()),
+            "upstream_prebuilt_updates": sum(1 for s in statuses.values() if s["state"] == "update" and s["prebuilt"]),
+        }
+
     def _activate_page_tenant(request: Request, user, db, _cid: str) -> None:
         """Set tenant DB context and enrich the log context for a page route that
         resolved *_cid* outside of the ActiveClient FastAPI dependency.
@@ -1773,6 +1791,9 @@ def create_app() -> FastAPI:
     app.include_router(threats.router)
     app.include_router(promotion.router)
     app.include_router(sigma.router)
+    app.include_router(elastic_api.router)
+    app.include_router(rule_upstream_api.router)
+    app.include_router(hunting_api.router)
     app.include_router(settings_api.router)
     app.include_router(inventory.router)
     app.include_router(external_sharing.router)
@@ -1956,12 +1977,14 @@ def create_app() -> FastAPI:
             _metrics_from_rules,
         )
         from app.models.rules import RuleFilters
+        from app.services import rule_origins
         qp = request.query_params
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
         enabled_q = qp.get("enabled") or ""
         from app.services.database import normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
+        upstream_q = [u for u in qp.getlist("upstream") if u]
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
         validated_from_q = qp.get("validated_from") or ""
@@ -1996,6 +2019,7 @@ def create_app() -> FastAPI:
                 space=space_q or None,
                 enabled=None if not enabled_q else (enabled_q.lower() == 'true'),
                 state=state_q,
+                upstream=upstream_q,
                 min_score=min_score_int,
                 max_score=max_score_int,
                 validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
@@ -2063,6 +2087,11 @@ def create_app() -> FastAPI:
                 "space": space_q,
                 "enabled": enabled_q,
                 "state": state_q,
+                "upstream": upstream_q,
+                "upstream_options": rule_origins.FILTER_STATES,
+                # How many of the tenant's rules are in each upstream state, whatever the filters, and
+                # of the updates how many are Elastic prebuilt rules (Kibana updates those itself)
+                **_upstream_counts(db.upstream_statuses()),
                 "min_score": min_score_q,
                 "max_score": max_score_q,
                 "validated_from": validated_from_q,
@@ -2461,13 +2490,11 @@ def create_app() -> FastAPI:
         db: DbDep,
         technique: str = "",
         rule: str = "",
-        autoconvert: bool = False,
     ):
         """Sigma Convert page."""
         from app import sigma_helper as sigma_mod
         
         # Load initial data
-        all_rules = sigma_mod.load_all_rules()
         categories = sigma_mod.get_rule_categories()
         backends = sigma_mod.get_available_backends()
         pipelines = sigma_mod.get_available_pipelines()
@@ -2475,11 +2502,9 @@ def create_app() -> FastAPI:
         # Get formats for default backend (elasticsearch)
         formats = sigma_mod.get_output_formats('elasticsearch')
         
-        # Initial rule search (optionally filtered by technique from URL)
-        initial_rules = sigma_mod.search_rules(
-            technique_filter=technique,
-            limit=100
-        )
+        # The rule browser's first rows (filtered by technique when the URL gives one)
+        from app.api.sigma import rules_list_context as _sigma_rows
+        rows = _sigma_rows(technique=technique)
 
         # Resolve active client and pin tenant context BEFORE any
         # detection_rules read — rules are per-tenant since 4.1.13 and the
@@ -2500,18 +2525,6 @@ def create_app() -> FastAPI:
         # Coverage data for MITRE pills (single DB connection — now tenant-scoped)
         covered_ttps, ttp_rule_counts = db.get_sigma_coverage_data()
 
-        # Build deploy targets from client's linked SIEMs
-        client_siems = db.get_client_siems(_cid) if _cid else []
-        deploy_targets = []
-        for s in client_siems:
-            if s.get("space"):
-                deploy_targets.append({
-                    "siem_id": s["id"],
-                    "space": s["space"],
-                    "label": s.get("name") or s["label"],
-                })
-
-        indices = sigma_mod.get_elastic_indices()
         pipeline_files = sigma_mod.list_saved_pipelines()
         template_files = sigma_mod.list_saved_templates()
         
@@ -2521,25 +2534,104 @@ def create_app() -> FastAPI:
             {
                 "user": user,
                 "active_page": "sigma",
-                "rules": initial_rules,
-                "total_count": len(all_rules),
-                "filtered_count": len(initial_rules),
+                **rows,
                 "categories": categories,
                 "backends": backends,
                 "pipelines": pipelines,
                 "formats": formats,
                 "technique_filter": technique,
                 "selected_rule_id": rule,
-                "auto_convert_selected_rule": autoconvert,
                 "covered_ttps": covered_ttps,
                 "ttp_rule_counts": ttp_rule_counts,
-                "deploy_targets": deploy_targets,
-                "indices": indices,
                 "pipeline_files": pipeline_files,
                 "template_files": template_files,
             }
         )
-    
+
+    @app.get("/elastic", response_class=HTMLResponse)
+    def elastic_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        client_id: ActiveClient,
+        tab: str = "",
+        technique: str = "",
+        rule: str = "",
+        hunt: str = "",
+    ):
+        """Elastic Rules page: Elastic's detection rules bundled in the image."""
+        from app.api.elastic import rules_list_context
+        from app.services import elastic_rules as er
+
+        if tab == "hunting":        # Elastic's hunting queries moved to the Hunting page
+            return RedirectResponse(url="/hunting?source=elastic" + (f"&hunt=elastic/{hunt}" if hunt else ""),
+                                    status_code=301)
+        facets = {"rule_count": 0}
+        with db.get_shared_connection() as conn:
+            # A reference DB built before Elastic's rules were bundled has no such tables.
+            if er.index_ready(conn):
+                facets = er.rule_facets(conn)
+        return render_template(
+            "pages/rules/elastic.html",
+            request,
+            {
+                "user": user,
+                "active_page": "elastic",
+                "technique_filter": technique,
+                "facets": facets,
+                "severities": er.SEVERITIES,
+                "statuses": er.STATUSES,
+                "source": er.commit(),
+                # Deploy to: this client's destinations
+                "destinations": [{"value": f"{s['id']}|{s.get('space') or 'default'}",
+                                  "label": s.get("name") or s.get("space") or s.get("label")}
+                                 for s in db.get_client_siems(client_id) or []],
+                **rules_list_context(db, client_id, technique=technique, selected=rule),
+            },
+        )
+
+    @app.get("/hunting", response_class=HTMLResponse)
+    def hunting_page(
+        request: Request,
+        user: CurrentUser,
+        db: DbDep,
+        client_id: ActiveClient,
+        technique: str = "",
+        source: str = "",
+        hunt: str = "",
+    ):
+        """Hunting page: Elastic's hunting queries and SigmaHQ's threat-hunting rules, bundled in the
+        image. ``hunt`` (``<source>/<id>``) opens one on arrival."""
+        from app.api.hunting import list_context
+        from app import sigma_helper
+        from app.services import elastic_rules as er
+        from app.services import hunt_runner, hunting
+
+        source = source if source in dict(hunting.SOURCES) else ""
+        with db.get_shared_connection() as conn:
+            counts = hunting.counts(conn)
+            platforms = hunting.platforms(conn)
+        dests = hunt_runner.destinations_for(db, client_id)
+        run = {"destinations": dests, "lookbacks": hunt_runner.LOOKBACKS, "lookback": "",
+               "pipelines": sigma_helper.get_available_pipelines(),
+               "index": (dests[0]["index"] if dests else "") or hunt_runner.DEFAULT_INDEX}
+        return render_template(
+            "pages/rules/hunting.html",
+            request,
+            {
+                "user": user,
+                "active_page": "hunting",
+                "technique_filter": technique,
+                "source_filter": source,
+                "sources": hunting.SOURCES,
+                "counts": counts,
+                "platforms": platforms,
+                "elastic_commit": er.commit(),
+                "run": run,
+                **list_context(db, client_id, technique=technique, source=source, selected=hunt),
+            },
+        )
+
     @app.get("/attack-tree", response_class=HTMLResponse)
     def attack_tree_page(request: Request, user: CurrentUser):
         """Attack Tree page (placeholder)."""

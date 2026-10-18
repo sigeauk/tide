@@ -1,0 +1,57 @@
+{#
+  The Hunting page's list (GET /api/hunting): Elastic's hunting queries and SigmaHQ's threat-hunting
+  rules together, each opening in the detail pane. Context: hunts, matching, total_count, offset,
+  next_offset, selected_id ("<source>/<id>"), source_labels, covered_ttps, ttp_rule_counts. With an
+  offset, only the next rows (components/library_more.html).
+#}
+{% from "macros/icons.html" import icon %}
+{% from "components/mitre_pill.html" import mitre_pill %}
+{% set _more = offset | default(0) > 0 %}
+{% if not _more %}
+<div class="rules-count">
+    {% if matching != total_count %}{{ matching }} of {{ total_count }} hunting queries match
+    {% else %}{{ total_count }} hunting queries{% endif %}
+</div>
+
+<div class="rules-list-container">
+{% endif %}
+    {% for hunt in hunts %}
+    {% set _techs = hunt.techniques or [] %}
+    {% set _key = hunt.source ~ '/' ~ hunt.hunt_id %}
+    <button name="Open Hunting Query" type="button"
+            class="rule-item-btn sigma-rule-card cve-card-item cve-card-item--available{% if selected_id == _key %} sigma-rule-selected{% endif %}"
+            data-item-id="{{ _key }}" data-click="library.open"
+            hx-get="/api/hunting/{{ _key }}" hx-include="#hunt-run-form" hx-target="#hunting-detail" hx-swap="innerHTML">
+        <span class="rule-item-id cve-card-item__id cve-card-item__id--pill">
+            {% if _techs %}
+            <span class="rule-item-id-summary">
+                {% if _techs[0].startswith('T') %}
+                {{ mitre_pill(_techs[0], covered=(_techs[0] in covered_ttps), rule_count=ttp_rule_counts.get(_techs[0], 0), clickable=true, size='sm') }}
+                {% else %}
+                <span class="mitre-pill mitre-neutral mitre-sm" title="MITRE ATLAS">{{ _techs[0] }}</span>
+                {% endif %}
+                {% if _techs | length > 1 %}<span class="mitre-pill mitre-more mitre-sm" title="{{ _techs[1:] | join(', ') }}">+{{ _techs | length - 1 }}</span>{% endif %}
+            </span>
+            {% else %}
+            <span class="rule-no-tech">No ATT&CK</span>
+            {% endif %}
+        </span>
+        <span class="rule-item-body cve-card-item__body">
+            <span class="rule-item-title cve-card-item__name" title="{{ hunt.name }}">{{ hunt.name }}</span>
+        </span>
+        <span class="rule-item-right cve-card-item__right">
+            <span class="sigma-status-text sigma-status-source-{{ hunt.source }}" title="{{ hunt.platform | replace('_', ' ') }}">{{ source_labels.get(hunt.source, hunt.source) }}</span>
+        </span>
+    </button>
+    {% else %}
+    {% if not _more %}
+    <div class="empty-output empty-output--short">
+        {{ icon('search-x', '24') }}
+        <p class="text-sm">No hunting queries found</p>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% with url="/api/hunting", filters="#hunting-filters", what="hunting queries" %}{% include "components/library_more.html" %}{% endwith %}
+{% if not _more %}
+</div>
+{% endif %}

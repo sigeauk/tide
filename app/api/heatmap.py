@@ -256,6 +256,13 @@ def get_technique_detail(
 
     # Sigma catalog rules related to this technique (status-ordered in helper).
     sigma_related_rules = sigma_mod.search_rules(technique_filter=ttp_upper, limit=250)
+    # Elastic's bundled rules for it (deployable ones: deprecated left out).
+    from app.services import elastic_rules as er
+    elastic_related_rules, elastic_related_count = [], 0
+    with db.get_shared_connection() as _conn:
+        if er.index_ready(_conn):
+            elastic_related_rules, elastic_related_count = er.search_rules(
+                _conn, technique=ttp_upper, limit=40, deployable=True)
 
     coverage_state = "active" if rule_count > 0 else ("latent" if has_rules else "none")
     coverage_label = "Active Coverage" if coverage_state == "active" else ("Latent Coverage" if coverage_state == "latent" else "No Coverage")
@@ -531,6 +538,8 @@ def get_technique_detail(
             "rule_count": rule_count,
             "total_rule_count": len(rules),
             "sigma_related_rules": sigma_related_rules,
+            "elastic_related_rules": elastic_related_rules,
+            "elastic_related_count": elastic_related_count,
             "coverage_state": coverage_state,
             "coverage_label": coverage_label,
             "coverage_detail": coverage_detail,

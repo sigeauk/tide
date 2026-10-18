@@ -1,4 +1,4 @@
-"""The reference data bundled in the TIDE image: ATT&CK (four domains), the Sigma rules, the CISA
+"""The reference data bundled in the TIDE image: ATT&CK (four domains), the Sigma and Elastic rules, the CISA
 KEV catalogue and the ATT&CK mappings (KEV -> ATT&CK, NIST 800-53 -> ATT&CK). For each: whether it
 is there, and what it says about itself (its version or date, and when it was fetched into the
 image), for the Dashboard's Built-in data section.
@@ -26,6 +26,7 @@ ITEMS = (
     ("mitre_mobile", "MITRE Mobile ATT&CK"),
     ("mitre_ics", "MITRE ICS ATT&CK"),
     ("sigma", "Sigma Rules"),
+    ("elastic", "Elastic detection rules"),
     ("cisa_kev", "CISA KEV catalogue"),
     ("attack_cve", "ATT&CK to CVE mapping"),
     ("nist", "NIST 800-53 to ATT&CK mapping"),
@@ -38,6 +39,8 @@ def _path(key: str) -> str:
         return os.path.join(s.mitre_repo_path, f"{key[len('mitre_'):]}-attack.json")
     if key == "sigma":
         return os.path.join(s.sigma_repo_path, "rules")
+    if key == "elastic":
+        return os.path.join(s.elastic_rules_repo_path, "rules")
     if key == "cisa_kev":
         override = s.cisa_kev_override_path
         return override if override and os.path.isfile(override) else s.cisa_kev_path
@@ -63,8 +66,19 @@ def _detail(key: str, path: str, mtime: float) -> str:
                 dates = re.findall(r'"modified":\s*"(\d{4}-\d{2}-\d{2})', fh.read())
             return f"ATT&CK data updated {max(dates)}" if dates else "ATT&CK data"
         if key == "sigma":
-            count = sum(1 for _, _, files in os.walk(path) for f in files if f.endswith((".yml", ".yaml")))
-            return f"{count:,} rules"
+            from app.services.hunting import SIGMA_HUNTING_DIR
+
+            def count(folder):
+                return sum(1 for _, _, files in os.walk(folder) for f in files if f.endswith((".yml", ".yaml")))
+            hunts = count(os.path.join(os.path.dirname(path), SIGMA_HUNTING_DIR))
+            return f"{count(path):,} rules" + (f" and {hunts:,} hunting rules" if hunts else "")
+        if key == "elastic":
+            from app.services import elastic_rules as er
+            root = os.path.dirname(path)
+            rules = sum(1 for sub in er.RULE_DIRS for _ in er.toml_files(root, sub))
+            hunts = sum(1 for _ in er.toml_files(root, er.HUNTING_DIR))
+            when = er.commit(root)["date"]
+            return f"{rules:,} rules and {hunts:,} hunting queries" + (f" from {when}" if when else "")
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
         if key == "cisa_kev":
@@ -86,7 +100,7 @@ def status() -> List[dict]:
     out = []
     for key, name in ITEMS:
         path = _path(key)
-        present = os.path.isdir(path) if key == "sigma" else os.path.isfile(path)
+        present = os.path.isdir(path) if key in ("sigma", "elastic") else os.path.isfile(path)
         if not present:
             tip = "Not found in this image"
         else:

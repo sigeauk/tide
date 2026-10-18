@@ -791,6 +791,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 spaces = _reachable_spaces(db, elastic_helper, siem, kurl, token, spaces)
                 if not spaces:
                     continue
+                # Which of Elastic's per-version builds of its rules this SIEM gets (Rule Health's
+                # Upstream column compares its rules with those).
+                try:
+                    db.record_siem_version(siem_id, elastic_helper.kibana_version(kurl, token))
+                except Exception:
+                    logger.warning("Could not read the Elastic version of SIEM '%s'", siem.get("label"), exc_info=True)
                 siem_spaces_attempted[siem_id] = set(spaces)
                 siem_search_history = {
                     (rid, sp): samples for (rid, sid, sp), samples in search_history.items() if sid == siem_id
@@ -1036,6 +1042,12 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         logger.info(f"Removed {pruned} score-history row(s) of deleted rules for client_id={client_id}")
                 except Exception as _prune_exc:  # noqa: BLE001
                     logger.error(f"Score-history prune failed for client_id={client_id}: {_prune_exc}")
+
+                # Rules seen for the first time: note the Elastic or Sigma rule each came from.
+                from app.services import rule_origins
+                matched = rule_origins.backfill_tenant(db, client_id)
+                if matched:
+                    logger.info(f"Matched {matched} rule(s) to their Elastic or Sigma origin for client_id={client_id}")
 
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count

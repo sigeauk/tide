@@ -195,6 +195,9 @@ class RuleFilters(BaseModel):
     # Lifecycle state checklist: any of "unlinked" (Live), "linked", "offline", "deprecated"
     # (database.normalize_rule_states; an old "live" means both of the first two). Empty = all.
     state: List[str] = Field(default_factory=list)
+    # Upstream checklist: any of "update", "current", "retired", "removed" (rule_origins.STATES) or
+    # "own" (did not come from Elastic's or the Sigma rules). Empty = all.
+    upstream: List[str] = Field(default_factory=list)
     validated_from: Optional[datetime] = None
     validated_to: Optional[datetime] = None
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc

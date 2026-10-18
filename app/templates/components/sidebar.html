@@ -67,7 +67,7 @@ Children are indented, slightly muted, icon-free.
         {% endif %}
 
         <!-- ── Rules ── -->
-        {% if not user or user.can_read('page:rules') or user.can_read('page:sigma') %}
+        {% if not user or user.can_read('page:rules') or user.can_read('page:sigma') or user.can_read('page:elastic') or user.can_read('page:hunting') %}
         <div class="nav-group collapsed" id="nav-group-rules">
             <button name="Rules" class="nav-item nav-group__trigger" data-click="nav.group" data-group="nav-group-rules" data-tooltip="Rules">
                 {{ icon('shield-check', '18', 'nav-icon-svg') }}
@@ -83,6 +83,16 @@ Children are indented, slightly muted, icon-free.
                 {% if not user or user.can_read('page:sigma') %}
                 <a name="Sigma" href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">
                     <span class="nav-label">Sigma</span>
+                </a>
+                {% endif %}
+                {% if not user or user.can_read('page:elastic') %}
+                <a name="Elastic" href="/elastic" class="nav-child {% if active_page == 'elastic' %}active{% endif %}">
+                    <span class="nav-label">Elastic</span>
+                </a>
+                {% endif %}
+                {% if not user or user.can_read('page:hunting') %}
+                <a name="Hunting" href="/hunting" class="nav-child {% if active_page == 'hunting' %}active{% endif %}">
+                    <span class="nav-label">Hunting</span>
                 </a>
                 {% endif %}
             </div>

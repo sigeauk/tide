@@ -1024,6 +1024,14 @@ def _es_get(session, base_url, es_direct_url, path, timeout=60):
                         timeout=timeout)
 
 
+def _es_post(session, base_url, es_direct_url, path, body, timeout=60):
+    """POST ``body`` to an Elasticsearch path directly, or through the Kibana console proxy."""
+    if es_direct_url:
+        return session.post(f"{es_direct_url}{path}", json=body, verify=siem_verify(es_direct_url), timeout=timeout)
+    return session.post(f"{base_url}/api/console/proxy", params={"path": path, "method": "POST"},
+                        json=body, timeout=timeout)
+
+
 def fetch_field_caps(session, base_url, pattern, es_direct_url=None):
     """Ask the SIEM what an index pattern maps, in ONE call covering every matching index.
 
@@ -2495,6 +2503,39 @@ def _lookup_rule_by_rule_id(session, base_url: str, space: str, rule_id: str):
     raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
 
 
+def kibana_version(kibana_url: str, api_key: str) -> Optional[str]:
+    """The SIEM's Kibana version ("8.19.11"), or None when it could not be read."""
+    if not (kibana_url and api_key):
+        return None
+    try:
+        resp = _make_session(api_key, kibana_url).get(f"{kibana_url.rstrip('/')}/api/status")
+        if resp.status_code == 200:
+            return ((resp.json() or {}).get("version") or {}).get("number")
+    except Exception as exc:
+        log_error(f"Kibana version check failed: {exc}")
+    return None
+
+
+def create_rule_as_given(rule: dict, space: str, kibana_url: str, api_key: str) -> Tuple[bool, str, Optional[str]]:
+    """Create ``rule`` in ``space`` exactly as given, its ``rule_id`` included (unlike
+    ``create_detection_rule``, which lets Kibana choose one and needs a query, so it cannot create a
+    machine-learning rule). Returns ``(success, message, rule_id)``."""
+    if not (kibana_url and api_key):
+        return False, "Missing kibana_url or api_key", None
+    base_url = kibana_url.rstrip("/")
+    try:
+        response = _make_session(api_key, kibana_url).post(
+            f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules", json=rule)
+    except Exception as exc:
+        log_error(f"Create rule failed: {exc}")
+        return False, str(exc), None
+    if response.status_code not in (200, 201):
+        return False, _kibana_error(response), None
+    data = response.json() or {}
+    log_info(f"Created rule '{rule.get('name')}' as {data.get('rule_id')} in {space}")
+    return True, f"Created rule '{rule.get('name')}'", data.get("rule_id") or rule.get("rule_id")
+
+
 def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
     """Ask Elastic -- not TIDE's cache -- whether ``space`` already holds ``rule_id``.
 
@@ -2515,9 +2556,12 @@ def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
                                source_kibana_url=None, source_api_key=None,
                                target_kibana_url=None, target_api_key=None,
-                               delete_source=True, on_target_recreated=None):
+                               delete_source=True, on_target_recreated=None, overwrite_rule_id=None):
     """
     Promote a rule from source space to target space, potentially across different SIEMs.
+
+    ``overwrite_rule_id``: Merge's linked rule, whose rule_id usually differs from this one's. Its
+    content is overwritten in place, and nothing is created when the target no longer has it.
 
     Source/target ``kibana_url`` and ``api_key`` are resolved per-tenant from
     ``siem_inventory`` / ``client_siem_map`` by the caller. The legacy global
@@ -2568,13 +2612,19 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # a duplicate.
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
     target_existing_id = None
-    try:
-        found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, rule_id)
-    except Exception:
-        found = None
-    if found:
-        target_existing_id = found.get("rule_id") or found.get("id") or rule_id
-    if target_existing_id is None:
+    if overwrite_rule_id:
+        found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, overwrite_rule_id)
+        if not found:
+            return False, f"The rule to merge onto is no longer in {target_space}, so nothing was changed."
+        target_existing_id = found.get("rule_id") or overwrite_rule_id
+    else:
+        try:
+            found = _lookup_rule_by_rule_id(tgt_session, tgt_base, target_space, rule_id)
+        except Exception:
+            found = None
+        if found:
+            target_existing_id = found.get("rule_id") or found.get("id") or rule_id
+    if target_existing_id is None and not source_rule_id:
         # A real Elastic rule always has a rule_id, so this only fires when the source payload
         # was missing one — match by exact name as a last resort. This is a single-page scan,
         # not authoritative on a target space with more rules than fit in one page; it exists

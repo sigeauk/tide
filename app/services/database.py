@@ -116,7 +116,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 86
+SCHEMA_VERSION = 89
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -3780,7 +3780,77 @@ class DatabaseService:
             self._set_schema_version(conn, 86)
             logger.info("Migration 86: added users.display_name and avatar; page:documentation readable by every role.")
 
+        # ── Migration 87: the Elastic Rules page ──
+        if current_version < 87:
+            self.seed_elastic_page_permissions(conn)
+            self._set_schema_version(conn, 87)
+            logger.info("Migration 87: page:elastic seeded from page:sigma for every client.")
+
+        # ── Migration 88: where each rule came from (rule_origins, app/services/rule_origins.py) ──
+        # The table only; rules already synced are matched to their Elastic or Sigma rule at the
+        # next sync or Rule Health load (that needs the reference DB, which a migration connection
+        # does not attach). Additive only.
+        if current_version < 88:
+            from app.services import rule_origins
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 88: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            migrated = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 88: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        rule_origins.ensure(tconn)
+                        migrated += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 88: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 88)
+            logger.info("Migration 88: rule_origins ensured in %d tenant DB(s).", migrated)
+
+        # ── Migration 89: the Hunting page ──
+        if current_version < 89:
+            self.seed_page_permissions(conn, "page:hunting", "page:elastic")
+            self._set_schema_version(conn, 89)
+            logger.info("Migration 89: page:hunting seeded from page:elastic for every client.")
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
+
+    @staticmethod
+    def seed_page_permissions(conn, resource: str, like: str) -> None:
+        """A new page's resource for every client (shared DB). Idempotent. Each role starts with what
+        it has on ``like`` on that client; a built-in role with no entry there gets the defaults:
+        read for all, write for ADMIN and ANALYST."""
+        conn.execute(
+            "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+            "SELECT role_id, client_id, ?, can_read, can_write FROM role_permissions "
+            "WHERE resource = ? AND client_id IS NOT NULL ON CONFLICT DO NOTHING", [resource, like]
+        )
+        writes = {"ADMIN": True, "ANALYST": True, "ENGINEER": False}
+        roles = conn.execute(
+            "SELECT id, name FROM roles WHERE name IN ('ADMIN', 'ANALYST', 'ENGINEER')").fetchall()
+        for (cid,) in conn.execute("SELECT id FROM clients").fetchall():
+            for rid, name in roles:
+                conn.execute(
+                    "INSERT INTO role_permissions (role_id, client_id, resource, can_read, can_write) "
+                    "VALUES (?, ?, ?, true, ?) ON CONFLICT DO NOTHING",
+                    [rid, cid, resource, writes[name]],
+                )
+
+    @classmethod
+    def seed_elastic_page_permissions(cls, conn) -> None:
+        """Migration 87: page:elastic as each role has page:sigma (the two rule libraries)."""
+        cls.seed_page_permissions(conn, "page:elastic", "page:sigma")
 
     @staticmethod
     def relink_mappings_by_object_id(tconn) -> int:
@@ -4707,6 +4777,23 @@ class DatabaseService:
 
     _checked_rule_ready: set = set()
     _rule_keys_ready: set = set()
+    _origins_ready: set = set()
+
+    def upstream_statuses(self, keys=None) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
+        """Each rule's upstream status (``rule_origins.statuses``) in the active tenant, of ``keys``
+        or all. Rules synced before origins were tracked are matched first, once per tenant DB per
+        process (a sync matches new ones)."""
+        from app.services import rule_origins
+        from app.services.tenant_manager import get_tenant_db_path
+        with self.get_connection() as conn:
+            tenant = get_tenant_db_path()
+            if tenant not in self._origins_ready:
+                try:
+                    rule_origins.backfill(conn)
+                except Exception:
+                    logger.warning("Rule origin backfill failed", exc_info=True)
+                self._origins_ready.add(tenant)
+            return rule_origins.statuses(conn, keys)
 
     def _ensure_rule_key_columns(self, conn) -> None:
         """Add detection_rules.kibana_rule_id / rule_language and fill them for rows written before
@@ -5014,7 +5101,8 @@ class DatabaseService:
             # validation-date sort above.
             needs_state_filter = bool(filters.state)
             needs_validated_range = filters.validated_from is not None or filters.validated_to is not None
-            needs_post_filter = needs_state_filter or needs_validated_range
+            needs_upstream_filter = bool(filters.upstream)
+            needs_post_filter = needs_state_filter or needs_validated_range or needs_upstream_filter
             fetch_all = is_validation_sort or needs_post_filter
             
             # Apply sorting (DB-side for DB columns)
@@ -5093,6 +5181,12 @@ class DatabaseService:
                         return s
                     return "linked" if (r.rule_id, r.siem_id, r.space) in linked else "unlinked"
                 rules = [r for r in rules if _badge(r) in wanted_states]
+            if needs_upstream_filter:
+                # Against the Elastic or Sigma rule each came from (rule_origins); "own" = neither.
+                wanted_upstream = set(filters.upstream)
+                upstream = self.upstream_statuses()
+                rules = [r for r in rules
+                         if upstream.get((r.rule_id, r.siem_id, r.space), {}).get("state", "own") in wanted_upstream]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
@@ -5310,6 +5404,10 @@ class DatabaseService:
                 "WHERE rule_id = ? AND siem_id = ? AND space = ? RETURNING rule_id",
                 [rule_id, siem_id, space],
             ).fetchone()
+            from app.services import rule_origins
+            rule_origins.ensure(conn)
+            conn.execute("DELETE FROM rule_origins WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                         [rule_id, siem_id, space])
         return deleted is not None
 
     def replace_rule_id(
@@ -5805,6 +5903,24 @@ class DatabaseService:
                 "VALUES (?, ?, ?, ?, now())",
                 [siem_id, space, reachable, reason or None],
             )
+
+    SIEM_VERSION_DDL = """
+        CREATE TABLE IF NOT EXISTS siem_versions (
+            siem_id    VARCHAR PRIMARY KEY,
+            version    VARCHAR NOT NULL,
+            checked_at TIMESTAMP DEFAULT now()
+        )
+    """
+
+    def record_siem_version(self, siem_id: str, version: Optional[str]) -> None:
+        """Store the Elastic version a SIEM runs, read at each sync and deploy: Elastic ships some
+        of its rules under other version numbers for newer Elastic versions."""
+        if not (siem_id and version):
+            return
+        with self.get_connection() as conn:
+            conn.execute(self.SIEM_VERSION_DDL)
+            conn.execute("INSERT OR REPLACE INTO siem_versions (siem_id, version, checked_at) VALUES (?, ?, now())",
+                         [siem_id, version])
 
     def get_offline_scopes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
         """``(siem_id, space)`` -> ``{reason, checked_at}`` for every destination that failed its

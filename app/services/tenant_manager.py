@@ -727,6 +727,9 @@ def _create_tenant_schema(conn):
     """)
     # ── Rule links + per-destination reachability (same DDL as Migration 74) ──
     DatabaseService.create_rule_link_tables(conn)
+    # ── Where each rule came from (same DDL as Migration 88) ──
+    from app.services import rule_origins
+    rule_origins.ensure(conn)
 
     logger.info("Tenant schema created successfully")
 

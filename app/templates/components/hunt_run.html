@@ -1,0 +1,67 @@
+{#
+  Running a hunting query against one of the tenant's SIEMs (the Hunting page; app/services/hunt_runner.py).
+  run_bar(run): the page's settings row, like the Sigma page's (where, over what time, and how a Sigma
+  rule is converted), kept while hunts are opened; every Run and Save sends it (#hunt-run-form). A
+  change to the pipeline or index pattern shows the open hunt again (library.js, data-refresh-view).
+  run_button(...), save_button(...) and run_result(n) sit with each query: Run on the destination's
+  SIEM, Save to Kibana (an ES|QL query, as a Discover saved search) in its space.
+  ``run``: {destinations, lookbacks, lookback, pipelines, index, can_save}.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+
+{% macro run_bar(run) -%}
+<div class="sigma-header-row lib-settings" id="hunt-run-form" data-library-settings>
+    {% if run.destinations %}
+    <div class="sigma-select-group">
+        <label for="hunt-destination" title="Run uses this destination's SIEM; Save to Kibana saves into its space">Run on / save to</label>
+        <select id="hunt-destination" name="destination" class="sigma-select sigma-select--wide">
+            {% for d in run.destinations %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
+        </select>
+    </div>
+    <div class="sigma-select-group">
+        <label for="hunt-lookback">Time</label>
+        <select id="hunt-lookback" name="lookback" class="sigma-select">
+            {% for value, label in run.lookbacks %}<option value="{{ value }}"{% if value == run.lookback %} selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+    </div>
+    {% else %}
+    <p class="text-muted text-sm lib-settings__note">Link a SIEM to this client to run hunting queries against it.</p>
+    {% endif %}
+    <div class="sigma-select-group">
+        <label for="hunt-pipeline" title="How a Sigma threat-hunting rule is converted to ES|QL">Sigma pipeline</label>
+        <select id="hunt-pipeline" name="pipeline" class="sigma-select sigma-select--wide" data-refresh-view>
+            <option value="">Automatic (ECS Windows for Windows rules)</option>
+            {% for key, label in run.pipelines.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
+        </select>
+    </div>
+    <div class="sigma-select-group lib-settings__wide">
+        <label for="hunt-index" title="The indices a Sigma rule or an EQL query reads (ES|QL queries name their own)">Index pattern</label>
+        <input type="text" id="hunt-index" name="index" class="sigma-select" value="{{ run.index }}" spellcheck="false" data-refresh-view>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro run_button(source, hunt_id, n, kind, run) -%}
+{% if run.destinations and kind != 'osquery' %}
+<button name="Run Hunting Query" type="button" class="btn btn-primary btn-sm"
+        hx-post="/api/hunting/{{ source }}/{{ hunt_id }}/run?query_no={{ n }}" hx-include="#hunt-run-form"
+        hx-target="#hunt-run-result-{{ n }}" hx-swap="innerHTML" hx-indicator="#hunt-run-result-{{ n }}"
+        title="Run it on the SIEM chosen above and show what it finds">{{ icon_text('binoculars', 'Run', '12') }}</button>
+{% elif kind == 'osquery' %}
+<span class="status-pill status-muted" title="Osquery runs on your hosts (Osquery Manager), not against the SIEM">Osquery</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro save_button(source, hunt_id, n, kind, run) -%}
+{% if run.destinations and run.can_save and kind == 'esql' %}
+<button name="Save To Kibana" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/hunting/{{ source }}/{{ hunt_id }}/save?query_no={{ n }}" hx-include="#hunt-run-form"
+        hx-target="#hunt-save-result-{{ n }}" hx-swap="innerHTML" hx-disabled-elt="this"
+        title="Save it in the chosen destination's Kibana space as a Discover search (saving again replaces it)">{{ icon_text('save', 'Save to Kibana', '12') }}</button>
+{% endif %}
+{%- endmacro %}
+
+{% macro run_result(n) -%}
+<div class="hunt-save-result" id="hunt-save-result-{{ n }}" aria-live="polite"></div>
+<div class="hunt-run-result" id="hunt-run-result-{{ n }}" aria-live="polite"></div>
+{%- endmacro %}

@@ -145,6 +145,7 @@ class Settings(BaseSettings):
     # --- BUILT-IN DATA (baked into the Docker image; app/services/builtin_data.py reports on it) ---
     sigma_repo_path: str = Field(default="/opt/repos/sigma", alias="SIGMA_REPO_PATH")
     mitre_repo_path: str = Field(default="/opt/repos/mitre", alias="MITRE_REPO_PATH")
+    elastic_rules_repo_path: str = Field(default="/opt/repos/elastic", alias="ELASTIC_RULES_REPO_PATH")
     
     # --- CVE / VULNERABILITY INTELLIGENCE (baked into Docker image) ---
     cisa_kev_path: str = Field(

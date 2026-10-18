@@ -451,6 +451,8 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         "rule": rule,
         "siem_id": getattr(rule, "siem_id", "") if rule else "",
         "space": getattr(rule, "space", "default") if rule else "default",
+        # A converted Sigma rule: Create records it as the rule's origin.
+        "sigma_id": "" if rule else str((prefill or {}).get("sigma_id") or ""),
     }
 
 
@@ -570,9 +572,17 @@ def _form_changes(rule, form, technique_lookup: dict, username: str) -> tuple[di
     never sent, and Kibana keeps whatever it holds for it. ``problem`` is a sentence for the user
     when the change can't be made.
     """
-    before, *_ = _build_rule_payload(_as_form(_rule_form_values(rule, username)), technique_lookup, username)
-    after, *_ = _build_rule_payload(form, technique_lookup, username)
     raw = getattr(rule, "raw_data", None) or {}
+    return changes_against(_rule_form_values(rule, username), str(raw.get("type") or "query"),
+                           form, technique_lookup, username)
+
+
+def changes_against(shown: dict, rule_type: str, form, technique_lookup: dict, username: str) -> tuple[dict, tuple, str]:
+    """``_form_changes`` for any rule form: what differs between the values the form was shown
+    with (``shown``, as ``_rule_form_values`` gives them) and what it posted, for a rule of
+    ``rule_type``. Also used to deploy one of Elastic's rules with the user's changes."""
+    before, *_ = _build_rule_payload(_as_form(shown), technique_lookup, username)
+    after, *_ = _build_rule_payload(form, technique_lookup, username)
     if not after["name"]:
         return {}, (), "The rule needs a name."
 
@@ -588,12 +598,11 @@ def _form_changes(rule, form, technique_lookup: dict, username: str) -> tuple[di
     removed = tuple(k for k in _CLEARABLE if k in before and k not in after)
 
     if "language" in changes:
-        rule_type = str(raw.get("type") or "query")
         if rule_type not in _LANGUAGE_TYPES:
             return {}, (), (f"A {_rule_type_label(rule_type)} rule's query language can't be changed. "
                             "Set the language back, or change it in Kibana.")
         changes["type"] = after["type"]
-    if "query" in changes and not changes["query"] and str(raw.get("type") or "query") != "query":
+    if "query" in changes and not changes["query"] and rule_type != "query":
         return {}, (), "The query can't be empty."
     return changes, removed, ""
 
@@ -1029,6 +1038,7 @@ def list_rules(
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
     state: list[str] = Query([]),
+    upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validated_from: Optional[str] = Query(None),
@@ -1058,6 +1068,7 @@ def list_rules(
             space=space if space else None,
             enabled=None if not enabled else (enabled.lower() == 'true'),
             state=[s for s in state if s],
+            upstream=[u for u in upstream if u],
             min_score=min_score_int,
             max_score=max_score_int,
             validated_from=validated_from_dt,
@@ -1157,6 +1168,7 @@ def get_metrics(
     space: Optional[str] = Query(None),
     enabled: Optional[str] = Query(None),
     state: list[str] = Query([]),
+    upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
     validated_from: Optional[str] = Query(None),
@@ -1164,7 +1176,8 @@ def get_metrics(
 ):
     """Get rule health metrics, scoped to the same filters as the rules grid."""
     ctx = filtered_rule_metrics(db, client_id, {
-        "search": search, "space": space, "enabled": enabled, "state": state, "min_score": min_score,
+        "search": search, "space": space, "enabled": enabled, "state": state, "upstream": upstream,
+        "min_score": min_score,
         "max_score": max_score, "validated_from": validated_from, "validated_to": validated_to,
     })
     return request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
@@ -1186,6 +1199,7 @@ def filtered_rule_metrics(db, client_id: str, params: dict) -> dict:
         space=params.get("space") or None,
         enabled=None if not enabled else (enabled.lower() == 'true'),
         state=[s for s in (params.get("state") or []) if s],
+        upstream=[u for u in (params.get("upstream") or []) if u],
         min_score=_int(params.get("min_score")),
         max_score=_int(params.get("max_score")),
         validated_from=_parse_date_bound(params.get("validated_from"), end_of_day=False),
@@ -1800,6 +1814,11 @@ async def create_rule(
                 "message": message,
             },
         )
+        sigma_id = str(form_data.get("sigma_id") or "").strip()
+        if sigma_id and new_rule_id:
+            from app.services import rule_origins
+            rule_origins.record_for_client(db, client_id, (new_rule_id, siem_id, space), "sigma", sigma_id,
+                                           "created", user.username)
 
         # Sync so the new rule shows up. Rule Health shows the sync's progress; from anywhere else
         # (a technique window's Sigma Convert) the sync just runs.
@@ -2108,6 +2127,9 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
     for r in rules:
         key = f"{r.rule_id}|{r.siem_id or ''}|{r.space or ''}"
         states[key], titles[key] = _lifecycle(r, links.get((r.rule_id, r.siem_id, r.space)), offline)
+    # Whether the Elastic or Sigma rule each came from has a newer version (rule_origins).
+    upstream = {f"{k[0]}|{k[1] or ''}|{k[2] or ''}": v
+                for k, v in db.upstream_statuses([(r.rule_id, r.siem_id, r.space) for r in rules]).items()}
 
     return {
         "space_labels": _build_space_labels(db, client_id),
@@ -2115,6 +2137,7 @@ def build_rule_card_context(db, client_id: str, rules) -> dict:
         "space_colors_by_pair": _build_space_colors_by_pair(db, client_id),
         "lifecycle_states": states,
         "lifecycle_titles": titles,
+        "upstream_states": upstream,
     }
 
 
@@ -2298,7 +2321,16 @@ def _build_rule_modal_context(
         for s in (db.get_client_siems(client_id) or [])
         if not (s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower())
     ]
+    from app.services import rule_origins
+    key = (rule.rule_id, actual_siem, space)
+    with db.get_connection() as conn:
+        upstream = rule_origins.statuses(conn, [key]).get(key)
+    if upstream and upstream["parent"]:
+        parent = db.get_rule_by_id(upstream["parent"][0], upstream["parent"][2], siem_id=upstream["parent"][1],
+                                   client_id=client_id)
+        upstream["parent_name"] = parent.name if parent else ""
     return {
+        "upstream": upstream,
         "rule": rule,
         "space": space,
         "siem_id": actual_siem,
@@ -2676,6 +2708,8 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
         if isinstance(rec.get("search_sample"), dict):
             db.record_search_time_samples([{**rec["search_sample"], "siem_id": siem_id}])
         db.set_rule_deprecated(rule_id, siem_id, space, False)
+        from app.services import rule_origins
+        rule_origins.backfill_tenant(db, client_id)
         action = "synced"
         # No score delta here: "before" is this rule's score as of the *start* of this call,
         # which a just-prior action (recording a search time, say) may have already moved —

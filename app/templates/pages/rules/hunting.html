@@ -1,0 +1,81 @@
+{#
+  Hunting: Elastic's hunting queries and SigmaHQ's threat-hunting rules, both built into TIDE
+  (app/services/hunting.py), laid out like the Sigma and Elastic Rules pages: a settings row for
+  running them on one of the tenant's SIEMs (components/hunt_run.html), one filtered list on the
+  left, the open hunt on the right (library.js). ?hunt=<source>/<id> opens one on arrival.
+#}
+{% extends "base.html" %}
+{% from "macros/icons.html" import icon %}
+{% from "components/hunt_run.html" import run_bar %}
+
+{% block title %}Hunting | TIDE{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div class="page-header__text">
+        <h1 class="page-title-hero">Hunting</h1>
+        <p class="page-subtitle">Elastic's hunting queries and SigmaHQ's threat-hunting rules, built into TIDE: searches for activity your detection rules may not alert on.</p>
+    </div>
+</div>
+
+{% if not counts.elastic and not counts.sigma %}
+<div class="empty-output">
+    {{ icon('package', '32') }}
+    <p>No hunting queries are in this TIDE image. They are added when the image is built; install a newer TIDE release to get them.</p>
+</div>
+{% else %}
+{{ run_bar(run) }}
+
+<div class="sigma-workbench lib-workbench" data-library="hunt">
+    <div class="rule-browser open">
+        <div class="rule-browser-header">
+            <span>{{ icon('search', '16') }} Hunt browser</span>
+            <span class="text-muted text-sm">{{ counts.elastic }} from Elastic · {{ counts.sigma }} from Sigma</span>
+        </div>
+        <div class="rule-browser-content">
+            <form class="browser-filters" id="hunting-filters" hx-get="/api/hunting"
+                  hx-target="#hunting-list" hx-trigger="input delay:300ms, submit">
+                <div class="browser-filter browser-filter--wide">
+                    <label for="hunting-q">Search</label>
+                    <input type="text" id="hunting-q" name="q" placeholder="Name, description, query…">
+                </div>
+                <div class="browser-filter">
+                    <label for="hunting-technique">MITRE Technique</label>
+                    <input type="text" id="hunting-technique" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
+                </div>
+                <div class="browser-filter">
+                    <label for="hunting-source">Source</label>
+                    <select id="hunting-source" name="source">
+                        <option value="">All</option>
+                        {% for value, label in sources %}<option value="{{ value }}" {% if value == source_filter %}selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="browser-filter">
+                    <label for="hunting-platform">Platform</label>
+                    <select id="hunting-platform" name="platform">
+                        <option value="">All</option>
+                        {% for p in platforms %}<option value="{{ p }}">{{ p | replace('_', ' ') }}</option>{% endfor %}
+                    </select>
+                </div>
+                <input type="hidden" name="selected" value="{{ selected_id }}">
+            </form>
+            <div id="hunting-list" class="lib-list">
+                {% include "partials/hunting_list.html" %}
+            </div>
+        </div>
+    </div>
+
+    <div class="sigma-panel lib-detail-panel">
+        <div id="hunting-detail" class="lib-detail"
+             {% if selected_id %}hx-get="/api/hunting/{{ selected_id }}" hx-include="#hunt-run-form" hx-trigger="load"{% endif %}>
+            <div class="empty-output">
+                {{ icon('binoculars', '32') }}
+                <p>Select a hunting query to see what it looks for.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<div id="slide-panel-container"></div>
+{% endblock %}

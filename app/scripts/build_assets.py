@@ -53,6 +53,7 @@ PAGE_SCRIPTS = [
     "cve_overview",
     "heatmap",
     "hosts",
+    "library",
     "management",
     "misc",
     "preferences",

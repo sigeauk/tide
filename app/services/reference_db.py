@@ -1,7 +1,7 @@
 """App-wide reference data in one read-only DuckDB.
 
-MITRE ATT&CK, NIST 800-53 mappings and the Sigma rule index are identical for
-every tenant, so they live in ``reference.duckdb`` (baked into the image at
+MITRE ATT&CK, NIST 800-53 mappings and the Sigma and Elastic rule indexes are
+identical for every tenant, so they live in ``reference.duckdb`` (baked into the image at
 build time) instead of being stored in ``tide.duckdb`` or copied into each
 tenant database.
 
@@ -29,7 +29,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 # Bump when the reference schema or the way it is populated changes.
-BUILD_VERSION = 1
+BUILD_VERSION = 6
 
 REFERENCE_TABLES = (
     "mitre_campaign_software",
@@ -50,6 +50,9 @@ REFERENCE_TABLES = (
     "nist_capabilities",
     "nist_capability_groups",
     "sigma_rules_index",
+    "elastic_rules_index",
+    "elastic_hunts_index",
+    "sigma_hunts_index",
 )
 
 # Tables that once tracked load state inside tide.duckdb.
@@ -73,6 +76,12 @@ def _sigma_rules_dir() -> str:
         if os.path.isdir(rules):
             return rules
     return os.path.join(os.getenv("SIGMA_REPO_PATH", "/opt/repos/sigma"), "rules")
+
+
+def _sigma_hunting_dir() -> str:
+    """SigmaHQ's threat-hunting rules, kept beside its detection rules."""
+    from app.services.hunting import SIGMA_HUNTING_DIR
+    return os.path.join(os.path.dirname(_sigma_rules_dir()), SIGMA_HUNTING_DIR)
 
 
 def _sigma_digest(rules_dir: str) -> str:
@@ -102,6 +111,12 @@ def source_digest() -> str:
     rules_dir = _sigma_rules_dir()
     if os.path.isdir(rules_dir):
         h.update(_sigma_digest(rules_dir).encode("ascii"))
+    hunting_dir = _sigma_hunting_dir()
+    if os.path.isdir(hunting_dir):
+        h.update(_sigma_digest(hunting_dir).encode("ascii"))
+    from app.services import elastic_rules
+    if elastic_rules.available():
+        h.update(elastic_rules.source_digest(elastic_rules.repo_path()).encode("ascii"))
     return h.hexdigest()
 
 
@@ -152,6 +167,22 @@ def _build(tmp_path: str, digest: str) -> Dict[str, Any]:
             except Exception as exc:
                 logger.error("Sigma index build failed", exc_info=True)
                 out["errors"].append(f"sigma index: {exc}")
+        from app.services import elastic_rules
+        # The tables always exist, empty when the image has no Elastic rules, so readers need no check.
+        conn.execute(elastic_rules.RULES_DDL)
+        conn.execute(elastic_rules.HUNTS_DDL)
+        if elastic_rules.available():
+            try:
+                elastic_rules.build_index(conn)
+            except Exception as exc:
+                logger.error("Elastic rules index build failed", exc_info=True)
+                out["errors"].append(f"elastic rules index: {exc}")
+        from app.services import hunting
+        try:
+            hunting.build_sigma_index(conn, _sigma_hunting_dir())    # the table exists even when empty
+        except Exception as exc:
+            logger.error("Sigma hunting index build failed", exc_info=True)
+            out["errors"].append(f"sigma hunting index: {exc}")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS reference_meta "
             "(key VARCHAR PRIMARY KEY, value VARCHAR, updated_at TIMESTAMP DEFAULT now())"
@@ -179,7 +210,9 @@ def ensure_reference_db(force: bool = False) -> Dict[str, Any]:
     """
     path = reference_db_path()
     result: Dict[str, Any] = {"updated": False, "path": path, "reason": ""}
-    if not (os.path.isdir(_MITRE_DIR) or os.path.isdir(_MAPPINGS_DIR) or os.path.isdir(_sigma_rules_dir())):
+    from app.services import elastic_rules
+    if not (os.path.isdir(_MITRE_DIR) or os.path.isdir(_MAPPINGS_DIR) or os.path.isdir(_sigma_rules_dir())
+            or elastic_rules.available()):
         result["reason"] = "No reference source files found; nothing to build."
         return result
 

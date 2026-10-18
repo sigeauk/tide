@@ -217,6 +217,95 @@ def extract_mitre_tactics(rule: Dict) -> List[str]:
     return list(dict.fromkeys(tactics))  # dedupe, preserve order
 
 
+# Sigma value modifiers in words, for reading a rule's detection.
+_MODIFIER_WORDS = {
+    "contains": "contains", "startswith": "starts with", "endswith": "ends with", "all": "all of",
+    "re": "matches regex", "cidr": "in CIDR range", "base64": "base64", "base64offset": "base64 at any offset",
+    "windash": "any dash", "exists": "exists", "gt": ">", "gte": "≥", "lt": "<", "lte": "≤",
+    "fieldref": "equals field", "wide": "UTF-16", "utf16le": "UTF-16LE", "utf16be": "UTF-16BE",
+    "utf16": "UTF-16", "expand": "expanded", "cased": "case-sensitive", "i": "ignore case",
+    "m": "multi-line", "s": "dot matches newline",
+}
+
+
+def _detection_value(value) -> str:
+    if value is None:
+        return "(empty)"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+def _detection_clause(key, value) -> Dict:
+    field, *modifiers = str(key).split("|")
+    values = value if isinstance(value, list) else [value]
+    return {"field": field or "Keywords", "modifiers": [_MODIFIER_WORDS.get(m, m) for m in modifiers],
+            "values": [_detection_value(v) for v in values]}
+
+
+def _detection_groups(body) -> List[List[Dict]]:
+    """A search's alternatives (any one matches), each a list of clauses (all must match)."""
+    if isinstance(body, dict):
+        return [[_detection_clause(k, v) for k, v in body.items()]]
+    if isinstance(body, list) and body and all(isinstance(item, dict) for item in body):
+        return [[_detection_clause(k, v) for k, v in item.items()] for item in body]
+    keywords = body if isinstance(body, list) else [body]
+    return [[{"field": "Keywords", "modifiers": [], "values": [_detection_value(v) for v in keywords]}]]
+
+
+def detection_view(detection) -> Dict:
+    """A rule's ``detection`` laid out for reading: each named search (its alternatives, each a set
+    of field conditions), the condition, and the timeframe if any."""
+    out: Dict = {"searches": [], "condition": [], "timeframe": ""}
+    if not isinstance(detection, dict):
+        return out
+    for name, body in detection.items():
+        if name == "condition":
+            out["condition"] = [str(c) for c in (body if isinstance(body, list) else [body])]
+        elif name == "timeframe":
+            out["timeframe"] = str(body)
+        else:
+            out["searches"].append({"name": str(name), "groups": _detection_groups(body)})
+    return out
+
+
+def rule_view(rule: Dict) -> Dict:
+    """What the Sigma rule window shows of a parsed rule (``yaml.safe_load`` of its YAML)."""
+    rule = rule if isinstance(rule, dict) else {}
+    logsource = rule.get("logsource") if isinstance(rule.get("logsource"), dict) else {}
+
+    def as_list(value):
+        return [str(v) for v in value] if isinstance(value, list) else ([str(value)] if value else [])
+
+    return {
+        "id": str(rule.get("id") or ""), "title": str(rule.get("title") or "Untitled Sigma rule"),
+        "status": str(rule.get("status") or "").lower(), "level": str(rule.get("level") or "").lower(),
+        "description": str(rule.get("description") or "").strip(), "author": str(rule.get("author") or ""),
+        "date": rule_modified({"date": rule.get("date")}) or "", "modified": rule_modified(rule) or "",
+        "logsource": {k: str(logsource.get(k)) for k in ("product", "category", "service") if logsource.get(k)},
+        "logsource_definition": str(logsource.get("definition") or ""),
+        "techniques": sorted(extract_mitre_techniques(rule)), "tactics": extract_mitre_tactics(rule),
+        "tags": as_list(rule.get("tags")), "falsepositives": as_list(rule.get("falsepositives")),
+        "references": as_list(rule.get("references")), "fields": as_list(rule.get("fields")),
+        "detection": detection_view(rule.get("detection")),
+    }
+
+
+def rule_content_hash(rule: Dict) -> str:
+    """A bundled rule's fingerprint: changes whenever its YAML file does."""
+    import hashlib
+    return hashlib.sha256(str(rule.get("_raw_yaml") or "").encode("utf-8")).hexdigest()
+
+
+def rule_modified(rule: Dict) -> Optional[str]:
+    """The rule's own last-change date (``modified``, else ``date``) as YYYY-MM-DD, or None."""
+    value = rule.get("modified") or rule.get("date")
+    if hasattr(value, "isoformat"):
+        return value.isoformat()[:10]
+    text = str(value or "").strip().replace("/", "-")
+    return text[:10] if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text[:10]) else None
+
+
 def index_sigma_rules(conn) -> int:
     """Populate the *sigma_rules_index* table on *conn* (the reference DB).
 
@@ -255,6 +344,8 @@ def index_sigma_rules(conn) -> int:
             techniques,
             tactics,
             rule.get("_file_path", ""),
+            rule_content_hash(rule),
+            rule_modified(rule),
             now,
         ))
 
@@ -270,6 +361,8 @@ def index_sigma_rules(conn) -> int:
             techniques VARCHAR[],
             tactics   VARCHAR[],
             file_path VARCHAR,
+            content_hash VARCHAR,
+            modified  DATE,
             indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -282,12 +375,13 @@ def index_sigma_rules(conn) -> int:
     conn.execute("DELETE FROM sigma_rules_index")
     import pandas as _pd
     cols = ["rule_id", "title", "level", "status", "product", "category",
-            "service", "techniques", "tactics", "file_path", "indexed_at"]
-    conn.register("sigma_index_src", _pd.DataFrame(rows, columns=cols))
+            "service", "techniques", "tactics", "file_path", "content_hash", "modified", "indexed_at"]
+    conn.register("sigma_index_src", _pd.DataFrame(rows, columns=cols, dtype=object))
     try:
+        select = ", ".join("TRY_CAST(modified AS DATE)" if c == "modified" else c for c in cols)
         conn.execute(
             f"INSERT INTO sigma_rules_index ({', '.join(cols)}) "
-            f"SELECT {', '.join(cols)} FROM sigma_index_src"
+            f"SELECT {select} FROM sigma_index_src"
         )
     finally:
         conn.unregister("sigma_index_src")
@@ -1154,6 +1248,44 @@ def build_detection_rule_dict(
     return payload
 
 
+def deploy_payload(yaml_content: str, enabled: bool = False, index_pattern: Optional[str] = None,
+                   pipeline_file: str = '', template_file: str = '', username: str = '') -> Tuple[Optional[Dict], str]:
+    """The Kibana rule a Sigma deploy sends: ``(payload, '')``, or ``(None, why)`` when it cannot be
+    converted. Converted by the same path as the UI preview (``kibana_ndjson``), so preview and
+    deploy always agree."""
+    ok, json_str = convert_sigma_rule(
+        yaml_content=yaml_content,
+        backend='elasticsearch',
+        pipeline='none',
+        output_format='kibana_ndjson',
+        index_pattern=index_pattern or '',
+        pipeline_file=pipeline_file,
+        template_file=template_file,
+    )
+    if not ok:
+        return None, f"Conversion failed before deploy: {json_str}"
+    try:
+        payload = json.loads(json_str)
+    except json.JSONDecodeError:
+        # siem_rule_ndjson can be returned as newline-delimited JSON.
+        payload = None
+        for line in [ln.strip() for ln in str(json_str).splitlines() if ln.strip()]:
+            try:
+                candidate = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+        if payload is None:
+            return None, "Failed to parse conversion result as JSON/NDJSON"
+    # Deploy-time overrides
+    payload['enabled'] = enabled
+    if username:
+        payload['author'] = [username]
+    return payload, ''
+
+
 def send_rule_to_siem(
     yaml_content: str,
     space: str,
@@ -1164,6 +1296,7 @@ def send_rule_to_siem(
     pipeline_file: str = '',
     template_file: str = '',
     username: str = '',
+    rule_id_override: str = '',
 ) -> Tuple[bool, str, str]:
     """
     Send a Sigma rule to Kibana/Elasticsearch SIEM via the Detection Rules API.
@@ -1181,6 +1314,8 @@ def send_rule_to_siem(
         index_pattern: Comma-separated index patterns (overrides pipeline)
         pipeline_file: Comma-separated filenames of saved pipelines in PIPELINE_DIR
         username: Username of the deploying user (added to ``author`` field)
+        rule_id_override: deploy under this rule id instead of the Sigma rule's own (a separate copy
+            beside a different rule that already has it)
 
     Returns:
         Tuple of (success: bool, message: str, rule_id: str) — rule_id is the portable id the
@@ -1188,40 +1323,11 @@ def send_rule_to_siem(
     """
     import requests
 
-    # ── Re-convert using the exact same code path as the UI preview ────────
-    ok, json_str = convert_sigma_rule(
-        yaml_content=yaml_content,
-        backend='elasticsearch',
-        pipeline='none',
-        output_format='kibana_ndjson',
-        index_pattern=index_pattern or '',
-        pipeline_file=pipeline_file,
-        template_file=template_file,
-    )
-    if not ok:
-        return False, f"Conversion failed before deploy: {json_str}", ""
-
-    try:
-        payload = json.loads(json_str)
-    except json.JSONDecodeError:
-        # siem_rule_ndjson can be returned as newline-delimited JSON.
-        parsed = None
-        for line in [ln.strip() for ln in str(json_str).splitlines() if ln.strip()]:
-            try:
-                candidate = json.loads(line)
-                if isinstance(candidate, dict):
-                    parsed = candidate
-                    break
-            except json.JSONDecodeError:
-                continue
-        if parsed is None:
-            return False, "Failed to parse conversion result as JSON/NDJSON", ""
-        payload = parsed
-
-    # Apply deploy-time overrides
-    payload['enabled'] = enabled
-    if username:
-        payload['author'] = [username]
+    payload, error = deploy_payload(yaml_content, enabled, index_pattern, pipeline_file, template_file, username)
+    if payload is None:
+        return False, error, ""
+    if rule_id_override:
+        payload['rule_id'] = rule_id_override
 
     title = payload.get('name', 'Unknown Rule')
     rule_id = payload.get('rule_id', '')

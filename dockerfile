@@ -60,6 +60,15 @@ RUN sigma plugin list >/dev/null && \
 
 # ─── DATA REPOS ───────────────────
 RUN git clone --depth 1 https://github.com/SigmaHQ/sigma.git /opt/repos/sigma
+# Elastic's detection rules (main): the rules, building blocks, hunting queries, version lock and
+# deprecation list only. The commit they came from is kept in .tide-commit.
+RUN git clone --depth 1 --filter=blob:none --no-checkout https://github.com/elastic/detection-rules.git /opt/repos/elastic && \
+    cd /opt/repos/elastic && \
+    git sparse-checkout set --no-cone '/rules/' '/rules_building_block/' '/hunting/' \
+        '/detection_rules/etc/version.lock.json' '/detection_rules/etc/deprecated_rules.json' && \
+    git checkout --quiet && \
+    git log -1 --format='%H %cI' > .tide-commit && \
+    rm -rf .git
 RUN curl -sSL -o /opt/repos/mitre/enterprise-attack.json https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json && \
     curl -sSL -o /opt/repos/mitre/mobile-attack.json https://raw.githubusercontent.com/mitre/cti/master/mobile-attack/mobile-attack.json && \
     curl -sSL -o /opt/repos/mitre/ics-attack.json https://raw.githubusercontent.com/mitre/cti/master/ics-attack/ics-attack.json
@@ -89,7 +98,7 @@ ENV PYTHONPATH="/app"
 # the source tree) re-runs `python -m app.scripts.build_assets` on demand.
 RUN python -m app.scripts.build_assets
 
-# Build the app-wide reference DB (ATT&CK, NIST 800-53, Sigma index) into the image.
+# Build the app-wide reference DB (ATT&CK, NIST 800-53, Sigma and Elastic rule indexes) into the image.
 # Read-only at runtime; the app rebuilds it at start if the source files change.
 ENV REFERENCE_DB_PATH=/opt/reference/reference.duckdb
 RUN mkdir -p /opt/reference && \

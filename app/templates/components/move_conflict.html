@@ -1,0 +1,68 @@
+{#
+  A Move or copy stopped because the target destination already holds a rule with this rule's id
+  (POST /api/promotion/{id}/move answers 409 with this). Nothing has been written. The choices go
+  back to the same route with a resolution (_move_rule_sync):
+    identical (index patterns and enabled state aside): link them (copy), or keep that one (move);
+    different: copy or move this rule under a new rule id; or Compare and merge, when linked.
+  Context: rule, target_name, clashing_name, diffs, identical, already_linked, in_tide, message,
+  source_siem_id, source_space, target_scope, delete_source, validation.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/rule_diff.html" import diff_fields %}
+{% set verb = 'Move' if delete_source else 'Copy' %}
+<div class="modal-overlay" data-click="backdrop.remove">
+  <div name="Move Conflict" class="modal-content rd-root modal-980" data-view="inline" data-stop-click data-move-conflict
+       data-rule-id="{{ rule.rule_id }}" data-siem-id="{{ source_siem_id }}" data-space="{{ source_space }}"
+       data-target-scope="{{ target_scope }}" data-delete-source="{{ 'true' if delete_source else 'false' }}"
+       data-validation="{{ validation }}">
+    <div class="modal-header">
+      <h2>{{ icon('triangle-alert', '18') }} {{ target_name }} already has this rule id</h2>
+      <button type="button" class="btn btn-icon" data-click="modal.remove">&times;</button>
+    </div>
+    <p class="rule-help">
+      <strong>{{ clashing_name }}</strong> in {{ target_name }} has the same rule id as <strong>{{ rule.name }}</strong>.
+      Nothing has been changed: writing there would overwrite it.
+    </p>
+
+    {% if identical %}
+    <div class="alert alert-success"><p>They are the same rule: nothing differs apart from index patterns and whether it is enabled.</p></div>
+    <p class="text-muted fs-md">
+      {% if delete_source %}<strong>Move onto it</strong> deletes this copy and points its baseline mappings at the rule in {{ target_name }}, which is left as it is.
+      {% else %}<strong>Link them</strong> records them as copies of one rule (the Linked panel); neither is changed.{% endif %}
+    </p>
+    {% else %}
+    <p class="text-muted fs-md">They differ in {{ diffs | length }} section{{ '' if diffs | length == 1 else 's' }}
+      (index patterns and whether it is enabled are not compared):</p>
+    <div class="rd-toolbar">
+      <div class="rd-toggle" role="group" aria-label="Comparison layout">
+        <button type="button" data-rd-view="inline">Inline</button>
+        <button type="button" data-rd-view="side">Side by side</button>
+      </div>
+    </div>
+    {{ diff_fields(diffs, 'This rule', target_name) }}
+    <p class="text-muted fs-md mt-md">
+      <strong>{{ verb }} under a new rule id</strong> puts this rule in {{ target_name }} beside the other one, with a rule id of its own.
+      TIDE records that it was copied from this rule{% if delete_source %} and points this rule's baseline mappings at the new copy{% endif %}.
+      {% if already_linked %}If they are meant to be the same rule, <strong>Compare and merge</strong> instead, choosing which side wins section by section.
+      {% elif in_tide %}If they are meant to be the same rule, link them first (Add link, in the Linked panel) and merge.{% endif %}
+    </p>
+    {% endif %}
+
+    <p class="inline-error" data-move-conflict-error hidden></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+      {% if not identical and already_linked %}
+      <button name="Compare And Merge" type="button" class="btn btn-secondary"
+              hx-get="/api/promotion/{{ rule.rule_id }}/diff?siem_id={{ source_siem_id | urlencode }}&space={{ source_space | urlencode }}"
+              hx-target="#modal-container" hx-swap="innerHTML">Compare and merge</button>
+      {% endif %}
+      {% if identical %}
+      <button name="Resolve Link" type="button" class="btn btn-primary" data-click="rule.moveResolve" data-resolution="link">
+        {{ icon_text('link', 'Move onto it' if delete_source else 'Link them', '13') }}</button>
+      {% else %}
+      <button name="Resolve New Id" type="button" class="btn btn-primary" data-click="rule.moveResolve" data-resolution="new_id">
+        {{ icon_text('copy', verb ~ ' under a new rule id', '13') }}</button>
+      {% endif %}
+    </div>
+  </div>
+</div>
