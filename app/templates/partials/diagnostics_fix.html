@@ -39,7 +39,7 @@
           hx-disabled-elt="find button" hx-indicator="find .htmx-indicator">
         <input type="hidden" name="fix" value="{{ p.fix.id }}">
         <input type="hidden" name="client" value="{{ p.client.id }}">
-        <label for="confirm-{{ p.fix.id }}-{{ p.client.id }}">Type <code>{{ p.fix.id }}</code> to confirm</label>
+        <label class="form-label" for="confirm-{{ p.fix.id }}-{{ p.client.id }}">Type <code>{{ p.fix.id }}</code> to confirm</label>
         <input id="confirm-{{ p.fix.id }}-{{ p.client.id }}" name="confirm" class="form-input" autocomplete="off" required
                pattern="{{ p.fix.id }}" title="Type {{ p.fix.id }}">
         <button name="Apply Fix" type="submit" class="btn btn-danger btn-sm">{{ icon('zap', '13') }} Back up, then apply</button>

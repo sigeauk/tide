@@ -6,12 +6,13 @@
   Context: system_id, applied (get_system_baselines rows), available (every template).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
 <div name="Manage Baselines Dialog" class="modal-overlay" data-rm-overlay data-baselines-dialog
      data-applied="{{ applied | map(attribute='playbook_id') | sort | join(',') }}">
-    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sys-bl-title">
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sys-bl-title">
         <div class="modal-header">
             <h3 class="modal-title" id="sys-bl-title">{{ icon('layers', '16') }} Baselines on this system</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+            {{ close_button('name="Close" data-rm-close') }}
         </div>
 
         {% if applied %}

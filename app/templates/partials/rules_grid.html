@@ -1,6 +1,7 @@
 <!-- Rules Grid Partial: card grid (view=cards) or sortable table (view=table). One data set, two renderings. -->
 
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import empty_state %}
 {% set state = state | default([]) %}
 {% set view = view | default('cards') %}
 {% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
@@ -8,7 +9,7 @@
 {% if state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (state | map('urlencode') | join('&state=')) %}{% endif %}
 
 {% macro sort_arrow(current) -%}
-    {%- if current == 'desc' %}<span class="rt-sort" aria-hidden="true">▼</span>{% elif current == 'asc' %}<span class="rt-sort" aria-hidden="true">▲</span>{% endif -%}
+    {%- if current == 'desc' %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-down', '12') }}</span>{% elif current == 'asc' %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-up', '12') }}</span>{% endif -%}
 {%- endmacro %}
 
 {% if view == 'table' %}
@@ -100,10 +101,9 @@
 {% endif %}
 
 {% if not (rules and rules | length > 0) and not append %}
-<div class="empty-state">
-    <div class="empty-state-icon">{{ icon('clipboard-list', '48') }}</div>
-    <div class="empty-state-title">No rules found in database</div>
-    <p class="empty-state-text">
+{% call empty_state('clipboard-list') %}
+    <p class="empty-state-title">No rules found in database</p>
+    <p>
         {% if search or space or enabled %}
             No rules match your current filters. Try adjusting your search criteria.
         {% else %}
@@ -111,11 +111,11 @@
         {% endif %}
     </p>
     <button name="Submit Sync"
-        class="btn btn-primary mt-md"
+        class="btn btn-primary"
         hx-post="/api/rules/sync"
         hx-target="#toast-container"
         hx-swap="beforeend">
         {{ icon_text('refresh-cw', 'Sync from Elastic', '16') }}
     </button>
-</div>
+{% endcall %}
 {% endif %}

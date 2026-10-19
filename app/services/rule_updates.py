@@ -6,7 +6,11 @@ upstream rule in Kibana's form (an Elastic rule's payload; a Sigma rule converte
 it was first converted when TIDE knows that) using the same comparison as Compare. The user ticks
 the sections to take; only those fields are written, to the rule as Kibana holds it now
 (``elastic_helper.apply_rule_changes``), and the rule is then marked as reviewed against that
-upstream revision. Elastic's prebuilt rules are updated by Kibana, so TIDE only shows those.
+upstream revision. An Elastic prebuilt rule takes the sections too: Kibana marks it customised.
+
+Elastic sometimes raises a rule's version for a change outside the rule as Kibana holds it (its
+build, its integrations' versions). Such an update changes nothing compared, so it is not offered
+for review: ``settle_unchanged`` moves the rule to the new version at a sync.
 """
 
 from __future__ import annotations
@@ -72,6 +76,35 @@ def upstream_payload(conn, origin: Dict[str, Any], deployed: Dict[str, Any]) -> 
     return payload, note
 
 
+def settle_unchanged(conn, keys: Optional[List[Key]] = None) -> int:
+    """Move every rule (of ``keys``, or all) with an Elastic update that changes nothing compared
+    to the new version, so it is not flagged for a review with nothing in it. Sigma updates are
+    left to the user: converting each again at every sync is too slow. Needs the tenant DB's pooled
+    connection (the reference DB attached). Returns how many were moved."""
+    pending = {k: s for k, s in rule_origins.statuses(conn, keys).items()
+               if s["state"] == "update" and s["origin"] == "elastic"}
+    if not pending:
+        return 0
+    origins = rule_origins.get_bulk(conn, pending)
+    raw = {(r, s, sp): data for r, s, sp, data in conn.execute(
+        "WITH k AS (SELECT unnest(?::VARCHAR[]) AS r, unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp) "
+        "SELECT d.rule_id, d.siem_id, d.space, d.raw_data FROM detection_rules d "
+        "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp",
+        [[k[0] for k in pending], [k[1] for k in pending], [k[2] for k in pending]]).fetchall()}
+    settled = 0
+    for key, status in pending.items():
+        deployed = json.loads(raw[key]) if isinstance(raw.get(key), str) else raw.get(key)
+        if not deployed or key not in origins:
+            continue
+        payload, _ = upstream_payload(conn, origins[key], deployed)
+        if payload is not None and not build_rule_diff(deployed, payload):
+            rule_origins.mark_current(conn, key, version=status.get("to_version"), how="unchanged")
+            settled += 1
+    if settled:
+        logger.info("Moved %d rule(s) to an Elastic version that changes nothing compared", settled)
+    return settled
+
+
 def review(db, client_id: str, key: Key) -> Dict[str, Any]:
     """Everything the update dialog shows: the rule, its upstream status, the upstream payload and
     the differences (``old`` = this rule, ``new`` = upstream), and which sections can be taken."""
@@ -129,13 +162,23 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
             return 502, message
         labels = {d["key"]: d["label"] for d in info["diffs"] or []}
         taken = ", ".join(labels.get(s, s) for s in chosen)
+    unchanged = info["diffs"] == []
     with db.get_connection() as conn:
-        rule_origins.mark_current(conn, key, actor, version=status.get("to_version"))
+        rule_origins.mark_current(conn, key, actor, version=status.get("to_version"),
+                                  how="unchanged" if unchanged else "updated")
     version = f" version {status['to_version']}" if status.get("to_version") else ""
-    message = (f"Merged {taken} from {status['source']}'s{version} into this rule." if taken
-               else f"Kept this rule as it is; marked as reviewed against {status['source']}'s{version}.")
+    if taken:
+        message = f"Merged {taken} from {status['source']}'s{version} into this rule."
+    elif unchanged:
+        message = (f"Moved this rule to {status['source']}'s{version or ' current rule'}: it changes nothing TIDE "
+                   "compares.")
+    else:
+        message = f"Kept this rule as it is; marked as reviewed against {status['source']}'s{version}."
     if taken and status["prebuilt"]:
         message += " Kibana now marks it as customised."
+    elif unchanged and status["prebuilt"] and status.get("installed_version"):
+        message += (f" Kibana keeps version {status['installed_version']} installed until it installs "
+                    "Elastic's update itself.")
     db.record_rule_history(
         rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action="upstream_update",
         actor_user_id=actor_id, actor_name=actor,

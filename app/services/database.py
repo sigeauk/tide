@@ -12,6 +12,7 @@ from app.services.credentials import PREFIX as CREDENTIAL_PREFIX, reveal_fields,
 import time
 import uuid
 import pandas as pd
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional, Tuple, Set, Iterable
 from contextlib import contextmanager
@@ -4781,15 +4782,17 @@ class DatabaseService:
 
     def upstream_statuses(self, keys=None) -> Dict[Tuple[str, str, str], Dict[str, Any]]:
         """Each rule's upstream status (``rule_origins.statuses``) in the active tenant, of ``keys``
-        or all. Rules synced before origins were tracked are matched first, once per tenant DB per
-        process (a sync matches new ones)."""
-        from app.services import rule_origins
+        or all. Once per tenant DB per process (a sync does both again), rules synced before origins
+        were tracked are matched, and Elastic updates that change nothing are settled, as after an
+        upgrade of TIDE brings newer Elastic rules."""
+        from app.services import rule_origins, rule_updates
         from app.services.tenant_manager import get_tenant_db_path
         with self.get_connection() as conn:
             tenant = get_tenant_db_path()
             if tenant not in self._origins_ready:
                 try:
                     rule_origins.backfill(conn)
+                    rule_updates.settle_unchanged(conn)
                 except Exception:
                     logger.warning("Rule origin backfill failed", exc_info=True)
                 self._origins_ready.add(tenant)
@@ -5953,6 +5956,33 @@ class DatabaseService:
             except duckdb.CatalogException:
                 return set()   # a tenant DB Migration 74 has not reached yet: nothing is linked
         return {(str(r), str(si), str(sp)) for r, si, sp in rows}
+
+    def rule_filter_counts(self) -> Dict[str, Counter]:
+        """How many of the active tenant's rules each Rule Health filter choice holds, whatever the
+        other filters, matched as ``get_rules`` matches them: ``scope`` by ``"siem_id|space"``
+        (space lowercased; deprecated rules left out, as the SIEM filter leaves them out unless a
+        State is picked), ``enabled`` by ``"true"``/``"false"``, ``state`` by the card's badge and
+        ``upstream`` by upstream state (``own`` when the rule has no origin)."""
+        counts = {"scope": Counter(), "enabled": Counter(), "state": Counter(), "upstream": Counter()}
+        with self.get_connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT rule_id, siem_id, space, COALESCE(enabled, 0) = 1, COALESCE(deprecated, false) "
+                    "FROM detection_rules").fetchall()
+            except duckdb.CatalogException:
+                return counts
+        offline = self.get_offline_scopes()
+        linked = self.linked_rule_keys()
+        upstream = self.upstream_statuses()
+        for rule_id, siem_id, space, enabled, deprecated in rows:
+            key = (rule_id, siem_id, space)
+            if not deprecated:
+                counts["scope"][f"{siem_id}|{str(space).lower()}"] += 1
+            counts["enabled"]["true" if enabled else "false"] += 1
+            counts["state"]["deprecated" if deprecated else "offline" if (siem_id, space) in offline
+                            else "linked" if key in linked else "unlinked"] += 1
+            counts["upstream"][upstream.get(key, {}).get("state", "own")] += 1
+        return counts
 
     def get_rule_links_bulk(
         self, items: List[Tuple[str, str, str]]

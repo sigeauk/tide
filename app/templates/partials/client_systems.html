@@ -2,6 +2,7 @@
    Context: system_summaries (list of SystemSummary), client (dict), available_systems (list), all_clients (list)
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
 
 <div  name="Systems Edit" class="client-section-toggle" data-click="section.toggle" data-body="systems-body" data-chev="systems-chev">
     <span class="client-list-item__icon">{{ icon('monitor', '14') }}</span>
@@ -57,9 +58,8 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="client-section-empty">
-    {{ icon('monitor', '36') }}
+{% call empty_state('monitor') %}
     <p>No systems assigned to this client yet.</p>
-</div>
+{% endcall %}
 {% endif %}
 </div>

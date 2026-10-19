@@ -294,17 +294,47 @@ console.debug('TIDE app.js loading...');
     // Expose TIDE namespace for debugging
     window.TIDE = TIDE;
 
+    // An icon for markup a script builds: the same SVG as the templates' icon macro, from the
+    // <template id="tide-icons"> in base.html. TIDE.icon gives the element, TIDE.iconHtml its markup.
+    TIDE.icon = function (name, size) {
+        var defs = document.getElementById('tide-icons');
+        var src = defs && defs.content.querySelector('[data-icon="' + name + '"] svg');
+        if (!src) return null;
+        var svg = src.cloneNode(true);
+        if (size) { svg.setAttribute('width', size); svg.setAttribute('height', size); }
+        return svg;
+    };
+    TIDE.iconHtml = function (name, size) {
+        var svg = TIDE.icon(name, size);
+        return svg ? svg.outerHTML : '';
+    };
+
     /**
-     * Toggle a "[name]-filter-dropdown" style panel (Rule Health / Promotion
-     * filter bar). Flips it to right-anchored when it would otherwise
-     * overflow the right edge of the viewport, since these panels sit in a
-     * flex-wrapped bar and can land anywhere left-to-right on the page.
+     * Choice dropdowns: every choice in TIDE is a button naming what is chosen, opening a panel of
+     * rows. Filter bars render them (macros/filters.html); any other <select> (a form's, a
+     * dialog's, a window's) is turned into the same by tideEnhanceSelect below. Either way the
+     * <select> stays, hidden, holding the value: forms, hx-include and page scripts read and set it
+     * as before, and the rows follow it (its options, value and disabled state).
+     * One panel is open at a time: opening one closes the others, and a click outside or Escape
+     * closes it. A panel that would overflow the viewport's right edge is anchored to the right.
      */
+    function closeFilterDropdowns(except) {
+        document.querySelectorAll('.tide-filter-dropdown').forEach(function (d) {
+            if (d === except || d.style.display === 'none') return;
+            d.style.display = 'none';
+            var btn = document.querySelector('[data-target="' + d.id + '"]');
+            if (btn) btn.setAttribute('aria-expanded', 'false');
+        });
+    }
     window.tideToggleFilterDropdown = function(id) {
         var dd = document.getElementById(id);
         if (!dd) return;
         var opening = dd.style.display === 'none' || !dd.style.display;
+        closeFilterDropdowns(dd);
+        if (opening) window.tideFilterSync(dd.parentElement);
         dd.style.display = opening ? 'block' : 'none';
+        var btn = document.querySelector('[data-target="' + id + '"]');
+        if (btn) btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
         dd.style.left = '';
         dd.style.right = '';
         if (opening) {
@@ -314,6 +344,214 @@ console.debug('TIDE app.js loading...');
                 dd.style.right = '0';
             }
         }
+    };
+    // Capture phase: a dialog keeps its clicks to itself (data-stop-click), and a dropdown in it
+    // must still close.
+    document.addEventListener('click', function (e) {
+        var inside = null;
+        document.querySelectorAll('.tide-filter-dropdown').forEach(function (d) {
+            if (d.parentElement.contains(e.target)) inside = d;
+        });
+        closeFilterDropdowns(inside);
+    }, true);
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') closeFilterDropdowns();
+    });
+
+    // A choice group ([data-filter-choices]): its <select>, its panel, and the box its rows sit in
+    // (the group itself in a filter bar's panel; the panel beside an enhanced select).
+    function choiceParts(group) {
+        var select = group.querySelector('select[data-filter-choice]');
+        var outer = group.closest('.tide-filter-dropdown');
+        var dd = outer || group.querySelector('.tide-filter-dropdown');
+        return { select: select, dd: dd, box: outer ? group : dd };
+    }
+    function selectOf(dd) {
+        return dd.querySelector('select[data-filter-choice]') || dd.parentElement.querySelector(':scope > select[data-filter-choice]');
+    }
+
+    // The button names what is chosen: the chosen option(s), or a multi's ticked rows (its
+    // data-all-text when none is). A panel with no data-filter-kind is named by its page.
+    function filterLabel(dd) {
+        var kind = dd && dd.getAttribute('data-filter-kind'), label = dd && document.getElementById(dd.id.replace(/-dropdown$/, '-label'));
+        if (!label || !kind) return;
+        var texts;
+        if (kind === 'choice') {
+            var select = selectOf(dd);
+            if (!select) return;
+            texts = Array.prototype.map.call(select.selectedOptions, function (o) { return o.textContent.trim(); }).filter(Boolean);
+            if (!texts.length && !select.multiple) texts = ['—'];
+        } else {
+            texts = Array.prototype.map.call(dd.querySelectorAll('input[type=checkbox]:checked'), function (i) {
+                return i.nextElementSibling ? i.nextElementSibling.textContent.trim() : i.value;
+            });
+        }
+        label.textContent = texts.length ? texts.join(', ') : (dd.getAttribute('data-all-text') || '');
+    }
+
+    // Rows for a select's options (and its option groups, as section labels): radios for one
+    // choice, tick boxes for a multiple select.
+    function buildRows(box, select) {
+        box.querySelectorAll(':scope > label.rh-checkbox-row, :scope > .tide-filter-section-label[data-optgroup]').forEach(function (n) { n.remove(); });
+        function add(o) {
+            var row = document.createElement('label'), pick = document.createElement('input'), text = document.createElement('span');
+            row.className = 'rh-checkbox-row' + (o.disabled ? ' is-disabled' : '');
+            pick.type = select.multiple ? 'checkbox' : 'radio';
+            pick.value = o.value;
+            pick.disabled = o.disabled;
+            pick.setAttribute('data-filter-pick', '');
+            text.textContent = o.textContent;
+            row.appendChild(pick);
+            row.appendChild(text);
+            box.appendChild(row);
+        }
+        Array.prototype.forEach.call(select.children, function (node) {
+            if (node.tagName === 'OPTGROUP') {
+                var head = document.createElement('div');
+                head.className = 'tide-filter-section-label';
+                head.setAttribute('data-optgroup', '');
+                head.textContent = node.label;
+                box.appendChild(head);
+                Array.prototype.forEach.call(node.children, add);
+            } else if (node.tagName === 'OPTION') {
+                add(node);
+            }
+        });
+    }
+    function syncGroup(group) {
+        var parts = choiceParts(group), select = parts.select;
+        if (!select || !parts.box) return;
+        var picks = parts.box.querySelectorAll(':scope > label > input[data-filter-pick]');
+        var same = picks.length === select.options.length && Array.prototype.every.call(picks, function (r, i) {
+            return r.value === select.options[i].value && r.disabled === select.options[i].disabled
+                && r.nextElementSibling && r.nextElementSibling.textContent === select.options[i].textContent;
+        });
+        if (!same) buildRows(parts.box, select);
+        parts.box.querySelectorAll(':scope > label > input[data-filter-pick]').forEach(function (r, i) {
+            r.checked = select.multiple ? !!(select.options[i] && select.options[i].selected) : r.value === select.value;
+        });
+        if (group.classList.contains('tide-select')) {        // an enhanced select: its button follows it
+            var btn = group.querySelector(':scope > .tide-filter-btn');
+            if (btn) btn.disabled = select.disabled;
+            group.hidden = select.hidden;
+            group.style.display = select.style.display === 'none' ? 'none' : '';
+        }
+        filterLabel(parts.dd);
+    }
+    window.tideFilterSync = function (root) {
+        root = root || document;
+        var groups = Array.prototype.slice.call(root.querySelectorAll('[data-filter-choices]'));
+        if (root.matches && root.matches('[data-filter-choices]')) groups.unshift(root);
+        groups.forEach(syncGroup);
+        root.querySelectorAll('.tide-filter-dropdown[data-filter-kind="multi"]').forEach(filterLabel);
+    };
+    function syncSoon(group) {
+        if (!group || group.__tideSyncQueued) return;
+        group.__tideSyncQueued = true;
+        Promise.resolve().then(function () { group.__tideSyncQueued = false; syncGroup(group); });
+    }
+    // Picking a row: it becomes the select's value, whose input and change go on as before (the
+    // row's own change stops here). A one-choice dropdown then closes.
+    document.addEventListener('change', function (e) {
+        var t = e.target;
+        if (t.matches && t.matches('input[data-filter-pick]')) {
+            e.stopPropagation();
+            var group = t.closest('[data-filter-choices]'), parts = choiceParts(group), select = parts.select;
+            if (select.multiple) {
+                Array.prototype.forEach.call(select.options, function (o) { if (o.value === t.value) o.selected = t.checked; });
+            } else {
+                group.querySelectorAll('input[data-filter-pick]').forEach(function (r) { r.checked = r === t; });
+                select.value = t.value;
+            }
+            filterLabel(parts.dd);
+            if (!select.multiple && parts.dd && parts.dd.getAttribute('data-filter-kind') === 'choice') closeFilterDropdowns();
+            // input too: a rule library's browser refreshes on input
+            select.dispatchEvent(new Event('input', { bubbles: true }));
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+        } else if (t.matches && t.matches('.tide-filter-dropdown[data-filter-kind="multi"] input[type=checkbox]')) {
+            filterLabel(t.closest('.tide-filter-dropdown'));
+        }
+    }, true);
+    document.addEventListener('htmx:beforeRequest', function () { window.tideFilterSync(); });
+    document.addEventListener('reset', function (e) { setTimeout(function () { window.tideFilterSync(e.target); }, 0); }, true);
+
+    // A select follows itself: its options or state changing (a script filling it, disabling or
+    // hiding it), or a script setting its value, redraws its rows and button.
+    var VALUE = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value');
+    var INDEX = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'selectedIndex');
+    function watchSelect(select) {
+        if (select.__tideWatched) return;
+        select.__tideWatched = true;
+        var group = select.closest('[data-filter-choices]');
+        new MutationObserver(function () { syncSoon(group); }).observe(select, {
+            childList: true, subtree: true, characterData: true, attributes: true,
+            attributeFilter: ['disabled', 'hidden', 'style', 'selected', 'label'],
+        });
+        Object.defineProperty(select, 'value', {
+            configurable: true,
+            get: function () { return VALUE.get.call(this); },
+            set: function (v) { VALUE.set.call(this, v); syncSoon(group); },
+        });
+        Object.defineProperty(select, 'selectedIndex', {
+            configurable: true,
+            get: function () { return INDEX.get.call(this); },
+            set: function (v) { INDEX.set.call(this, v); syncSoon(group); },
+        });
+    }
+
+    // A label for an enhanced select (still its label, for scripts and validation messages) moves
+    // focus to its button.
+    document.addEventListener('click', function (e) {
+        var label = e.target.closest && e.target.closest('label[for]');
+        var select = label && document.getElementById(label.htmlFor);
+        if (!select || !select.classList.contains('tide-select__native')) return;
+        e.preventDefault();
+        var btn = select.parentElement.querySelector(':scope > .tide-filter-btn');
+        if (btn) btn.focus();
+    });
+
+    // Any other <select> becomes the same control: the select, still in its form, beside a button
+    // and a panel of rows. Its layout classes (a width, a margin) move to the wrapper. A select marked
+    // data-native is left as it is.
+    var enhanced = 0;
+    var CHEVRON = '<svg class="icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+    var LOOKS = ['form-input', 'form-select', 'rule-form-select'];
+    window.tideEnhanceSelect = function (select) {
+        if (select.hasAttribute('data-filter-choice')) { watchSelect(select); syncSoon(select.closest('[data-filter-choices]')); return; }
+        if (select.hasAttribute('data-native') || !select.parentNode) return;
+        var id = 'ts-' + (++enhanced);
+        var wrap = document.createElement('div');
+        var keep = Array.prototype.filter.call(select.classList, function (c) { return LOOKS.indexOf(c) === -1; });
+        var block = LOOKS.some(function (c) { return select.classList.contains(c); });
+        wrap.className = ['tide-select', block ? 'tide-select--block' : ''].concat(keep).join(' ').trim();
+        wrap.setAttribute('data-filter-choices', '');
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.id = id + '-btn';
+        btn.className = 'btn btn-secondary form-input form-select tide-filter-btn';
+        btn.setAttribute('data-click', 'filterDropdown.toggle');
+        btn.setAttribute('data-target', id + '-dropdown');
+        btn.setAttribute('aria-expanded', 'false');
+        btn.setAttribute('aria-haspopup', 'listbox');
+        if (select.getAttribute('aria-label')) btn.setAttribute('aria-label', select.getAttribute('aria-label'));
+        if (select.title) btn.title = select.title;
+        if (select.name) btn.setAttribute('name', select.name);
+        btn.innerHTML = '<span class="tide-filter-label" id="' + id + '-label"></span>' + CHEVRON;
+        var dd = document.createElement('div');
+        dd.id = id + '-dropdown';
+        dd.className = 'tide-filter-dropdown';
+        dd.style.display = 'none';
+        dd.setAttribute('data-filter-kind', 'choice');
+        if (select.multiple) dd.setAttribute('data-all-text', select.getAttribute('data-placeholder') || 'None');
+        select.parentNode.insertBefore(wrap, select);
+        wrap.appendChild(select);
+        wrap.appendChild(btn);
+        wrap.appendChild(dd);
+        select.setAttribute('data-filter-choice', '');
+        select.classList.add('tide-select__native');
+        select.tabIndex = -1;
+        watchSelect(select);
+        syncGroup(wrap);
     };
 
     window.tideInitInfiniteScroll = function(root) {
@@ -495,29 +733,6 @@ console.debug('TIDE app.js loading...');
         updateActiveNavItem();
         document.dispatchEvent(new CustomEvent('tide:pageInit'));
     }
-
-    // Action menu: toggle on trigger click, close on outside click (one-time listener)
-    document.addEventListener('click', function(e) {
-        var trigger = e.target.closest('.action-menu__trigger');
-        if (trigger) {
-            e.stopPropagation();
-            var menu = trigger.closest('.action-menu');
-            document.querySelectorAll('.action-menu.open').forEach(function(m) {
-                if (m !== menu) m.classList.remove('open');
-            });
-            menu.classList.toggle('open');
-            return;
-        }
-        if (e.target.closest('.action-menu__item')) {
-            var openMenu = e.target.closest('.action-menu');
-            if (openMenu) openMenu.classList.remove('open');
-            return;
-        }
-
-        document.querySelectorAll('.action-menu.open').forEach(function(m) {
-            m.classList.remove('open');
-        });
-    });
 
     document.addEventListener('change', function(e) {
         var filter = e.target;
@@ -1813,7 +2028,7 @@ console.debug('TIDE app.js loading...');
             return '<option value="' + escapeHtml(t.siem_id + '|' + t.space) + '">' + escapeHtml(t.name || t.label) + '</option>';
         }).join('');
         overlay.innerHTML =
-            '<div name="Move Rule Modal" class="modal-content modal-sm" data-stop-click>' +
+            '<div name="Move Rule Modal" class="modal-content modal-md" data-stop-click>' +
             '<h2 class="modal-section-title">Move rule</h2>' +
             '<p class="text-secondary mb-md">Move <strong>' + escapeHtml(ruleName) + '</strong> to another linked destination.</p>' +
             '<label class="form-label" style="font-size:0.78rem;">Target</label>' +
@@ -1889,7 +2104,7 @@ console.debug('TIDE app.js loading...');
         overlay.className = 'modal-overlay';
         overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
         overlay.innerHTML =
-            '<div name="Delete Rule Modal" class="modal-content modal-sm" data-stop-click>' +
+            '<div name="Delete Rule Modal" class="modal-content modal-md" data-stop-click>' +
             '<h2 class="modal-section-title">Delete rule</h2>' +
             '<p class="text-secondary mb-md">Remove <strong>' + esc(ruleName) + '</strong> from TIDE.' +
             (deprecated ? '' : ' If it is still in Elastic, the next sync brings it back unless you delete it there too.') + '</p>' +

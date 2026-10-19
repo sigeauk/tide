@@ -8,6 +8,7 @@
   system's technique or a template's).
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
 <p class="text-muted sm-sigma__note">Candidate rules to convert. They do not count as coverage until converted, created and mapped under Coverage.</p>
 {% if rules %}
 <div class="sm-sigma__group">{% if query %}Matching “{{ query }}”{% else %}Suggested for {{ technique_ids | join(', ') if technique_ids else tactic }}{% endif %}</div>
@@ -19,8 +20,7 @@
       {% if r.level %}<span class="sev-pill sev-{{ r.level | lower }}">{{ r.level | upper }}</span>{% endif %}
       {% if r.status %}<span class="text-muted">{{ r.status }}</span>{% endif %}
       <span class="rh-more" data-more>
-        <button name="Sigma Rule Actions" type="button" class="rm-iconbtn" data-more-toggle
-                aria-haspopup="menu" aria-expanded="false" title="Rule actions" aria-label="Actions for {{ r.title or r.id }}">{{ icon('more-horizontal', '14') }}</button>
+        {{ more_button('Actions for ' ~ (r.title or r.id), title='Rule actions', attrs='name="Sigma Rule Actions"') }}
         <span class="rh-more__menu" role="menu" hidden>
           <button name="Convert Sigma Rule" type="button" role="menuitem" class="rh-more__item"
                   hx-get="{{ technique_url }}/sigma/convert?sigma_id={{ r.id | urlencode }}"

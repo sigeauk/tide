@@ -1152,8 +1152,8 @@ def list_rules(
         logger.exception(f"Failed to list rules (sort={sort_by}, space={space}): {e}")
         return HTMLResponse(
             '<div class="empty-state">'
-            '<div class="empty-state-title">Error loading rules</div>'
-            f'<p class="empty-state-text">An error occurred while loading rules. Check server logs for details.</p>'
+            '<p class="empty-state-title">Error loading rules</p>'
+            '<p>An error occurred while loading rules. Check server logs for details.</p>'
             '</div>'
         )
 
@@ -1243,7 +1243,7 @@ def validate_rule(
     )
     
     if not rule:
-        return HTMLResponse('<div class="empty-state">Rule not found</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     
     username = user.name or user.username if user else "Unknown"
     db.save_validation(validation_key(rule.rule_id, rule.raw_data), rule.name, username)
@@ -1751,7 +1751,7 @@ async def get_create_form(
     except Exception as e:
         logger.exception("get_create_form failed")
         return HTMLResponse(
-            f'<div class="empty-state-text">Error loading form: {str(e)}</div>',
+            f'<div class="alert alert-danger">Error loading form: {str(e)}</div>',
             status_code=500,
         )
 
@@ -1840,11 +1840,11 @@ def get_rule_history(
 ):
     """Render lifecycle timeline for one rule."""
     if not siem_id:
-        return HTMLResponse('<div class="timeline-empty">Missing SIEM context.</div>', status_code=400)
+        return HTMLResponse('<div class="rm-empty">Missing SIEM context.</div>', status_code=400)
 
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
 
     history = db.get_rule_history(rule_id, siem_id, space, limit=100)
     score_history = db.get_rule_score_history(rule_id, siem_id, space, limit=50)
@@ -2369,7 +2369,7 @@ def get_rule_history_modal(
     """Unified Rule modal (history + score chart, logic, actions) opened from a rule card."""
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     return request.app.state.templates.TemplateResponse(
         request,
         "components/rule_modal.html",
@@ -2445,7 +2445,7 @@ async def add_rule_link(
     target_siem_id, target_space = target_siem_id.strip(), target_space.strip()
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     flash = ""
     if not (target_name or target_rule_id) or not target_siem_id or not target_space:
         flash = "Choose a target destination and type the rule's name."
@@ -2500,7 +2500,7 @@ def remove_rule_link(
     db.delete_rule_link(link_id)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
-        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     response = request.app.state.templates.TemplateResponse(
         request, "components/rule_modal.html",
         _build_rule_modal_context(db, client_id, rule, space, siem_id, flash="Link removed."),
@@ -2523,7 +2523,7 @@ def get_rule_edit_form(
     thresholds = db.get_client_validation_thresholds(client_id)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, thresholds=thresholds)
     if not rule:
-        return HTMLResponse('<div class="timeline-empty">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
 
     templates = request.app.state.templates
     return templates.TemplateResponse(
@@ -2709,7 +2709,7 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
             db.record_search_time_samples([{**rec["search_sample"], "siem_id": siem_id}])
         db.set_rule_deprecated(rule_id, siem_id, space, False)
         from app.services import rule_origins
-        rule_origins.backfill_tenant(db, client_id)
+        rule_origins.backfill_tenant(db, client_id, keys=[(rule_id, siem_id, space)])
         action = "synced"
         # No score delta here: "before" is this rule's score as of the *start* of this call,
         # which a just-prior action (recording a search time, say) may have already moved —
@@ -2740,7 +2740,8 @@ def sync_one_rule(
     def reply(message: str, status_code: int = 200, rule=None):
         if rule is not None and request.headers.get("X-Return-Modal") == "rule":
             return _modal_with_card_oob(request, db, client_id, rule, space, siem_id, settings, flash=message)
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=status_code)
+        tone = "danger" if status_code >= 400 else "success"
+        return HTMLResponse(f'<div class="alert alert-{tone}">{message}</div>', status_code=status_code)
 
     before_rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) if siem_id else None
     status, message, _action = sync_single_rule(
@@ -2764,16 +2765,16 @@ async def restore_rule(
 ):
     """Recreate a deprecated rule in the selected replacement SIEM scope."""
     if not siem_id:
-        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule or not rule.raw_data:
-        return HTMLResponse('<div class="empty-state-text">Rule data is unavailable.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule data is unavailable.</div>', status_code=404)
     form = await request.form()
     replacement_siem_id, replacement_space = _parse_scope_pair(
         str(form.get("replacement_scope") or "")
     )
     if not replacement_siem_id or not replacement_space:
-        return HTMLResponse('<div class="empty-state-text">Select a Replacement SIEM / space first.</div>', status_code=400)
+        return HTMLResponse('<div class="alert alert-danger">Select a Replacement SIEM / space first.</div>', status_code=400)
     target = next(
         (item for item in (db.get_client_siems(client_id) or [])
          if item.get("id") == replacement_siem_id
@@ -2781,7 +2782,7 @@ async def restore_rule(
         None,
     )
     if not target:
-        return HTMLResponse('<div class="empty-state-text">Replacement SIEM / space is not linked to this client.</div>', status_code=400)
+        return HTMLResponse('<div class="alert alert-danger">Replacement SIEM / space is not linked to this client.</div>', status_code=400)
 
     from app import elastic_helper
     full_target = db.get_siem_inventory_item(replacement_siem_id) or target
@@ -2792,7 +2793,7 @@ async def restore_rule(
         api_key=full_target.get("api_token_enc"),
     )
     if not success or not new_rule_id:
-        return HTMLResponse(f'<div class="empty-state-text">Restore failed: {message}</div>', status_code=400)
+        return HTMLResponse(f'<div class="alert alert-danger">Restore failed: {message}</div>', status_code=400)
 
     # Refresh the tenant cache so the new Elastic ID exists before moving
     # baseline references and recording the migration pair.
@@ -2823,7 +2824,7 @@ async def restore_rule(
         },
     )
     return HTMLResponse(
-        f'<div class="empty-state-text">Rule recreated in Elastic as {new_rule_id}.</div>'
+        f'<div class="alert alert-success">Rule recreated in Elastic as {new_rule_id}.</div>'
     )
 
 
@@ -2846,23 +2847,23 @@ def delete_rule(
     ``remove_links`` (default on) also removes any rule_links row this rule was part of, so its
     counterpart doesn't end up pointing at a rule that no longer exists."""
     if not siem_id or not db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id):
-        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     if from_elastic:
         from html import escape
         from app.elastic_helper import delete_detection_rule
         siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
         if not siem:
             return HTMLResponse(
-                '<div class="empty-state-text">This rule\'s SIEM is no longer linked to this client, '
+                '<div class="alert alert-danger">This rule\'s SIEM is no longer linked to this client, '
                 'so it could not be deleted from Elastic. Nothing was deleted.</div>', status_code=400)
         ok, msg = delete_detection_rule(rule_id, space, siem.get("kibana_url"), siem.get("api_token_enc"))
         if not ok:
             return HTMLResponse(
-                f'<div class="empty-state-text">Elastic refused the delete ({escape(msg[:200])}). '
+                f'<div class="alert alert-danger">Elastic refused the delete ({escape(msg[:200])}). '
                 'Nothing was deleted, in Elastic or TIDE.</div>', status_code=502)
     if not db.delete_rule(rule_id, siem_id, space, remove_links=remove_links):
         if not from_elastic:
-            return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+            return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     message = "Rule deleted from Elastic and TIDE." if from_elastic else "Rule deleted from TIDE."
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
@@ -2890,11 +2891,11 @@ async def enable_rule(
     from app import elastic_helper
 
     if not siem_id:
-        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+        return HTMLResponse('<div class="alert alert-danger">Missing SIEM context.</div>', status_code=400)
 
     siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
     if not siem:
-        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">SIEM not found.</div>', status_code=404)
 
     success, message = await run_in_threadpool(elastic_helper.enable_detection_rule,
         rule_id,
@@ -2904,7 +2905,7 @@ async def enable_rule(
         api_key=siem.get("api_token_enc"),
     )
     if not success:
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+        return HTMLResponse(f'<div class="alert alert-danger">{message}</div>', status_code=400)
 
     db.record_rule_history(
         rule_id=rule_id,
@@ -2933,11 +2934,11 @@ async def disable_rule(
     from app import elastic_helper
 
     if not siem_id:
-        return HTMLResponse('<div class="empty-state-text">Missing SIEM context.</div>', status_code=400)
+        return HTMLResponse('<div class="alert alert-danger">Missing SIEM context.</div>', status_code=400)
 
     siem = next((s for s in (db.get_client_siems(client_id) or []) if s.get("id") == siem_id), None)
     if not siem:
-        return HTMLResponse('<div class="empty-state-text">SIEM not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">SIEM not found.</div>', status_code=404)
 
     success, message = await run_in_threadpool(elastic_helper.disable_detection_rule,
         rule_id,
@@ -2947,7 +2948,7 @@ async def disable_rule(
         api_key=siem.get("api_token_enc"),
     )
     if not success:
-        return HTMLResponse(f'<div class="empty-state-text">{message}</div>', status_code=400)
+        return HTMLResponse(f'<div class="alert alert-danger">{message}</div>', status_code=400)
 
     db.record_rule_history(
         rule_id=rule_id,

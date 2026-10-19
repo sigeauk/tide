@@ -5,7 +5,7 @@
   Context: detail (get_mitre_mitigation_detail), coverage, uncovered_count, techniques,
   tactic_coverage, covered_ttps, ttp_rule_counts, source context.
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section %}
 
 <div class="rm-body">
@@ -35,7 +35,7 @@
         {% for t in tactic_coverage %}
         <li>
           <div class="mw-tactics__head">
-            <a href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ t.name }}</a>
+            <a href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ tactic_icon(t.name, '12') }} {{ t.name }}</a>
             <span class="text-muted">{{ t.covered }} of {{ t.total }}</span>
           </div>
           <div class="cov-bar cov-bar--{{ t.level }}" style="--pct: {{ t.pct }}" role="img" aria-label="{{ t.pct }}% of this mitigation's {{ t.name }} techniques covered"><span></span></div>

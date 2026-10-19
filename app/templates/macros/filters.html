@@ -1,0 +1,78 @@
+{#
+  Filter dropdowns: the one control every filter bar uses for a choice. A button naming what is
+  chosen opens a list of rows; one choice is a radio row, several are checkbox rows, and a count
+  sits on the right of a row when the page has one.
+
+  filter_choice / choice_rows keep the value in a hidden <select> (id, name and ``attrs``: hx-*,
+  data-change, ...), so forms, hx-include and page scripts read and set it as before; the radio
+  rows only choose (app.js: picking one sets the select and fires its change). A script that sets
+  the select itself calls tideFilterSync(), or leaves it to the next htmx request.
+  filter_multi's checkboxes carry the name themselves.
+
+  wrap: "filter-group" in a filters bar, "browser-filter" in a rule library's browser,
+  "sigma-select-group" in a rule library's settings row.
+#}
+{% from "macros/icons.html" import icon %}
+
+{# The button and its panel; the caller gives the panel's contents. ``kind`` tells app.js how to
+   name the choice on the button: "choice", "multi" or "" (the page does it). #}
+{% macro filter_dropdown(id, label, text, kind='', wrap='filter-group', all_text='', tip='') -%}
+<div class="{{ wrap }} relative" data-filter>
+    <label class="form-label" for="{{ id }}-btn"{% if tip %} title="{{ tip }}"{% endif %}>{{ label }}</label>
+    <button type="button" id="{{ id }}-btn" class="btn btn-secondary form-input form-select tide-filter-btn"
+            data-click="filterDropdown.toggle" data-target="{{ id }}-dropdown" aria-expanded="false">
+        <span class="tide-filter-label" id="{{ id }}-label">{{ text }}</span>{{ icon('chevron-down', '14') }}
+    </button>
+    <div id="{{ id }}-dropdown" class="tide-filter-dropdown" style="display:none;"
+         {% if kind %}data-filter-kind="{{ kind }}"{% endif %} {% if all_text %}data-all-text="{{ all_text }}"{% endif %}>
+        {{ caller() }}
+    </div>
+</div>
+{%- endmacro %}
+
+{# Radio rows for one choice, over a hidden <select id name attrs>. options: (value, text) pairs, or
+   (value, text, option_attrs) when a script reads attributes off the chosen <option>;
+   counts: {value: n} (none: no counts; the "all" row, value "", never has one); titles: {value: tip}. #}
+{% macro choice_rows(id, name, options, selected='', counts=none, attrs='', titles=none) -%}
+{% set sel = '' if selected is none else selected | string %}
+<div class="tide-filter-choices" data-filter-choices>
+    <select id="{{ id }}" name="{{ name }}" class="hidden" data-filter-choice tabindex="-1" aria-hidden="true" {{ attrs | safe }}>
+        {% for o in options %}<option value="{{ o[0] }}" {% if o[0] | string == sel %}selected{% endif %} {{ (o[2] if o | length > 2 else '') | safe }}>{{ o[1] }}</option>{% endfor %}
+    </select>
+    {% for o in options %}{% set value, text = o[0], o[1] %}
+    <label class="rh-checkbox-row"{% if titles and titles.get(value) %} title="{{ titles.get(value) }}"{% endif %}>
+        <input type="radio" value="{{ value }}" data-filter-pick {% if value | string == sel %}checked{% endif %}>
+        <span>{{ text }}</span>
+        {% if counts is not none and value != '' %}<span class="rh-checkbox-count">{{ counts.get(value, 0) }}</span>{% endif %}
+    </label>
+    {% endfor %}
+</div>
+{%- endmacro %}
+
+{% macro choice_text(options, selected) -%}
+{% set ns = namespace(text=options[0][1] if options else '') %}
+{% for o in options %}{% if o[0] | string == ('' if selected is none else selected | string) %}{% set ns.text = o[1] %}{% endif %}{% endfor %}
+{{- ns.text -}}
+{%- endmacro %}
+
+{# One choice of several. #}
+{% macro filter_choice(id, name, label, options, selected='', counts=none, attrs='', titles=none, wrap='filter-group', tip='') -%}
+{% call filter_dropdown(id, label, choice_text(options, selected), 'choice', wrap, tip=tip) %}
+{{ choice_rows(id, name, options, selected, counts, attrs, titles) }}
+{% endcall %}
+{%- endmacro %}
+
+{# Any number of choices; none ticked shows all_text. input_attrs go on every checkbox. #}
+{% macro filter_multi(id, name, label, options, selected=[], all_text='All', counts=none, input_attrs='', titles=none, wrap='filter-group') -%}
+{% set picked = [] %}
+{% for value, text in options %}{% if value in selected %}{% set _ = picked.append(text) %}{% endif %}{% endfor %}
+{% call filter_dropdown(id, label, picked | join(', ') or all_text, 'multi', wrap, all_text) %}
+{% for value, text in options %}
+<label class="rh-checkbox-row"{% if titles and titles.get(value) %} title="{{ titles.get(value) }}"{% endif %}>
+    <input type="checkbox" name="{{ name }}" value="{{ value }}" {% if value in selected %}checked{% endif %} {{ input_attrs | safe }}>
+    <span>{{ text }}</span>
+    {% if counts is not none %}<span class="rh-checkbox-count">{{ counts.get(value, 0) }}</span>{% endif %}
+</label>
+{% endfor %}
+{% endcall %}
+{%- endmacro %}

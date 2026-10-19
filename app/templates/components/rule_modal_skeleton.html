@@ -4,6 +4,7 @@
   modal request starts and the real response replaces it on swap.
   No data, no icons — shimmering blocks that mirror the real layout.
 #}
+{% from "macros/modal.html" import close_button %}
 <div class="modal-overlay" data-rule-modal data-rm-overlay data-rm-skeleton>
     <div class="modal-content rule-modal rm-skel" role="dialog" aria-modal="true" aria-busy="true" aria-label="Loading">
         <header class="rm-header">
@@ -19,7 +20,7 @@
             <div class="rm-header__tools">
                 <div class="rm-skel__block rm-skel__tool"></div>
                 <div class="rm-skel__block rm-skel__tool rm-skel__tool--sm"></div>
-                <button type="button" class="rm-close" data-rm-close aria-label="Cancel loading"><span aria-hidden="true">×</span></button>
+                {{ close_button('data-rm-close', 'Cancel loading') }}
             </div>
         </header>
         <div class="rm-body">

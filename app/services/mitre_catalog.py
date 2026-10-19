@@ -369,9 +369,9 @@ def _techniques_load(db, search, domain, covered, counts) -> List[dict]:
         subs = children.get(tid, [])
         meta = []
         if parent:
-            meta.append(("git-branch", f"Sub-technique of {parent['id']}", parent["name"]))
+            meta.append(("list-tree", f"Sub-technique of {parent['id']}", parent["name"]))
         elif subs:
-            meta.append(("git-branch", f"{len(subs)} sub-technique{'s' if len(subs) != 1 else ''}", "Sub-techniques"))
+            meta.append(("list-tree", f"{len(subs)} sub-technique{'s' if len(subs) != 1 else ''}", "Sub-techniques"))
         meta.append(("users", f"{r['group_count']} group{'s' if r['group_count'] != 1 else ''}", "Groups known to use it"))
         meta.append(("shield", f"{r['mitigation_count']} mitigation{'s' if r['mitigation_count'] != 1 else ''}", "ATT&CK mitigations"))
         items.append({
@@ -380,6 +380,7 @@ def _techniques_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("technique", r["id"], domain),
             "name": r["name"],
             "sub": ", ".join(name for _, name, _ in tactics),
+            "sub_tactics": [name for _, name, _ in tactics],     # the sub line is tactics: each shows its icon
             "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": technique_coverage(tid, subs, covered, counts),
@@ -667,6 +668,7 @@ def _mitigations_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("mitigations", r["id"], domain),
             "name": r["name"],
             "sub": ", ".join(name for _, name, _ in tactics),
+            "sub_tactics": [name for _, name, _ in tactics],     # the sub line is tactics: each shows its icon
             "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(ids, covered),
@@ -731,6 +733,7 @@ def _tactics_load(db, search, domain, covered, counts) -> List[dict]:
             "window_url": window_url("tactic", r["id"], domain),
             "name": r["name"],
             "sub": "",
+            "tactic": r["name"],
             "summary": plain_summary(r.get("description")),
             "sources": r.get("sources") or [],
             "coverage": coverage_of(ids, covered),

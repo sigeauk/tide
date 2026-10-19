@@ -5,6 +5,7 @@
   Context: detail (get_mitre_group_detail), coverage, uncovered_count, covered_ttps,
   ttp_rule_counts, window_kinds, source context.
 #}
+{% from "macros/icons.html" import tactic_icon %}
 {% from "components/mitre_ui.html" import panel, coverage_section, description_section, techniques_section, related_section %}
 
 {% set aliases = (detail.aliases or '').split(',') | map('trim') | reject('equalto', '') | reject('equalto', detail.name) | list %}
@@ -22,7 +23,7 @@
       <div class="rm-chips"><span class="rm-chips__label">Also known as</span>{% for a in aliases %}<span class="rm-chip">{{ a }}</span>{% endfor %}</div>
       {% endif %}
       {% if detail.tactics %}
-      <div class="rm-chips"><span class="rm-chips__label">Tactics</span>{% for t in detail.tactics %}<span class="rm-chip" title="{{ t.id }}">{{ t.name }}</span>{% endfor %}</div>
+      <div class="rm-chips"><span class="rm-chips__label">Tactics</span>{% for t in detail.tactics %}<span class="rm-chip" title="{{ t.id }}">{{ tactic_icon(t.name, '12') }} {{ t.name }}</span>{% endfor %}</div>
       {% endif %}
     {% endcall %}
     {{ coverage_section(coverage, uncovered_count, 'group') }}

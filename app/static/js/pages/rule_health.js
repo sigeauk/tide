@@ -10,10 +10,10 @@
     function onPage() { return !!$('rules-grid'); }
 
     // ── Filter bar ──
-    // Close sync/filter dropdowns on outside click
+    // Close the sync dropdown on outside click (filter dropdowns close themselves: app.js)
     document.addEventListener('click', function (e) {
         if (!onPage()) return;
-        document.querySelectorAll('.sync-dropdown, .tide-filter-dropdown').forEach(function (d) {
+        document.querySelectorAll('.sync-dropdown').forEach(function (d) {
             if (!d.parentElement.contains(e.target)) d.style.display = 'none';
         });
     });
@@ -31,28 +31,10 @@
             var el = $(id);
             if (el && el !== e.target) el.value = '';
         });
+        window.tideFilterSync();
     }, true);
 
-    // Each dropdown button's label follows its filters.
-    function updateStateLabel() {
-        var label = $('rh-state-label');
-        if (!label) return;
-        var checked = Array.prototype.slice.call(document.querySelectorAll("#rh-state-dropdown input[name='state']:checked"));
-        label.textContent = checked.length
-            ? checked.map(function (c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
-            : 'All states';
-    }
-    function updateUpstreamLabel() {
-        var label = $('rh-upstream-label');
-        if (!label) return;
-        var checked = Array.prototype.slice.call(document.querySelectorAll("#rh-upstream-dropdown input[name='upstream']:checked"));
-        label.textContent = checked.length
-            ? checked.map(function (c) { return c.nextElementSibling ? c.nextElementSibling.textContent : c.value; }).join(', ')
-            : 'Any';
-        // "N updates" on the button only while nothing is ticked
-        var count = document.querySelector('#rh-upstream-btn .rh-filter-count');
-        if (count) count.hidden = checked.length > 0;
-    }
+    // Score, Validate and Name are named by what they sort and narrow (the other filter buttons by app.js).
     function updateScoreLabel() {
         var label = $('rh-score-label');
         if (!label) return;
@@ -64,6 +46,12 @@
         else if (sort === 'asc') parts.push('Low → High');
         if (min || max) parts.push((min || '0') + '–' + (max || '100'));
         label.textContent = parts.length ? parts.join(' · ') : 'Score';
+    }
+    function updateNameLabel() {
+        var label = $('rh-name-label');
+        if (!label) return;
+        var sort = $('rh-sort-name').value;
+        label.textContent = sort === 'asc' ? 'A → Z' : sort === 'desc' ? 'Z → A' : 'Name';
     }
     function updateValidatedLabel() {
         var label = $('rh-validated-label');
@@ -79,10 +67,10 @@
     }
     document.addEventListener('change', function (e) {
         if (!e.target.matches) return;
-        if (e.target.matches("#rh-state-dropdown input[name='state']")) updateStateLabel();
-        if (e.target.matches("#rh-upstream-dropdown input[name='upstream']")) updateUpstreamLabel();
         if (e.target.closest('#rh-score-dropdown')) updateScoreLabel();
         if (e.target.closest('#rh-validated-dropdown')) updateValidatedLabel();
+        // Picking one sort clears the others (above), so every sort button follows.
+        if (SORT_IDS.indexOf(e.target.id) !== -1) { updateScoreLabel(); updateValidatedLabel(); updateNameLabel(); }
     });
 
     // A rule card's own actions (validate, edit, sync, archive, restore) swap only that card, so
@@ -130,6 +118,7 @@
             SORT_IDS.forEach(function (id) { var el = $(id); if (el) el.value = ''; });
             updateScoreLabel();
             updateValidatedLabel();
+            updateNameLabel();
             htmx.trigger(document.body, 'refreshRules');
             return;
         }
@@ -392,11 +381,11 @@
 
             var move = document.createElement('span');
             move.className = 'rt-colmenu__move';
-            [['up', '▲', -1, 'Move ' + (TITLES[col] || col) + ' left'], ['down', '▼', 1, 'Move ' + (TITLES[col] || col) + ' right']]
+            [['up', 'chevron-up', -1, 'Move ' + (TITLES[col] || col) + ' left'], ['down', 'chevron-down', 1, 'Move ' + (TITLES[col] || col) + ' right']]
                 .forEach(function (d) {
                     var b = document.createElement('button');
                     b.type = 'button';
-                    b.textContent = d[1];
+                    b.appendChild(TIDE.icon(d[1], 12));
                     b.title = d[3];
                     b.setAttribute('aria-label', d[3]);
                     b.disabled = (d[2] < 0 && i === 0) || (d[2] > 0 && i === order.length - 1);
@@ -460,6 +449,7 @@
         // Filter bar labels, view toggle, and the offline notice (data-offline-notice)
         updateScoreLabel();
         updateValidatedLabel();
+        updateNameLabel();
         var viewInput = $('rh-view');
         if (viewInput) {
             if (!viewInput.value) {

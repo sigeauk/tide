@@ -5,11 +5,12 @@
            selected, error (the conversion failed).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
 <div name="Convert Sigma Rule Dialog" class="modal-overlay" data-rm-overlay>
-    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sm-convert-title">
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sm-convert-title">
         <div class="modal-header">
             <h3 class="modal-title" id="sm-convert-title">{{ icon('zap', '16') }} Convert Sigma rule</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+            {{ close_button('name="Close" data-rm-close') }}
         </div>
         <form class="sys-dialog__form" hx-post="{{ technique_url }}/sigma/convert"
               hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">

@@ -14,8 +14,9 @@ tenant's ``rule_origins`` table:
 - ``parent_*``: the copy it was made from, when it was given a new rule id.
 - ``recorded_how``: ``deployed`` (from TIDE's Sigma or Elastic page), ``created`` (Create Rule from
   a Sigma conversion), ``copied`` (Move/copy), ``updated`` (an upstream update reviewed, all of it
-  or some sections taken), ``first_seen`` (found at a sync; its revision is taken as the bundled
-  one at that time), or ``matched`` (a rule converted from Sigma before origins were recorded,
+  or some sections taken), ``unchanged`` (an Elastic update that changes nothing compared, moved
+  to by TIDE at a sync or by the user), ``first_seen`` (found at a sync; its revision is taken as
+  the bundled one at that time), or ``matched`` (a rule converted from Sigma before origins were recorded,
   found by its Sigma title and tags; only the day it was made is known).
 - ``convert_options``: how a Sigma rule was converted (JSON: pipeline, template, index pattern), so
   an upstream update can be converted the same way.
@@ -134,11 +135,12 @@ def get(conn, key: Key) -> Optional[Dict[str, Any]]:
     return rows[0] if rows else None
 
 
-def mark_current(conn, key: Key, actor: str = "", version: Optional[int] = None) -> bool:
+def mark_current(conn, key: Key, actor: str = "", version: Optional[int] = None, how: str = "updated") -> bool:
     """Re-stamp ``key`` as taken from the bundled upstream revision as it is now (an update reviewed:
     all, some or none of it taken), keeping everything else about its origin. ``version`` is the
     upstream version reviewed when it is not the bundled rule's own (Elastic's build for the rule's
-    SIEM's Elastic version). False if it has none."""
+    SIEM's Elastic version). ``how`` is ``unchanged`` when the update changed nothing compared.
+    False if it has none."""
     row = get(conn, key)
     if not row:
         return False
@@ -146,7 +148,7 @@ def mark_current(conn, key: Key, actor: str = "", version: Optional[int] = None)
     row.update({"upstream_version": version if version is not None else now.get("version", row["upstream_version"]),
                 "upstream_hash": None if row["prebuilt"] else now.get("hash", row["upstream_hash"]),
                 "upstream_date": None if row["prebuilt"] else now.get("date", row["upstream_date"]),
-                "recorded_how": "updated", "recorded_by": actor or "TIDE"})
+                "recorded_how": how, "recorded_by": actor or "TIDE"})
     _write(conn, row)
     return True
 
@@ -328,6 +330,9 @@ def _status(row: Dict[str, Any], running: Optional[str] = None) -> Dict[str, Any
             title = (f"Elastic's version {to_version} is newer than the installed {installed}. Review update takes "
                      "the sections you choose into it; Kibana also offers its own update (Rules → Rule updates) "
                      "once it has Elastic's newer rules.")
+        elif installed and from_version and installed < from_version and row["recorded_how"] == "unchanged":
+            title = (f"Elastic's version {from_version} changes nothing TIDE compares, so there is nothing to "
+                     f"review; Kibana still has version {installed} installed.")
         elif installed and from_version and installed < from_version:
             title = (f"Reviewed against Elastic's version {from_version} in TIDE; Kibana still has version "
                      f"{installed} installed.")
@@ -439,13 +444,21 @@ def record_for_client(db, client_id: str, key: Key, origin: str, upstream_id: st
         return False
 
 
-def backfill_tenant(db, client_id: str) -> int:
-    """``backfill`` on one tenant's DB; never raises (a sync must not fail over it)."""
+def backfill_tenant(db, client_id: str, keys: Optional[Iterable[Key]] = None) -> int:
+    """``backfill`` on one tenant's DB, then ``rule_updates.settle_unchanged`` (of ``keys``, or
+    all), so a sync never flags an Elastic update that changes nothing. Returns how many origins
+    were added; never raises (a sync must not fail over it)."""
+    from app.services import rule_updates
     from app.services.tenant_manager import tenant_context_for
     try:
         with tenant_context_for(client_id):
             with db.get_connection() as conn:
-                return backfill(conn)
+                added = backfill(conn)
+                try:
+                    rule_updates.settle_unchanged(conn, keys)
+                except Exception:
+                    logger.exception("Settling unchanged Elastic updates failed for client %s", client_id)
+                return added
     except Exception:
         logger.exception("Rule origin backfill failed for client %s", client_id)
         return 0

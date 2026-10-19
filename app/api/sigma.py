@@ -93,7 +93,7 @@ def _rule_detail(request: Request, db, client_id: str, yaml_content: str, backen
     from app.services import rule_origins
 
     def empty(text: str) -> HTMLResponse:
-        return HTMLResponse(f'<div class="empty-output"><p>{text}</p></div>')
+        return HTMLResponse(f'<div class="empty-state empty-state--fill"><p>{text}</p></div>')
 
     if not yaml_content.strip():
         return empty("Select a rule to see what it detects.")
@@ -140,7 +140,7 @@ def view_rule(
     """One SigmaHQ rule in the Sigma page's detail pane, converted with the page's settings."""
     rule = sigma.get_rule_by_id(rule_id)
     if not rule:
-        return HTMLResponse('<div class="empty-output"><p>This rule is not in the Sigma rules built into TIDE.</p></div>',
+        return HTMLResponse('<div class="empty-state empty-state--fill"><p>This rule is not in the Sigma rules built into TIDE.</p></div>',
                             status_code=404)
     path = str(rule.get("_file_path") or "")
     rel = path[path.find("/rules") + 1:] if "/rules" in path else os.path.basename(path)

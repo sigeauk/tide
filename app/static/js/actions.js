@@ -130,8 +130,14 @@
     TIDE.action('page.reload', function () { window.location.reload(); });
     // A filter bar's dropdown panel (Rule Health, a system's techniques): data-target is its id.
     TIDE.action('filterDropdown.toggle', function (e, el) {
-        e.stopPropagation();
         window.tideToggleFilterDropdown(el.getAttribute('data-target'));
+    });
+    // Every <select> is a choice dropdown (app.js tideEnhanceSelect), wherever it appears.
+    TIDE.page('select', function (el) { window.tideEnhanceSelect(el); });
+    // A filter in a plain GET form (no htmx): a new choice submits it, as filters elsewhere apply at once.
+    TIDE.action('filterDropdown.submit', function (e, el) {
+        var form = el.form || el.closest('form');
+        if (form) form.requestSubmit();
     });
     TIDE.action('event.prevent', function () { return false; });
 

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_choice %}
 
 {% block title %}CTI Indicators | TIDE{% endblock %}
 
@@ -50,39 +51,15 @@
                value="{{ search }}"
                placeholder="observable value or pattern type…">
     </div>
-    <div class="filter-group">
-        <label class="form-label">Pattern</label>
-        <select name="pattern_type" class="form-input form-select">
-            <option value="">All patterns</option>
-            {% for t in pattern_types %}
-            <option value="{{ t }}" {% if t == selected_pattern_type %}selected{% endif %}>{{ t }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">TLP</label>
-        <select name="tlp" class="form-input form-select">
-            <option value="">All TLPs</option>
-            {% for t in tlp_values %}
-            <option value="{{ t }}" {% if t == selected_tlp %}selected{% endif %}>{{ t|upper }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <select name="source" class="form-input form-select">
-            <option value="">All sources</option>
-            {% for s in sources %}
-            <option value="{{ s }}" {% if s == selected_source %}selected{% endif %}>
-                {{ source_labels.get(s, s) }}
-            </option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">&nbsp;</label>
-        <button name="Apply" type="submit" class="btn btn-primary">Apply</button>
-    </div>
+    {% set pattern_opts = [('', 'All patterns')] %}
+    {% for t in pattern_types %}{% set _ = pattern_opts.append((t, t)) %}{% endfor %}
+    {{ filter_choice('cti-pattern', 'pattern_type', 'Pattern', pattern_opts, selected_pattern_type, attrs='data-change="filterDropdown.submit"') }}
+    {% set tlp_opts = [('', 'All TLPs')] %}
+    {% for t in tlp_values %}{% set _ = tlp_opts.append((t, t | upper)) %}{% endfor %}
+    {{ filter_choice('cti-tlp', 'tlp', 'TLP', tlp_opts, selected_tlp, attrs='data-change="filterDropdown.submit"') }}
+    {% set source_opts = [('', 'All sources')] %}
+    {% for s in sources %}{% set _ = source_opts.append((s, source_labels.get(s, s))) %}{% endfor %}
+    {{ filter_choice('cti-source', 'source', 'Source', source_opts, selected_source, attrs='data-change="filterDropdown.submit"') }}
 </form>
 
 {% if indicators %}
@@ -145,13 +122,13 @@
 <div class="pagination mt-md">
     {% set qbase = '&search=' ~ search ~ '&pattern_type=' ~ selected_pattern_type ~ '&tlp=' ~ selected_tlp ~ '&source=' ~ selected_source %}
     {% if page > 1 %}
-        <a name="← Prev" class="btn btn-secondary"
-           href="/cti/indicators?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
+        <a name="Previous" class="btn btn-secondary"
+           href="/cti/indicators?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">{{ icon_text('arrow-left', 'Previous', '14') }}</a>
     {% endif %}
     <span class="my-0 mx-ms">Page {{ page }}</span>
     {% if indicators|length == page_size %}
-        <a name="Next →" class="btn btn-secondary"
-           href="/cti/indicators?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
+        <a name="Next" class="btn btn-secondary"
+           href="/cti/indicators?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}"><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></a>
     {% endif %}
 </div>
 {% endblock %}

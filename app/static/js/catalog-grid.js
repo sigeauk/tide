@@ -64,6 +64,7 @@
             if (el.tagName === 'SELECT' && !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) return;
             el.value = v;
         });
+        if (window.tideFilterSync) window.tideFilterSync(b);
         syncView(b);
 
         var searchTimer = null;

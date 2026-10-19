@@ -3,6 +3,7 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if toast is defined %}
 <div class="toast toast-success" style="display:none" data-toast="{{ toast }}"></div>
@@ -153,9 +154,8 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="empty-output empty-output--hero">
-    {{ icon('monitor', '48') }}
-    <p class="mt-md fs-lg">No systems yet.</p>
-    <p class="text-sm">Click <strong>Add System</strong> to create your first enterprise system.</p>
-</div>
+{% call empty_state('monitor') %}
+    <p class="empty-state-title">No systems yet.</p>
+    <p>Click <strong>Add System</strong> to create your first enterprise system.</p>
+{% endcall %}
 {% endif %}

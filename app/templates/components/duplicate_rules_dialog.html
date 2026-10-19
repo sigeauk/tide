@@ -8,11 +8,12 @@
   legitimately in both staging and production is never grouped here: that's a different (siem_id,
   space) pair per row, and is what the Migrated state already covers.
 #}
+{% from "macros/modal.html" import close_button %}
 <div class="modal-overlay" data-duplicate-rules-dialog data-click="backdrop.remove">
-    <div class="modal-content modal-52rem" data-stop-click>
+    <div class="modal-content modal-lg" data-stop-click>
         <div class="modal-header">
             <h2 class="modal-title">Find duplicate rules</h2>
-            <button name="Close" type="button" class="btn btn-icon" data-click="modal.remove">&#x2715;</button>
+            {{ close_button('name="Close" data-click="modal.remove"') }}
         </div>
 
         {% if result is defined and result %}
@@ -20,7 +21,7 @@
                 <p>Merged {{ result.groups }} group{{ '' if result.groups == 1 else 's' }}: moved {{ result.moved_links }} baseline reference{{ '' if result.moved_links == 1 else 's' }}, removed {{ result.deleted }} duplicate row{{ '' if result.deleted == 1 else 's' }} from TIDE's database. Nothing was changed in Elastic.</p>
             </div>
             <div class="modal-actions">
-                <button name="Done" type="button" class="btn btn-primary" data-click="modal.remove">Done</button>
+                <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
             </div>
         {% elif not groups %}
             <p class="text-secondary mb-md">No duplicates found — every rule maps to exactly one row per SIEM and space.</p>

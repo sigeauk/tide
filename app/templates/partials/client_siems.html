@@ -2,6 +2,7 @@
    Context: client_siems (list of SIEM dicts), client (dict), available_siems (list), siem_rule_counts (dict space->counts)
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button, empty_state %}
 
 <div  name="Linked SIEMs Edit" class="client-section-toggle" data-click="section.toggle" data-body="siems-body" data-chev="siems-chev">
     <span class="client-list-item__icon">{{ icon('server', '14') }}</span>
@@ -43,19 +44,19 @@
             {% endif %}
         </div>
         <div class="relative flex-none">
-            <button type="button" class="btn btn-ghost btn-sm" title="Edit this destination's name, default index and card colour"
+            <button type="button" class="rm-iconbtn rm-iconbtn--boxed" aria-label="Edit destination" title="Edit this destination's name, default index and card colour"
                     data-click="clientSiems.toggleEdit" data-target="{{ edit_id }}">
-                {{ icon('more-vertical', '16') }}
+                {{ icon('pencil', '16') }}
             </button>
             <div id="{{ edit_id }}" class="client-siem-edit-popover" style="display:none;" data-stop-click>
                 <form hx-post="/api/management/clients/{{ client.id }}/siems/{{ s.id }}/edit-destination"
                       hx-target="#client-siems-section" hx-swap="innerHTML">
                     <input type="hidden" name="space" value="{{ s.space or 'default' }}">
-                    <label class="form-label fs-xs">Name</label>
+                    <label class="form-label">Name</label>
                     <input type="text" name="name" value="{{ s.name }}" class="form-input" required>
-                    <label class="form-label fs-xs mt-sm">Default index</label>
+                    <label class="form-label mt-sm">Default index</label>
                     <input type="text" name="default_index" value="{{ s.default_index or '' }}" class="form-input" placeholder="logs-*">
-                    <label class="form-label fs-xs mt-sm">Card colour</label>
+                    <label class="form-label mt-sm">Card colour</label>
                     <div class="client-siem-color-row">
                         {% for c in destination_color_palette %}
                         <button type="button" class="client-siem-swatch{% if (s.color or '') | lower == c | lower %} client-siem-swatch--selected{% endif %}"
@@ -75,10 +76,9 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="client-section-empty">
-    {{ icon('server', '36') }}
+{% call empty_state('server') %}
     <p>No SIEMs linked to this client yet.</p>
-</div>
+{% endcall %}
 {% endif %}
 
 {# Per-tenant rule validation thresholds. Stored on the clients row
@@ -91,7 +91,7 @@
       hx-target="#client-siems-section" hx-swap="innerHTML"
     class="flex gap-ms items-start flex-wrap py-0 px-xs">
     <div class="siem-mode-col">
-        <label class="form-label fs-sm">Validation mode</label>
+        <label class="form-label">Validation mode</label>
         <select name="rule_validation_mode" class="form-input siem-mode-select" data-change="clientSiems.validationMode">
             <option value="master" {% if client.rule_validation_mode != 'criticality' %}selected{% endif %}>Master cadence</option>
             <option value="criticality" {% if client.rule_validation_mode == 'criticality' %}selected{% endif %}>By criticality</option>
@@ -104,13 +104,13 @@
         </label>
     </div>
     <div class="flex-none">
-        <label class="form-label fs-sm">Master amber after (weeks)</label>
+        <label class="form-label">Master amber after (weeks)</label>
         <input type="number" min="1" name="amber_weeks" class="form-input siem-num-input"
                placeholder="{{ settings.rule_validation_amber_weeks }} (default)"
                value="{{ client.rule_validation_amber_weeks if client.rule_validation_amber_weeks is not none else '' }}">
     </div>
     <div class="flex-none">
-        <label class="form-label fs-sm">Master expired after (weeks)</label>
+        <label class="form-label">Master expired after (weeks)</label>
         <input type="number" min="1" name="expired_weeks" class="form-input siem-num-input"
                placeholder="{{ settings.rule_validation_expired_weeks }} (default)"
                value="{{ client.rule_validation_expired_weeks if client.rule_validation_expired_weeks is not none else '' }}">
@@ -118,11 +118,11 @@
     <div id="criticality-validation-grid" class="crit-grid"{% if client.rule_validation_mode != 'criticality' %} hidden{% endif %}>
         {% for severity in ['low', 'medium', 'high', 'critical'] %}
         <div class="min-w-0">
-            <label class="form-label fs-xs">{{ severity|title }} amber</label>
+            <label class="form-label">{{ severity|title }} amber</label>
             <input type="number" min="1" name="{{ severity }}_amber_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_amber_weeks'] if client['rule_validation_' ~ severity ~ '_amber_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_amber_weeks }}">
         </div>
         <div class="min-w-0">
-            <label class="form-label fs-xs">{{ severity|title }} expired</label>
+            <label class="form-label">{{ severity|title }} expired</label>
             <input type="number" min="1" name="{{ severity }}_expired_weeks" class="form-input" value="{{ client['rule_validation_' ~ severity ~ '_expired_weeks'] if client['rule_validation_' ~ severity ~ '_expired_weeks'] is not none else '' }}" placeholder="{{ settings.rule_validation_expired_weeks }}">
         </div>
         {% endfor %}
@@ -141,11 +141,11 @@
 <!-- Edit SIEMs Modal -->
 <div name="Edit Siems Modal" id="edit-siems-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Manage SIEMs — {{ client.name }}</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-siems-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-siems-modal"') }}
         </div>
         <div class="stack gap-md">
             <!-- Current SIEMs with remove -->
@@ -184,13 +184,13 @@
                     {% endfor %}
                 </select>
                 <div>
-                    <label class="form-label fs-sm text-muted mb-xs">
+                    <label class="form-label">
                         Name this destination (e.g. "Legacy Prod", "New SIEM Prod", "QA Sandbox")
                     </label>
                     <input type="text" name="name" class="form-input" placeholder="Production" required>
                 </div>
                 <div id="siem-space-field" style="display:none;">
-                    <label class="form-label fs-sm text-muted mb-xs">
+                    <label class="form-label">
                         Kibana space id (NOT the name above -- this is the actual space in Kibana).
                         Leave blank for Kibana's built-in <code>default</code> space.
                     </label>
@@ -217,13 +217,13 @@
                     {% endif %}
                 </div>
                 <div>
-                    <label class="form-label fs-sm text-muted mb-xs">
+                    <label class="form-label">
                         Default index pattern (optional)
                     </label>
                     <input type="text" name="default_index" class="form-input" placeholder="logs-*">
                 </div>
                 <div>
-                    <label class="form-label fs-sm text-muted mb-xs">
+                    <label class="form-label">
                         Card colour &mdash; a free one is pre-selected; pick another if you'd rather
                     </label>
                     <div class="client-siem-color-row">

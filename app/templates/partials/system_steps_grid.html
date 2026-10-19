@@ -9,6 +9,7 @@
 #}
 {% from "macros/icons.html" import icon, icon_text, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "macros/modal.html" import empty_state %}
 
 {% macro coverage(step) -%}
 {% set status = step.status | default('red') %}
@@ -93,13 +94,13 @@
         {% elif g.steps %}
             {{ items(g.steps) }}
         {% else %}
-            <div class="empty-state-text sys-empty">
+            {% call empty_state() %}
                 <p>No techniques in this template yet.</p>
                 <button name="Add Technique" type="button" class="btn btn-primary btn-sm"
                         hx-get="/api/baselines/techniques-new?baseline_id={{ g.key }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                     {{ icon_text('plus', 'Add technique', '13') }}
                 </button>
-            </div>
+            {% endcall %}
         {% endif %}
     </div>
 </details>
@@ -120,10 +121,11 @@
         {{ items(steps) }}
     {% endif %}
 {% elif not baselines %}
-<div class="empty-state-text sys-empty"><p>{{ "No templates yet. Create one from this page's menu, with New baseline." if template else "No baselines are applied to this system." }}</p></div>
+{% call empty_state() %}
+    <p>{{ "No templates yet. Create one from this page's menu, with New baseline." if template else "No baselines are applied to this system." }}</p>
+{% endcall %}
 {% else %}
-<div class="empty-state-text sys-empty">
-    {{ icon('search', '22') }}
+{% call empty_state('search') %}
     <p>No techniques match these filters.</p>
-</div>
+{% endcall %}
 {% endif %}

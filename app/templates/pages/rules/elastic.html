@@ -6,6 +6,8 @@
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice %}
+{% from "macros/modal.html" import empty_state %}
 
 {% block title %}Elastic Rules | TIDE{% endblock %}
 
@@ -18,28 +20,18 @@
 </div>
 
 {% if not facets.rule_count %}
-<div class="empty-output">
-    {{ icon('package', '32') }}
+{% call empty_state('package', fill=true) %}
     <p>Elastic's rules are not in this TIDE image. They are added when the image is built; install a newer TIDE release to get them.</p>
-</div>
+{% endcall %}
 {% else %}
 {# Where and how Deploy puts a rule (the rule form opens with these chosen), like the Sigma page's
    conversion settings and the Hunting page's run settings #}
 <div class="sigma-header-row lib-settings" id="elastic-settings">
     {% if destinations %}
-    <div class="sigma-select-group">
-        <label for="elastic-deploy-to">Deploy to</label>
-        <select id="elastic-deploy-to" name="scope_pair" class="sigma-select sigma-select--wide">
-            {% for d in destinations %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
-        </select>
-    </div>
-    <div class="sigma-select-group">
-        <label for="elastic-deploy-as">Deploy as</label>
-        <select id="elastic-deploy-as" name="enabled" class="sigma-select">
-            <option value="false">Disabled</option>
-            <option value="true">Enabled</option>
-        </select>
-    </div>
+    {% set dest_opts = [] %}
+    {% for d in destinations %}{% set _ = dest_opts.append((d.value, d.label)) %}{% endfor %}
+    {{ filter_choice('elastic-deploy-to', 'scope_pair', 'Deploy to', dest_opts, dest_opts[0][0], wrap='sigma-select-group') }}
+    {{ filter_choice('elastic-deploy-as', 'enabled', 'Deploy as', [('false', 'Disabled'), ('true', 'Enabled')], 'false', wrap='sigma-select-group') }}
     {% else %}
     <p class="text-muted text-sm lib-settings__note">Link a SIEM to this client to deploy Elastic's rules to it.</p>
     {% endif %}
@@ -55,48 +47,22 @@
             <form class="browser-filters" id="elastic-filters" hx-get="/api/elastic/rules"
                   hx-target="#elastic-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
-                    <label for="elastic-q">Search</label>
+                    <label class="form-label" for="elastic-q">Search</label>
                     <input type="text" id="elastic-q" name="q" placeholder="Name, description, rule id, tag…">
                 </div>
                 <div class="browser-filter">
-                    <label for="elastic-technique">MITRE Technique</label>
+                    <label class="form-label" for="elastic-technique">MITRE technique</label>
                     <input type="text" id="elastic-technique" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                <div class="browser-filter">
-                    <label for="elastic-platform">Platform</label>
-                    <select id="elastic-platform" name="platform">
-                        <option value="">All</option>
-                        {% for p in facets.platforms %}<option value="{{ p }}">{{ p | replace('_', ' ') }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="elastic-integration">Integration</label>
-                    <select id="elastic-integration" name="integration">
-                        <option value="">All</option>
-                        {% for i in facets.integrations %}<option value="{{ i }}">{{ i }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="elastic-type">Type</label>
-                    <select id="elastic-type" name="type">
-                        <option value="">All</option>
-                        {% for t in facets.types %}<option value="{{ t }}">{{ t | replace('_', ' ') }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="elastic-severity">Severity</label>
-                    <select id="elastic-severity" name="severity">
-                        <option value="">All</option>
-                        {% for s in severities %}<option value="{{ s }}">{{ s | title }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="elastic-status">Status</label>
-                    <select id="elastic-status" name="status">
-                        <option value="">All</option>
-                        {% for value, label in statuses %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
-                    </select>
-                </div>
+                {% set plat_opts = [('', 'All')] %}{% for p in facets.platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
+                {{ filter_choice('elastic-platform', 'platform', 'Platform', plat_opts, '', wrap='browser-filter') }}
+                {% set int_opts = [('', 'All')] %}{% for i in facets.integrations %}{% set _ = int_opts.append((i, i)) %}{% endfor %}
+                {{ filter_choice('elastic-integration', 'integration', 'Integration', int_opts, '', wrap='browser-filter') }}
+                {% set type_opts = [('', 'All')] %}{% for t in facets.types %}{% set _ = type_opts.append((t, t | replace('_', ' '))) %}{% endfor %}
+                {{ filter_choice('elastic-type', 'type', 'Type', type_opts, '', wrap='browser-filter') }}
+                {% set sev_opts = [('', 'All')] %}{% for s in severities %}{% set _ = sev_opts.append((s, s | title)) %}{% endfor %}
+                {{ filter_choice('elastic-severity', 'severity', 'Severity', sev_opts, '', wrap='browser-filter') }}
+                {{ filter_choice('elastic-status', 'status', 'Status', [('', 'All')] + statuses | list, '', wrap='browser-filter') }}
                 <input type="hidden" name="selected" value="{{ selected_id }}">
             </form>
             <div id="elastic-list" class="lib-list">
@@ -108,10 +74,9 @@
     <div class="sigma-panel lib-detail-panel">
         <div id="elastic-detail" class="lib-detail"
              {% if selected_id %}hx-get="/api/elastic/rules/{{ selected_id }}" hx-trigger="load"{% endif %}>
-            <div class="empty-output">
-                {{ icon('shield', '32') }}
+            {% call empty_state('shield', fill=true) %}
                 <p>Select a rule to see what it detects.</p>
-            </div>
+            {% endcall %}
         </div>
     </div>
 </div>

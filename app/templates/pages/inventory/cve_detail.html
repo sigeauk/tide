@@ -5,6 +5,7 @@
 {% block title %}{{ cve.cve_id }} — TIDE{% endblock %}
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "macros/modal.html" import close_button %}
 
 {% block content %}
 <div class="p-lg">
@@ -111,17 +112,15 @@
 <!-- ── Export Report Modal ────────────────────────────────────── -->
 <div id="export-modal-overlay" data-cve-id="{{ cve.cve_id }}"
      class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm modal-360">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
                 Export CVE Audit Report
             </h3>
-            <button name="Close Export Modal" data-click="cvePage.exportClose"
-                    type="button" class="modal-x"
-                    title="Close">&#x2715;</button>
+            {{ close_button('name="Close Export Modal" data-click="cvePage.exportClose"') }}
         </div>
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Format</label>
+            <label class="form-label">Format</label>
             <select name="PDF Markdown" id="modal-format"
                     class="form-input">
                 <option value="pdf">PDF</option>
@@ -129,7 +128,7 @@
             </select>
         </div>
         <div class="mb-lg">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Classification</label>
+            <label class="form-label">Classification</label>
             <select name="Modal Classification" id="modal-classification"
                     class="form-input">
                 {% for clf in classification_options %}

@@ -2,6 +2,7 @@
    Context: client_baselines (list of baseline objects), client (dict), available_baselines (list), all_clients (list)
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
 
 <div  name="Baselines Edit" class="client-section-toggle" data-click="section.toggle" data-body="baselines-body" data-chev="baselines-chev">
     <span class="client-list-item__icon">{{ icon('shield', '14') }}</span>
@@ -39,9 +40,8 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="client-section-empty">
-    {{ icon('shield', '36') }}
+{% call empty_state('shield') %}
     <p>No baselines assigned to this client yet.</p>
-</div>
+{% endcall %}
 {% endif %}
 </div>

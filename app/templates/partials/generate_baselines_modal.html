@@ -1,10 +1,11 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/tech_icons.html" import tech_icon, bucket_icon %}
-<div  name="Generate Detection Baselines" class="modal-content" data-stop-click>
+{% from "macros/modal.html" import close_button, empty_state %}
+<div  name="Generate Detection Baselines" class="modal-content modal-lg" data-stop-click>
     <div class="modal-header">
         <h3 class="modal-title modal-title--accent">{{ icon('zap','16') }} Generate Detection Baselines</h3>
-        <button   name="Close Modal" class="modal-x"
-                data-click="el.hide" data-target="generate-baselines-modal">&#x2715;</button>
+        {{ close_button('name="Close Modal"
+                data-click="el.hide" data-target="generate-baselines-modal"') }}
     </div>
     <p class="modal-intro">
         Select the technologies in your environment. TIDE will generate modular detection baselines
@@ -44,11 +45,10 @@
         </div>
         </div>
         {% else %}
-        <div class="empty-output gen-empty">
-            {{ icon('info','18') }}
-            <p>No Sigma rule index found for this tenant.</p>
-            <p class="text-sm">Run Sigma indexing first, then reopen this generator.</p>
-        </div>
+        {% call empty_state('info') %}
+            <p class="empty-state-title">No Sigma rule index found for this tenant.</p>
+            <p>Run Sigma indexing first, then reopen this generator.</p>
+        {% endcall %}
         {% endif %}
 
         <!-- ── Preview area (populated by HTMX POST) ───────────── -->

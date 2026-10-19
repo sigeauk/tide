@@ -4,6 +4,7 @@
 {% block title %}{{ host.name }} — TIDE{% endblock %}
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "macros/modal.html" import close_button %}
 
 {% block content %}
 <div class="p-lg">
@@ -65,11 +66,11 @@
 <!-- ── Edit Device Modal ────────────────────────────────────────────── -->
 <div name="Edit Host Modal" id="edit-host-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('pencil','16') }} Edit Device</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-host-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-host-modal"') }}
         </div>
         <form name="Update Hosts" hx-put="/api/inventory/hosts/{{ host.id }}"
               hx-target="#host-header"
@@ -77,22 +78,22 @@
               hx-on::after-request="document.getElementById('edit-host-modal').style.display='none'"
               class="stack gap-md">
             <div>
-                <label class="form-label">Device Name <span class="req">*</span></label>
+                <label class="form-label">Device name <span class="req">*</span></label>
                 <input name="name" class="form-input" required value="{{ host.name }}">
             </div>
             <div class="form-grid-2 gap-ms">
                 <div>
-                    <label class="form-label">IP Address</label>
+                    <label class="form-label">IP address</label>
                     <input name="ip_address" class="form-input" value="{{ host.ip_address or '' }}" placeholder="10.0.0.1">
                 </div>
                 <div>
-                    <label class="form-label">Operating System</label>
+                    <label class="form-label">Operating system</label>
                     <input name="os" class="form-input" value="{{ host.os or '' }}" placeholder="Windows Server 2022">
                 </div>
             </div>
             <div class="form-grid-2 gap-ms">
                 <div>
-                    <label class="form-label">Hardware Vendor</label>
+                    <label class="form-label">Hardware vendor</label>
                     <input name="hardware_vendor" class="form-input" value="{{ host.hardware_vendor or '' }}" placeholder="Dell">
                 </div>
                 <div>
@@ -112,7 +113,7 @@
 <!-- ── Add Package Modal ─────────────────────────────────────────── -->
 <div name="Add Sw Modal" id="add-sw-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <h3 class="mt-0 mx-0 mb-md fs-title fw-600">
             Add Package — {{ host.name }}
         </h3>
@@ -122,21 +123,21 @@
               hx-on::after-request="document.getElementById('add-sw-modal').style.display='none';this.reset()"
               class="stack gap-ms">
             <div>
-                <label class="fs-md fw-500 block mb-xs">
-                    Software Name <span class="req">*</span>
+                <label class="form-label">
+                    Software name <span class="req">*</span>
                 </label>
                 <input class="form-input" name="name" required placeholder="e.g. Apache HTTP Server">
             </div>
             <div>
-                <label class="fs-md fw-500 block mb-xs">Version</label>
+                <label class="form-label">Version</label>
                 <input class="form-input" name="version" placeholder="e.g. 2.4.51">
             </div>
             <div>
-                <label class="fs-md fw-500 block mb-xs">Vendor</label>
+                <label class="form-label">Vendor</label>
                 <input class="form-input" name="vendor" placeholder="e.g. Apache Software Foundation">
             </div>
             <div>
-                <label class="fs-md fw-500 block mb-xs">CPE</label>
+                <label class="form-label">CPE</label>
                 <input class="form-input" name="cpe" placeholder="cpe:2.3:a:apache:http_server:2.4.51:*:*:*:*:*:*:*">
             </div>
             <div class="flex gap-sm justify-end mt-sm">

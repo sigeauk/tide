@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
+{% from "macros/menu.html" import more_button %}
 
 {#
   A dashboard (app/api/dashboard.py builds the context): the picker of the client's dashboards
@@ -43,8 +45,7 @@
         <a name="Edit Dashboard" class="btn btn-secondary btn-sm" href="/dashboard/{{ dashboard.id }}?edit=1"
            title="Name this dashboard, and add, arrange and filter its sections">{{ icon('pencil', '14') }} Edit</a>
         <div class="rh-more" data-more>
-            <button name="Dashboard Actions" type="button" class="btn btn-secondary btn-sm rh-more__btn rh-more__btn--sm" data-more-toggle
-                    aria-haspopup="menu" aria-expanded="false" title="More actions">{{ icon('more-vertical', '16') }}<span class="sr-only">More actions</span></button>
+            {{ more_button('More actions', attrs='name="Dashboard Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
                 <button name="New Dashboard" type="button" role="menuitem" class="rh-more__item"
                         hx-post="/api/dashboard/new" hx-include="unset">{{ icon('plus', '14') }}<span>New dashboard</span></button>
@@ -100,9 +101,9 @@
     {% for card, view in items %}{% include "partials/dashboard_card.html" %}{% endfor %}
 </div>
 {% if not items and not editing %}
-<div class="empty-state-text dash-empty">
-    Nothing is on this dashboard yet.{% if can_edit %} Use <strong>Edit</strong> to add sections.{% endif %}
-</div>
+{% call empty_state() %}
+    <p>Nothing is on this dashboard yet.{% if can_edit %} Use <strong>Edit</strong> to add sections.{% endif %}</p>
+{% endcall %}
 {% endif %}
 
 {% if editing %}

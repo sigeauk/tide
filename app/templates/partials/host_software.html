@@ -5,6 +5,7 @@
      vulns   (List[CveMatch])
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if software %}
 {# Build sets: all vulnerable sw names, and covered (detection applied to THIS host/system) sw names #}
@@ -91,29 +92,29 @@
           hx-swap="innerHTML"
           hx-on::after-request="document.getElementById('sw-edit-{{ sw.id }}').style.display='none';document.getElementById('sw-display-{{ sw.id }}').style.display='';">
         <div>
-            <label class="fs-xs text-muted block mb-2xs">Name</label>
+            <label class="form-label">Name</label>
             <input class="form-input sw-input sw-input--name" name="name" value="{{ sw.name }}" required>
         </div>
         <div>
-            <label class="fs-xs text-muted block mb-2xs">Version</label>
+            <label class="form-label">Version</label>
             <input class="form-input sw-input sw-input--version" name="version" value="{{ sw.version or '' }}" placeholder="—">
         </div>
         <div>
-            <label class="fs-xs text-muted block mb-2xs">Vendor</label>
+            <label class="form-label">Vendor</label>
             <input class="form-input sw-input sw-input--vendor" name="vendor" value="{{ sw.vendor or '' }}" placeholder="—">
         </div>
         <div class="sw-input-grow">
-            <label class="fs-xs text-muted block mb-2xs">CPE</label>
+            <label class="form-label">CPE</label>
             <input class="form-input w-full fs-md py-xs px-sm" name="cpe" value="{{ sw.cpe or '' }}"
                    placeholder="cpe:2.3:a:…">
         </div>
         <div class="flex gap-xs self-end">
-            <button name="Save" type="submit" class="btn btn-primary btn-sm fs-sm py-xs px-sm">
-                {{ icon('save', '11') }} Save
-            </button>
             <button name="Cancel" type="button" class="btn btn-secondary btn-sm fs-sm py-xs px-sm"
                     data-click="hosts.swCancel" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}">
                 Cancel
+            </button>
+            <button name="Save" type="submit" class="btn btn-primary btn-sm fs-sm py-xs px-sm">
+                {{ icon('save', '11') }} Save
             </button>
         </div>
     </form>
@@ -124,8 +125,7 @@
 </div>
 
 {% else %}
-<div class="empty-centre empty-centre--text-muted">
-    {{ icon('package', '40') }}
-    <p class="mt-ms fs-base">No packages installed on this device.</p>
-</div>
+{% call empty_state('package') %}
+    <p>No packages installed on this device.</p>
+{% endcall %}
 {% endif %}

@@ -1,7 +1,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
 <!-- Test Rule Result Popup -->
 <div  name="Test Results: ... Close" class="modal-overlay" data-click="el.remove">
-    <div  name="Test Results: ... Close" class="modal-content modal-sm modal-700" data-stop-click>
+    <div  name="Test Results: ... Close" class="modal-content modal-lg" data-stop-click>
         <div class="modal-header">
             <h2 class="modal-title">Test Results: {{ rule.name[:60] }}{% if rule.name|length > 60 %}...{% endif %}</h2>
             <button  name="Close Modal" class="btn btn-secondary btn-sm" data-click="modal.remove">
@@ -69,7 +69,7 @@
         <!-- Sample Results -->
         {% if samples and samples | length > 0 %}
         <div class="modal-section">
-            <h3 class="modal-section-subtitle">Sample Results ({{ samples | length }})</h3>
+            <h3 class="modal-section-subtitle">Sample Results <span class="rm-fold__count">{{ samples | length }}</span></h3>
             <div class="mapping-table-wrapper">
                 <table class="mapping-table">
                     <thead>

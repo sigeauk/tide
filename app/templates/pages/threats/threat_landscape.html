@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_choice %}
+{% from "macros/modal.html" import close_button %}
 
 {% block title %}Threat Landscape | TIDE{% endblock %}
 
@@ -50,58 +52,15 @@
             hx-include="[name='origin'], [name='source'], [name='sort_by']">
     </div>
     
-    <div class="filter-group">
-        <label class="form-label">Origin</label>
-        <select 
-            name="origin" 
-            class="form-input form-select"
-            hx-get="/api/threats"
-            hx-trigger="change"
-            hx-target="#threats-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='source'], [name='sort_by']">
-            <option value="">All Origins</option>
-            {% for origin in origins %}
-            <option value="{{ origin }}">{{ origin }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <select 
-            name="source" 
-            class="form-input form-select"
-            hx-get="/api/threats"
-            hx-trigger="change"
-            hx-target="#threats-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='origin'], [name='sort_by']">
-            <option value="">All Sources</option>
-            {% for raw, label in sources %}
-            <option value="{{ raw }}">{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    
-    <div class="filter-group">
-        <label class="form-label">Sort By</label>
-        <select 
-            name="sort_by" 
-            class="form-input form-select"
-            hx-get="/api/threats"
-            hx-trigger="change"
-            hx-target="#threats-grid"
-            hx-swap="innerHTML"
-            hx-include="[name='search'], [name='origin'], [name='source']">
-            <option value="ttp_desc">TTPs (High → Low)</option>
-            <option value="ttp_asc">TTPs (Low → High)</option>
-            <option value="name_asc">Name (A → Z)</option>
-            <option value="coverage_desc">Coverage (High → Low)</option>
-            <option value="coverage_asc">Coverage (Low → High)</option>
-        </select>
-    </div>
-    
+    {% set tl_hx = 'hx-get="/api/threats" hx-trigger="change" hx-target="#threats-grid" hx-swap="innerHTML" hx-include="[name=\'search\'], [name=\'origin\'], [name=\'source\'], [name=\'sort_by\']"' %}
+    {% set origin_opts = [('', 'All origins')] %}
+    {% for origin in origins %}{% set _ = origin_opts.append((origin, origin)) %}{% endfor %}
+    {{ filter_choice('tl-origin', 'origin', 'Origin', origin_opts, '', attrs=tl_hx) }}
+
+    {{ filter_choice('tl-source', 'source', 'Source', [('', 'All sources')] + sources | list, '', attrs=tl_hx) }}
+
+    {{ filter_choice('tl-sort', 'sort_by', 'Sort by', [('ttp_desc', 'TTPs (High → Low)'), ('ttp_asc', 'TTPs (Low → High)'), ('name_asc', 'Name (A → Z)'),
+                     ('coverage_desc', 'Coverage (High → Low)'), ('coverage_asc', 'Coverage (Low → High)')], 'ttp_desc', attrs=tl_hx) }}
 </div>
 
 <!-- Threats Grid - Load on page load via HTMX -->
@@ -121,7 +80,7 @@
 <!-- ── Generate Baseline Modal (per actor) ─────────────────────────── -->
 <div id="actor-baseline-overlay"
      class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm modal-420">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
@@ -129,23 +88,21 @@
                 </svg>
                 Create Assurance Baseline
             </h3>
-            <button name="Close Actor Baseline Modal" data-click="threats.baselineClose"
-                    type="button" class="modal-x"
-                    title="Close">&#x2715;</button>
+            {{ close_button('name="Close Actor Baseline Modal" data-click="threats.baselineClose"') }}
         </div>
 
         <form   name="Generate Baseline Form" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <input type="hidden" id="actor-bl-actors" name="actor_names" value="">
             <input type="hidden" id="actor-bl-group-ids" name="actor_group_ids" value="">
             <div class="mb-md">
-                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
-                    Baseline Name
+                <label class="form-label">
+                    Baseline name
                 </label>
                 <input id="actor-bl-name" name="baseline_name" required
                        class="form-input">
             </div>
             <div class="mb-lg">
-                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
+                <label class="form-label">
                     Description (optional)
                 </label>
                 <textarea id="actor-bl-desc" name="description" rows="3"

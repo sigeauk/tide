@@ -2058,7 +2058,7 @@ def _template_window(request: Request, step_id: str, client_id: str, changed: bo
     from app.inventory_engine import get_template_step_detail
     detail = get_template_step_detail(step_id, client_id=client_id)
     if not detail:
-        return HTMLResponse('<div class="empty-state-text">This technique no longer exists.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">This technique no longer exists.</div>', status_code=404)
     resp = _render("components/template_step_modal.html", request, {"detail": detail})
     if changed:
         resp.headers["HX-Trigger"] = "stepsChanged"
@@ -2391,7 +2391,7 @@ def _system_not_found(system_id: str, client_id: str) -> Optional[HTMLResponse]:
     """
     if get_system(system_id, client_id=client_id):
         return None
-    return HTMLResponse('<div class="empty-state-text">This system no longer exists.</div>', status_code=404)
+    return HTMLResponse('<div class="rm-empty">This system no longer exists.</div>', status_code=404)
 
 
 def _coverage_destination_context(system_id: str, client_id: str = None) -> Dict[str, Any]:
@@ -2432,7 +2432,7 @@ def _step_modal_response(request: Request, system_id: str, step_id: str, client_
         return missing
     detail = get_step_detail_for_system(step_id, system_id, client_id=client_id)
     if not detail:
-        return HTMLResponse('<div class="empty-state-text">This technique no longer exists.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">This technique no longer exists.</div>', status_code=404)
     return _render("components/step_modal.html", request, {
         "detail": detail, "system_id": system_id, "coverage_error": coverage_error,
     })

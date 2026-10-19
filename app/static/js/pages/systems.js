@@ -78,6 +78,7 @@
             $('system-filter-q').value = '';
             $('system-filter-classification').value = '';
             $('system-filter-risk').value = '';
+            window.tideFilterSync();
             filterCards();
         },
         // Nessus upload: "+ New environment…" asks for its name.

@@ -5,11 +5,12 @@
   copies the whole rule over as before.
 #}
 {% from "macros/rule_diff.html" import diff_fields %}
+{% from "macros/modal.html" import close_button %}
 <div class="modal-overlay" data-click="backdrop.remove">
-  <div class="modal-content rd-root modal-980" data-view="inline" data-stop-click>
+  <div class="modal-content modal-xl rd-root" data-view="inline" data-stop-click>
     <div class="modal-header">
       <h2>Compare</h2>
-      <button type="button" class="btn btn-icon" data-click="modal.remove">&times;</button>
+      {{ close_button('data-click="modal.remove"') }}
     </div>
     <p class="rule-help">
       Showing what's different between <strong>{{ source.name if source else 'this rule' }}</strong> ({{ source_dest_name }})
@@ -19,7 +20,7 @@
     </p>
     {% if all_links and all_links | length > 1 %}
     <div class="mb-md rd-select-wrap">
-      <label class="form-label fs-sm">Comparing against</label>
+      <label class="form-label">Comparing against</label>
       <select class="form-input" id="rm-diff-target"
               data-stop-click
               data-change="rule.compareTarget" data-rule-id="{{ source_rule_id }}" data-siem-id="{{ source_siem_id }}" data-space="{{ source_space }}">
@@ -30,7 +31,7 @@
     </div>
     {% endif %}
     {% if diffs is none %}
-    <p class="empty-state-text">One of the two copies no longer exists, so there is nothing to compare.</p>
+    <p class="rm-empty">One of the two copies no longer exists, so there is nothing to compare.</p>
     {% elif diffs %}
     <div class="rd-toolbar">
       <div class="rd-toggle" role="group" aria-label="Comparison layout">
@@ -40,7 +41,7 @@
     </div>
     {{ diff_fields(diffs, 'This rule', 'Linked rule', select='rm-merge-section' if source and target else none) }}
     {% else %}
-    <p class="empty-state-text">The two rules are identical in every field compared.</p>
+    <p class="rm-empty">The two rules are identical in every field compared.</p>
     {% endif %}
     {% if source and target %}
     <div class="rm-merge border-t mt-md pt-md">
@@ -52,7 +53,7 @@
       </p>
       {% set src_label = source.name ~ ' (' ~ source_dest_name ~ ')' %}
       {% set tgt_label = target.name ~ ' (' ~ link.destination_name ~ ')' %}
-      <label class="form-label fs-xs">Direction</label>
+      <label class="form-label">Direction</label>
       <div class="flex flex-col gap-sm mb-ms">
         <label class="flex items-start gap-sm">
           <input type="radio" name="rm-merge-direction" value="source_over_target" checked>
@@ -63,7 +64,7 @@
           <span>Merge <strong>{{ tgt_label }}</strong> over <strong>{{ src_label }}</strong> &mdash; {{ src_label }} is overwritten</span>
         </label>
       </div>
-      <label class="form-label fs-xs">After merging</label>
+      <label class="form-label">After merging</label>
       <div class="flex flex-col gap-sm mb-ms">
         <label class="flex items-start gap-sm">
           <input type="radio" name="rm-merge-delete" value="none" checked>

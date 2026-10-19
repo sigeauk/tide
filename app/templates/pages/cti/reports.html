@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_choice %}
 
 {% block title %}CTI Reports | TIDE{% endblock %}
 
@@ -60,30 +61,12 @@
                value="{{ search }}"
                placeholder="report name or description…">
     </div>
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <select name="source" class="form-input form-select">
-            <option value="">All sources</option>
-            {% for s in sources %}
-            <option value="{{ s }}" {% if s == selected_source %}selected{% endif %}>
-                {{ source_labels.get(s, s) }}
-            </option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">Label</label>
-        <select name="label" class="form-input form-select">
-            <option value="">All labels</option>
-            {% for l in all_labels %}
-            <option value="{{ l }}" {% if l == selected_label %}selected{% endif %}>{{ l }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">&nbsp;</label>
-        <button name="Apply" type="submit" class="btn btn-primary">Apply</button>
-    </div>
+    {% set source_opts = [('', 'All sources')] %}
+    {% for s in sources %}{% set _ = source_opts.append((s, source_labels.get(s, s))) %}{% endfor %}
+    {{ filter_choice('cti-source', 'source', 'Source', source_opts, selected_source, attrs='data-change="filterDropdown.submit"') }}
+    {% set label_opts = [('', 'All labels')] %}
+    {% for t in all_labels %}{% set _ = label_opts.append((t, t)) %}{% endfor %}
+    {{ filter_choice('cti-label', 'label', 'Label', label_opts, selected_label, attrs='data-change="filterDropdown.submit"') }}
 </form>
 
 {% if reports %}
@@ -136,13 +119,13 @@
 <div class="pagination mt-md">
     {% set qbase = '&search=' ~ search ~ '&source=' ~ selected_source ~ '&label=' ~ selected_label %}
     {% if page > 1 %}
-        <a name="← Prev" class="btn btn-secondary"
-           href="/cti/reports?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">← Prev</a>
+        <a name="Previous" class="btn btn-secondary"
+           href="/cti/reports?page={{ page - 1 }}&page_size={{ page_size }}{{ qbase }}">{{ icon_text('arrow-left', 'Previous', '14') }}</a>
     {% endif %}
     <span class="my-0 mx-ms">Page {{ page }}</span>
     {% if reports|length == page_size %}
-        <a name="Next →" class="btn btn-secondary"
-           href="/cti/reports?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}">Next →</a>
+        <a name="Next" class="btn btn-secondary"
+           href="/cti/reports?page={{ page + 1 }}&page_size={{ page_size }}{{ qbase }}"><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></a>
     {% endif %}
 </div>
 {% endblock %}

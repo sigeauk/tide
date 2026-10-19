@@ -91,7 +91,7 @@
                     var ord = prev.indexOf(it.filename);
                     if (ord !== -1) row.classList.add('selected');
                     row.innerHTML =
-                        '<span class="pipeline-option-check">&#10003;</span>' +
+                        '<span class="pipeline-option-check">' + TIDE.iconHtml('check', 10) + '</span>' +
                         '<span class="pipeline-option-name">' + it.display + '</span>' +
                         '<span class="pipeline-option-badge">' + (ord !== -1 ? (ord + 1) : '') + '</span>';
                     widget.appendChild(row);
@@ -102,19 +102,6 @@
             })
             .catch(function (e) { console.error('[Sigma] Failed to refresh ' + kind + ' list:', e); });
     }
-
-    function toggleMenu(kind) {
-        var dd = $(kind + '-multiselect');
-        if (dd) dd.style.display = dd.style.display === 'none' ? '' : 'none';
-    }
-
-    // Close a picker on a click outside it
-    document.addEventListener('click', function (e) {
-        ['pipeline', 'template'].forEach(function (kind) {
-            var dd = $(kind + '-multiselect'), btn = $(kind + '-dropdown-btn');
-            if (dd && btn && dd.style.display !== 'none' && !dd.contains(e.target) && !btn.contains(e.target)) dd.style.display = 'none';
-        });
-    });
 
     // ── The settings the view and Convert send ──
     function settings() {
@@ -240,7 +227,7 @@
                     }
                     return response.text();
                 })
-                .then(function (html) { $('format-select').innerHTML = html; settings(); })
+                .then(function (html) { $('format-select').innerHTML = html; window.tideFilterSync($('sigma-settings')); settings(); })
                 .catch(function (err) { console.error('Failed to load formats:', err); });
             refreshDetail();
         });
@@ -265,8 +252,6 @@
     });
 
     TIDE.actions('sigma', {
-        pipelineMenu: function () { toggleMenu('pipeline'); },
-        templateMenu: function () { toggleMenu('template'); },
         ownRule: openOwn,
         showOwn: showOwn,
         clear: clearEditor,

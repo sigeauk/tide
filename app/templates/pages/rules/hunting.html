@@ -6,7 +6,9 @@
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice %}
 {% from "components/hunt_run.html" import run_bar %}
+{% from "macros/modal.html" import empty_state %}
 
 {% block title %}Hunting | TIDE{% endblock %}
 
@@ -19,10 +21,9 @@
 </div>
 
 {% if not counts.elastic and not counts.sigma %}
-<div class="empty-output">
-    {{ icon('package', '32') }}
+{% call empty_state('package', fill=true) %}
     <p>No hunting queries are in this TIDE image. They are added when the image is built; install a newer TIDE release to get them.</p>
-</div>
+{% endcall %}
 {% else %}
 {{ run_bar(run) }}
 
@@ -36,27 +37,16 @@
             <form class="browser-filters" id="hunting-filters" hx-get="/api/hunting"
                   hx-target="#hunting-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
-                    <label for="hunting-q">Search</label>
+                    <label class="form-label" for="hunting-q">Search</label>
                     <input type="text" id="hunting-q" name="q" placeholder="Name, description, query…">
                 </div>
                 <div class="browser-filter">
-                    <label for="hunting-technique">MITRE Technique</label>
+                    <label class="form-label" for="hunting-technique">MITRE technique</label>
                     <input type="text" id="hunting-technique" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                <div class="browser-filter">
-                    <label for="hunting-source">Source</label>
-                    <select id="hunting-source" name="source">
-                        <option value="">All</option>
-                        {% for value, label in sources %}<option value="{{ value }}" {% if value == source_filter %}selected{% endif %}>{{ label }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="hunting-platform">Platform</label>
-                    <select id="hunting-platform" name="platform">
-                        <option value="">All</option>
-                        {% for p in platforms %}<option value="{{ p }}">{{ p | replace('_', ' ') }}</option>{% endfor %}
-                    </select>
-                </div>
+                {{ filter_choice('hunting-source', 'source', 'Source', [('', 'All')] + sources | list, source_filter, wrap='browser-filter') }}
+                {% set plat_opts = [('', 'All')] %}{% for p in platforms %}{% set _ = plat_opts.append((p, p | replace('_', ' '))) %}{% endfor %}
+                {{ filter_choice('hunting-platform', 'platform', 'Platform', plat_opts, '', wrap='browser-filter') }}
                 <input type="hidden" name="selected" value="{{ selected_id }}">
             </form>
             <div id="hunting-list" class="lib-list">
@@ -68,10 +58,9 @@
     <div class="sigma-panel lib-detail-panel">
         <div id="hunting-detail" class="lib-detail"
              {% if selected_id %}hx-get="/api/hunting/{{ selected_id }}" hx-include="#hunt-run-form" hx-trigger="load"{% endif %}>
-            <div class="empty-output">
-                {{ icon('binoculars', '32') }}
+            {% call empty_state('binoculars', fill=true) %}
                 <p>Select a hunting query to see what it looks for.</p>
-            </div>
+            {% endcall %}
         </div>
     </div>
 </div>

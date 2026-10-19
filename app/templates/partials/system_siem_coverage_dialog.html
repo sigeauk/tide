@@ -3,11 +3,12 @@
   Context: system_id, coverage_destinations, counted_total, saved (optional).
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
 <div name="SIEM Coverage Dialog" class="modal-overlay" data-rm-overlay>
-    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="siem-cov-title">
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="siem-cov-title">
         <div class="modal-header">
             <h3 class="modal-title" id="siem-cov-title">{{ icon('target', '16') }} SIEM coverage</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+            {{ close_button('name="Close" data-rm-close') }}
         </div>
         <p class="rule-help">
             A rule only counts as covering a technique on this system if it lives at one of these

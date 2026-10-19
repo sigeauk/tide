@@ -27,7 +27,7 @@ def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, 
                   siem_id: str = Query(...), space: str = Query("default")):
     """The update dialog: this rule beside its upstream rule as it is now, a tick per differing section."""
     if not _in_scope(db, client_id, siem_id, space):
-        return HTMLResponse('<div class="empty-state-text">Rule not found.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     info = rule_updates.review(db, client_id, (rule_id, siem_id, space))
     dest_name = next((s.get("name") for s in db.get_client_siems(client_id) or []
                       if s.get("id") == siem_id and str(s.get("space") or "default") == space), space)
@@ -59,7 +59,7 @@ async def apply_update(request: Request, rule_id: str, db: DbDep, user: RequireU
     response = HTMLResponse(
         f'<div class="alert alert-success"><p>{escape(message)}</p>'
         f'<button name="Back To Rule" type="button" class="btn btn-secondary btn-sm" '
-        f'hx-get="{escape(window["url"])}" hx-target="#modal-container" hx-swap="innerHTML">Back to the rule</button></div>'
+        f'hx-get="{escape(window["url"])}" hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button></div>'
     )
     response.headers["HX-Trigger"] = "refreshRules"
     return response

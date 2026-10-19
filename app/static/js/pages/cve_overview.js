@@ -10,16 +10,9 @@
 
     function cards() { return Array.from(document.querySelectorAll('#cve-card-list .cve-card-item')); }
 
-    // Close the filter dropdowns on a click outside them
-    document.addEventListener('click', function (e) {
-        document.querySelectorAll('.filter-multi__dropdown').forEach(function (dd) {
-            if (!dd.classList.contains('hidden') && !dd.parentElement.contains(e.target)) dd.classList.add('hidden');
-        });
-    });
-
     function filterCards() {
         var q = (($('kev-search') || {}).value || '').toLowerCase();
-        var matchedOnly = ($('filter-matched') || {}).checked;
+        var matchedOnly = ($('filter-matched') || {}).value === 'matched';
         var sysCbs = document.querySelectorAll('.sys-filter-cb');
         var selectedSys = Array.from(sysCbs).filter(function (c) { return c.checked; }).map(function (c) { return c.value; });
         var allSys = selectedSys.length === sysCbs.length;
@@ -28,9 +21,9 @@
         var allCov = selectedCov.length === covCbs.length;
 
         var sysLabel = $('sys-filter-label');
-        if (sysLabel) sysLabel.textContent = allSys ? 'All Systems' : selectedSys.length + ' System' + (selectedSys.length !== 1 ? 's' : '');
+        if (sysLabel) sysLabel.textContent = allSys ? 'All systems' : selectedSys.length + ' system' + (selectedSys.length !== 1 ? 's' : '');
         var covLabel = $('cov-filter-label');
-        if (covLabel) covLabel.textContent = allCov ? 'All Coverage' : selectedCov.length + ' Selected';
+        if (covLabel) covLabel.textContent = allCov ? 'All coverage' : selectedCov.length + ' selected';
 
         var visible = 0;
         cards().forEach(function (card) {
@@ -70,7 +63,7 @@
         var sortSel = $('sort-field');
         if (sortSel) sortSel.value = 'cve_id';
         var dirIcon = $('sort-dir-icon');
-        if (dirIcon) dirIcon.textContent = '▲';
+        if (dirIcon) dirIcon.innerHTML = TIDE.iconHtml('chevron-up', 14);
         sortCards();
     });
 
@@ -85,20 +78,20 @@
         try {
             var resp = await fetch(inp.dataset.endpoint, { method: 'POST', body: fd });
             if (resp.redirected || resp.status === 401) {
-                if (status) status.innerHTML = '<span class="req">&#10007;</span> Session expired — please reload the page.';
+                if (status) status.innerHTML = '<span class="req">' + TIDE.iconHtml('x', 14) + '</span> Session expired — please reload the page.';
                 return;
             }
             var html = await resp.text();
             if (!resp.ok) {
-                if (status) status.innerHTML = '<span class="req">&#10007;</span> Error: ' + resp.status;
+                if (status) status.innerHTML = '<span class="req">' + TIDE.iconHtml('x', 14) + '</span> Error: ' + resp.status;
                 return;
             }
             var target = $(targetId);
             if (target) { target.innerHTML = html; htmx.process(target); }
-            if (status) status.innerHTML = '<span class="text-success">&#10003;</span> ' + (inp.dataset.done || 'Done');
+            if (status) status.innerHTML = '<span class="text-success">' + TIDE.iconHtml('check', 14) + '</span> ' + (inp.dataset.done || 'Done');
             setTimeout(function () { if (status) status.innerHTML = ''; }, 4000);
         } catch (err) {
-            if (status) status.innerHTML = '<span class="req">&#10007;</span> ' + err.message;
+            if (status) status.innerHTML = '<span class="req">' + TIDE.iconHtml('x', 14) + '</span> ' + err.message;
         }
     }
 
@@ -108,7 +101,7 @@
         sortDir: function () {
             sortAsc = !sortAsc;
             var icon = $('sort-dir-icon');
-            if (icon) icon.textContent = sortAsc ? '▼' : '▲';
+            if (icon) icon.innerHTML = TIDE.iconHtml(sortAsc ? 'chevron-down' : 'chevron-up', 14);
             sortCards();
         },
         // "All" / "None" in a filter dropdown: data-boxes is the class of its checkboxes.

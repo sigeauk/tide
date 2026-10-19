@@ -1,4 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import empty_state %}
 <!-- Heatmap Matrix Partial - CSS Grid MITRE ATT&CK Matrix -->
 
 <!-- OOB Swap for Metrics Cards - only show when actors are selected -->
@@ -51,9 +52,8 @@
 {% endif %}
 
 {% else %}
-<div class="empty-state">
-    <div class="empty-state-icon">{{ icon('target', '48') }}</div>
-    <div class="empty-state-title">Select Threat Actors</div>
+{% call empty_state('target') %}
+    <p class="empty-state-title">Select Threat Actors</p>
     <p>Choose one or more adversaries from the dropdown above to generate the coverage matrix.</p>
-</div>
+{% endcall %}
 {% endif %}

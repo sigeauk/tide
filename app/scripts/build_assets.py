@@ -51,6 +51,7 @@ PAGE_SCRIPTS = [
     "cve_affected",
     "cve_detail",
     "cve_overview",
+    "docs",
     "heatmap",
     "hosts",
     "library",

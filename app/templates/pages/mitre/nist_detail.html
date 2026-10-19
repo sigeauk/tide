@@ -33,7 +33,7 @@
 
 <div id="nist-capability-detail" data-collapse-scope="nist-capability-detail" class="mt-ms">
 <details class="card card-padded mt-md" data-collapse-key="nist-capability-{{ nist_capability.group_code }}-{{ nist_capability.slug }}-techniques">
-    <summary class="section-title cursor-pointer">Techniques ({{ nist_capability.techniques | length }})</summary>
+    <summary class="section-title cursor-pointer">Techniques <span class="rm-fold__count">{{ nist_capability.techniques | length }}</span></summary>
     <div class="cve-list mt-ms">
         {% for technique in nist_capability.techniques %}
         <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-capability-technique-{{ technique.id }}">

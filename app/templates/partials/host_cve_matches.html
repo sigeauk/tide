@@ -5,6 +5,7 @@
      vulns (List[CveMatch])
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if vulns %}
 
@@ -78,8 +79,7 @@
 </div>
 
 {% else %}
-<div class="empty-centre">
-    {{ icon('shield-check', '40') }}
-    <p class="mt-ms fs-base">No CISA CVE matches for <strong>{{ host.name }}</strong>.</p>
-</div>
+{% call empty_state('shield-check') %}
+    <p>No CISA CVE matches for <strong>{{ host.name }}</strong>.</p>
+{% endcall %}
 {% endif %}

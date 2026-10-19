@@ -16,6 +16,7 @@ import requests as http_requests
 from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
+from app.services.icons import close_button as _close_button, icon as _icon, icon_text as _icon_text
 from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
                           can_manage_user, require_client_member, require_manageable_user)
 from app.services import tls
@@ -1128,7 +1129,7 @@ def _format_test_result_panel(result: dict, *, panel_id: str = "siem-test-result
     """
     rows = []
     for chk in result.get("checks", []):
-        icon = "✓" if chk["ok"] else "✗"
+        icon = _icon("check" if chk["ok"] else "x", "12")
         cls = "status-pill--ok" if chk["ok"] else "status-pill--fail"
         sc = chk.get("status_code")
         sc_str = f" [HTTP {sc}]" if sc is not None else ""
@@ -2727,12 +2728,12 @@ def _render_clients_tab(clients: list) -> str:
     empty = ""
     if not clients:
         empty = '''
-        <div class="empty-output mgmt-empty">
+        <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/>
                 <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
             </svg>
-            <p class="mt-md text-muted">No clients configured yet.</p>
+            <p>No clients configured yet.</p>
         </div>'''
 
     return f'''
@@ -2839,7 +2840,7 @@ def _siem_logging_block_html(s: dict) -> str:
             '<summary class="space-picker__summary" '
             f'title="Click to pick one or more spaces. Empty selection = log every space.">'
             f'<span>{escape(summary_text)}</span>'
-            '<span class="space-picker__caret">&#9662;</span>'
+            f'<span class="space-picker__caret">{_icon("chevron-down", "12")}</span>'
             '</summary>'
             '<div class="space-picker__menu">'
             + "".join(checkbox_rows)
@@ -3099,7 +3100,7 @@ def _render_users_tab(users: list, all_roles: list, clients: list,
                 <input type="email" name="new_email" class="form-input" placeholder="user@example.com">
             </div>
             <div>
-                <label class="form-label text-sm">Full Name</label>
+                <label class="form-label">Full name</label>
                 <input type="text" name="new_full_name" class="form-input" placeholder="Full Name">
             </div>
             <div>
@@ -3299,7 +3300,7 @@ def _render_threat_intel_tab(instances: list) -> str:
                     <span class="text-secondary">URL</span>
                     <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
                     <span class="text-secondary">Token</span>
-                    <span class="text-secondary fs-sm">{'&#x2713; configured' if i.get('token_set') else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
                 </div>
                 <div id="opencti-cti-status-{iid}" class="mt-sm fs-md"></div>
             </div>
@@ -3311,11 +3312,11 @@ def _render_threat_intel_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output mgmt-empty">
+        <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
-            <p class="mt-md text-muted">No Threat Intel sources configured yet.</p>
+            <p>No Threat Intel sources configured yet.</p>
         </div>'''
 
     return f'''
@@ -3388,7 +3389,7 @@ def _render_gitlab_tab(instances: list) -> str:
                     <span class="text-secondary">Group</span>
                     <span class="mono text-sm">{grp_esc}</span>
                     <span class="text-secondary">Token</span>
-                    <span class="text-secondary fs-sm">{'&#x2713; configured' if i.get('token_set') else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
                 </div>
             </div>
             <div class="system-card__footer card-footer-wrap">
@@ -3399,13 +3400,13 @@ def _render_gitlab_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output mgmt-empty">
+        <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="m22 16.92-.02.02-2.71 1.6a1 1 0 0 1-1.02-.06l-2.09-1.41a1 1 0 0 0-1.16.08L13 19"/>
                 <path d="M22 22H2"/><path d="M2 12 12 2l10 10"/>
             </svg>
-            <p class="mt-md text-muted">No GitLab instances configured yet.</p>
-            <p class="text-muted fs-base mt-sm">GitLab integration is reserved for future report publishing workflows.</p>
+            <p>No GitLab instances configured yet.</p>
+            <p>GitLab integration is reserved for future report publishing workflows.</p>
         </div>'''
 
     return f'''
@@ -3478,9 +3479,9 @@ def _render_keycloak_tab(instances: list) -> str:
                     <span class="text-secondary">Realm</span>
                     <span class="mono text-sm">{realm_esc}</span>
                     <span class="text-secondary">Client ID</span>
-                    <span class="text-secondary fs-sm">{'&#x2713; configured' if has_client_id else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if has_client_id else _icon_text('x', 'not set', '12')}</span>
                     <span class="text-secondary">Secret</span>
-                    <span class="text-secondary fs-sm">{'&#x2713; configured' if has_secret else '&#x2717; not set'}</span>
+                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if has_secret else _icon_text('x', 'not set', '12')}</span>
                 </div>
             </div>
             <div class="system-card__footer card-footer-wrap">
@@ -3491,13 +3492,13 @@ def _render_keycloak_tab(instances: list) -> str:
     empty = ""
     if not instances:
         empty = '''
-        <div class="empty-output mgmt-empty">
+        <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
                 <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
             </svg>
-            <p class="mt-md text-muted">No Keycloak instances configured yet.</p>
-            <p class="text-muted fs-base mt-sm">Register Keycloak to centralise SSO configuration across clients.</p>
+            <p>No Keycloak instances configured yet.</p>
+            <p>Register Keycloak to centralise SSO configuration across clients.</p>
         </div>'''
 
     return f'''
@@ -3850,12 +3851,12 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
 
     modal_body = '<div class="stack gap-md">'
     if client_systems:
-        modal_body += f'<div><label class="form-label">Current Systems</label><div class="stack gap-xs">{sys_list_items}</div></div>'
+        modal_body += f'<div><label class="form-label">Current systems</label><div class="stack gap-xs">{sys_list_items}</div></div>'
     if available_systems:
         modal_body += (
             f'<hr class="divider-line">'
             f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
-            f'<label class="form-label">Add System</label>'
+            f'<label class="form-label">Add system</label>'
             f'<select name="system_id" class="form-input" required><option value="" disabled selected>Select a system&hellip;</option>{sys_options}</select>'
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add System</button></form>'
         )
@@ -3877,10 +3878,9 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
     edit_modal_oob = (
         f'<div id="edit-systems-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
         f'data-click="backdrop.hide">'
-        f'<div class="modal-content modal-sm"><div class="modal-header">'
+        f'<div class="modal-content modal-md"><div class="modal-header">'
         f'<h3 class="modal-title">Manage Systems — {escape(client["name"])}</h3>'
-        f'<button type="button" class="modal-x" aria-label="Close" '
-        f'data-click="el.hide" data-target="edit-systems-modal">&#x2715;</button></div>'
+        f'{_close_button('data-click="el.hide" data-target="edit-systems-modal"')}</div>'
         f'{modal_body}</div></div>'
     )
 
@@ -3947,12 +3947,12 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
 
     modal_body = '<div class="stack gap-md">'
     if client_baselines:
-        modal_body += f'<div><label class="form-label">Current Baselines</label><div class="stack gap-xs">{bl_list_items}</div></div>'
+        modal_body += f'<div><label class="form-label">Current baselines</label><div class="stack gap-xs">{bl_list_items}</div></div>'
     if available_baselines:
         modal_body += (
             f'<hr class="divider-line">'
             f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
-            f'<label class="form-label">Add Baseline</label>'
+            f'<label class="form-label">Add baseline</label>'
             f'<select name="baseline_id" class="form-input" required><option value="" disabled selected>Select a baseline&hellip;</option>{bl_options}</select>'
             f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add Baseline</button></form>'
         )
@@ -3974,10 +3974,9 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
     edit_modal_oob = (
         f'<div id="edit-baselines-modal" class="modal-overlay" style="display:none;" hx-swap-oob="true" '
         f'data-click="backdrop.hide">'
-        f'<div class="modal-content modal-sm"><div class="modal-header">'
+        f'<div class="modal-content modal-md"><div class="modal-header">'
         f'<h3 class="modal-title">Manage Baselines — {escape(client["name"])}</h3>'
-        f'<button type="button" class="modal-x" aria-label="Close" '
-        f'data-click="el.hide" data-target="edit-baselines-modal">&#x2715;</button></div>'
+        f'{_close_button('data-click="el.hide" data-target="edit-baselines-modal"')}</div>'
         f'{modal_body}</div></div>'
     )
 
@@ -4835,7 +4834,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
                 if spec.secret:
                     has = bool(cfg.get(spec.key))
                     summary_pairs.append(
-                        (spec.label, '<span class="text-secondary">&#x2713; set</span>' if has else '<span class="text-secondary">&#x2717; missing</span>')
+                        (spec.label, f'<span class="text-secondary">{_icon_text("check", "set", "12")}</span>' if has else f'<span class="text-secondary">{_icon_text("x", "missing", "12")}</span>')
                     )
                 else:
                     v = cfg.get(spec.key)
@@ -4904,12 +4903,12 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
     empty = ""
     if not connectors:
         empty = '''
-        <div class="empty-output mgmt-empty">
+        <div class="empty-state">
             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
                 <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
                 <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
             </svg>
-            <p class="mt-md text-muted">No connectors configured yet.</p>
+            <p>No connectors configured yet.</p>
         </div>'''
 
     # Vendors and connector rows for the dialogs (management.js reads #connector-data).

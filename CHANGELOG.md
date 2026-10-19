@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.1] - 2026-10-19
+
+### Added
+- **A guide to using TIDE, inside TIDE.** **Settings → Documentation** now explains how to use every page, task by task: creating a system, building a baseline and adding its techniques, mapping rules, recording known gaps, editing, validating, moving and merging rules, taking Elastic and Sigma updates, converting and deploying rules, running hunts, working with threat intelligence, and setting up a client. Each task says who can do it and walks through it by the names you see on screen.
+  - The guide has one sidebar: a search across every page, then its pages grouped as **Using TIDE**, **Detection engineering**, **Administration** and **Reference**. The page you are reading opens out there to its sections, and search results take the groups' place while you search. **Start here** shows the groups and their pages. The README is now **Installing TIDE**, under Administration, and links to it open there.
+
+### Changed
+- **Every dropdown in TIDE works the same way.** Filters, settings, form fields in dialogs and fields in the rule and technique windows all use one dropdown: a button naming what is chosen opens a list. Picking one choice closes it; where you can tick several, it stays open while you tick. Only one is open at a time, and clicking elsewhere or pressing Escape closes it.
+  - On Rule Health, SIEM, Status, State and Upstream show how many rules each choice holds. The Upstream button no longer shows how many updates are waiting; that number is in its list, which now counts **Your own rules** too.
+  - The CTI pages and Systems filter as soon as you choose, like the rest of TIDE, so their **Apply** buttons have gone; Systems' search filters as you type. CVE Overview's search, system, coverage, "matched only" and sort are now in one filter bar.
+  - Every field label reads the same way, in sentence case (**Risk status**, **Sort by**), and the Sigma Rules, Elastic Rules and Hunting pages label their settings and filters like every other page.
+- **Dialogs look and behave the same.** Every dialog, rule or technique window and side panel closes with the same X at the top right, and dialogs come in four widths to suit what they hold. A button that leaves a dialog says **Cancel** when leaving discards what you entered, **Close** when there was nothing to save, and **Back to rule** when it returns to the rule window, and it comes before the main button.
+- **Every "more actions" button is the same ⋮.** Pages, sections and rows across TIDE open their extra actions from the same button, in the same place, including CVE Overview's import menu. A SIEM destination's edit button on a client is now a pencil.
+- **The MITRE pages show each tactic's icon**, as a system's technique cards do: on technique and mitigation cards and in the table, on tactic cards, beside each group when grouped by tactic, and in the technique, group and mitigation windows. A technique card's sub-technique count has an icon of its own, so it no longer looks like a tactic.
+- **Counts and "nothing here" messages look the same everywhere.** A count beside a heading is the same small grey label on every page (the NIST pages and test results showed it in brackets), and a count at the end of a list row matches the filter lists'. A page, list or panel with nothing to show has the same icon, message and next step everywhere, and a rule action that fails or succeeds now says so as a red or green message.
+- **TIDE uses the same fonts on every computer and browser.** It used whatever font each computer had, so the same page looked different from one machine to the next, and figures could sit higher or lower than the words beside them. TIDE now brings its own fonts, Inter for text and JetBrains Mono for code, rule IDs and queries, so pages look the same everywhere, including without internet access. Figures in cards, tables and counts are all one width, so they line up. PDF reports are unchanged.
+- **Icons look the same everywhere too.** Sort arrows, ticks and crosses, the Enabled and Disabled markers, the Previous and Next buttons and the space picker's arrow were typed characters, drawn by each computer's own fonts, so they changed size and shape from one machine to another, or went missing. They are now TIDE's own icons, like the rest of the app. Previous and Next read the same on every page that pages through results (the CTI pages said "Prev").
+
+### Fixed
+- **Moving, copying or merging a rule that has actions to another SIEM or space no longer fails** with "Failed to load action … saved object not found". An action's connector belongs to one Kibana space, so the copy now keeps an action when the destination has the same connector (or one of the same type and name) and goes without the rest, saying which to add to the rule in Kibana.
+- **An Elastic rule is no longer flagged Update available when its new version changes nothing TIDE compares.** Elastic sometimes raises a rule's version for something outside the rule itself, and Compare with Elastic then had nothing to show. TIDE now moves such a rule to the new version itself at each sync, and when it first starts after an upgrade, and shows it as Up to date (for a prebuilt rule, saying which version Kibana still has installed). If you open one before that, Compare with Elastic offers **Move to version N** instead of Merge.
+
 ## [6.2.0] - 2026-10-18
 
 ### Added

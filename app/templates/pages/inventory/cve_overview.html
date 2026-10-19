@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/menu.html" import more_button %}
 
 {% block title %}CVE Overview — TIDE{% endblock %}
 
@@ -9,16 +10,14 @@
         <h1 class="page-title-hero">CVE Overview</h1>
         <p class="page-subtitle">All CISA CVE entries — matched entries shown first.</p>
     </div>
-    <div class="action-menu shrink-0 ml-auto">
-        <button name="Actions" class="btn btn-secondary btn-sm action-menu__trigger">
-            {{ icon('more-vertical', '14') }} Actions
-        </button>
-        <div class="action-menu__dropdown">
-            <label class="action-menu__item cursor-pointer m-0" for="cisa-kev-upload" title="Upload CISA KEV JSON file">
-                {{ icon('upload', '14') }} Import CVE
+    <div class="rh-more shrink-0 ml-auto" data-more>
+        {{ more_button('More actions', title='Import CVE data, upload the MITRE map', attrs='name="Actions"') }}
+        <div class="rh-more__menu" role="menu" hidden>
+            <label class="rh-more__item" role="menuitem" for="cisa-kev-upload" title="Upload CISA KEV JSON file">
+                {{ icon('upload', '15') }}<span>Import CVE</span>
             </label>
-            <label class="action-menu__item cursor-pointer m-0" for="mitre-map-upload" title="Upload attack-to-cve.json mapping file">
-                {{ icon('globe', '14') }} Upload MITRE Map
+            <label class="rh-more__item" role="menuitem" for="mitre-map-upload" title="Upload attack-to-cve.json mapping file">
+                {{ icon('globe', '15') }}<span>Upload MITRE Map</span>
             </label>
         </div>
         <input name="Cisa Kev Upload" id="cisa-kev-upload" type="file" accept=".json" style="display:none"
@@ -61,17 +60,6 @@
         <p class="metric-label">Ransomware Undetected</p>
         <div class="metric-tip" role="tooltip">Ransom without detection</div>
     </div>
-</div>
-
-<!-- Filter bar -->
-<div class="flex gap-ms mb-md flex-wrap items-center">
-    <input name="Kev Search" id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
-           class="form-input cve-upload-input"
-           data-input="cves.filter">
-    <label class="flex items-center gap-sm fs-base cursor-pointer">
-        <input name="Filter Matched" type="checkbox" id="filter-matched" data-change="cves.filter">
-        Show matched only
-    </label>
 </div>
 
 <!-- Table -->

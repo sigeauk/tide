@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/elastic", tags=["elastic"])
 
-_NOT_FOUND = '<div class="empty-output"><p>{}</p></div>'
+_NOT_FOUND = '<div class="empty-state empty-state--fill"><p>{}</p></div>'
 
 
 def _coverage(db, client_id: str):

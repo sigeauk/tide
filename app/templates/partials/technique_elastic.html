@@ -7,6 +7,7 @@
   Context: rules, query, technique_ids, technique_url (the technique window's own URL), can_deploy.
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
 <p class="text-muted sm-sigma__note">Elastic's rules you can deploy. They do not count as coverage until deployed and mapped under Coverage.</p>
 {% if rules %}
 <div class="sm-sigma__group">{% if query %}Matching “{{ query }}”{% else %}Suggested for {{ technique_ids | join(', ') }}{% endif %}</div>
@@ -18,8 +19,7 @@
       {% if r.severity %}<span class="sev-pill sev-{{ r.severity }}">{{ r.severity | upper }}</span>{% endif %}
       <span class="text-muted">{{ 'building block' if r.status == 'building_block' else r.rule_type | replace('_', ' ') }}</span>
       <span class="rh-more" data-more>
-        <button name="Elastic Rule Actions" type="button" class="rm-iconbtn" data-more-toggle
-                aria-haspopup="menu" aria-expanded="false" title="Rule actions" aria-label="Actions for {{ r.name }}">{{ icon('more-horizontal', '14') }}</button>
+        {{ more_button('Actions for ' ~ r.name, title='Rule actions', attrs='name="Elastic Rule Actions"') }}
         <span class="rh-more__menu" role="menu" hidden>
           {% if can_deploy %}
           <button name="Deploy Elastic Rule" type="button" role="menuitem" class="rh-more__item"

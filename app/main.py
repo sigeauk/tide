@@ -18,7 +18,7 @@ import os
 import re
 import time
 import uuid
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 from urllib.parse import urlencode
 
 try:
@@ -1374,7 +1374,9 @@ def create_app() -> FastAPI:
             status_code=exc.status_code
         )
     
-    # Mount static files
+    # Mount static files. TIDE's fonts (static/fonts) go out as fonts, not as unknown files.
+    import mimetypes
+    mimetypes.add_type("font/woff2", ".woff2")
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.mount("/static", StaticFiles(directory=static_path), name="static")
 
@@ -1681,14 +1683,6 @@ def create_app() -> FastAPI:
 
     # --- Helper function to render templates with global context ---
     # --- Helper function to render templates with global context ---
-
-    def _upstream_counts(statuses: dict) -> dict:
-        """Rule Health's Upstream filter: rules per upstream state, and how many of the updates are
-        Elastic prebuilt rules, which Kibana updates itself."""
-        return {
-            "upstream_counts": Counter(s["state"] for s in statuses.values()),
-            "upstream_prebuilt_updates": sum(1 for s in statuses.values() if s["state"] == "update" and s["prebuilt"]),
-        }
 
     def _activate_page_tenant(request: Request, user, db, _cid: str) -> None:
         """Set tenant DB context and enrich the log context for a page route that
@@ -2089,9 +2083,9 @@ def create_app() -> FastAPI:
                 "state": state_q,
                 "upstream": upstream_q,
                 "upstream_options": rule_origins.FILTER_STATES,
-                # How many of the tenant's rules are in each upstream state, whatever the filters, and
-                # of the updates how many are Elastic prebuilt rules (Kibana updates those itself)
-                **_upstream_counts(db.upstream_statuses()),
+                # How many of the tenant's rules each SIEM, Status, State and Upstream choice holds,
+                # whatever the filters
+                "filter_counts": db.rule_filter_counts(),
                 "min_score": min_score_q,
                 "max_score": max_score_q,
                 "validated_from": validated_from_q,
@@ -2682,23 +2676,31 @@ def create_app() -> FastAPI:
             }
         )
 
+    @app.get("/settings/docs/search.json")
+    def docs_search_index(user: CurrentUser):
+        """Every section of the guide, for the Documentation sidebar's search (docs.js)."""
+        from fastapi.responses import JSONResponse
+        from app.services import docs
+        return JSONResponse(docs.search_index(settings.tide_version), headers={"Cache-Control": "no-store"})
+
     @app.get("/settings/docs", response_class=HTMLResponse)
     @app.get("/settings/docs/{slug}", response_class=HTMLResponse)
     def docs_page(request: Request, user: CurrentUser, slug: str = ""):
-        """Documentation: the README, What's new and the documents in docs/, one page each."""
+        """Documentation: a landing page of the guide's groups, or one page of the guide, with the
+        whole guide in the sidebar. Bookmarks to the README's old address land on the landing page."""
         from fastapi import HTTPException
         from app.services import docs
         from app.services.route_metadata import set_crumbs
-        if slug not in docs.PAGES_BY_SLUG:
+        if slug and slug not in docs.PAGES_BY_SLUG:
             raise HTTPException(status_code=404, detail="No such documentation page")
-        title = docs.PAGES_BY_SLUG[slug].title
+        current = docs.PAGES_BY_SLUG.get(slug)
         set_crumbs(request, [("Home", "/"), ("Settings", "/settings"),
-                             ("Documentation", "/settings/docs" if slug else None)] + ([(title, None)] if slug else []))
+                             ("Documentation", "/settings/docs" if slug else None)] + ([(current.title, None)] if current else []))
         return render_template(
             "pages/admin/docs.html",
             request,
-            {"user": user, "active_page": "docs", "doc": docs.page(slug, settings.tide_version),
-             "doc_pages": docs.PAGES, "doc_slug": slug},
+            {"user": user, "active_page": "docs", "doc": docs.page(slug, settings.tide_version) if current else None,
+             "doc_page": current, "doc_nav": docs.nav(), "doc_slug": slug},
         )
 
     @app.get("/settings/changelog", response_class=HTMLResponse)
@@ -2709,7 +2711,7 @@ def create_app() -> FastAPI:
             "pages/admin/docs.html",
             request,
             {"user": user, "active_page": "changelog", "doc": docs.page(docs.CHANGELOG.slug, settings.tide_version),
-             "doc_pages": None, "doc_slug": docs.CHANGELOG.slug},
+             "doc_page": docs.CHANGELOG, "doc_nav": None, "doc_slug": docs.CHANGELOG.slug},
         )
 
     @app.get("/clients", response_class=HTMLResponse)

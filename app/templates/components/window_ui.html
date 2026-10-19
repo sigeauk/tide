@@ -6,6 +6,7 @@
   the handle, or arrow keys on it), and remembers the arrangement under the root's data-layout-key.
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/menu.html" import more_button %}
 
 {% macro collapse_ctl(label) -%}
 <button type="button" class="rm-collapse" data-rm-collapse aria-expanded="true" title="Collapse or expand {{ label }}" aria-label="Collapse or expand {{ label }}">{{ icon('chevron-down', '14') }}</button>
@@ -20,8 +21,7 @@
    …menu items…{% endcall %}), then its move handle. #}
 {% macro section_menu(label) -%}
 <div class="rh-more rm-secmenu" data-more>
-    <button name="{{ label }} Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
-            aria-haspopup="menu" aria-expanded="false" title="{{ label }} actions" aria-label="{{ label }} actions">{{ icon('more-horizontal', '14') }}</button>
+    {{ more_button(label ~ ' actions', attrs='name="' ~ (label | e) ~ ' Actions"') }}
     <div class="rh-more__menu" role="menu" hidden>{{ caller() }}</div>
 </div>
 {{ drag_ctl(label) }}
@@ -67,7 +67,7 @@
         {% if d.destination %}{{ tag(d.destination, d.destination_color, title='SIEM destination') }}
         {% elif d.source == 'manual' %}{{ tag('Manual', title='Recorded by hand, not a SIEM rule') }}{% endif %}
         {% if caller is defined %}{{ caller() }}{% endif %}
-        {% if d.enabled is not none %}<span class="{{ 'text-success' if d.enabled else 'text-muted' }}">{{ '● Enabled' if d.enabled else '○ Disabled' }}</span>{% endif %}
+        {% if d.enabled is not none %}<span class="state-dot{{ ' state-dot--on text-success' if d.enabled else ' text-muted' }}">{{ 'Enabled' if d.enabled else 'Disabled' }}</span>{% endif %}
         {% if d.score is not none and not e.applicable %}<span class="text-muted" title="The rule's own score; it does not count here">rule scores {{ d.score }}%</span>{% endif %}
         {% if d.deprecated %}{{ tag('Deprecated') }}{% endif %}
     </div>
@@ -117,11 +117,7 @@
    hx-indicator="closest .rm-overflow" runs. #}
 {% macro window_menu() -%}
 <div class="rh-more rm-overflow" data-more data-rm-layout>
-    <button name="More Actions" type="button" class="rm-iconbtn rm-iconbtn--boxed" data-more-toggle
-            aria-haspopup="menu" aria-expanded="false" title="More actions" aria-label="More actions">
-        <span class="rm-overflow__idle">{{ icon('more-horizontal', '16') }}</span>
-        <span class="rm-overflow__busy">{{ icon('loader', '16', 'spin') }}</span>
-    </button>
+    {{ more_button('More actions', attrs='name="More Actions"', busy=true) }}
     <div class="rh-more__menu" role="menu" hidden>
         <div class="rm-menu__main" data-rm-menu-main>{% if caller is defined %}{{ caller() }}{% else %}{{ sections_item() }}{% endif %}</div>
         {{ sections_panel() }}

@@ -1,0 +1,17 @@
+{#
+  more_button: the ⋮ that opens a menu of more actions, everywhere (a page's header, a window's
+  sections and rows): the same icon in the same box as a dialog's close X. It sits in a
+  <div class="rh-more" data-more> beside its <div class="rh-more__menu" role="menu" hidden>
+  (app.js opens and closes it; ``toggle=false`` when the page wires its own, as Rule Health does).
+  ``label`` is what a screen reader says, ``title`` its tip (what is in the menu), ``attrs`` its
+  name, id and so on. ``busy``: shows a spinner while its window's request runs (rm-overflow).
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro more_button(label='More actions', title='', attrs='', toggle=true, busy=false) -%}
+<button type="button" class="more-btn" {% if toggle %}data-more-toggle {% endif %}aria-haspopup="menu" aria-expanded="false"
+        aria-label="{{ label }}" title="{{ title or label }}" {{ attrs | safe }}>
+    {%- if busy %}<span class="rm-overflow__idle">{{ icon('more-vertical', '16') }}</span><span class="rm-overflow__busy">{{ icon('loader', '16', 'spin') }}</span>
+    {%- else %}{{ icon('more-vertical', '16') }}{% endif -%}
+</button>
+{%- endmacro %}

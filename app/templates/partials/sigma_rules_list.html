@@ -7,6 +7,7 @@
 #}
 {% from "macros/icons.html" import icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "macros/modal.html" import empty_state %}
 {% set _more = offset | default(0) > 0 %}
 {% if not _more %}
 <div class="rules-count">
@@ -42,10 +43,9 @@
     </button>
     {% else %}
     {% if not _more %}
-    <div class="empty-output empty-output--short">
-        {{ icon('search-x', '24') }}
-        <p class="text-sm">No rules found</p>
-    </div>
+    {% call empty_state('search-x') %}
+        <p>No rules found</p>
+    {% endcall %}
     {% endif %}
     {% endfor %}
     {% with url="/api/sigma/rules", filters="#sigma-filters", what="rules" %}{% include "components/library_more.html" %}{% endwith %}

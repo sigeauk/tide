@@ -2,6 +2,7 @@
 {% from "components/mitre_ui.html" import technique_list %}
 {% from "macros/rule_ui.html" import state_badge %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, sections_item, tag, window_menu %}
+{% from "macros/modal.html" import close_button %}
 {#
   Rule modal — opened by clicking a rule card / table row.
     header : score ring · name · destination/state/severity badges · author |
@@ -128,7 +129,7 @@
                     {{ icon('trash-2', '14') }}<span>Delete rule</span>
                 </button>
                 {% endcall %}
-                <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+                {{ close_button('name="Close Modal" data-rm-close', title='Close (Esc)') }}
             </div>
         </header>
 

@@ -1,5 +1,7 @@
 <!-- Threats Grid Partial -->
+{% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_pill.html" import mitre_pill %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if actors and actors | length > 0 %}
 <div class="threats-grid">
@@ -97,15 +99,13 @@
 <!-- Pagination -->
 <div class="pagination">
     {% if page > 1 %}
-    <button name="← Previous" 
+    <button name="Previous" 
         class="btn btn-secondary btn-sm"
         hx-get="/api/threats?page={{ page - 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
         hx-target="#threats-grid"
-        hx-swap="innerHTML">
-        ← Previous
-    </button>
+        hx-swap="innerHTML">{{ icon_text('arrow-left', 'Previous', '14') }}</button>
     {% else %}
-    <button name="← Previous" class="btn btn-secondary btn-sm" disabled>← Previous</button>
+    <button name="Previous" class="btn btn-secondary btn-sm" disabled>{{ icon_text('arrow-left', 'Previous', '14') }}</button>
     {% endif %}
     
     <span class="pagination-info">
@@ -113,22 +113,20 @@
     </span>
     
     {% if page < total_pages %}
-    <button name="Next →" 
+    <button name="Next" 
         class="btn btn-secondary btn-sm"
         hx-get="/api/threats?page={{ page + 1 }}&search={{ search }}&origin={{ origin }}&source={{ source }}&sort_by={{ sort_by }}"
         hx-target="#threats-grid"
-        hx-swap="innerHTML">
-        Next →
-    </button>
+        hx-swap="innerHTML"><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></button>
     {% else %}
-    <button name="Next →" class="btn btn-secondary btn-sm" disabled>Next →</button>
+    <button name="Next" class="btn btn-secondary btn-sm" disabled><span class="icon-text">Next {{ icon('arrow-right', '14') }}</span></button>
     {% endif %}
 </div>
 
 {% else %}
-<div class="empty-state">
-    <div class="empty-state-title">No threat actors found</div>
-    <p class="empty-state-text">
+{% call empty_state() %}
+    <p class="empty-state-title">No threat actors found</p>
+    <p>
         {% if search or origin or source %}
             No actors match your current filters. Try adjusting your search criteria.
         {% else %}
@@ -136,11 +134,11 @@
         {% endif %}
     </p>
     <button name="Sync Threat Intel" 
-        class="btn btn-primary mt-md"
+        class="btn btn-primary"
         hx-post="/api/threats/sync"
         hx-target="#toast-container"
         hx-swap="beforeend">
         Sync Threat Intel
     </button>
-</div>
+{% endcall %}
 {% endif %}

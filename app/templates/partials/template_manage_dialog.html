@@ -6,11 +6,12 @@
   when the user may not edit systems, as applying changes one).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
 <div name="Manage Template Dialog" class="modal-overlay" data-rm-overlay data-template-dialog>
-    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="tpl-manage-title">
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="tpl-manage-title">
         <div class="modal-header">
             <h3 class="modal-title" id="tpl-manage-title">{{ icon('layers', '16') }} {{ baseline.name }}</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+            {{ close_button('name="Close" data-rm-close') }}
         </div>
 
         <form class="sys-dialog__form" hx-put="/api/baselines/{{ baseline.id }}" hx-swap="none" hx-include="unset">

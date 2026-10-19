@@ -24,8 +24,8 @@
                   hx-target="#profile-identity" hx-swap="outerHTML" data-keyup="prefs.nameKey">
                 <input id="profile-display-name" type="text" name="display_name" class="form-input" maxlength="64"
                        value="{{ user.display_name or '' }}" placeholder="{{ user.name or user.username }}" aria-label="Display name">
-                <button name="Save Display Name" type="submit" class="btn btn-primary btn-sm">Save</button>
                 <button name="Cancel Display Name" type="button" class="btn btn-secondary btn-sm" data-click="prefs.nameEdit">Cancel</button>
+                <button name="Save Display Name" type="submit" class="btn btn-primary btn-sm">Save</button>
             </form>
             <span class="text-muted fs-md">{{ user.username }}{% if user.email %} &middot; {{ user.email }}{% endif %}</span>
             <div class="profile-identity__actions">

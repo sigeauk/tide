@@ -8,34 +8,23 @@
   ``run``: {destinations, lookbacks, lookback, pipelines, index, can_save}.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_choice %}
 
 {% macro run_bar(run) -%}
 <div class="sigma-header-row lib-settings" id="hunt-run-form" data-library-settings>
     {% if run.destinations %}
-    <div class="sigma-select-group">
-        <label for="hunt-destination" title="Run uses this destination's SIEM; Save to Kibana saves into its space">Run on / save to</label>
-        <select id="hunt-destination" name="destination" class="sigma-select sigma-select--wide">
-            {% for d in run.destinations %}<option value="{{ d.value }}">{{ d.label }}</option>{% endfor %}
-        </select>
-    </div>
-    <div class="sigma-select-group">
-        <label for="hunt-lookback">Time</label>
-        <select id="hunt-lookback" name="lookback" class="sigma-select">
-            {% for value, label in run.lookbacks %}<option value="{{ value }}"{% if value == run.lookback %} selected{% endif %}>{{ label }}</option>{% endfor %}
-        </select>
-    </div>
+    {% set dest_opts = [] %}
+    {% for d in run.destinations %}{% set _ = dest_opts.append((d.value, d.label)) %}{% endfor %}
+    {{ filter_choice('hunt-destination', 'destination', 'Run on / save to', dest_opts, dest_opts[0][0], wrap='sigma-select-group',
+                     tip="Run uses this destination's SIEM; Save to Kibana saves into its space") }}
+    {{ filter_choice('hunt-lookback', 'lookback', 'Time', run.lookbacks | list, run.lookback, wrap='sigma-select-group') }}
     {% else %}
     <p class="text-muted text-sm lib-settings__note">Link a SIEM to this client to run hunting queries against it.</p>
     {% endif %}
-    <div class="sigma-select-group">
-        <label for="hunt-pipeline" title="How a Sigma threat-hunting rule is converted to ES|QL">Sigma pipeline</label>
-        <select id="hunt-pipeline" name="pipeline" class="sigma-select sigma-select--wide" data-refresh-view>
-            <option value="">Automatic (ECS Windows for Windows rules)</option>
-            {% for key, label in run.pipelines.items() %}<option value="{{ key }}">{{ label }}</option>{% endfor %}
-        </select>
-    </div>
+    {{ filter_choice('hunt-pipeline', 'pipeline', 'Sigma pipeline', [('', 'Automatic (ECS Windows for Windows rules)')] + run.pipelines.items() | list, '',
+                     attrs='data-refresh-view', wrap='sigma-select-group', tip='How a Sigma threat-hunting rule is converted to ES|QL') }}
     <div class="sigma-select-group lib-settings__wide">
-        <label for="hunt-index" title="The indices a Sigma rule or an EQL query reads (ES|QL queries name their own)">Index pattern</label>
+        <label class="form-label" for="hunt-index" title="The indices a Sigma rule or an EQL query reads (ES|QL queries name their own)">Index pattern</label>
         <input type="text" id="hunt-index" name="index" class="sigma-select" value="{{ run.index }}" spellcheck="false" data-refresh-view>
     </div>
 </div>

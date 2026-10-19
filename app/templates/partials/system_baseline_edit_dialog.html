@@ -4,11 +4,12 @@
   Context: system, baseline (the system's copy).
 #}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
 <div name="Edit System Baseline Dialog" class="modal-overlay" data-rm-overlay>
-    <div class="modal-content modal-sm" role="dialog" aria-modal="true" aria-labelledby="sys-bl-edit-title">
+    <div class="modal-content modal-md" role="dialog" aria-modal="true" aria-labelledby="sys-bl-edit-title">
         <div class="modal-header">
             <h3 class="modal-title" id="sys-bl-edit-title">{{ icon('pencil', '16') }} Edit baseline</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-rm-close aria-label="Close">{{ icon('x', '16') }}</button>
+            {{ close_button('name="Close" data-rm-close') }}
         </div>
         <form class="sys-dialog__form" hx-put="/api/systems/{{ system.id }}/baselines/{{ baseline.id }}"
               hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">

@@ -1,5 +1,8 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi, choice_rows %}
+{% from "macros/modal.html" import close_button %}
+{% from "macros/menu.html" import more_button %}
 
 {% block title %}Rule Health | TIDE{% endblock %}
 
@@ -18,11 +21,7 @@
     <div class="flex items-center gap-ms shrink-0">
         <div id="sync-status"></div>
         <div class="rh-more">
-            <button name="More Actions" id="rh-more-btn" type="button" class="btn btn-secondary rh-more__btn"
-                aria-haspopup="menu" aria-expanded="false" title="Sync, cards or table, create a rule, bulk edit">
-                {{ icon('more-vertical', '18') }}
-                <span class="sr-only">More actions</span>
-            </button>
+            {{ more_button('More actions', title='Sync, cards or table, create a rule, bulk edit', attrs='name="More Actions" id="rh-more-btn"', toggle=false) }}
             <div class="rh-more__menu" id="rh-more-menu" role="menu" hidden>
                 <div class="rh-more__item-wrap">
                     <button name="Sync" type="button" role="menuitem" class="rh-more__item sync-btn"
@@ -127,173 +126,54 @@
             hx-include="{{ rh_filter_include }}">
     </div>
     
-    {% set current_space = space %}
-    <div class="filter-group">
-        <label class="form-label">SIEM</label>
-        <select 
-            name="space" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="{{ rh_filter_include }}">
-            <option value="" {% if not current_space %}selected{% endif %}>All SIEMs</option>
-            {% for scope in scopes %}
-            <option value="{{ scope }}" {% if scope == current_space %}selected{% endif %}>{{ scope_labels.get(scope, scope.split('|')[-1] | capitalize) }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    
-    <div class="filter-group">
-        <label class="form-label">Status</label>
-        <select 
-            name="enabled" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="{{ rh_filter_include }}">
-            <option value="" {% if not enabled %}selected{% endif %}>All</option>
-            <option value="true" {% if enabled == 'true' %}selected{% endif %}>Enabled</option>
-            <option value="false" {% if enabled == 'false' %}selected{% endif %}>Disabled</option>
-        </select>
-    </div>
+    {% set counts = filter_counts | default({}) %}
+    {% set rh_hx = 'hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="' ~ rh_filter_include ~ '"' %}
+    {% set siem_opts = [('', 'All SIEMs')] %}
+    {% for scope in scopes %}{% set _ = siem_opts.append((scope, scope_labels.get(scope, scope.split('|')[-1] | capitalize))) %}{% endfor %}
+    {{ filter_choice('rh-siem', 'space', 'SIEM', siem_opts, space, counts.scope or {}, rh_hx) }}
 
-    <div class="filter-group relative">
-        <label class="form-label">State</label>
-        <button type="button" id="rh-state-btn"
-            class="btn btn-secondary form-input form-select tide-filter-btn"
-            data-click="filterDropdown.toggle" data-target="rh-state-dropdown">
-            <span id="rh-state-label">{% set state_names = {'unlinked': 'Live', 'linked': 'Linked', 'offline': 'SIEM offline', 'deprecated': 'Deprecated'} %}{% for s in state %}{{ state_names.get(s | lower, s) }}{{ ', ' if not loop.last }}{% else %}All states{% endfor %}</span>
-            {{ icon('chevron-down', '14') }}
-        </button>
-        <div id="rh-state-dropdown" class="tide-filter-dropdown" style="display:none;">
-            {% set state_opts = [('unlinked', 'Live'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')] %}
-            {% for opt, opt_label in state_opts %}
-            <label class="rh-checkbox-row" title="{{ {'unlinked': 'Found at the last successful sync, with no copy linked in another destination', 'linked': 'Found at the last successful sync, with a copy linked in another destination', 'offline': 'Its SIEM could not be reached before the last sync; shown from TIDE\'s last copy', 'deprecated': 'Not found at the last successful sync'}[opt] }}">
-                <input type="checkbox" name="state" value="{{ opt }}" {% if opt in state %}checked{% endif %}
-                    hx-get="/api/rules"
-                    hx-trigger="change"
-                    hx-target="#rules-grid"
-                    hx-swap="innerHTML"
-                    hx-include="{{ rh_filter_include }}">
-                <span>{{ opt_label }}</span>
-            </label>
-            {% endfor %}
+    {{ filter_choice('rh-status', 'enabled', 'Status', [('', 'All'), ('true', 'Enabled'), ('false', 'Disabled')],
+                     enabled, counts.enabled or {}, rh_hx) }}
+
+    {{ filter_multi('rh-state', 'state', 'State', [('unlinked', 'Live'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')],
+                    state, 'All states', counts.state or {}, rh_hx,
+                    {'unlinked': 'Found at the last successful sync, with no copy linked in another destination',
+                     'linked': 'Found at the last successful sync, with a copy linked in another destination',
+                     'offline': "Its SIEM could not be reached before the last sync; shown from TIDE's last copy",
+                     'deprecated': 'Not found at the last successful sync'}) }}
+
+    {{ filter_multi('rh-upstream', 'upstream', 'Upstream', upstream_options, upstream, 'Any', counts.upstream or {}, rh_hx,
+                    {'update': "Came from Elastic's or the Sigma rules, which have a newer version of it",
+                     'current': "Came from Elastic's or the Sigma rules and matches their current version",
+                     'retired': 'Elastic or Sigma has deprecated the rule it came from',
+                     'removed': 'The rule it came from is no longer in the rules built into TIDE',
+                     'own': "Did not come from Elastic's or the Sigma rules"}) }}
+
+    {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons. #}
+    {% call filter_dropdown('rh-score', 'Score', 'Score') %}
+        <div class="tide-filter-section-label">Sort</div>
+        {{ choice_rows('rh-sort-score', 'sort_score', [('desc', 'High → Low'), ('asc', 'Low → High'), ('', 'Off')], sort_score, attrs=rh_hx) }}
+        <div class="tide-filter-section-label">Range</div>
+        <div class="tide-filter-range">
+            <input type="number" name="min_score" value="{{ min_score }}" placeholder="Min" class="form-input" {{ rh_hx | safe }}>
+            <input type="number" name="max_score" value="{{ max_score }}" placeholder="Max" class="form-input" {{ rh_hx | safe }}>
         </div>
-    </div>
+    {% endcall %}
 
-    <div class="filter-group relative">
-        <label class="form-label">Upstream</label>
-        <button type="button" id="rh-upstream-btn"
-            class="btn btn-secondary form-input form-select tide-filter-btn"
-            data-click="filterDropdown.toggle" data-target="rh-upstream-dropdown">
-            <span id="rh-upstream-label">{% set upstream_names = dict(upstream_options) %}{% for u in upstream %}{{ upstream_names.get(u, u) }}{{ ', ' if not loop.last }}{% else %}Any{% endfor %}</span>
-            {% set _updates = (upstream_counts | default({})).get('update', 0) %}
-            {% set _prebuilt = upstream_prebuilt_updates | default(0) %}
-            {% if _updates and not upstream %}<span class="rh-filter-count" title="{{ _updates }} of your rules have an update from Elastic or Sigma{% if _prebuilt %}: {{ _prebuilt }} {{ 'is an Elastic prebuilt rule' if _prebuilt == 1 else 'are Elastic prebuilt rules' }}, which Kibana updates itself (Rules → Rule updates), and {{ _updates - _prebuilt }} you can review in TIDE{% endif %}. Tick Update available to see them.">{{ _updates }} update{{ 's' if _updates != 1 }}</span>{% endif %}
-            {{ icon('chevron-down', '14') }}
-        </button>
-        <div id="rh-upstream-dropdown" class="tide-filter-dropdown" style="display:none;">
-            {% for opt, opt_label in upstream_options %}
-            <label class="rh-checkbox-row" title="{{ {'update': 'Came from Elastic\'s or the Sigma rules, which have a newer version of it', 'current': 'Came from Elastic\'s or the Sigma rules and matches their current version', 'retired': 'Elastic or Sigma has deprecated the rule it came from', 'removed': 'The rule it came from is no longer in the rules built into TIDE', 'own': 'Did not come from Elastic\'s or the Sigma rules'}[opt] }}">
-                <input type="checkbox" name="upstream" value="{{ opt }}" {% if opt in upstream %}checked{% endif %}
-                    hx-get="/api/rules"
-                    hx-trigger="change"
-                    hx-target="#rules-grid"
-                    hx-swap="innerHTML"
-                    hx-include="{{ rh_filter_include }}">
-                <span>{{ opt_label }}</span>
-                {% if opt != 'own' %}<span class="rh-checkbox-count">{{ (upstream_counts | default({})).get(opt, 0) }}</span>{% endif %}
-            </label>
-            {% endfor %}
+    {% call filter_dropdown('rh-validated', 'Validate', 'Validate') %}
+        <div class="tide-filter-section-label">Sort</div>
+        {{ choice_rows('rh-sort-validated', 'sort_validated', [('desc', 'Newest → Oldest'), ('asc', 'Oldest → Newest'), ('', 'Off')], sort_validated, attrs=rh_hx) }}
+        <div class="tide-filter-section-label">Date range</div>
+        <div class="tide-filter-range">
+            <input type="date" name="validated_from" value="{{ validated_from }}" class="form-input" {{ rh_hx | safe }}>
+            <input type="date" name="validated_to" value="{{ validated_to }}" class="form-input" {{ rh_hx | safe }}>
         </div>
-    </div>
+    {% endcall %}
 
-    <div class="filter-group relative">
-        <label class="form-label">Score</label>
-        <button type="button" id="rh-score-btn"
-            class="btn btn-secondary form-input form-select tide-filter-btn"
-            data-click="filterDropdown.toggle" data-target="rh-score-dropdown">
-            <span id="rh-score-label">Score</span>
-            {{ icon('chevron-down', '14') }}
-        </button>
-        <div id="rh-score-dropdown" class="tide-filter-dropdown" style="display:none;">
-            <div class="tide-filter-section-label">Sort</div>
-            <select 
-                id="rh-sort-score"
-                name="sort_score" 
-                class="form-input form-select"
-                hx-get="/api/rules"
-                hx-trigger="change"
-                hx-target="#rules-grid"
-                hx-swap="innerHTML"
-                hx-include="{{ rh_filter_include }}">
-                <option value="desc" {% if sort_score == 'desc' %}selected{% endif %}>High → Low</option>
-                <option value="asc" {% if sort_score == 'asc' %}selected{% endif %}>Low → High</option>
-                <option value="" {% if not sort_score %}selected{% endif %}>Off</option>
-            </select>
-            <div class="tide-filter-section-label">Range</div>
-            <div class="tide-filter-range">
-                <input type="number" name="min_score" value="{{ min_score }}" placeholder="Min" class="form-input"
-                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
-                <input type="number" name="max_score" value="{{ max_score }}" placeholder="Max" class="form-input"
-                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
-            </div>
-        </div>
-    </div>
-
-    <div class="filter-group relative">
-        <label class="form-label">Validate</label>
-        <button type="button" id="rh-validated-btn"
-            class="btn btn-secondary form-input form-select tide-filter-btn"
-            data-click="filterDropdown.toggle" data-target="rh-validated-dropdown">
-            <span id="rh-validated-label">Validate</span>
-            {{ icon('chevron-down', '14') }}
-        </button>
-        <div id="rh-validated-dropdown" class="tide-filter-dropdown" style="display:none;">
-            <div class="tide-filter-section-label">Sort</div>
-            <select 
-                id="rh-sort-validated"
-                name="sort_validated" 
-                class="form-input form-select"
-                hx-get="/api/rules"
-                hx-trigger="change"
-                hx-target="#rules-grid"
-                hx-swap="innerHTML"
-                hx-include="{{ rh_filter_include }}">
-                <option value="" {% if not sort_validated %}selected{% endif %}>Off</option>
-                <option value="desc" {% if sort_validated == 'desc' %}selected{% endif %}>Newest → Oldest</option>
-                <option value="asc" {% if sort_validated == 'asc' %}selected{% endif %}>Oldest → Newest</option>
-            </select>
-            <div class="tide-filter-section-label">Date range</div>
-            <div class="tide-filter-range">
-                <input type="date" name="validated_from" value="{{ validated_from }}" class="form-input"
-                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
-                <input type="date" name="validated_to" value="{{ validated_to }}" class="form-input"
-                    hx-get="/api/rules" hx-trigger="change" hx-target="#rules-grid" hx-swap="innerHTML" hx-include="{{ rh_filter_include }}">
-            </div>
-        </div>
-    </div>
-
-    <div class="filter-group">
-        <label class="form-label">Name</label>
-        <select 
-            id="rh-sort-name"
-            name="sort_name" 
-            class="form-input form-select"
-            hx-get="/api/rules"
-            hx-trigger="change"
-            hx-target="#rules-grid"
-            hx-swap="innerHTML"
-            hx-include="{{ rh_filter_include }}">
-            <option value="" {% if not sort_name %}selected{% endif %}>Off</option>
-            <option value="asc" {% if sort_name == 'asc' %}selected{% endif %}>A → Z</option>
-            <option value="desc" {% if sort_name == 'desc' %}selected{% endif %}>Z → A</option>
-        </select>
-    </div>
+    {% call filter_dropdown('rh-name', 'Name', 'Name') %}
+        <div class="tide-filter-section-label">Sort</div>
+        {{ choice_rows('rh-sort-name', 'sort_name', [('asc', 'A → Z'), ('desc', 'Z → A'), ('', 'Off')], sort_name, attrs=rh_hx) }}
+    {% endcall %}
 
     {# Cards or table: chosen in the ⋮ menu (Show as cards / Show as table), carried with the filters #}
     <div class="hidden">
@@ -342,11 +222,11 @@
 <!-- Import Validation File Modal -->
 <div name="Import Validation File Modal" id="import-validation-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">{{ icon('upload', '16') }} Import validation file</h3>
-            <button name="Close" type="button" class="btn btn-icon"
-                    data-click="el.hide" data-target="import-validation-modal">&#x2715;</button>
+            {{ close_button('name="Close"
+                    data-click="el.hide" data-target="import-validation-modal"') }}
         </div>
         <p class="rule-help">
             Import a <code>checkedRule.json</code>-shaped file into this client's rule validations —

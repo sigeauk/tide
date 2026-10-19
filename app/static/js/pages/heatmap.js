@@ -8,20 +8,9 @@
     function $(id) { return document.getElementById(id); }
     function checkedActors() { return document.querySelectorAll('input[name="actors"]:checked'); }
 
-    function toggleDropdown(containerId, dropdownId) {
-        var isOpen = $(containerId).classList.toggle('open');
-        $(dropdownId).style.display = isOpen ? 'flex' : 'none';
-    }
-
-    // Close the pickers on a click outside them, and a dialog on a click on its backdrop.
+    // A click on a dialog's backdrop closes it. (The actor and source pickers are filter dropdowns:
+    // app.js opens, closes and names them.)
     document.addEventListener('click', function (e) {
-        [['actor-select-container', 'actor-dropdown'], ['source-select-container', 'source-dropdown']].forEach(function (p) {
-            var container = $(p[0]), dropdown = $(p[1]);
-            if (container && !container.contains(e.target)) {
-                container.classList.remove('open');
-                if (dropdown) dropdown.style.display = 'none';
-            }
-        });
         var overlay = $('export-modal-overlay');
         if (overlay && e.target === overlay) closeExport();
         var baselineOverlay = $('baseline-gen-overlay');
@@ -30,21 +19,10 @@
 
     function filterActors(e, input) {
         var q = input.value.toLowerCase();
-        document.querySelectorAll('.actor-checkbox-item').forEach(function (item) {
+        document.querySelectorAll('[data-actor-row]').forEach(function (item) {
             var matches = (item.dataset.name || '').includes(q) || (item.dataset.aliases || '').includes(q);
             item.style.display = matches ? 'flex' : 'none';
         });
-    }
-
-    function selectionLabel(textId, checked, none, many) {
-        var textEl = $(textId);
-        if (checked.length === 0) {
-            textEl.textContent = none;
-            textEl.classList.remove('has-selection');
-        } else {
-            textEl.textContent = checked.length === 1 ? checked[0].value : checked.length + many;
-            textEl.classList.add('has-selection');
-        }
     }
 
     function redraw() {
@@ -99,17 +77,7 @@
     function closeBaseline() { $('baseline-gen-overlay').style.display = 'none'; }
 
     TIDE.actions('heatmap', {
-        actorMenu: function () { toggleDropdown('actor-select-container', 'actor-dropdown'); },
-        sourceMenu: function () { toggleDropdown('source-select-container', 'source-dropdown'); },
         filterActors: filterActors,
-        actorPicked: function () {
-            selectionLabel('actor-select-text', checkedActors(), 'Choose threat actors...', ' actors selected');
-            redraw();
-        },
-        sourcePicked: function () {
-            selectionLabel('source-select-text', document.querySelectorAll('input[name="source_filter"]:checked'), 'All sources', ' sources');
-            redraw();
-        },
         redraw: redraw,
         filterTechniques: filterTechniques,
         exportOpen: openExport, exportClose: closeExport, exportConfirm: confirmExport,

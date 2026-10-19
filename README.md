@@ -108,8 +108,16 @@ TIDE is ready. [Operations](docs/OPERATIONS.md) explains what to do next: syncin
 
 ## Documentation
 
+In TIDE, the whole guide is under **Settings → Documentation**, with a search.
+
 | Document | Read it for |
 |----------|-------------|
+| [Getting started](docs/GETTING_STARTED.md) | Finding your way around: signing in, choosing a client, filters, windows, dashboards and your profile. |
+| [Systems & baselines](docs/SYSTEMS.md) | Systems, baseline templates and their techniques, mapping rules, known gaps, risks, devices and CVEs. |
+| [Threat intelligence](docs/THREATS.md) | Threat Landscape, the Heatmap, the MITRE pages and CTI, and making baselines from threats. |
+| [Rules](docs/RULES.md) | Rule Health, the rule window, editing, validating, moving and merging rules, and Elastic and Sigma updates. |
+| [Sigma, Elastic & Hunting](docs/LIBRARIES.md) | Converting Sigma rules, deploying Elastic's rules, and running hunts. |
+| [Setting up clients](docs/CLIENTS.md) | SIEMs, clients, destinations, users and roles, validation, scoring and threat feeds. |
 | [Configuration](docs/CONFIGURATION.md) | Every `.env` setting, certificates and how strictly they are checked, single sign-on with Keycloak, users and roles. |
 | [Operations](docs/OPERATIONS.md) | How TIDE runs day to day: syncing rules and CTI, how coverage is worked out, backups and upgrades, moving hosts, reclaiming disk space, Diagnostics and troubleshooting. |
 | [External Query API](docs/API.md) | Reading TIDE's data from other tools over HTTPS: API keys, endpoints, what queries may do, and examples. |

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import empty_state %}
 
 {% block title %}{{ page_title }} | TIDE{% endblock %}
 
@@ -13,16 +14,13 @@
 
 {% set is_not_found = page_title and ('Not Found' in page_title) %}
 
-<div class="empty-state mt-xl">
-    <div class="empty-state-icon">{{ icon('alert-circle', '48') if is_not_found else icon('construction', '48') }}</div>
-    <div class="empty-state-title">{{ 'Not Found' if is_not_found else 'Coming Soon' }}</div>
+{% call empty_state('alert-circle' if is_not_found else 'construction') %}
+    <p class="empty-state-title">{{ 'Not Found' if is_not_found else 'Coming Soon' }}</p>
     {% if is_not_found %}
     <p>{{ page_subtitle or 'The requested resource could not be found.' }}</p>
     {% else %}
     <p>This page is being migrated from Streamlit to FastAPI.</p>
     {% endif %}
-    <p class="mt-md">
-        <a name="HOME →" href="/" class="btn btn-primary">HOME →</a>
-    </p>
-</div>
+    <a name="HOME →" href="/" class="btn btn-primary">HOME →</a>
+{% endcall %}
 {% endblock %}

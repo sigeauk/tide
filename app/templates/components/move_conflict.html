@@ -9,15 +9,16 @@
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/rule_diff.html" import diff_fields %}
+{% from "macros/modal.html" import close_button %}
 {% set verb = 'Move' if delete_source else 'Copy' %}
 <div class="modal-overlay" data-click="backdrop.remove">
-  <div name="Move Conflict" class="modal-content rd-root modal-980" data-view="inline" data-stop-click data-move-conflict
+  <div name="Move Conflict" class="modal-content modal-xl rd-root" data-view="inline" data-stop-click data-move-conflict
        data-rule-id="{{ rule.rule_id }}" data-siem-id="{{ source_siem_id }}" data-space="{{ source_space }}"
        data-target-scope="{{ target_scope }}" data-delete-source="{{ 'true' if delete_source else 'false' }}"
        data-validation="{{ validation }}">
     <div class="modal-header">
       <h2>{{ icon('triangle-alert', '18') }} {{ target_name }} already has this rule id</h2>
-      <button type="button" class="btn btn-icon" data-click="modal.remove">&times;</button>
+      {{ close_button('data-click="modal.remove"') }}
     </div>
     <p class="rule-help">
       <strong>{{ clashing_name }}</strong> in {{ target_name }} has the same rule id as <strong>{{ rule.name }}</strong>.

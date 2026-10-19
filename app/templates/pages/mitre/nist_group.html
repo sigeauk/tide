@@ -36,7 +36,7 @@
 <div id="nist-capability-group-detail" data-collapse-scope="nist-capability-group-detail" class="mt-ms">
     <form method="get" action="/mitre/nist/{{ nist_group.code }}" class="filters-bar mt-md">
         <div class="filter-group grow">
-            <label class="form-label">Search Capabilities</label>
+            <label class="form-label">Search capabilities</label>
             <input class="form-input" type="text" name="q" value="{{ query or '' }}" placeholder="Search by capability title, id, or comments">
         </div>
         <div class="filter-group self-end">
@@ -46,7 +46,7 @@
 
     <div id="nist-capabilities" class="mt-md">
     <details class="card card-padded" data-collapse-key="nist-group-{{ nist_group.code }}-capabilities" open>
-        <summary class="section-title cursor-pointer">Capabilities ({{ nist_group.capabilities | length }})</summary>
+        <summary class="section-title cursor-pointer">Capabilities <span class="rm-fold__count">{{ nist_group.capabilities | length }}</span></summary>
         <div class="cve-list mt-ms">
             {% for capability in nist_group.capabilities %}
             <details class="cve-card-item cve-card-item--available block" data-collapse-key="nist-capability-{{ nist_group.code }}-{{ capability.slug }}">

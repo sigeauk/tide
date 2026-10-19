@@ -1,4 +1,6 @@
 {% extends "base.html" %}
+{% from "macros/filters.html" import filter_dropdown, filter_multi %}
+{% from "macros/modal.html" import close_button %}
 
 {% block title %}Heatmap | TIDE{% endblock %}
 
@@ -55,7 +57,7 @@
     
     <!-- Actor Search -->
     <div class="filter-group grow filter-group--md">
-        <label class="form-label">Search Actors</label>
+        <label class="form-label">Search actors</label>
         <input name="Actor Search" 
             type="text" 
             id="actor-search"
@@ -64,34 +66,17 @@
             data-input="heatmap.filterActors">
     </div>
     
-    <!-- Actor Selection Dropdown -->
-    <div class="filter-group grow filter-group--lg">
-        <label class="form-label">Select Adversaries</label>
-        <div class="actor-select-container" id="actor-select-container">
-            <div  name="Choose threat actors..." class="actor-select-trigger" data-click="heatmap.actorMenu">
-                <span class="actor-select-text" id="actor-select-text">Choose threat actors...</span>
-                <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m6 9 6 6 6-6"/>
-                </svg>
-            </div>
-            <div class="actor-select-dropdown" id="actor-dropdown">
-                <div class="actor-checkbox-list" id="actor-checkbox-list">
-                    {% for actor in actors %}
-                    <label class="actor-checkbox-item" data-name="{{ (actor.name or '') | lower }}" data-aliases="{{ (actor.aliases or '') | lower }}">
-                        <input 
-                            type="checkbox" 
-                            name="actors" 
-                            value="{{ actor.name }}"
-                            data-change="heatmap.actorPicked">
-                        <span class="actor-checkbox-label">{{ actor.name }}</span>
-                        <span class="actor-checkbox-count">{{ actor.ttp_count }} TTPs</span>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-    </div>
-    
+    <!-- Actor Selection Dropdown (the search box above narrows its rows) -->
+    {% call filter_dropdown('actor', 'Select adversaries', 'Choose threat actors', 'multi', 'filter-group grow filter-group--lg', 'Choose threat actors') %}
+        {% for actor in actors %}
+        <label class="rh-checkbox-row" data-actor-row data-name="{{ (actor.name or '') | lower }}" data-aliases="{{ (actor.aliases or '') | lower }}" title="{{ actor.ttp_count }} TTPs">
+            <input type="checkbox" name="actors" value="{{ actor.name }}" data-change="heatmap.redraw">
+            <span>{{ actor.name }}</span>
+            <span class="rh-checkbox-count">{{ actor.ttp_count }}</span>
+        </label>
+        {% endfor %}
+    {% endcall %}
+
     <!-- Options -->
     <div class="filter-group">
         <label class="form-label">Options</label>
@@ -101,36 +86,12 @@
                 name="show_defense"
                 id="show-defense-checkbox"
                 data-change="heatmap.redraw">
-            <span>Show Defense in Depth</span>
+            <span>Show defense in depth</span>
         </label>
     </div>
 
     <!-- Source Filter -->
-    <div class="filter-group">
-        <label class="form-label">Source</label>
-        <div class="actor-select-container" id="source-select-container">
-            <div  name="All sources" class="actor-select-trigger" data-click="heatmap.sourceMenu">
-                <span class="actor-select-text" id="source-select-text">All sources</span>
-                <svg class="actor-select-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m6 9 6 6 6-6"/>
-                </svg>
-            </div>
-            <div class="actor-select-dropdown" id="source-dropdown">
-                <div class="actor-checkbox-list" id="source-checkbox-list">
-                    {% for raw, label in sources %}
-                    <label class="actor-checkbox-item" data-name="{{ (label or '') | lower }}">
-                        <input
-                            type="checkbox"
-                            name="source_filter"
-                            value="{{ raw }}"
-                            data-change="heatmap.sourcePicked">
-                        <span class="actor-checkbox-label">{{ label }}</span>
-                    </label>
-                    {% endfor %}
-                </div>
-            </div>
-        </div>
-    </div>
+    {{ filter_multi('source', 'source_filter', 'Source', sources, [], 'All sources', input_attrs='data-change="heatmap.redraw"') }}
 
 </div>
 
@@ -149,21 +110,19 @@
 <!-- ── Export Options Modal ─────────────────────────────────────────────── -->
 <div id="export-modal-overlay"
      class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm modal-360">
+    <div class="modal-content modal-sm">
 
         <!-- Header -->
         <div class="modal-header">
             <h3 class="modal-title">
                 Export Threat Report
             </h3>
-            <button name="Close Export Modal" data-click="heatmap.exportClose"
-                    type="button" class="modal-x"
-                    title="Close">&#x2715;</button>
+            {{ close_button('name="Close Export Modal" data-click="heatmap.exportClose"') }}
         </div>
 
         <!-- Format -->
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
+            <label class="form-label">
                 Format
             </label>
             <select name="PDF Markdown" id="modal-format"
@@ -175,7 +134,7 @@
 
         <!-- Classification -->
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
+            <label class="form-label">
                 Classification
             </label>
             <select name="Modal Classification" id="modal-classification"
@@ -188,7 +147,7 @@
 
         <!-- Audience -->
         <div class="mb-lg">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
+            <label class="form-label">
                 Audience
             </label>
             <select name="Executive / CISO Technical / Engineer" id="modal-audience"
@@ -214,7 +173,7 @@
 <!-- ── Generate Baseline Modal ──────────────────────────────────────── -->
 <div id="baseline-gen-overlay"
      class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm modal-420">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
@@ -222,16 +181,14 @@
                 </svg>
                 Create Assurance Baseline
             </h3>
-            <button name="Close Baseline Generate Modal" data-click="heatmap.baselineClose"
-                    type="button" class="modal-x"
-                    title="Close">&#x2715;</button>
+            {{ close_button('name="Close Baseline Generate Modal" data-click="heatmap.baselineClose"') }}
         </div>
 
         <form   name="Generate Baseline Modal" method="post" action="/api/heatmap/generate-baseline" hx-boost="false">
             <!-- Selected actors (hidden, shown as readonly) -->
             <div class="mb-md">
-                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
-                    Selected Actor(s)
+                <label class="form-label">
+                    Selected actor(s)
                 </label>
                 <input id="baseline-gen-actors" name="actor_names" readonly
                        class="form-input">
@@ -239,8 +196,8 @@
 
             <!-- Baseline Name -->
             <div class="mb-md">
-                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
-                    Baseline Name
+                <label class="form-label">
+                    Baseline name
                 </label>
                 <input id="baseline-gen-name" name="baseline_name" required
                        placeholder="e.g. APT28 Baseline"
@@ -249,7 +206,7 @@
 
             <!-- Description -->
             <div class="mb-lg">
-                <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">
+                <label class="form-label">
                     Description (optional)
                 </label>
                 <textarea id="baseline-gen-desc" name="description" rows="3"

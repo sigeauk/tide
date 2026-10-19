@@ -1,5 +1,6 @@
 {% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
 {% block title %}Management - TIDE{% endblock %}
 
 {% block head %}
@@ -279,10 +280,10 @@
 <!-- Tenant assignment modal for sigma assets -->
 <div name="Sigma Assign Modal" class="modal-overlay" id="sigma-assign-modal" style="display:none;"
      data-click="mgmt.assignBackdrop">
-    <div class="modal-content modal-sm modal-narrow">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title" id="sigma-assign-title">Assign tenants</h3>
-            <button name="Close Modal" type="button" class="modal-x" data-click="mgmt.assignClose">&#x2715;</button>
+            {{ close_button('name="Close Modal" data-click="mgmt.assignClose"') }}
         </div>
         <p class="modal-intro">
             Pick at least one tenant. The asset is only available to Sigma conversions
@@ -353,11 +354,11 @@
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
 <div name="Client Modal" class="modal-overlay" id="client-modal" style="display:none;"
      data-click="clients.backdrop">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="client-modal-title">New Client</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="clients.close">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="clients.close"') }}
         </div>
         <form id="client-form" data-submit="clients.submit" data-after="tab" class="form-stack">
             <input name="Client Form Id" type="hidden" id="client-form-id" value="">
@@ -385,11 +386,11 @@
 <!-- ── Create / Edit SIEM Modal ───────────────────────────────────── -->
 <div name="Siem Modal" class="modal-overlay" id="siem-modal" style="display:none;"
      data-click="mgmt.siemBackdrop">
-    <div class="modal-content modal-sm modal-560">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="siem-modal-title">New SIEM</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="mgmt.siemClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.siemClose"') }}
         </div>
         <form id="siem-form" data-submit="mgmt.siemSubmit" class="form-stack">
             <input name="Siem Form Id" type="hidden" id="siem-form-id" value="">
@@ -420,7 +421,7 @@
                         <input type="text" id="siem-form-kb-url" name="kibana_url" class="form-input" placeholder="https://kibana.example.com:5601">
                     </div>
                     <div>
-                        <label for="siem-form-token" class="form-label">API Key / Token</label>
+                        <label for="siem-form-token" class="form-label">API key / token</label>
                         <input type="password" id="siem-form-token" name="api_token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
                 </div>
@@ -434,7 +435,7 @@
                         <input name="Siem Form Splunk Url" type="text" id="siem-form-splunk-url" class="form-input" placeholder="https://splunk.example.com:8089">
                     </div>
                     <div>
-                        <label class="form-label">API Token</label>
+                        <label class="form-label">API token</label>
                         <input name="Siem Form Splunk Token" type="password" id="siem-form-splunk-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
                 </div>
@@ -448,7 +449,7 @@
                         <input name="Siem Form Sentinel Url" type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
                     </div>
                     <div>
-                        <label class="form-label">API Token</label>
+                        <label class="form-label">API token</label>
                         <input name="Siem Form Sentinel Token" type="password" id="siem-form-sentinel-token" class="form-input" placeholder="Leave blank to keep existing" autocomplete="new-password">
                     </div>
                 </div>
@@ -471,11 +472,11 @@
 <!-- ── Create / Edit OpenCTI Modal ───────────────────────────────── -->
 <div name="Opencti Modal" class="modal-overlay" id="opencti-modal" style="display:none;"
      data-click="mgmt.openctiBackdrop">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="opencti-modal-title">New OpenCTI Instance</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="mgmt.openctiClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.openctiClose"') }}
         </div>
         <form id="opencti-form" data-submit="mgmt.openctiSubmit" class="form-stack">
             <input name="Opencti Form Id" type="hidden" id="opencti-form-id" value="">
@@ -488,7 +489,7 @@
                 <input name="Opencti Form Url" type="text" id="opencti-form-url" class="form-input" required placeholder="https://opencti.example.com">
             </div>
             <div>
-                <label for="opencti-form-token" class="form-label">API Token</label>
+                <label for="opencti-form-token" class="form-label">API token</label>
                 <input name="Opencti Form Token" type="password" id="opencti-form-token" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
@@ -520,11 +521,11 @@
 <!-- ── Create / Edit GitLab Modal ─────────────────────────────────── -->
 <div name="Gitlab Modal" class="modal-overlay" id="gitlab-modal" style="display:none;"
      data-click="mgmt.gitlabBackdrop">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="gitlab-modal-title">New GitLab Instance</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="mgmt.gitlabClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.gitlabClose"') }}
         </div>
         <form id="gitlab-form" data-submit="mgmt.gitlabSubmit" class="form-stack">
             <input name="Gitlab Form Id" type="hidden" id="gitlab-form-id" value="">
@@ -537,12 +538,12 @@
                 <input name="Gitlab Form Url" type="text" id="gitlab-form-url" class="form-input" required placeholder="https://gitlab.example.com">
             </div>
             <div>
-                <label for="gitlab-form-token" class="form-label">Access Token</label>
+                <label for="gitlab-form-token" class="form-label">Access token</label>
                 <input name="Gitlab Form Token" type="password" id="gitlab-form-token" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             <div>
-                <label for="gitlab-form-group" class="form-label">Default Group / Namespace</label>
+                <label for="gitlab-form-group" class="form-label">Default group / namespace</label>
                 <input name="Gitlab Form Group" type="text" id="gitlab-form-group" class="form-input" maxlength="200"
                        placeholder="security-team">
                 <span class="form-hint">GitLab group where reports will be pushed.</span>
@@ -559,11 +560,11 @@
 <!-- ── Create / Edit Keycloak Modal ─────────────────────────────────── -->
 <div name="Keycloak Modal" class="modal-overlay" id="keycloak-modal" style="display:none;"
      data-click="mgmt.keycloakBackdrop">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="keycloak-modal-title">New Keycloak Instance</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="mgmt.keycloakClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.keycloakClose"') }}
         </div>
         <form id="keycloak-form" data-submit="mgmt.keycloakSubmit" class="form-stack">
             <input name="Keycloak Form Id" type="hidden" id="keycloak-form-id" value="">
@@ -586,7 +587,7 @@
                        placeholder="Leave blank to keep existing">
             </div>
             <div>
-                <label for="keycloak-form-client-secret" class="form-label">Client Secret</label>
+                <label for="keycloak-form-client-secret" class="form-label">Client secret</label>
                 <input name="Keycloak Form Client Secret" type="password" id="keycloak-form-client-secret" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
@@ -607,11 +608,11 @@
 <!-- ── Create / Edit Connector Modal (multi-vendor CTI framework) ─── -->
 <div name="Connector Modal" class="modal-overlay" id="connector-modal" style="display:none;"
      data-click="mgmt.connectorBackdrop">
-    <div class="modal-content modal-sm modal-560">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title" id="connector-modal-title">New Connector</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="mgmt.connectorClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.connectorClose"') }}
         </div>
         <form id="connector-form" data-submit="mgmt.connectorSubmit" class="form-stack">
             <input name="Connector Form Id" type="hidden" id="connector-form-id" value="">
@@ -659,11 +660,11 @@
 
 <div name="Connector Import Modal" class="modal-overlay" id="connector-import-modal" style="display:none;"
      data-click="mgmt.importBackdrop">
-    <div class="modal-content modal-sm modal-640">
+    <div class="modal-content modal-lg">
         <div class="modal-header">
             <h3 class="modal-title">Import Connectors</h3>
-            <button name="Close Modal" type="button" class="modal-x" aria-label="Close"
-                    data-click="mgmt.importClose">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="mgmt.importClose"') }}
         </div>
         <form id="connector-import-form" data-submit="mgmt.importSubmit">
             <p class="modal-intro">

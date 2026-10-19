@@ -69,7 +69,7 @@ def get_promotion_rule_diff(
     all_links = [l for l in all_links if not l.get("missing")]
     link = _pick_link(db, rule_id, siem_id, space, target_rule_id, target_siem_id, target_space) if siem_id else None
     if not link:
-        return HTMLResponse('<div class="empty-state-text">This rule has no linked counterpart.</div>', status_code=404)
+        return HTMLResponse('<div class="rm-empty">This rule has no linked counterpart.</div>', status_code=404)
     source = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     target = db.get_rule_by_id(link["rule_id"], link["space"], siem_id=link["siem_id"], client_id=client_id)
     diffs = None
@@ -172,8 +172,9 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
         success, message = result[:2]
         if not success:
             return 400, f"Could not merge: {message}", None, None
-        merged = f'Merged: updated to match "{donor_rule.name}".'
-        friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".'
+        actions_note = result[3] if len(result) > 3 else ""
+        merged = f'Merged: updated to match "{donor_rule.name}".{actions_note}'
+        friendly = f'Merged — "{dest_rule.name}" now matches "{donor_rule.name}".{actions_note}'
     elif sections:
         from app.elastic_helper import apply_rule_changes
         from app.services.rule_diff import build_rule_diff, section_changes
@@ -267,7 +268,7 @@ async def merge_linked_rule(
         target_rule_id, target_siem_id, target_space, sections,
     )
     if status != 200:
-        return HTMLResponse(f'<div class="empty-state-text text-danger">{escape(message)}</div>', status_code=status)
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(message)}</div>', status_code=status)
     if refresh_scope:
         from app.api.rules import sync_single_rule
         await _run_in_context(sync_single_rule, db, client_id, refresh_scope[2], refresh_scope[0], refresh_scope[1],
@@ -557,6 +558,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
 
     success, _kibana_message = result[:2]
     target_rule_id = result[2] if len(result) > 2 else (new_rule_id or rule_id)
+    actions_note = result[3] if len(result) > 3 else ""
     if not success:
         logger.error(f"Failed to move rule '{rule.name}': {_kibana_message}")
         return 400, f"Move failed: {_kibana_message}", rule.name, None, None
@@ -605,6 +607,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             source_siem_id, source_space, target_siem_id, target_space, actor=username,
         )
         friendly_message = f'Moved "{rule.name}" to {dest_name}{under}.'
+        friendly_message += actions_note
     else:
         # Both copies stay live -- link them so the rule window shows each from the other,
         # regardless of whether Kibana happened to give the copy the same portable id.
@@ -613,6 +616,7 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             target_rule_id, target_siem_id, target_space, username,
         )
         friendly_message = f'Copied "{rule.name}" to {dest_name}{under}.'
+        friendly_message += actions_note
         if not link_id:
             logger.warning(
                 "Move: copied '%s' to %s but could not record a link (target not found in "

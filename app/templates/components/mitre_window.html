@@ -10,6 +10,7 @@
 {% from "macros/icons.html" import icon %}
 {% from "components/window_ui.html" import window_menu %}
 {% from "components/mitre_ui.html" import coverage_pill, source_pills %}
+{% from "macros/modal.html" import close_button %}
 
 <div name="Dismiss {{ spec.singular }} Window" class="modal-overlay" data-rm-overlay>
   <div class="modal-content rule-modal mw-modal" data-layout-key="tide.mitreWindowLayout.{{ spec.key }}"
@@ -51,7 +52,7 @@
           <button name="Next {{ spec.singular }}" type="button" class="rm-iconbtn" data-rm-nav="next" title="Next {{ spec.singular | lower }} (→)" aria-label="Next {{ spec.singular | lower }}" disabled>{{ icon('chevron-right', '16') }}</button>
         </div>
         {{ window_menu() }}
-        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+        {{ close_button('name="Close Modal" data-rm-close', title='Close (Esc)') }}
       </div>
     </header>
 

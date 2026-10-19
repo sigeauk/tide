@@ -4,20 +4,22 @@
   Laid out like Compare (components/rule_migration_diff.html): the differences with a tick per
   section, then Merge. Merge writes the ticked sections only (keep your query, take the new
   investigation guide); "Keep this rule as it is" takes none. Either marks the update as reviewed.
-  An Elastic prebuilt rule takes sections too: Kibana marks it customised.
+  An Elastic prebuilt rule takes sections too: Kibana marks it customised. When nothing compared
+  differs (Elastic raised the version for something outside the rule), "Move to version N" marks it.
   Context: rule, status (rule_origins.statuses), diffs, note, sections, siem_id, space, dest_name, can_apply.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/rule_diff.html" import diff_fields %}
+{% from "macros/modal.html" import close_button %}
 {% set scope_qs = 'siem_id=' ~ (siem_id | urlencode) ~ '&space=' ~ (space | urlencode) %}
 {% set upstream_label = ((status.source ~ "'s version " ~ status.to_version) if status and status.to_version
                          else (status.source ~ "'s rule now") if status else 'Upstream') %}
 {% set this_label = (rule.name ~ ' (' ~ dest_name ~ ')') if rule else 'This rule' %}
 <div class="modal-overlay" data-click="backdrop.remove">
-  <div class="modal-content rd-root modal-980" data-view="inline" data-stop-click>
+  <div class="modal-content modal-xl rd-root" data-view="inline" data-stop-click>
     <div class="modal-header">
       <h2>{{ icon('git-branch', '18') }} Compare with {{ status.source if status else 'upstream' }}</h2>
-      <button type="button" class="btn btn-icon" data-click="modal.remove">&times;</button>
+      {{ close_button('data-click="modal.remove"') }}
     </div>
     {% if rule and status %}
     <p class="rule-help">
@@ -40,10 +42,29 @@
       </div>
       {{ diff_fields(diffs, 'This rule', upstream_label, select='section' if can_apply else none) }}
       {% elif diffs is not none %}
-      <p class="empty-state-text">The two are the same in every field compared{% if status.state == 'update' %}: the change upstream is outside them{% endif %}.</p>
+      <p class="rm-empty">The two are the same in every field compared{% if status.state == 'update' %}: {{ status.source }} changed something outside the rule as Kibana holds it, such as how it builds the rule or its integrations' versions{% endif %}.</p>
       {% endif %}
 
-      {% if can_apply %}
+      {% if can_apply and diffs is not none and not diffs and status.state == 'update' %}
+      {% set move_label = ('Move to version ' ~ status.to_version) if status.to_version else ('Move to ' ~ status.source ~ "'s current rule") %}
+      <div class="rm-merge border-t mt-md pt-md">
+        <p class="rd-label mb-sm">{{ move_label }}</p>
+        <p class="text-muted fs-md mb-sm">
+          There is nothing to merge. Moving marks this rule as {{ upstream_label }} in TIDE, so it shows
+          <strong>Up to date</strong>; nothing in your SIEM changes.
+          {% if status.prebuilt and status.installed_version %}Kibana keeps version {{ status.installed_version }} installed until
+          it installs Elastic's update itself (Rules → Rule updates).{% endif %}
+          {% if status.origin == 'elastic' %}TIDE also does this itself at each sync.{% endif %}
+        </p>
+        <div class="modal-actions">
+          <button type="button" class="btn btn-secondary" hx-get="/api/rules/{{ rule.rule_id }}/history-modal?{{ scope_qs }}"
+                  hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button>
+          <button type="button" class="btn btn-primary" data-update-move
+                  hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-vals='{"take": "none"}'
+                  hx-target="#rule-update-result" hx-swap="innerHTML" hx-disabled-elt="this">{{ icon_text('git-branch', move_label, '13') }}</button>
+        </div>
+      </div>
+      {% elif can_apply %}
       <div class="rm-merge border-t mt-md pt-md">
         <p class="rd-label mb-sm">Merge</p>
         <p class="text-muted fs-md mb-sm">
@@ -56,12 +77,12 @@
           when {{ status.source }} changes it again.
         </p>
         {% if diffs %}
-        <label class="form-label fs-xs">Direction</label>
+        <label class="form-label">Direction</label>
         <p class="mb-ms">Merge <strong>{{ upstream_label }}</strong> into <strong>{{ this_label }}</strong> &mdash; the ticked sections of {{ this_label }} are overwritten</p>
         {% endif %}
         <div class="modal-actions">
           <button type="button" class="btn btn-secondary" hx-get="/api/rules/{{ rule.rule_id }}/history-modal?{{ scope_qs }}"
-                  hx-target="#modal-container" hx-swap="innerHTML">Back</button>
+                  hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button>
           {% if status.state == 'update' %}<button type="button" class="btn btn-secondary" data-update-keep
                   hx-post="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}" hx-vals='{"take": "none"}'
                   hx-target="#rule-update-result" hx-swap="innerHTML" hx-disabled-elt="this">Keep this rule as it is</button>{% endif %}
@@ -74,7 +95,7 @@
       {% else %}
       <div class="modal-actions">
         <button type="button" class="btn btn-secondary" hx-get="/api/rules/{{ rule.rule_id }}/history-modal?{{ scope_qs }}"
-                hx-target="#modal-container" hx-swap="innerHTML">Back to the rule</button>
+                hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button>
       </div>
       {% endif %}
     </form>

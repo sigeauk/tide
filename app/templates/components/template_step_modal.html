@@ -17,6 +17,7 @@
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, section_menu, sections_item, window_menu %}
+{% from "macros/modal.html" import close_button %}
 
 {% set step = detail.step %}
 {% set rl = detail.risk_labels %}
@@ -61,7 +62,7 @@
         </button>
         {% endcall %}
         {% endif %}
-        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+        {{ close_button('name="Close Modal" data-rm-close', title='Close (Esc)') }}
       </div>
     </header>
 

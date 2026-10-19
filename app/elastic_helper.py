@@ -2553,6 +2553,69 @@ def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
     return ("found", found) if found else ("absent", None)
 
 
+def _connectors(session, base_url: str, space: str) -> Optional[Dict[str, dict]]:
+    """The connectors one Kibana space can use, by id; None when they can't be read (an API key
+    without access to connectors, an older Kibana)."""
+    try:
+        resp = session.get(f"{_space_api_prefix(base_url, space)}/api/actions/connectors")
+    except Exception:
+        return None
+    if resp.status_code != 200:
+        return None
+    try:
+        return {c.get("id"): c for c in (resp.json() or []) if c.get("id")}
+    except ValueError:
+        return None
+
+
+def _portable_actions(actions, src_session, src_base, source_space, tgt_session, tgt_base, target_space):
+    """A rule's actions as the target space can take them: ``(actions, left_behind)``.
+
+    An action names its connector by id, and connectors belong to one Kibana space (only
+    preconfigured and system ones are everywhere), so a copy to another SIEM or space would make
+    Kibana refuse the whole rule. Each action keeps its connector when the target has that same id,
+    moves to the target's connector of the same type and name, or is left behind (by name in
+    ``left_behind``). When the target's connectors can't be read, the actions go as they are and
+    any Kibana refuses are dropped on the retry (``promote_rule_to_production``)."""
+    actions = list(actions or [])
+    if not actions or (src_base == tgt_base and source_space == target_space):
+        return actions, []
+    target = _connectors(tgt_session, tgt_base, target_space)
+    if target is None:
+        return actions, []
+    source = _connectors(src_session, src_base, source_space) or {}
+    by_name = {((c.get("connector_type_id") or ""), (c.get("name") or "").strip().lower()): cid
+               for cid, c in target.items()}
+    kept, left = [], []
+    for action in actions:
+        cid = action.get("id") or ""
+        if cid in target or cid.startswith("system-connector-"):
+            kept.append(action)
+            continue
+        info = source.get(cid) or {}
+        type_id = info.get("connector_type_id") or action.get("action_type_id") or ""
+        match = by_name.get((type_id, (info.get("name") or "").strip().lower())) if info.get("name") else None
+        if match:
+            moved = dict(action, id=match)
+            moved.pop("uuid", None)
+            kept.append(moved)
+        else:
+            left.append(info.get("name") or cid)
+    return kept, left
+
+
+_MISSING_ACTION = re.compile(r'\[action/([^\]\s]+)\]|load action "?([\w-]+)')
+
+
+def _actions_note(left, target_space) -> str:
+    if not left:
+        return ""
+    names = ", ".join(dict.fromkeys(left))
+    n = len(left)
+    return (f" It went without {n} action{'s' if n != 1 else ''} ({names}): {target_space} has no connector "
+            f"by that name. Add {'them' if n != 1 else 'it'} to the rule in Kibana.")
+
+
 def promote_rule_to_production(rule_data, source_space="staging", target_space="production",
                                source_kibana_url=None, source_api_key=None,
                                target_kibana_url=None, target_api_key=None,
@@ -2571,7 +2634,9 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     ``on_target_recreated(old_id, new_id)``: called when overwriting the target's copy found its API
     key unreadable and the copy had to be deleted and created again (_put_rule).
 
-    Returns: (success: bool, message: str)
+    Returns ``(False, message)``, or ``(True, message, target_rule_id, note)``: ``note`` says which
+    actions were left behind for want of their connector in the target (``_portable_actions``),
+    for the caller to pass on; empty when none were.
     """
     if not (source_kibana_url and source_api_key):
         return False, "Promotion requires source SIEM kibana_url + api_key (none resolved)."
@@ -2665,20 +2730,34 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
         if new_exceptions:
             rule["exceptions_list"] = new_exceptions
     
+    # Actions whose connector the target doesn't have would make Kibana refuse the whole rule.
+    rule["actions"], left_behind = _portable_actions(
+        rule.get("actions"), src_session, src_base, source_space, tgt_session, tgt_base, target_space)
+
     # ── CREATE / UPDATE in target ──
     tgt_prefix = _space_api_prefix(tgt_base, target_space)
     url = f"{tgt_prefix}/api/detection_engine/rules"
-    
     if target_existing_id:
         rule["rule_id"] = target_existing_id
-        response, heal_note = _put_rule(tgt_session, tgt_base, target_space, rule, on_target_recreated)
-        if heal_note:
-            log_info(f"Promotion target: {heal_note}")
-        action = "Updated"
-    else:
-        response = tgt_session.post(url, json=rule)
-        action = "Created"
-    
+    action = "Updated" if target_existing_id else "Created"
+
+    for _attempt in range(3):
+        if target_existing_id:
+            response, heal_note = _put_rule(tgt_session, tgt_base, target_space, rule, on_target_recreated)
+            if heal_note:
+                log_info(f"Promotion target: {heal_note}")
+        else:
+            response = tgt_session.post(url, json=rule)
+        # Kibana names a connector it doesn't have (its connectors couldn't be listed beforehand):
+        # go without that action rather than fail the whole rule.
+        missing = {a or b for a, b in _MISSING_ACTION.findall(response.text or "")} if response.status_code == 400 else set()
+        refused = [a for a in rule.get("actions") or [] if a.get("id") in missing]
+        if not refused:
+            break
+        rule["actions"] = [a for a in rule["actions"] if a not in refused]
+        left_behind += [a.get("id") for a in refused]
+    note = _actions_note(left_behind, target_space)
+
     if response.status_code not in (200, 201):
         error_msg = f"Failed to {action.lower()} rule in {target_space}: {response.status_code} - {response.text}"
         log_error(error_msg)
@@ -2701,7 +2780,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     # the successful create response is sufficient to retain the source and
     # let the next tenant sync reconcile the destination copy.
     if not delete_source:
-        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_rule_id
+        return True, f"Successfully {action.lower()} rule in {target_space}; source retained", target_rule_id, note
     
     # ── Verify the rule actually exists in the target before deleting from source ──
     verify_prefix = _space_api_prefix(tgt_base, target_space)
@@ -2742,7 +2821,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     if delete_response.status_code not in (200, 204):
         warning_msg = f"Rule promoted but failed to delete from {source_space}: {delete_response.status_code}"
         log_error(warning_msg)
-        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_rule_id
+        return True, f"{action} in {target_space}, but failed to remove from {source_space}", target_rule_id, note
     
     log_info(f"Deleted rule '{rule_name}' from {source_space}")
-    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_rule_id
+    return True, f"Successfully {action.lower()} rule in {target_space} and removed from {source_space}", target_rule_id, note

@@ -1,3 +1,4 @@
+{% from "macros/icons.html" import icon %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -67,6 +68,8 @@
     <div id="modal-container"></div>
     <!-- Loading skeleton, cloned into the container by app.js while a modal request is in flight. -->
     <template id="rule-modal-skeleton">{% include "components/rule_modal_skeleton.html" %}</template>
+    <!-- The icons scripts draw (TIDE.icon in app.js), from the same macro as every template's. -->
+    <template id="tide-icons">{% for n in ['chevron-up', 'chevron-down', 'chevron-left', 'chevron-right', 'check', 'x', 'arrow-left', 'arrow-right'] %}<span data-icon="{{ n }}">{{ icon(n, '14') }}</span>{% endfor %}</template>
 
     {% block scripts %}{% endblock %}
 </body>

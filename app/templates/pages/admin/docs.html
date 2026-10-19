@@ -1,60 +1,118 @@
 {% extends "pages/admin/settings_layout.html" %}
 {#
-  Settings & Administration -> Documentation (a page of the guide: the README or a document from
-  docs/, with the guide's pages as sub-tabs) and -> Changelog (doc_pages None), each with a contents
-  list of its sections (app.services.docs.page).
-  Context: doc ({html, contents, title, slug}) or None when its file is missing; doc_pages, doc_slug.
+  Settings & Administration -> Documentation and -> Changelog.
+
+  Documentation: the whole guide in one sidebar (app.services.docs): a search over every section
+  (docs.js, /settings/docs/search.json), then the groups (Using TIDE, Detection engineering,
+  Administration, Reference) and their pages; the page being read opens out to its sections. The
+  main column is the landing page (the groups as cards, in the sidebar's order) or the page. A page
+  not written yet is listed as coming. While searching, the results take the groups' place.
+  Changelog: the release notes with their contents beside them.
+  Context: doc ({html, contents, title, slug}) or None; doc_page (docs.Page) or None for the
+  landing page; doc_nav (the groups, in order) or None on the Changelog; doc_slug.
 #}
 {% from "macros/icons.html" import icon %}
-{% block title %}{{ doc.title if doc and doc_slug else 'Documentation' }} - TIDE{% endblock %}
-{% block settings_subtitle %}{% if doc_pages %}The TIDE guide for version {{ env.tide_version }}: installing, configuring and running TIDE, and its API.{% else %}Every change in TIDE {{ env.tide_version.split('.')[0] }}, newest release first.{% endif %}{% endblock %}
+{% from "macros/modal.html" import empty_state %}
+{% block title %}{{ doc_page.title if doc_page else 'Documentation' }} - TIDE{% endblock %}
+{% block settings_subtitle %}{% if doc_nav is not none %}The TIDE guide for version {{ env.tide_version }}: using TIDE, engineering detections, and installing and running it.{% else %}Every change in TIDE {{ env.tide_version.split('.')[0] }}, newest release first.{% endif %}{% endblock %}
+
+{# A page's sections (h2), each folding its subsections (h3); remembered per page. #}
+{% macro sections(doc, page_key) -%}
+<ul class="docs-toc__list">
+    {% for h in doc.contents %}
+    <li class="docs-toc__item">
+        {% if h.children %}
+        <details class="docs-toc__group" data-remember="docs-toc-{{ page_key }}-{{ h.id }}">
+            <summary><a href="#{{ h.id }}">{{ h.name }}</a>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
+            <ul class="docs-toc__list docs-toc__sub">
+                {% for c in h.children %}
+                <li class="docs-toc__item"><a href="#{{ c.id }}">{{ c.name }}</a></li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% else %}
+        <a class="docs-toc__section" href="#{{ h.id }}">{{ h.name }}</a>
+        {% endif %}
+    </li>
+    {% endfor %}
+</ul>
+{%- endmacro %}
 
 {% block settings_tab_content %}
-{% if doc_pages %}
-<nav class="settings-tabs settings-tabs--inline docs-pages" aria-label="Documents">
-    {% for p in doc_pages %}
-    <a name="{{ p.title }}" href="/settings/docs{{ '/' ~ p.slug if p.slug }}" class="settings-tab {% if p.slug == doc_slug %}active{% endif %}"
-       {% if p.slug == doc_slug %}aria-current="page"{% endif %}>{{ p.title }}</a>
-    {% endfor %}
-</nav>
-{% endif %}
-
+{% if doc_nav is none %}
+{# The Changelog: its contents beside it, as before. #}
 {% if doc %}
-{% set page_key = doc_slug or 'readme' %}
 <div class="docs-layout">
-    {# Contents: the whole list folds away, and each section folds its subsections; both remembered
-       per browser (data-remember, per page). A section's name still jumps to it. #}
     <details class="docs-toc" open data-remember="docs-contents">
         <summary class="docs-toc__title">Contents {{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
-        <nav aria-label="Contents">
-            <ul class="docs-toc__list">
-                {% for h in doc.contents %}
-                <li class="docs-toc__item">
-                    {% if h.children %}
-                    <details class="docs-toc__group" data-remember="docs-toc-{{ page_key }}-{{ h.id }}">
-                        <summary><a href="#{{ h.id }}">{{ h.name }}</a>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
-                        <ul class="docs-toc__list docs-toc__sub">
-                            {% for c in h.children %}
-                            <li class="docs-toc__item"><a href="#{{ c.id }}">{{ c.name }}</a></li>
-                            {% endfor %}
-                        </ul>
-                    </details>
-                    {% else %}
-                    <a class="docs-toc__section" href="#{{ h.id }}">{{ h.name }}</a>
-                    {% endif %}
+        <nav aria-label="Contents">{{ sections(doc, 'changelog') }}</nav>
+    </details>
+    <article class="card card-padded doc-markdown">{{ doc.html | safe }}</article>
+</div>
+{% endif %}
+{% else %}
+<div class="docs-layout">
+    <aside class="docs-toc docs-nav" aria-label="The guide" data-docs-nav>
+        <div class="docs-search" data-docs-search>
+            <div class="docs-search__field">
+                {{ icon('search', '14', 'docs-search__icon') }}
+                <input type="search" class="form-input" placeholder="Search the guide…" aria-label="Search the guide"
+                       autocomplete="off" data-docs-search-input>
+            </div>
+            <div class="docs-search__results" role="listbox" aria-label="Search results" hidden data-docs-search-results></div>
+        </div>
+        <a name="Start Here" href="/settings/docs" class="docs-nav__home{{ ' is-active' if not doc_slug }}"
+           {% if not doc_slug %}aria-current="page"{% endif %}>{{ icon('book-open', '14') }} Start here</a>
+        {% for g in doc_nav %}
+        {% set holds_current = doc_page and doc_page.group == g.key %}
+        <details class="docs-nav__group" open {% if not holds_current %}data-remember="docs-group-{{ g.key }}"{% endif %}>
+            <summary class="docs-nav__heading">{{ icon(g.icon, '15') }}<span>{{ g.title }}</span>{{ icon('chevron-down', '14', 'docs-toc__chev') }}</summary>
+            <ul class="docs-toc__list docs-nav__pages">
+                {% for p in g.pages %}
+                {% if p.path %}
+                <li class="docs-nav__page{{ ' is-active' if p.slug == doc_slug }}">
+                    <a name="{{ p.title }}" href="/settings/docs/{{ p.slug }}"{% if p.slug == doc_slug %} aria-current="page"{% endif %}>{{ p.title }}</a>
+                    {% if p.slug == doc_slug and doc and doc.contents %}<nav aria-label="{{ p.title }} sections">{{ sections(doc, p.slug) }}</nav>{% endif %}
+                </li>
+                {% else %}
+                <li class="docs-nav__page is-coming{{ ' is-active' if p.slug == doc_slug }}">
+                    <a name="{{ p.title }}" href="/settings/docs/{{ p.slug }}" title="{{ p.summary }}">{{ p.title }} <span class="docs-nav__soon">coming</span></a>
+                </li>
+                {% endif %}
+                {% endfor %}
+            </ul>
+        </details>
+        {% endfor %}
+    </aside>
+
+    {% if not doc_page %}
+    {# Start here: the groups in the sidebar's order, each page a line. #}
+    <div class="docs-landing">
+        {% for g in doc_nav %}
+        <section class="card card-padded docs-card">
+            <h2 class="docs-card__title">{{ icon(g.icon, '18') }} {{ g.title }}</h2>
+            <p class="docs-card__about">{{ g.about }}</p>
+            <ul class="docs-card__pages">
+                {% for p in g.pages %}
+                <li>
+                    <a name="{{ p.title }}" href="/settings/docs/{{ p.slug }}">{{ p.title }}</a>{% if not p.path %} <span class="docs-nav__soon">coming</span>{% endif %}
+                    <span class="docs-card__summary">{{ p.summary }}</span>
                 </li>
                 {% endfor %}
             </ul>
-        </nav>
-    </details>
-    <article class="card card-padded doc-markdown">
-        {{ doc.html | safe }}
-    </article>
-</div>
-{% else %}
-<div class="card card-padded empty-state">
-    {{ icon('book-open', '24') }}
-    <p>This part of the guide isn't included in this installation.</p>
+        </section>
+        {% endfor %}
+    </div>
+    {% elif doc %}
+    <article class="card card-padded doc-markdown">{{ doc.html | safe }}</article>
+    {% else %}
+    <div class="card card-padded">
+        {% call empty_state('book-open') %}
+            <p class="empty-state-title">{{ doc_page.title }} is coming to the guide</p>
+            <p>{{ doc_page.summary }}</p>
+        {% endcall %}
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 {% endblock %}

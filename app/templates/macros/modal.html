@@ -1,0 +1,25 @@
+{#
+  Dialog and window parts every modal shares, so each looks and behaves the same.
+
+  close_button: the X at the top right of every dialog, window and side panel. ``attrs`` is what
+  closes it (data-click="modal.remove", data-rm-close, data-click="el.hide" data-target="…", …)
+  plus its name; ``label`` is what a screen reader says; ``title`` its tip.
+
+  empty_state: a page, list or panel with nothing to show: an icon, then the caller's
+  <p class="empty-state-title"> (what is missing, when there is more to say) and <p> (what to do),
+  and any buttons. ``fill``: centred in a panel's full height (a rule library's detail pane).
+  One section with nothing in it (in a window, a dialog or a detail page) is a
+  <p class="rm-empty"> instead.
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro close_button(attrs='data-click="modal.remove"', label='Close', title='') -%}
+<button type="button" class="rm-close" aria-label="{{ label }}" title="{{ title or label }}" {{ attrs | safe }}>{{ icon('x', '18') }}</button>
+{%- endmacro %}
+
+{% macro empty_state(icon_name='', fill=false) -%}
+<div class="empty-state{{ ' empty-state--fill' if fill }}">
+    {% if icon_name %}{{ icon(icon_name, '36', 'empty-state-icon') }}{% endif %}
+    {{ caller() }}
+</div>
+{%- endmacro %}

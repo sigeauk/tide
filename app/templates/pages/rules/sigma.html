@@ -7,6 +7,9 @@
 #}
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice %}
+{% from "macros/modal.html" import close_button, empty_state %}
+{% from "macros/menu.html" import more_button %}
 
 {% block title %}Sigma Rules | TIDE{% endblock %}
 
@@ -25,10 +28,7 @@
         <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE. Pick one to see it converted for your SIEM with the settings below; Convert opens it in the rule form to deploy.</p>
     </div>
     <div class="rh-more" data-more>
-        <button name="Sigma Actions" type="button" class="btn btn-secondary rh-more__btn" data-more-toggle
-                aria-haspopup="menu" aria-expanded="false" title="Add a Sigma rule of your own">
-            {{ icon('more-vertical', '18') }}<span class="sr-only">More actions</span>
-        </button>
+        {{ more_button('More actions', title='Add a Sigma rule of your own', attrs='name="Sigma Actions"') }}
         <div class="rh-more__menu" role="menu" hidden>
             <button name="Add Your Own Sigma Rule" type="button" role="menuitem" class="rh-more__item" data-click="sigma.ownRule">
                 {{ icon('file-code', '15') }}<span>Add your own Sigma rule</span>
@@ -39,66 +39,34 @@
 
 {# How a rule is converted: the open rule's query follows these, and Convert uses them. #}
 <div class="sigma-header-row lib-settings" id="sigma-settings">
-    <div class="sigma-select-group">
-        <label for="backend-select">Target</label>
-        <select name="Backend Select" id="backend-select" class="sigma-select">
-            {% for key, label in backends.items() %}
-            <option value="{{ key }}" {% if key == 'elasticsearch' %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
+    {{ filter_choice('backend-select', 'backend_choice', 'Target', backends.items() | list, 'elasticsearch', wrap='sigma-select-group') }}
+    {{ filter_choice('format-select', 'format_choice', 'Format', formats.items() | list, formats.keys() | list | first, wrap='sigma-select-group') }}
+    {{ filter_choice('pipeline-select', 'pipeline_choice', 'Pipeline', pipelines.items() | list, pipelines.keys() | list | first, wrap='sigma-select-group') }}
 
-    <div class="sigma-select-group">
-        <label for="format-select">Format</label>
-        <select name="Format Select" id="format-select" class="sigma-select">
-            {% for key, label in formats.items() %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
-
-    <div class="sigma-select-group">
-        <label for="pipeline-select">Pipeline</label>
-        <select name="Pipeline Select" id="pipeline-select" class="sigma-select sigma-select--wide">
-            {% for key, label in pipelines.items() %}
-            <option value="{{ key }}">{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
-
-    <div class="sigma-select-group relative">
-        <label title="Custom pipelines — click to toggle, applied in selection order">Custom Pipelines</label>
-        <button name="None selected" type="button" id="pipeline-dropdown-btn" class="sigma-select sigma-dropdown-btn" data-click="sigma.pipelineMenu">
-            <span id="pipeline-dropdown-label">None selected</span>
-            {{ icon('chevron-down', '12') }}
-        </button>
-        <div id="pipeline-multiselect" class="pipeline-multiselect pipeline-multiselect--menu" style="display:none;">
+    {# Ordered pickers: sigma.js keeps their rows, ticked in the order they apply #}
+    {% call filter_dropdown('pipeline-dropdown', 'Custom pipelines', 'None selected', wrap='sigma-select-group', tip='Custom pipelines, applied in the order you pick them') %}
+        <div id="pipeline-multiselect" class="pipeline-options">
             {% for pl in pipeline_files %}
             <button name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ pl.filename }}">
-                <span class="pipeline-option-check">&#10003;</span>
+                <span class="pipeline-option-check">{{ icon('check', '10') }}</span>
                 <span class="pipeline-option-name">{{ pl.display }}</span>
                 <span class="pipeline-option-badge"></span>
             </button>
             {% endfor %}
         </div>
-    </div>
+    {% endcall %}
 
-    <div class="sigma-select-group relative">
-        <label title="Template postprocessing pipelines — click to toggle">Templates</label>
-        <button name="None selected" type="button" id="template-dropdown-btn" class="sigma-select sigma-dropdown-btn" data-click="sigma.templateMenu">
-            <span id="template-dropdown-label">None selected</span>
-            {{ icon('chevron-down', '12') }}
-        </button>
-        <div id="template-multiselect" class="pipeline-multiselect pipeline-multiselect--menu" style="display:none;">
+    {% call filter_dropdown('template-dropdown', 'Templates', 'None selected', wrap='sigma-select-group', tip='Template postprocessing pipelines, applied in the order you pick them') %}
+        <div id="template-multiselect" class="pipeline-options">
             {% for tpl in template_files %}
             <button name="Select Pipeline Option" type="button" class="pipeline-option" data-value="{{ tpl.filename }}">
-                <span class="pipeline-option-check">&#10003;</span>
+                <span class="pipeline-option-check">{{ icon('check', '10') }}</span>
                 <span class="pipeline-option-name">{{ tpl.display }}</span>
                 <span class="pipeline-option-badge"></span>
             </button>
             {% endfor %}
         </div>
-    </div>
+    {% endcall %}
 
     {# What the view and Convert send (sigma.js keeps them in step with the controls above) #}
     <input type="hidden" id="form-backend" name="backend" value="elasticsearch">
@@ -119,42 +87,17 @@
             <form class="browser-filters" id="sigma-filters" hx-get="/api/sigma/rules"
                   hx-target="#rules-list" hx-trigger="input delay:300ms, submit">
                 <div class="browser-filter browser-filter--wide">
-                    <label for="rule-search">Search</label>
+                    <label class="form-label" for="rule-search">Search</label>
                     <input type="text" id="rule-search" name="q" placeholder="Title, description, technique…">
                 </div>
                 <div class="browser-filter">
-                    <label for="technique-filter">MITRE Technique</label>
+                    <label class="form-label" for="technique-filter">MITRE technique</label>
                     <input type="text" id="technique-filter" name="technique" placeholder="e.g., T1059" value="{{ technique_filter }}">
                 </div>
-                <div class="browser-filter">
-                    <label for="category-filter">Category</label>
-                    <select id="category-filter" name="category">
-                        <option value="">All</option>
-                        {% for cat in categories %}<option value="{{ cat }}">{{ cat | title }}</option>{% endfor %}
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="level-filter">Level</label>
-                    <select id="level-filter" name="level">
-                        <option value="">All</option>
-                        <option value="critical">Critical</option>
-                        <option value="high">High</option>
-                        <option value="medium">Medium</option>
-                        <option value="low">Low</option>
-                        <option value="informational">Info</option>
-                    </select>
-                </div>
-                <div class="browser-filter">
-                    <label for="status-filter">Status</label>
-                    <select id="status-filter" name="status">
-                        <option value="">All</option>
-                        <option value="stable">Stable</option>
-                        <option value="test">Test</option>
-                        <option value="experimental">Experimental</option>
-                        <option value="deprecated">Deprecated</option>
-                        <option value="unsupported">Unsupported</option>
-                    </select>
-                </div>
+                {% set cat_opts = [('', 'All')] %}{% for cat in categories %}{% set _ = cat_opts.append((cat, cat | title)) %}{% endfor %}
+                {{ filter_choice('category-filter', 'category', 'Category', cat_opts, '', wrap='browser-filter') }}
+                {{ filter_choice('level-filter', 'level', 'Level', [('', 'All'), ('critical', 'Critical'), ('high', 'High'), ('medium', 'Medium'), ('low', 'Low'), ('informational', 'Info')], '', wrap='browser-filter') }}
+                {{ filter_choice('status-filter', 'status', 'Status', [('', 'All'), ('stable', 'Stable'), ('test', 'Test'), ('experimental', 'Experimental'), ('deprecated', 'Deprecated'), ('unsupported', 'Unsupported')], '', wrap='browser-filter') }}
                 <input type="hidden" id="selected-rule-id" name="selected" value="{{ selected_rule_id | default('', true) }}">
             </form>
             <div id="rules-list" class="lib-list">
@@ -165,10 +108,9 @@
 
     <div class="sigma-panel lib-detail-panel">
         <div id="sigma-detail" class="lib-detail" data-rule-id="{{ selected_rule_id | default('', true) }}">
-            <div class="empty-output">
-                {{ icon('sigma', '32') }}
+            {% call empty_state('sigma', fill=true) %}
                 <p>Select a rule to see what it detects.</p>
-            </div>
+            {% endcall %}
         </div>
     </div>
 </div>
@@ -176,10 +118,10 @@
 {# Add your own Sigma rule (⋮ menu): paste or write its YAML, check it, then show it like the others #}
 <div name="Add Your Own Sigma Rule Modal" id="sigma-own-modal" class="modal-overlay" style="display:none;"
      role="dialog" aria-modal="true" aria-labelledby="sigma-own-title" data-click="backdrop.hide">
-    <div class="modal-content">
+    <div class="modal-content modal-lg">
         <div class="modal-header">
             <h3 class="modal-title" id="sigma-own-title">{{ icon('file-code', '16') }} Add your own Sigma rule</h3>
-            <button name="Close" type="button" class="btn btn-icon" data-click="el.hide" data-target="sigma-own-modal">&#x2715;</button>
+            {{ close_button('name="Close" data-click="el.hide" data-target="sigma-own-modal"') }}
         </div>
         <p class="rule-help">Paste or write a Sigma rule. <strong>Show rule</strong> lays it out on the page like SigmaHQ's, converted with the settings there; Convert then opens it in the rule form to deploy.</p>
         <div class="code-editor-container sigma-own-editor">

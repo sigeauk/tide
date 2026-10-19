@@ -7,6 +7,7 @@
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_ui.html" import technique_list %}
+{% from "macros/modal.html" import close_button %}
 
 {% set cov_class = {'active': 'success', 'latent': 'warning'}.get(coverage_state, 'danger') %}
 
@@ -56,9 +57,7 @@
                     {% for p in platform_pills %}<span class="rm-chip" title="Platform">{{ p }}</span>{% endfor %}
                 </div>
             </div>
-            <button name="Close Technique Panel" class="btn-icon" data-click="ui.closePanel" title="Close" aria-label="Close">
-                {{ icon('x', '20') }}
-            </button>
+            {{ close_button('name="Close Technique Panel" data-click="ui.closePanel"') }}
         </div>
 
         <div class="slide-panel-content">

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hunting", tags=["hunting"])
 
-_NOT_FOUND = '<div class="empty-output"><p>This hunt is not in the hunting queries built into TIDE.</p></div>'
+_NOT_FOUND = '<div class="empty-state empty-state--fill"><p>This hunt is not in the hunting queries built into TIDE.</p></div>'
 
 
 def list_context(db, client_id: str, q: str = "", technique: str = "", platform: str = "", source: str = "",

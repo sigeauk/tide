@@ -8,6 +8,7 @@
                      form.
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button, empty_state %}
 
 {# Build siem_id -> label map for row rendering. The relationship is a soft
    reference (cti_egress_targets lives in the per-tenant CTI DuckDB while
@@ -94,22 +95,21 @@
     {% endfor %}
 </div>
 {% else %}
-<div class="client-section-empty">
-    {{ icon('upload', '36') }}
-    <p>No CTI egress targets configured for this client yet.</p>
-    <p class="fs-base">Targets describe where this tenant's STIX indicators are pushed (Elasticsearch <code>_bulk</code> against a SIEM in the shared inventory).</p>
-</div>
+{% call empty_state('upload') %}
+    <p class="empty-state-title">No CTI egress targets configured for this client yet.</p>
+    <p>Targets describe where this tenant's STIX indicators are pushed (Elasticsearch <code>_bulk</code> against a SIEM in the shared inventory).</p>
+{% endcall %}
 {% endif %}
 </div>
 
 <!-- Add Egress Target Modal -->
 <div name="Add Cti Egress Modal" id="add-cti-egress-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-md">
+    <div class="modal-content modal-lg">
         <div class="modal-header">
             <h3 class="modal-title">New CTI Egress Target &mdash; {{ client.name }}</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="add-cti-egress-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="add-cti-egress-modal"') }}
         </div>
         <form name="Submit Cti Egress" hx-post="/api/management/clients/{{ client.id }}/cti-egress"
               hx-target="#client-cti-egress-section" hx-swap="innerHTML"

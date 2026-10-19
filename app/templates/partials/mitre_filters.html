@@ -8,6 +8,7 @@
   Context: spec (KindSpec), f (current values), filter_options, url_keys, source_options.
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice %}
 
 <div class="filters-bar cat-filters" id="catalog-filters" data-catalog-bar
      data-kind="{{ spec.key }}" data-base-path="/mitre/{{ spec.key }}"
@@ -19,46 +20,21 @@
                placeholder="ID, name, alias or description…" autocomplete="off">
     </div>
 
-    <div class="filter-group">
-        <label class="form-label" for="cat-src">Source</label>
-        <select id="cat-src" name="src" class="form-input form-select">
-            {% for value, label in source_options %}
-            <option value="{{ value }}" {% if f.src == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
+    {{ filter_choice('cat-src', 'src', 'Source', source_options, f.src) }}
 
     {% for name, flt in spec.filters.items() %}
-    <div class="filter-group">
-        <label class="form-label" for="cat-f-{{ name }}">{{ flt.label }}</label>
-        <select id="cat-f-{{ name }}" name="{{ name }}" class="form-input form-select"{% if flt.by_source %} data-cat-by-source{% endif %}>
-            {% for value, label in filter_options[name] %}
-            <option value="{{ value }}" {% if f[name] == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
+    {{ filter_choice('cat-f-' ~ name, name, flt.label, filter_options[name], f[name], attrs='data-cat-by-source' if flt.by_source else '') }}
     {% endfor %}
 
-    <div class="filter-group">
-        <label class="form-label" for="cat-sort">Sort</label>
-        <select id="cat-sort" name="sort" class="form-input form-select" data-cat-pref>
-            {% for key, (label, default_dir, _key) in spec.sorts.items() %}
-            <option value="{{ key }}" data-default-dir="{{ default_dir }}" {% if (f.sort or spec.default_sort) == key %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-        <input type="hidden" id="cat-dir" name="dir" value="{{ f.dir }}" data-cat-pref>
-    </div>
+    {% set sort_opts = [] %}
+    {% for key, (label, default_dir, _key) in spec.sorts.items() %}{% set _ = sort_opts.append((key, label, 'data-default-dir="' ~ default_dir ~ '"')) %}{% endfor %}
+    {{ filter_choice('cat-sort', 'sort', 'Sort', sort_opts, f.sort or spec.default_sort, attrs='data-cat-pref') }}
+    <input type="hidden" id="cat-dir" name="dir" value="{{ f.dir }}" data-cat-pref>
 
     {% if spec.groupings %}
-    <div class="filter-group">
-        <label class="form-label" for="cat-group">Group by</label>
-        <select id="cat-group" name="group" class="form-input form-select" data-cat-pref>
-            <option value="none">None</option>
-            {% for key, (label, _fn) in spec.groupings.items() %}
-            <option value="{{ key }}" {% if f.group == key %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-        </select>
-    </div>
+    {% set group_opts = [('none', 'None')] %}
+    {% for key, (label, _fn) in spec.groupings.items() %}{% set _ = group_opts.append((key, label)) %}{% endfor %}
+    {{ filter_choice('cat-group', 'group', 'Group by', group_opts, f.group or 'none', attrs='data-cat-pref') }}
     {% endif %}
 
     <div class="filter-group">

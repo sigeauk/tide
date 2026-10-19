@@ -6,76 +6,65 @@
      systems       (List[System])    — for system filter dropdown
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_dropdown, filter_choice %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if cves %}
 
-{# ── Toolbar: system filter + sort controls ─────────────────────────────── #}
-<div class="cve-toolbar">
-    {% if systems %}
-    <div class="filter-multi relative">
-        <button name="All Systems ▾" class="form-input cve-filter-btn"
-                data-click="el.toggleNextHidden" type="button">
-            {{ icon('filter','12') }} <span id="sys-filter-label">All Systems</span> <span class="ml-auto">▾</span>
-        </button>
-        <div class="filter-multi__dropdown hidden u-bg-surface cve-filter-menu" id="sys-filter-dropdown">
-            {% for s in systems %}
-            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer nowrap">
-                <input   name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter" checked> {{ s.name }}
-            </label>
-            {% endfor %}
-            <hr class="cve-filter-sep">
-            <div class="flex gap-sm fs-sm">
-                <a name="All Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="true">All</a>
-                <a name="No Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="false">None</a>
-            </div>
-        </div>
+{# ── Filter bar: search, systems, coverage, matched, sort (cve_overview.js filters the cards) ── #}
+<div class="filters-bar cve-filters">
+    <div class="filter-group grow">
+        <label class="form-label" for="kev-search">Search</label>
+        <input name="Kev Search" id="kev-search" type="search" placeholder="Search CVE ID, name, vendor…"
+               class="form-input" data-input="cves.filter">
     </div>
+
+    {% if systems %}
+    {% call filter_dropdown('sys-filter', 'System', 'All systems') %}
+        {% for s in systems %}
+        <label class="rh-checkbox-row">
+            <input name="System Filter Checkbox" type="checkbox" class="sys-filter-cb" value="{{ s.id }}" data-change="cves.filter" checked>
+            <span>{{ s.name }}</span>
+        </label>
+        {% endfor %}
+        <div class="tide-filter-links">
+            <a name="All Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="true">All</a>
+            <a name="No Systems" href="#" data-click="cves.checkAll" data-boxes="sys-filter-cb" data-value="false">None</a>
+        </div>
+    {% endcall %}
     {% endif %}
 
-    <div class="filter-multi relative">
-        <button name="All Coverage ▾" class="form-input cve-filter-btn cve-filter-btn--narrow"
-                data-click="el.toggleNextHidden" type="button">
-            {{ icon('shield','12') }} <span id="cov-filter-label">All Coverage</span> <span class="ml-auto">▾</span>
-        </button>
-        <div class="filter-multi__dropdown hidden u-bg-surface cve-filter-menu cve-filter-menu--narrow" id="cov-filter-dropdown">
-            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
-                <input name="detected" type="checkbox" class="cov-filter-cb" value="detected" data-change="cves.filter" checked> Has Rules
-            </label>
-            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
-                <input name="nocover" type="checkbox" class="cov-filter-cb" value="nocover" data-change="cves.filter" checked> No Rules
-            </label>
-            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
-                <input name="available" type="checkbox" class="cov-filter-cb" value="available" data-change="cves.filter" checked> Available
-            </label>
-            <label class="flex items-center gap-sm fs-md py-xs px-0 cursor-pointer">
-                <input name="unaffected" type="checkbox" class="cov-filter-cb" value="unaffected" data-change="cves.filter" checked> Unaffected
-            </label>
-            <hr class="cve-filter-sep">
-            <div class="flex gap-sm fs-sm">
-                <a name="All Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="true">All</a>
-                <a name="No Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="false">None</a>
-            </div>
+    {% call filter_dropdown('cov-filter', 'Coverage', 'All coverage') %}
+        {% for value, text in [('detected', 'Has rules'), ('nocover', 'No rules'), ('available', 'Available'), ('unaffected', 'Unaffected')] %}
+        <label class="rh-checkbox-row">
+            <input name="{{ value }}" type="checkbox" class="cov-filter-cb" value="{{ value }}" data-change="cves.filter" checked>
+            <span>{{ text }}</span>
+        </label>
+        {% endfor %}
+        <div class="tide-filter-links">
+            <a name="All Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="true">All</a>
+            <a name="No Coverage" href="#" data-click="cves.checkAll" data-boxes="cov-filter-cb" data-value="false">None</a>
         </div>
+    {% endcall %}
+
+    {{ filter_choice('filter-matched', 'matched', 'Show', [('', 'All CVEs'), ('matched', 'Matched only')], '', attrs='data-change="cves.filter"') }}
+
+    {{ filter_choice('sort-field', 'sort', 'Sort by', [('cve_id', 'CVE ID'), ('name', 'Vulnerability'), ('vendor', 'Vendor'), ('date_added', 'Date added'),
+                     ('due_date', 'Due date'), ('matched', 'Matched first')], 'cve_id', attrs='data-change="cves.sort"') }}
+
+    <div class="filter-group">
+        <label class="form-label" for="sort-dir-btn">Order</label>
+        <button name="Sort Direction" id="sort-dir-btn" type="button" class="btn btn-secondary" data-click="cves.sortDir" title="Toggle sort direction" aria-label="Toggle sort direction">
+            <span id="sort-dir-icon">{{ icon('chevron-down', '14') }}</span>
+        </button>
     </div>
 
-    <select  name="CVE Sort Selector" id="sort-field" class="form-input cve-sort-select"
-            data-change="cves.sort">
-        <option value="cve_id">Sort: CVE ID</option>
-        <option value="name">Sort: Vulnerability</option>
-        <option value="vendor">Sort: Vendor</option>
-        <option value="date_added">Sort: Date Added</option>
-        <option value="due_date">Sort: Due Date</option>
-        <option value="matched">Sort: Matched first</option>
-    </select>
-
-    <button name="▼" id="sort-dir-btn" class="btn btn-secondary btn-sm" data-click="cves.sortDir" title="Toggle sort direction">
-        <span id="sort-dir-icon">▼</span>
-    </button>
-
-    <span class="fs-md text-muted ml-auto">
-        <span id="cve-visible-count">{{ cves | length }}</span> / {{ cves | length }} entries
-        &nbsp;·&nbsp; {{ matched_count }} matched
-    </span>
+    <div class="filter-group self-end">
+        <span class="fs-md text-muted">
+            <span id="cve-visible-count">{{ cves | length }}</span> / {{ cves | length }} entries
+            &nbsp;·&nbsp; {{ matched_count }} matched
+        </span>
+    </div>
 </div>
 
 {# ── CVE card list ─────────────────────────────────────────────────────── #}
@@ -192,7 +181,7 @@
                 </span>
             {% elif matched %}
                 <span class="status-pill status-chip status-chip--danger" title="No detection rules recorded">
-                    {{ icon('shield-off','10') }} No Rules
+                    {{ icon('shield-off','10') }} No rules
                 </span>
             {% endif %}
         </div>
@@ -203,9 +192,8 @@
 
 
 {% else %}
-<div class="empty-output empty-output--roomy">
-    {{ icon('shield-check','48') }}
-    <p class="mt-md">No CISA CVE data loaded.</p>
-    <p class="text-sm">Use <strong>Import CVE</strong> above to load the catalogue.</p>
-</div>
+{% call empty_state('shield-check') %}
+    <p class="empty-state-title">No CISA CVE data loaded.</p>
+    <p>Use <strong>Import CVE</strong> above to load the catalogue.</p>
+{% endcall %}
 {% endif %}

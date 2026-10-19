@@ -48,6 +48,8 @@
         var tSort = $('sys-tactic-sort'), shown = b.querySelectorAll('input[name="tactic"]:checked');
         var tLabel = shown.length === 1 ? shown[0].value : (shown.length ? shown.length + ' tactics' : 'All');
         $('sys-tactic-label').textContent = tLabel + (tSort.value === 'off' ? '' : ' · ' + tSort.options[tSort.selectedIndex].text);
+        var nSort = $('sys-sort-name');
+        $('sys-name-label').textContent = nSort.value ? nSort.options[nSort.selectedIndex].text : 'Name';
         var status = $('sys-status'), mapping = $('sys-mapping');
         if (status && mapping) {   // a system's grid only: templates have no coverage
             var cParts = [];
@@ -66,6 +68,7 @@
     }
 
     function refresh() {
+        window.tideFilterSync(bar());
         updateLabels();
         savePrefs();
         if (window.htmx) htmx.trigger(document.body, 'sysFilter');
@@ -83,11 +86,6 @@
             t.value = t.value === 'attack' ? 'alpha' : 'attack';
         }
         refresh();
-    });
-    document.addEventListener('click', function (e) {
-        document.querySelectorAll('#sys-filters .tide-filter-dropdown').forEach(function (d) {
-            if (!d.parentElement.contains(e.target)) d.style.display = 'none';
-        });
     });
 
     // The address bar mirrors the grid's filters (so a refresh or a shared link shows the same
@@ -114,6 +112,7 @@
 
     TIDE.page('#sys-filters', function (b) {
         applyPrefs(b);
+        window.tideFilterSync(b);
         updateLabels();
         var searchTimer = null;
         b.addEventListener('input', function (e) {

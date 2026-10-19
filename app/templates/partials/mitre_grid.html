@@ -4,11 +4,12 @@
   replaces the metric strip, out of band.
   mode: flat | append (a later page) | groups (group heads only) | group_body (one group's items).
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_ui.html" import coverage_pill, source_pills %}
+{% from "macros/modal.html" import empty_state %}
 
 {% macro sort_arrow(key) -%}
-{%- if sort == key %}<span class="rt-sort" aria-hidden="true">{{ '▲' if dir == 'asc' else '▼' }}</span>{% endif -%}
+{%- if sort == key %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-up' if dir == 'asc' else 'chevron-down', '12') }}</span>{% endif -%}
 {%- endmacro %}
 
 {% macro more(view) -%}
@@ -35,7 +36,8 @@
     hx-trigger="click, keyup[key=='Enter']">
     {% for key, label, _sort in spec.columns %}
     {% if key == 'id' %}<td class="cat-cell-id">{{ it.id }}</td>
-    {% elif key == 'name' %}<td class="rt-name"><span class="rt-title" title="{{ it.name }}">{{ it.name }}</span></td>
+    {% elif key == 'name' %}<td class="rt-name"><span class="rt-title" title="{{ it.name }}">{% if it.tactic %}{{ tactic_icon(it.tactic, '12') }} {% endif %}{{ it.name }}</span></td>
+    {% elif key == 'sub' and it.sub_tactics %}<td class="rt-sub" title="{{ it.sub }}">{% for t in it.sub_tactics %}<span class="cat-card__tactic">{{ tactic_icon(t, '12') }} {{ t }}</span>{% endfor %}</td>
     {% elif key == 'coverage' %}<td>{% if it.coverage %}{{ coverage_pill(it.coverage) }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
     {% elif key == 'sources' %}<td>{{ source_pills(it.sources, source_meta) }}</td>
     {% else %}<td class="rt-sub" title="{{ it[key] }}">{{ it[key] if it[key] not in (none, '') else '—' }}</td>
@@ -88,16 +90,15 @@
     {% if view == 'table' %}{% for it in items %}{{ row(it) }}{% endfor %}{{ more('table') }}
     {% else %}{% for it in items %}{% include "components/mitre_card.html" %}{% endfor %}{{ more('cards') }}{% endif %}
 {% elif not total %}
-<div class="empty-state-text sys-empty">
-    {{ icon('search', '22') }}
+{% call empty_state('search') %}
     <p>No {{ spec.title | lower }} match these filters.</p>
-</div>
+{% endcall %}
 {% elif mode == 'groups' %}
     {% for g in groups %}
     <details class="sys-group"{% if loop.first %} open{% endif %}>
         <summary class="sys-group__head">
             <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
-            <span class="sys-group__label">{{ g.label }}</span>
+            <span class="sys-group__label">{% if group == 'tactic' and g.key != 'none' %}{{ tactic_icon(g.label, '14') }} {% endif %}{{ g.label }}</span>
             <span class="sys-group__meta">{{ g.count }} {{ spec.title | lower if g.count != 1 else spec.singular | lower }}</span>
         </summary>
         <div class="sys-group__body" hx-get="{{ g.url }}" hx-swap="innerHTML" hx-include="unset"

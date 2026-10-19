@@ -2,6 +2,8 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "components/window_ui.html" import drag_ctl, sections_item, sections_panel %}
+{% from "macros/modal.html" import close_button, empty_state %}
+{% from "macros/menu.html" import more_button %}
 
 {#
   A system, in Rule Health's shape: header with a "…" menu, a whole-system metric strip, then
@@ -42,10 +44,7 @@
         <p class="page-subtitle">{{ system.description or 'No description.' }}</p>
     </div>
     <div class="rh-more" data-more data-rm-layout>
-        <button name="System Actions" type="button" class="btn btn-secondary rh-more__btn" data-more-toggle
-                aria-haspopup="menu" aria-expanded="false" title="Edit this system, export a report">
-            {{ icon('more-vertical', '18') }}<span class="sr-only">More actions</span>
-        </button>
+        {{ more_button('More actions', title='Edit this system, export a report', attrs='name="System Actions"') }}
         <div class="rh-more__menu" role="menu" hidden>
             <div class="rm-menu__main" data-rm-menu-main>
             <button name="Edit System" type="button" role="menuitem" class="rh-more__item"
@@ -79,12 +78,9 @@
 <section class="card card-padded sys-section" data-section="baselines" data-section-label="Baselines" data-fold="baselines" aria-label="Baselines">
     <div class="sys-section__head">
         {{ collapse_ctl('baselines') }}
-        <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="sys-section__count">{{ bl_count }}</span></h2>
+        <h2 class="section-title sys-section__title">{{ icon('check-square', '18') }} Baselines <span class="rm-fold__count">{{ bl_count }}</span></h2>
         <div class="rh-more" data-more>
-            <button name="Baseline Actions" type="button" class="btn btn-secondary btn-sm rh-more__btn rh-more__btn--sm" data-more-toggle
-                    aria-haspopup="menu" aria-expanded="false" title="Apply baselines, add techniques, generate baselines, choose SIEM coverage">
-                {{ icon('more-vertical', '16') }}<span class="sr-only">Baseline actions</span>
-            </button>
+            {{ more_button('Baseline actions', title='Apply baselines, add techniques, generate baselines, choose SIEM coverage', attrs='name="Baseline Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
                 <button name="Manage Baselines" type="button" role="menuitem" class="rh-more__item"
                         hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
@@ -125,13 +121,13 @@
             {{ loading_state("Loading techniques…") }}
         </div>
     {% else %}
-        <div class="empty-state-text sys-empty">
+        {% call empty_state() %}
             <p>No baselines are applied to this system yet.</p>
             <button name="Apply a Baseline" type="button" class="btn btn-primary btn-sm"
                     hx-get="/api/systems/{{ system.id }}/baselines-dialog" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                 {{ icon_text('plus', 'Apply a baseline', '13') }}
             </button>
-        </div>
+        {% endcall %}
     {% endif %}
     </div>
 </section>
@@ -140,7 +136,7 @@
 <section class="card card-padded sys-section" data-section="devices" data-section-label="Devices" data-fold="devices" aria-label="Devices">
     <div class="sys-section__head">
         {{ collapse_ctl('devices') }}
-        <h2 class="section-title sys-section__title">{{ icon('server', '18') }} Devices <span class="sys-section__count">{{ host_count }}</span></h2>
+        <h2 class="section-title sys-section__title">{{ icon('server', '18') }} Devices <span class="rm-fold__count">{{ host_count }}</span></h2>
         <div class="sys-section__tools">
             <label name="Nessus Upload Hint" class="btn btn-secondary btn-sm" for="nessus-upload"
                    title="Upload a .nessus or .xml scan file to auto-populate devices and packages">
@@ -192,7 +188,7 @@
         <div id="system-heatmap-matrix" class="sys-heatmap__matrix"
              hx-get="/api/heatmap/system/{{ system.id }}/matrix" hx-trigger="intersect once" hx-swap="innerHTML"></div>
     {% else %}
-        <p class="text-muted sys-empty">Apply a baseline to see its heatmap.</p>
+        <p class="rm-empty">Apply a baseline to see its heatmap.</p>
     {% endif %}
     </div>
 </section>
@@ -203,11 +199,11 @@
 <!-- ── Add Device Modal ──────────────────────────────────────────── -->
 <div name="Add Host Modal" id="add-host-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Add Device</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="add-host-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="add-host-modal"') }}
         </div>
         <form name="Submit Hosts" hx-post="/api/inventory/systems/{{ system.id }}/hosts"
               hx-target="#hosts-section"
@@ -215,16 +211,16 @@
               hx-on::after-request="document.getElementById('add-host-modal').style.display='none';this.reset()"
               class="stack gap-md">
             <div>
-                <label class="form-label">Device Name <span class="req">*</span></label>
+                <label class="form-label">Device name <span class="req">*</span></label>
                 <input name="name" class="form-input" required placeholder="e.g. DC-PROD-01">
             </div>
             <div class="form-grid-2 gap-ms">
                 <div>
-                    <label class="form-label">IP Address</label>
+                    <label class="form-label">IP address</label>
                     <input name="ip_address" class="form-input" placeholder="10.0.0.1">
                 </div>
                 <div>
-                    <label class="form-label">Operating System</label>
+                    <label class="form-label">Operating system</label>
                     <input name="os" class="form-input" placeholder="e.g. Windows Server 2022">
                 </div>
             </div>
@@ -240,11 +236,11 @@
 <!-- ── Edit System Modal ─────────────────────────────────── -->
 <div name="Edit Env Modal" id="edit-env-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Edit System</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-env-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-env-modal"') }}
         </div>
         <form name="Update Systems" hx-put="/api/inventory/systems/{{ system.id }}"
               hx-swap="none"
@@ -287,17 +283,15 @@
 <!-- ── Export Report Modal ────────────────────────────────────── -->
 <div id="export-modal-overlay"
      class="modal-overlay" style="display:none;">
-    <div class="modal-content modal-sm modal-360">
+    <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
                 Export System Report
             </h3>
-            <button name="Close Export Modal" data-click="systemPage.exportClose"
-                    type="button" class="modal-x"
-                    title="Close">&#x2715;</button>
+            {{ close_button('name="Close Export Modal" data-click="systemPage.exportClose"') }}
         </div>
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Format</label>
+            <label class="form-label">Format</label>
             <select name="PDF Markdown" id="modal-format"
                     class="form-input">
                 <option value="pdf">PDF</option>
@@ -305,7 +299,7 @@
             </select>
         </div>
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Classification</label>
+            <label class="form-label">Classification</label>
             <select name="Modal Classification" id="modal-classification"
                     class="form-input">
                 {% for clf in classification_options %}
@@ -314,7 +308,7 @@
             </select>
         </div>
         <div class="mb-lg">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Audience</label>
+            <label class="form-label">Audience</label>
             <select name="Executive / CISO Technical / Engineer" id="modal-audience" data-change="systemPage.exportAudience"
                     class="form-input">
                 <option value="executive">Executive / CISO</option>
@@ -322,13 +316,13 @@
             </select>
         </div>
         <div class="mb-lg">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Include Sections</label>
+            <label class="form-label">Include sections</label>
             <label class="flex items-center gap-sm fs-base text-body mb-sm cursor-pointer">
-                <input name="Modal Include Devices" type="checkbox" id="modal-include-devices" class="accent-primary"> Include Devices
+                <input name="Modal Include Devices" type="checkbox" id="modal-include-devices" class="accent-primary"> Include devices
             </label>
         </div>
         <div class="mb-md">
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm">Baselines</label>
+            <label class="form-label">Baselines</label>
             {% if baselines %}
             <div class="scroll-9rem">
                 {% for b in baselines %}
@@ -343,7 +337,7 @@
             {% endif %}
         </div>
         <div id="modal-techniques-field" class="mb-lg" hidden>
-            <label class="block fs-sm fw-600 text-secondary uppercase tracking-wide mb-sm" for="modal-techniques">Technique detail pages</label>
+            <label class="form-label" for="modal-techniques">Technique detail pages</label>
             <select name="Technique Detail" id="modal-techniques"
                     class="form-input">
                 <option value="gaps">Only techniques with no coverage or a known gap</option>

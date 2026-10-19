@@ -7,6 +7,8 @@
      nessus_warnings (List[str] | None)
 #}
 {% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice %}
+{% from "macros/modal.html" import empty_state %}
 
 {% if nessus_hosts is defined %}
 <div class="alert alert-success alert--banner">
@@ -25,26 +27,12 @@
 
 <form class="filters-bar mb-ms items-end flex-nowrap overflow-x-auto" data-submit="hosts.filter">
     <div class="filter-group grow">
-        <label class="form-label">Search Devices</label>
+        <label class="form-label">Search devices</label>
         <input name="Host Search" id="host-search" class="form-input" type="search" placeholder="Search by name, IP, OS or package…"
                data-input="hosts.filter">
     </div>
-    <div class="filter-group">
-        <label class="form-label">Risk Status</label>
-        <select name="Vulnerability Status CVE Found Clean" id="host-cve-filter" class="form-input" data-change="hosts.filter">
-        <option value="all">Vulnerability Status</option>
-        <option value="cve">CVE Found</option>
-        <option value="clean">Clean</option>
-    </select>
-    </div>
-    <div class="filter-group">
-        <label class="form-label">Sort</label>
-        <select name="Sort: Name Sort: CVE Count Sort: Status" id="host-sort" class="form-input" data-change="hosts.sort">
-        <option value="name">Sort: Name</option>
-        <option value="vuln">Sort: CVE Count</option>
-        <option value="status">Sort: Status</option>
-    </select>
-    </div>
+    {{ filter_choice('host-cve-filter', 'cve', 'Risk status', [('all', 'All statuses'), ('cve', 'CVE Found'), ('clean', 'Clean')], 'all', attrs='data-change="hosts.filter"') }}
+    {{ filter_choice('host-sort', 'sort', 'Sort', [('name', 'Name'), ('vuln', 'CVE count'), ('status', 'Status')], 'name', attrs='data-change="hosts.sort"') }}
 </form>
 
 <div id="host-search-count" class="text-muted fs-md mb-sm"></div>
@@ -104,9 +92,8 @@
 
 
 {% else %}
-<div class="empty-centre">
-    {{ icon('server', '40') }}
-    <p class="mt-md">No devices yet.</p>
-    <p class="fs-base">Upload a Nessus scan or add devices manually.</p>
-</div>
+{% call empty_state('server') %}
+    <p class="empty-state-title">No devices yet.</p>
+    <p>Upload a Nessus scan or add devices manually.</p>
+{% endcall %}
 {% endif %}

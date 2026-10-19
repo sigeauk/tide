@@ -6,7 +6,7 @@
   Context: detail (get_mitre_technique_detail), coverage, rules, rule_cards, enabled_rules, sigma_rules,
   nist_capabilities, technique_groups, covered_ttps, ttp_rule_counts, window_kinds, source context.
 #}
-{% from "macros/icons.html" import icon %}
+{% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import panel, related_section, technique_list %}
 
@@ -32,7 +32,7 @@
       {% endif %}
       {% if detail.tactics %}
       <div class="rm-chips"><span class="rm-chips__label">Tactics</span>
-        {% for t in detail.tactics %}<a class="rm-chip" href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ t.name }}</a>{% endfor %}</div>
+        {% for t in detail.tactics %}<a class="rm-chip" href="/mitre/technique?tactic={{ t.id }}&amp;src={{ source_domain }}" title="Every {{ t.name }} technique">{{ tactic_icon(t.name, '12') }} {{ t.name }}</a>{% endfor %}</div>
       {% endif %}
     {% endcall %}
 

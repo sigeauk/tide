@@ -31,6 +31,8 @@
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/mitre_ui.html" import technique_list %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, rule_card, section_menu, sections_item, tag, window_menu %}
+{% from "macros/modal.html" import close_button %}
+{% from "macros/menu.html" import more_button %}
 
 {% set step = detail.step %}
 {% set status = detail.status %}
@@ -111,7 +113,7 @@
         </button>
         {% endcall %}
         {% endif %}
-        <button name="Close Modal" type="button" class="rm-close" data-rm-close aria-label="Close" title="Close (Esc)">{{ icon('x', '18') }}</button>
+        {{ close_button('name="Close Modal" data-rm-close', title='Close (Esc)') }}
       </div>
     </header>
 
@@ -383,8 +385,7 @@
                 </div>
               </form>
               <div class="rh-more" data-more>
-                <button name="Coverage Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
-                        aria-haspopup="menu" aria-expanded="false" title="{{ w.kind_label }} actions" aria-label="Actions for {{ w.title }}">{{ icon('more-horizontal', '14') }}</button>
+                {{ more_button('Actions for ' ~ w.title, title=w.kind_label ~ ' actions', attrs='name="Coverage Actions"') }}
                 <div class="rh-more__menu" role="menu" hidden>
                   <button name="Update Coverage" type="button" role="menuitem" class="rh-more__item" data-click="step.watchEdit"
                           title="Change its type, title, link or rationale">{{ icon('pencil', '14') }}<span>Update</span></button>
@@ -409,8 +410,7 @@
               {% if d.unresolved %}
               {# A mapping whose rule TIDE can't find: Relink points it at the rule, keeping its history. #}
               <div class="rh-more" data-more>
-                <button name="Rule Mapping Actions" type="button" class="rm-iconbtn rm-secmenu__btn" data-more-toggle
-                        aria-haspopup="menu" aria-expanded="false" title="Mapping actions" aria-label="Actions for {{ d.name }}">{{ icon('more-horizontal', '14') }}</button>
+                {{ more_button('Actions for ' ~ d.name, title='Mapping actions', attrs='name="Rule Mapping Actions"') }}
                 <div class="rh-more__menu" role="menu" hidden>
                   <button name="Relink Rule" type="button" role="menuitem" class="rh-more__item"
                           data-relink-id="{{ d.id }}" data-relink-name="{{ d.name }}" data-relink-query="{{ d.relink_query }}"

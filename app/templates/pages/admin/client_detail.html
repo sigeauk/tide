@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
+{% from "macros/modal.html" import close_button %}
 
 {% block title %}{{ client.name }} | Clients | TIDE{% endblock %}
 
@@ -101,17 +102,17 @@
 <!-- Edit Systems Modal -->
 <div name="Edit Systems Modal" id="edit-systems-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Manage Systems — {{ client.name }}</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-systems-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-systems-modal"') }}
         </div>
         <div class="stack gap-md">
             <!-- Current systems with remove -->
             {% if client_systems %}
             <div>
-                <label class="form-label">Current Systems</label>
+                <label class="form-label">Current systems</label>
                 <div class="stack gap-xs">
                     {% for sys in client_systems %}
                     <div class="u-bg-surface list-row list-row--plain">
@@ -142,7 +143,7 @@
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
-                <label class="form-label">Add System</label>
+                <label class="form-label">Add system</label>
                 <select name="system_id" class="form-input" required>
                     <option value="" disabled selected>Select a system&hellip;</option>
                     {% for sys in available_systems %}
@@ -159,7 +160,7 @@
                   hx-target="#client-systems-section" hx-swap="innerHTML"
                   class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-systems-modal').style.display='none'">
-                <label class="form-label">Move from Another Client</label>
+                <label class="form-label">Move from another client</label>
                 <select name="source_client_id" class="form-input" required
                         hx-get="/api/management/clients/{{ client.id }}/move-from/systems"
                         hx-target="#edit-move-from-system-select"
@@ -186,11 +187,11 @@
 <!-- Move System Modal (outside HTMX swap zone) -->
 <div name="Move System Modal" id="move-system-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Move System to Another Client</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="move-system-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="move-system-modal"') }}
         </div>
         <form name="Submit Move System" hx-post="/api/management/clients/{{ client.id }}/move-system"
               hx-target="#client-systems-section" hx-swap="innerHTML"
@@ -203,7 +204,7 @@
                 </p>
             </div>
             <div>
-                <label class="form-label">Target Client <span class="req">*</span></label>
+                <label class="form-label">Target client <span class="req">*</span></label>
                 <select name="target_client_id" id="move-target-client" class="form-input" required
                         hx-get="/api/management/clients/{{ client.id }}/move-check"
                         hx-target="#move-check-result" hx-swap="innerHTML"
@@ -229,17 +230,17 @@
 <!-- Edit Baselines Modal -->
 <div name="Edit Baselines Modal" id="edit-baselines-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Manage Baselines — {{ client.name }}</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-baselines-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-baselines-modal"') }}
         </div>
         <div class="stack gap-md">
             <!-- Current baselines with remove -->
             {% if client_baselines %}
             <div>
-                <label class="form-label">Current Baselines</label>
+                <label class="form-label">Current baselines</label>
                 <div class="stack gap-xs">
                     {% for bl in client_baselines %}
                     <div class="u-bg-surface list-row list-row--plain">
@@ -263,7 +264,7 @@
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
-                <label class="form-label">Add Baseline</label>
+                <label class="form-label">Add baseline</label>
                 <select name="baseline_id" class="form-input" required>
                     <option value="" disabled selected>Select a baseline&hellip;</option>
                     {% for bl in available_baselines %}
@@ -280,7 +281,7 @@
                   hx-target="#client-baselines-section" hx-swap="innerHTML"
                   class="stack gap-ms"
                   hx-on::before-request="if(event.detail.elt===this) document.getElementById('edit-baselines-modal').style.display='none'">
-                <label class="form-label">Clone from Another Client</label>
+                <label class="form-label">Clone from another client</label>
                 <select name="source_client_id" class="form-input" required
                         hx-get="/api/management/clients/{{ client.id }}/clone-baseline/baselines"
                         hx-target="#edit-clone-baseline-select"
@@ -307,11 +308,11 @@
 <!-- Edit Client Modal -->
 <div name="Edit Client Modal" id="edit-client-modal" class="modal-overlay" style="display:none;"
      data-click="backdrop.hide">
-    <div class="modal-content modal-sm">
+    <div class="modal-content modal-md">
         <div class="modal-header">
             <h3 class="modal-title">Edit Client</h3>
-            <button   name="Close Modal" class="modal-x"
-                    data-click="el.hide" data-target="edit-client-modal">&#x2715;</button>
+            {{ close_button('name="Close Modal"
+                    data-click="el.hide" data-target="edit-client-modal"') }}
         </div>
         <form id="edit-client-form" data-submit="clientDetail.submitEdit" data-client-id="{{ client.id }}"
               class="stack gap-md">

@@ -1,4 +1,5 @@
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import close_button %}
 {# In edit mode, Close/Cancel return to the Rule modal instead of dismissing everything; a form opened from
    another window (deploying an Elastic rule from a technique window) names it in cancel_url. #}
 {% set back_url = cancel_url if cancel_url else ("/api/rules/" ~ rule.rule_id ~ "/history-modal?space=" ~ (space | urlencode) ~ (("&siem_id=" ~ (siem_id | urlencode)) if siem_id else "")) if (mode == "edit" and rule) else "" %}
@@ -15,7 +16,8 @@
         {% if mode == 'edit' and rule %}<div class="rm-header__badges"><span class="rm-header__meta">{{ rule.name }}</span></div>{% endif %}
       </div>
       <div class="rm-header__tools">
-        <button name="✕" type="button" class="rm-close" {% if back_url %}data-click="modal.load" data-url="{{ back_url }}"{% else %}data-click="modal.remove"{% endif %} title="{{ 'Back to rule' if back_url else 'Close' }}" aria-label="{{ 'Back to rule' if back_url else 'Close' }}">{{ icon('x', '18') }}</button>
+        {{ close_button(('data-click="modal.load" data-url="' ~ (back_url | e) ~ '"') if back_url else 'data-click="modal.remove"',
+                        'Back to rule' if back_url else 'Close') }}
       </div>
     </header>
     <div class="rm-form-body">
@@ -29,11 +31,11 @@
           <summary>Create Rule</summary>
           <div class="rule-accordion-panel">
             <div class="form-section">
-              <label for="rule-name">Rule Name *</label>
+              <label class="form-label" for="rule-name">Rule name *</label>
               <input class="rule-form-control" type="text" id="rule-name" name="name" required value="{{ form_values.name }}" placeholder="e.g., Suspicious Process Execution">
             </div>
             <div class="form-section">
-              <label for="rule-scope-pair">Target SIEM / Space *</label>
+              <label class="form-label" for="rule-scope-pair">Target SIEM / space *</label>
               {% if scope_locked %}
                 <input type="hidden" name="scope_pair" value="{{ form_values.scope_pair }}">
               {% endif %}
@@ -57,7 +59,7 @@
           <summary>Define Rule</summary>
           <div class="rule-accordion-panel">
             <div class="form-section">
-              <label for="rule-language">Query Language *</label>
+              <label class="form-label" for="rule-language">Query language *</label>
               {% if rule_type_label %}
                 <div class="scope-note">{{ type_note or ("This is a " ~ rule_type_label ~ " rule. Its " ~ rule_type_label ~ " settings aren't shown here and stay as they are in Kibana; change them there.") }}</div>
               {% endif %}
@@ -70,12 +72,12 @@
               </select>
             </div>
             <div class="form-section">
-              <label for="rule-index">Index Patterns</label>
+              <label class="form-label" for="rule-index">Index patterns</label>
               <input class="rule-form-control" type="text" id="rule-index" name="index" value="{{ form_values.index }}" placeholder="logs-*, auditbeat-*">
             </div>
             <div class="form-section">
               {% set _query_required = mode != 'edit' and form_values.type != 'machine_learning' %}
-              <label for="rule-query">Query{% if _query_required %} *{% endif %}</label>
+              <label class="form-label" for="rule-query">Query{% if _query_required %} *{% endif %}</label>
               {# Not required when editing: a KQL rule can match on filters alone, with an empty query. #}
               <textarea class="rule-form-textarea mono" id="rule-query" name="query"{% if _query_required %} required{% endif %} rows="6">{{ form_values.query }}</textarea>
             </div>
@@ -87,7 +89,7 @@
           <div class="rule-accordion-panel">
             <div class="rule-grid-2">
               <div class="form-section">
-                <label for="rule-severity">Severity</label>
+                <label class="form-label" for="rule-severity">Severity</label>
                 <select class="rule-form-select" id="rule-severity" name="severity">
                   <option value="low" {% if form_values.severity == 'low' %}selected{% endif %}>Low</option>
                   <option value="medium" {% if form_values.severity == 'medium' %}selected{% endif %}>Medium</option>
@@ -96,28 +98,28 @@
                 </select>
               </div>
               <div class="form-section">
-                <label for="rule-risk-score">Risk Score</label>
+                <label class="form-label" for="rule-risk-score">Risk score</label>
                 <input class="rule-form-control" type="number" min="0" max="100" id="rule-risk-score" name="risk_score" value="{{ form_values.risk_score }}" placeholder="47">
               </div>
             </div>
             <div class="form-section">
-              <label for="rule-description">Description</label>
+              <label class="form-label" for="rule-description">Description</label>
               <textarea class="rule-form-textarea" id="rule-description" name="description" rows="3" placeholder="Rule description or analyst summary">{{ form_values.description }}</textarea>
             </div>
             <div class="form-section">
-              <label for="rule-author">Author</label>
+              <label class="form-label" for="rule-author">Author</label>
               <input class="rule-form-control" type="text" id="rule-author" name="author" value="{{ form_values.author }}" placeholder="Security Team">
             </div>
             <div class="form-section">
-              <label for="rule-tags">Tags (optional, comma-separated)</label>
+              <label class="form-label" for="rule-tags">Tags (optional, comma-separated)</label>
               <input class="rule-form-control" type="text" id="rule-tags" name="tags" value="{{ form_values.tags }}" placeholder="detection, process, suspicious">
             </div>
             <div class="form-section">
-              <label for="rule-timestamp-override">Timestamp Override</label>
+              <label class="form-label" for="rule-timestamp-override">Timestamp override</label>
               <input class="rule-form-control" type="text" id="rule-timestamp-override" name="timestamp_override" value="{{ form_values.timestamp_override }}" placeholder="None: the rule uses @timestamp">
             </div>
             <div class="form-section">
-              <label>MITRE ATT&CK Techniques</label>
+              <label class="form-label">MITRE ATT&CK techniques</label>
               <input type="hidden" id="rule-mitre-values" name="mitre_ids" value="{{ form_values.mitre_ids | join(', ') }}">
               <div id="mitre-builder" class="flex flex-col gap-sm"></div>
               <script type="application/json" data-technique-groups>{{ technique_groups | tojson }}</script>
@@ -132,17 +134,17 @@
               {% endif %}
             </div>
             <div class="form-section">
-              <label for="rule-highlighted-fields">Custom Highlighted Fields</label>
+              <label class="form-label" for="rule-highlighted-fields">Custom highlighted fields</label>
               <input class="rule-form-control" type="text" id="rule-highlighted-fields" name="highlighted_fields" value="{{ form_values.highlighted_fields }}" placeholder="user.name, process.name, source.ip">
               <div class="rule-help">Fields to surface prominently in investigation context and SIEM payload.</div>
             </div>
             <div class="form-section">
-              <label for="rule-note">Investigation Guide</label>
+              <label class="form-label" for="rule-note">Investigation guide</label>
               <textarea class="rule-form-textarea" id="rule-note" name="note" rows="3" placeholder="Optional investigation guidance">{{ form_values.note }}</textarea>
             </div>
             {% if mode != 'edit' %}
             <div class="form-section">
-              <label for="rule-reason">Reason for Change</label>
+              <label class="form-label" for="rule-reason">Reason for change</label>
               <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Document the change before saving">{{ form_values.reason }}</textarea>
               <div class="rule-help">Optional context for analysts and changelog reviewers.</div>
             </div>
@@ -155,11 +157,11 @@
           <div class="rule-accordion-panel">
             <div class="rule-grid-2">
               <div class="form-section">
-                <label for="rule-interval">Run every (optional)</label>
+                <label class="form-label" for="rule-interval">Run every (optional)</label>
                 <input class="rule-form-control" type="text" id="rule-interval" name="interval" value="{{ form_values.interval }}" placeholder="5m">
               </div>
               <div class="form-section">
-                <label for="rule-lookback">Look back (optional)</label>
+                <label class="form-label" for="rule-lookback">Look back (optional)</label>
                 <input class="rule-form-control" type="text" id="rule-lookback" name="from" value="{{ form_values.from }}" placeholder="now-6m">
               </div>
             </div>
@@ -170,7 +172,7 @@
           <summary>Action</summary>
           <div class="rule-accordion-panel">
             <div class="form-section">
-              <label for="rule-enabled">Status</label>
+              <label class="form-label" for="rule-enabled">Status</label>
               <select class="rule-form-select" id="rule-enabled" name="enabled">
                 <option value="true" {% if form_values.enabled %}selected{% endif %}>Enabled</option>
                 <option value="false" {% if not form_values.enabled %}selected{% endif %}>Disabled</option>
@@ -184,7 +186,7 @@
       <div class="rm-form-actions">
         {% if mode == 'edit' %}
         <div class="rm-form-reason">
-          <label for="rule-reason">Reason for Change *</label>
+          <label class="form-label" for="rule-reason">Reason for change *</label>
           <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Why you're changing this rule. Recorded in its History.">{{ form_values.reason }}</textarea>
         </div>
         {% endif %}
@@ -194,6 +196,7 @@
         {% endif %}
         {# Why the form wasn't saved: a field to fill in (rule_form.js) or the server's refusal. #}
         <div id="rule-form-error" class="rm-form-error" aria-live="assertive"></div>
+        <button name="Cancel" type="button" class="btn btn-secondary" {% if back_url %}data-click="modal.load" data-url="{{ back_url }}"{% else %}data-click="modal.remove"{% endif %}>Cancel</button>
         <button   name="Submit Rule Form" type="submit" class="btn btn-primary">
           <span class="htmx-indicator">{{ icon('loader', '14', 'spin') }}</span>
           {% if mode == 'edit' %}
@@ -202,7 +205,6 @@
             {{ icon_text('plus-circle', submit_label, '14') }}
           {% endif %}
         </button>
-        <button name="Cancel" type="button" class="btn btn-secondary" {% if back_url %}data-click="modal.load" data-url="{{ back_url }}"{% else %}data-click="modal.remove"{% endif %}>Cancel</button>
       </div>
     </form>
     {% if mode == 'edit' %}
@@ -210,7 +212,7 @@
          with the rule window's other actions; merging is Add link + Compare there too. #}
       {% if rule.deprecated %}
       <div class="form-section mt-ms">
-        <label for="replacement-scope">Recreate in</label>
+        <label class="form-label" for="replacement-scope">Recreate in</label>
         <div class="flex gap-sm">
           <select class="rule-form-select" id="replacement-scope" name="replacement_scope">
             {% for s in scope_options %}
