@@ -10,6 +10,7 @@
 {% from "macros/filters.html" import filter_dropdown, filter_choice %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}Sigma Rules | TIDE{% endblock %}
 
@@ -24,7 +25,7 @@
 {% block content %}
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-header__text">
-        <h1 class="page-title-hero">Sigma Rules</h1>
+        <h1 class="page-title-hero">Sigma Rules {{ help_button('sigma') }}</h1>
         <p class="page-subtitle">SigmaHQ's detection rules, built into TIDE. Pick one to see it converted for your SIEM with the settings below; Convert opens it in the rule form to deploy.</p>
     </div>
     <div class="rh-more" data-more>

@@ -192,7 +192,7 @@ class RuleFilters(BaseModel):
     severity: Optional[Severity] = None
     min_score: Optional[int] = None
     max_score: Optional[int] = None
-    # Lifecycle state checklist: any of "unlinked" (Live), "linked", "offline", "deprecated"
+    # Lifecycle state checklist: any of "unlinked", "linked", "offline", "deprecated"
     # (database.normalize_rule_states; an old "live" means both of the first two). Empty = all.
     state: List[str] = Field(default_factory=list)
     # Upstream checklist: any of "update", "current", "retired", "removed" (rule_origins.STATES) or

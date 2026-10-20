@@ -168,7 +168,7 @@ def _merge_rule_sync(db, client_id: str, rule_id: str, siem_id: str, space: str,
             )
         except Exception as exc:
             logger.exception("Merging '%s' onto '%s' failed", donor_rule.name, dest_rule.name)
-            return 500, f"Error: {exc}", None, None
+            return 500, f"Could not merge the rules: {exc}", None, None
         success, message = result[:2]
         if not success:
             return 400, f"Could not merge: {message}", None, None
@@ -303,18 +303,39 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     if not rule.raw_data:
         return 400, "TIDE has no stored copy of this rule to restore from.", None
 
+    # A rule held under one of Elastic's rule ids comes back under a new one, keeping Elastic's rule
+    # as its upstream: a custom rule under Elastic's id would stop Kibana installing Elastic's rule.
+    import copy
+    import uuid
+    from app.services import rule_origins
+    with db.get_connection() as conn:
+        elastic_id = rule_origins.elastic_id_held(conn, rule.raw_data, rule_id)
+    rule_data, new_rule_id = rule.raw_data, None
+    if elastic_id:
+        new_rule_id = str(uuid.uuid4())
+        rule_data = {**copy.deepcopy(rule.raw_data), "rule_id": new_rule_id}
+
     ok, message, saved_id = restore_detection_rule(
-        rule.raw_data, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
+        rule_data, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
     )
     if not ok:
-        return 400, f"Restore failed: {message}", None
+        return 400, f"Could not restore the rule: {message}", None
 
     # TIDE's row is keyed by the id it last synced. If that is the rule's own Kibana rule_id it survives
     # the restore, so the row just becomes active again. If it was the saved-object id, Kibana has now
     # issued a new one: keep the old row for history and move baseline links to the new identity.
     kibana_rule_id = (rule.raw_data or {}).get("rule_id")
     effective_rule_id = rule_id
-    if kibana_rule_id and kibana_rule_id == rule_id:
+    if new_rule_id:
+        with db.get_connection() as conn:
+            if not rule_origins.get(conn, (rule_id, siem_id, space)):
+                rule_origins.record(conn, (rule_id, siem_id, space), "elastic", elastic_id, "first_seen", username,
+                                    version=rule.raw_data.get("version"))
+        db.rekey_rule(rule_id, new_rule_id, siem_id, space, object_id=saved_id)
+        db.set_rule_deprecated(new_rule_id, siem_id, space, False)
+        effective_rule_id = new_rule_id
+        message += f" under its own rule id, {new_rule_id} (Elastic's is {elastic_id})"
+    elif kibana_rule_id and kibana_rule_id == rule_id:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
     elif saved_id and saved_id != rule_id:
         db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space, actor=username)
@@ -322,12 +343,15 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     else:
         db.set_rule_deprecated(rule_id, siem_id, space, False)
     db.record_rule_history(
-        rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="restored",
+        rule_id=new_rule_id or rule_id, siem_id=siem_id, space=space, client_id=client_id, action="restored",
         actor_user_id=user_id, actor_name=username,
         detail={"message": message, "restored_disabled": True},
     )
     logger.info("Restored deprecated rule '%s' in %s by %s", rule.name, space, username)
-    return 200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.', effective_rule_id
+    own_id = (f" It has its own rule id now, so Kibana can still install Elastic's own rule here; TIDE still shows "
+              "Elastic's updates for it." if new_rule_id else "")
+    return (200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.{own_id}',
+            effective_rule_id)
 
 
 @router.post("/{rule_id}/restore", response_class=HTMLResponse)
@@ -349,7 +373,101 @@ async def restore_rule(
         return _toast("danger", message, status)
     from app.api.rules import sync_single_rule
     await _run_in_context(sync_single_rule, db, client_id, effective_rule_id, siem_id, space, user.id, username)
-    return _toast("success", message, 200, trigger="refreshRules")
+    response = _toast("success", message, 200, trigger="refreshRules")
+    if effective_rule_id != rule_id:
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(effective_rule_id, siem_id, space))
+    return response
+
+
+def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str,
+                      copy_id: str = ""):
+    """Give a custom rule holding one of Elastic's rule ids a rule id of its own (blocking).
+
+    Without ``copy_id`` it is this rule (the rule TIDE holds). With ``copy_id`` it is the custom copy
+    Kibana held beside this prebuilt rule under the same rule id at the last sync, which TIDE does not
+    hold; only a copy that sync reported is accepted. In TIDE everything this destination holds for
+    the rule moves to the new id (``rekey_rule``), and the rule keeps Elastic's rule as its upstream,
+    so Elastic's updates are still shown. Returns ``(status, message, new_rule_id)``."""
+    import uuid
+    from app import elastic_helper
+    from app.api.rules import sync_single_rule
+    from app.services import rule_origins
+
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule:
+        return 404, "Rule not found.", None
+    if rule.deprecated:
+        return 400, "Kibana no longer has this rule.", None
+    siem = next((s for s in (db.get_client_siems(client_id) or [])
+                 if s.get("id") == siem_id and str(s.get("space") or "default") == space), None)
+    if not siem:
+        return 400, "This rule's destination is no longer linked to this client.", None
+    raw = rule.raw_data or {}
+    elastic_id = str(raw.get("rule_id") or rule_id)
+    if copy_id:
+        copy = next((c for c in db.shared_rule_id_copies(siem_id, space, rule_id) if c.get("id") == copy_id), None)
+        if not copy or copy.get("prebuilt"):
+            return 400, "Kibana no longer reports that copy. Sync, then try again.", None
+        object_id, name, version = copy_id, copy.get("name") or rule.name, None
+    else:
+        if rule_origins.is_prebuilt(raw):
+            return 400, "This is one of Elastic's prebuilt rules, so it keeps Elastic's rule id.", None
+        object_id, name, version = str(raw.get("id") or ""), rule.name, raw.get("version")
+    if not object_id:
+        return 400, "TIDE doesn't have this rule's Kibana id. Sync this rule, then try again.", None
+
+    ok, message, created = elastic_helper.give_rule_own_id(object_id, space, siem.get("kibana_url"),
+                                                           siem.get("api_token_enc"))
+    if not ok:
+        return 502, message, None
+    new_id = str(created.get("rule_id") or uuid.uuid4())
+    new_key = (new_id, siem_id, space)
+    with db.get_connection() as conn:
+        if not copy_id and not rule_origins.get(conn, (rule_id, siem_id, space)):
+            rule_origins.record(conn, (rule_id, siem_id, space), "elastic", elastic_id, "first_seen", username,
+                                version=version)
+    if copy_id:
+        rule_origins.record_for_client(db, client_id, new_key, "elastic", elastic_id, "copied", username,
+                                       version=created.get("version"))
+    else:
+        db.rekey_rule(rule_id, new_id, siem_id, space, object_id=created.get("id"))
+    text = (f'Gave "{name}" its own rule id, {new_id}, in place of Elastic\'s {elastic_id}. Kibana keeps its '
+            "past alerts and runs with the original. TIDE still shows Elastic's updates for it.")
+    db.record_rule_history(rule_id=new_id, siem_id=siem_id, space=space, client_id=client_id, action="new_rule_id",
+                           actor_user_id=user_id, actor_name=username,
+                           detail={"message": text, "previous_rule_id": elastic_id})
+    if copy_id:
+        db.record_rule_history(rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="new_rule_id",
+                               actor_user_id=user_id, actor_name=username,
+                               detail={"message": f'Kibana\'s custom copy of this rule, "{name}", now has its own '
+                                                  f"rule id, {new_id}."})
+    sync_single_rule(db, client_id, new_id, siem_id, space, user_id, username)
+    logger.info("Rule %s in %s/%s given its own rule id %s by %s", elastic_id, siem_id, space, new_id, username)
+    return 200, text, new_id
+
+
+@router.post("/{rule_id}/own-rule-id", response_class=HTMLResponse)
+async def own_rule_id(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+    copy_id: str = Query(""),
+):
+    """Give a custom rule holding one of Elastic's rule ids its own rule id (``_own_rule_id_sync``),
+    then reopen the rule window on it."""
+    username = user.name or user.username if user else "Unknown"
+    status, message, new_id = await _run_in_context(
+        _own_rule_id_sync, db, user.id, username, client_id, rule_id, siem_id, space, copy_id,
+    )
+    if status != 200:
+        return _toast("danger", f"Could not give this rule its own rule id: {message}", status)
+    response = _toast("success", message, 200, trigger="refreshRules")
+    response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(new_id, siem_id, space))
+    return response
 
 
 def _toast(kind: str, message: str, status_code: int = 200, trigger: Optional[str] = None) -> HTMLResponse:
@@ -535,6 +653,13 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             return 409, (f'"{clashing_name}" already exists at {target_name} with this same rule id. '
                          f"{verdict}"), rule.name, None, None
         new_rule_id = str(uuid.uuid4())
+    # A rule under one of Elastic's rule ids is copied under a new one: a custom rule holding
+    # Elastic's id would stop Kibana installing Elastic's rule there. It keeps Elastic's rule as its
+    # upstream (rule_origins), so its updates are still shown.
+    with db.get_connection() as conn:
+        elastic_id = rule_origins.elastic_id_held(conn, rule.raw_data, rule_id)
+    if elastic_id and not new_rule_id:
+        new_rule_id = str(uuid.uuid4())
 
     rule_data = rule.raw_data
     if new_rule_id:
@@ -554,14 +679,14 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
         )
     except Exception as e:
         logger.exception(f"Exception moving rule '{rule.name}'")
-        return 500, f"Error: {e}", rule.name, None, None
+        return 500, f"Could not move the rule: {e}", rule.name, None, None
 
     success, _kibana_message = result[:2]
     target_rule_id = result[2] if len(result) > 2 else (new_rule_id or rule_id)
     actions_note = result[3] if len(result) > 3 else ""
     if not success:
         logger.error(f"Failed to move rule '{rule.name}': {_kibana_message}")
-        return 400, f"Move failed: {_kibana_message}", rule.name, None, None
+        return 400, f"Could not move the rule: {_kibana_message}", rule.name, None, None
     if new_rule_id and delete_source:
         # promote_rule_to_production deletes the source by the payload's rule id, which is the
         # copy's new one: delete the original by its own, once the copy exists.
@@ -593,12 +718,18 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
     # The copy keeps where the rule came from (Elastic's or the Sigma rules); under a new rule id
     # it also records this rule as the one it was copied from.
     with db.get_connection() as conn:
-        rule_origins.copy(conn, source_key, (target_rule_id, target_siem_id, target_space),
-                          "copied", username, parent=bool(new_rule_id))
+        if not rule_origins.copy(conn, source_key, (target_rule_id, target_siem_id, target_space),
+                                 "copied", username, parent=bool(new_rule_id)) and elastic_id:
+            rule_origins.record(conn, (target_rule_id, target_siem_id, target_space), "elastic", elastic_id,
+                                "copied", username, parent=source_key if new_rule_id else None,
+                                version=(rule.raw_data or {}).get("version"))
 
     dest_name = target_name
-    under = (f" under a new rule id, because {dest_name} already has a different rule with this one's id"
-             if new_rule_id else "")
+    under = ("" if not new_rule_id
+             else f" under a new rule id, because {dest_name} already has a different rule with this one's id"
+             if state == "found" else
+             " under a new rule id, so Kibana can still install Elastic's own rule there. TIDE still shows "
+             "Elastic's updates for it")
     db.set_rule_deprecated(rule_id, source_siem_id, source_space, delete_source)
     if delete_source:
         # A true move: baseline references follow the rule to its new home.

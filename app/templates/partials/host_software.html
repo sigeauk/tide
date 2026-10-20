@@ -69,12 +69,12 @@
         <div class="sw-card__cpe" title="{{ sw.cpe }}">{{ sw.cpe }}</div>
         {% endif %}
         <div class="sw-card__actions">
-            <button  name="Close Modal" class="btn btn-secondary btn-sm py-xs px-sm fs-xs"
+            <button  name="Close Modal" class="btn btn-secondary btn-sm"
                     data-click="hosts.swEdit" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}"
                     title="Edit">
                 {{ icon('pencil', '11') }} Edit
             </button>
-            <button name="Delete Software" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
+            <button name="Delete Software" class="btn btn-danger btn-sm"
                     hx-delete="/api/inventory/software/{{ sw.id }}?host_id={{ host.id }}"
                     hx-confirm="Remove '{{ sw.name }}'?"
                     hx-target="#software-section"
@@ -109,11 +109,11 @@
                    placeholder="cpe:2.3:a:…">
         </div>
         <div class="flex gap-xs self-end">
-            <button name="Cancel" type="button" class="btn btn-secondary btn-sm fs-sm py-xs px-sm"
+            <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
                     data-click="hosts.swCancel" data-display="sw-display-{{ sw.id }}" data-edit="sw-edit-{{ sw.id }}">
                 Cancel
             </button>
-            <button name="Save" type="submit" class="btn btn-primary btn-sm fs-sm py-xs px-sm">
+            <button name="Save" type="submit" class="btn btn-primary btn-sm">
                 {{ icon('save', '11') }} Save
             </button>
         </div>

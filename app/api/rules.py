@@ -15,6 +15,7 @@ from typing import Optional, Any, List, Dict, Tuple
 
 from app.api.deps import DbDep, CurrentUser, RequireUser, SettingsDep, ActiveClient
 from app.services.database import validation_key, rule_state
+from app.services.rule_origins import is_prebuilt
 from app.models.rules import RuleFilters, RuleHealthMetrics, DetectionRule
 
 import logging
@@ -449,6 +450,8 @@ def _build_rule_form_context(db, client_id: str, username: str, form_action: str
         "rule_type_label": _rule_type_label(form_values["type"]) if rule and form_values["type"] not in _LANGUAGE_TYPES else "",
         "scope_locked": scope_locked,
         "rule": rule,
+        # One of Elastic's prebuilt rules still in Kibana: the form says what saving does to it.
+        "prebuilt": bool(rule and not rule.deprecated and is_prebuilt(rule.raw_data)),
         "siem_id": getattr(rule, "siem_id", "") if rule else "",
         "space": getattr(rule, "space", "default") if rule else "default",
         # A converted Sigma rule: Create records it as the rule's origin.
@@ -773,6 +776,8 @@ def _build_rule_history_entries(history: list[dict], score_history: list[dict]) 
             badge = "Validated"
         elif action == "edited":
             badge = "Edit"
+        elif action == "new_rule_id":
+            badge = "New rule id"
         elif action:
             badge = action.replace("_", " ").title()
         else:
@@ -1150,12 +1155,7 @@ def list_rules(
         return response
     except Exception as e:
         logger.exception(f"Failed to list rules (sort={sort_by}, space={space}): {e}")
-        return HTMLResponse(
-            '<div class="empty-state">'
-            '<p class="empty-state-title">Error loading rules</p>'
-            '<p>An error occurred while loading rules. Check server logs for details.</p>'
-            '</div>'
-        )
+        return HTMLResponse('<div class="alert alert-danger">Could not load the rules. Check the server logs for details.</div>')
 
 
 @router.get("/metrics", response_class=HTMLResponse)
@@ -1217,9 +1217,11 @@ def filtered_rule_metrics(db, client_id: str, params: dict) -> dict:
     # longer in client_siem_map after a mapping change).
     _prune_orphan_scopes(metrics, db, client_id)
     _apply_lifecycle_counts(metrics, db, client_id, deduped_rules)
+    from app.services import rule_issues
     return {
         "metrics": metrics,
         "last_sync_time": get_last_sync_time(all_rules),
+        "last_sync": rule_issues.freshness(db, client_id),
         "space_labels": _build_space_labels(db, client_id),
         "scope_labels": _build_scope_labels(db, client_id),
     }
@@ -1440,7 +1442,7 @@ async def test_rule(
     except Exception as e:
         logger.exception(f"Test rule failed for {rule_id}")
         return HTMLResponse(
-            f'<div class="test-result test-error">Error: {str(e)}</div>',
+            f'<div class="test-result test-error">Could not run the test: {str(e)}</div>',
             status_code=500
         )
 
@@ -1700,9 +1702,9 @@ def _start_rule_sync(db, user, client_id: str, force_mapping: bool, siem_id: Opt
             )
 
     if dest_name:
-        label = f"Initialising full mapping sync for {dest_name}..." if force_mapping else f"Initialising sync for {dest_name}..."
+        label = f"Initialising full mapping sync for {dest_name}…" if force_mapping else f"Initialising sync for {dest_name}…"
     else:
-        label = "Initialising full mapping sync..." if force_mapping else "Initialising sync..."
+        label = "Initialising full mapping sync…" if force_mapping else "Initialising sync…"
     job_id = _start_sync_job(client_id, message=label, actor=user.username, retry_of=retry_of,
                              scope={"force_mapping": force_mapping, "siem_id": only_siem_id, "space": only_space,
                                     "destination": dest_name})
@@ -1719,7 +1721,7 @@ def _start_rule_sync(db, user, client_id: str, force_mapping: bool, siem_id: Opt
         '     hx-swap="outerHTML"'
         '     class="sync-tracker sync-running">'
         '    <span class="sync-spinner"></span>'
-        '    <span>Sync starting...</span>'
+        '    <span>Sync starting…</span>'
         '</div>'
     )
 
@@ -1790,7 +1792,7 @@ async def create_rule(
             None,
         )
         if not siem:
-            return _form_error("Unable to resolve SIEM credentials for selected pair.", 404)
+            return _form_error("Could not find the SIEM details for that destination.", 404)
 
         success, message, new_rule_id = await run_in_threadpool(elastic_helper.create_detection_rule,
             rule_data,
@@ -1799,7 +1801,7 @@ async def create_rule(
             api_key=siem.get("api_token_enc"),
         )
         if not success:
-            return _form_error(f"Failed to create rule: {message}", 502)
+            return _form_error(f"Could not create the rule: {message}", 502)
 
         db.record_rule_history(
             rule_id=new_rule_id,
@@ -1825,7 +1827,7 @@ async def create_rule(
         return HTMLResponse('<div hidden data-start-sync></div>')
     except Exception as e:
         logger.exception("create_rule failed")
-        return _form_error(f"Error: {e}", 500)
+        return _form_error(f"Could not create the rule: {e}", 500)
 
 
 @router.get("/{rule_id}/history", response_class=HTMLResponse)
@@ -2323,14 +2325,22 @@ def _build_rule_modal_context(
     ]
     from app.services import rule_origins
     key = (rule.rule_id, actual_siem, space)
+    raw = rule.raw_data or {}
     with db.get_connection() as conn:
         upstream = rule_origins.statuses(conn, [key]).get(key)
+        # A custom rule under one of Elastic's rule ids can be given its own (promotion.own_rule_id).
+        holds_elastic_id = (not rule.deprecated and not is_prebuilt(raw)
+                            and bool(rule_origins.elastic_id_held(conn, raw, rule.rule_id)))
+    # Custom rules Kibana held beside this prebuilt one under the same rule id at the last sync.
+    shared_copies = db.shared_rule_id_copies(actual_siem, space, rule.rule_id) if is_prebuilt(raw) else []
     if upstream and upstream["parent"]:
         parent = db.get_rule_by_id(upstream["parent"][0], upstream["parent"][2], siem_id=upstream["parent"][1],
                                    client_id=client_id)
         upstream["parent_name"] = parent.name if parent else ""
     return {
         "upstream": upstream,
+        "holds_elastic_id": holds_elastic_id,
+        "shared_copies": shared_copies,
         "rule": rule,
         "space": space,
         "siem_id": actual_siem,
@@ -2717,6 +2727,9 @@ def sync_single_rule(db, client_id: str, rule_id: str, siem_id: Optional[str], s
         # session. The score-over-time chart is the accurate record; this message just confirms
         # the refresh happened.
         message = "Rule refreshed from Elastic and its field mappings re-checked."
+    # What needs action on this rule now (Rule Monitoring); a deprecated rule's issues are resolved.
+    from app.services import rule_issues
+    rule_issues.refresh_tenant(db, client_id, rule_keys=[(rule_id, siem_id, space)])
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
         action=action, actor_user_id=actor_user_id, actor_name=actor_name,
@@ -2793,7 +2806,7 @@ async def restore_rule(
         api_key=full_target.get("api_token_enc"),
     )
     if not success or not new_rule_id:
-        return HTMLResponse(f'<div class="alert alert-danger">Restore failed: {message}</div>', status_code=400)
+        return HTMLResponse(f'<div class="alert alert-danger">Could not restore the rule: {message}</div>', status_code=400)
 
     # Refresh the tenant cache so the new Elastic ID exists before moving
     # baseline references and recording the migration pair.

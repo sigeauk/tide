@@ -41,6 +41,7 @@ _REGISTRY: dict = {
     "/heatmap":        [_HOME, ("Heatmap", None)],
     "/threats":        [_HOME, ("Threats", None)],
     "/rules":          [_HOME, ("Rules", None)],
+    "/rule-monitoring": [_HOME, ("Rule Monitoring", None)],
     "/sigma":          [_HOME, ("Sigma Rules", None)],
     "/elastic":        [_HOME, ("Elastic Rules", None)],
     "/hunting":        [_HOME, ("Hunting", None)],

@@ -2163,8 +2163,9 @@ a:hover { color: var(--color-primary); }
 .btn-primary {
   background: var(--color-primary);
   color: var(--color-bg-base);
-  border: none;
-  border-top: 1px solid var(--color-primary-hover);
+  /* A border all round, like every other button, so a primary is the same size as the Cancel beside it. */
+  border: 1px solid var(--color-primary);
+  border-top-color: var(--color-primary-hover);
 }
 
 .btn-primary:hover { background: var(--color-primary-hover); }
@@ -2430,8 +2431,6 @@ a:hover { color: var(--color-primary); }
 /* Sigma's pipeline / template pickers: the menu under the button. */
 
 /* Placeholder text while a section loads. */
-.loading-note         { padding: var(--sp-md); color: var(--color-text-secondary); }
-.loading-note--center { padding: var(--sp-xl); text-align: center; }
 /* A short paragraph explaining a section, under its heading. */
 .section-intro { font-size: var(--fs-base); margin: 0 0 var(--sp-md); max-width: 80ch; color: var(--color-text-secondary); }
 
@@ -3170,16 +3169,6 @@ a:hover { color: var(--color-primary); }
 .htmx-request .htmx-indicator,
 .htmx-request.htmx-indicator { opacity: 1; }
 
-.loading-spinner {
-  display: inline-block;
-  width: 1rem;
-  height: 1rem;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
 /* HTMX body-level loading */
 .htmx-request { cursor: wait; }
 .htmx-request .main-content {
@@ -3665,6 +3654,16 @@ details:not([open]) > summary > .docs-toc__chev { transform: rotate(-90deg); }
   font-weight: 700;
   margin-bottom: 0.5rem;
 }
+/* A page's ? beside its title (macros/help.html), and the help it opens in the side panel. */
+.help-btn {
+  display: inline-flex; align-items: center; justify-content: center; vertical-align: middle;
+  width: 1.75rem; height: 1.75rem; margin-left: 0.35rem; padding: 0;
+  border: 0; border-radius: 50%; background: transparent; color: var(--color-text-muted); cursor: pointer;
+}
+.help-btn:hover, .help-btn:focus-visible { color: var(--color-primary); background: var(--color-bg-hover); }
+.help-panel__body { font-size: var(--fs-sm); }
+.help-panel__body h3 { font-size: var(--fs-base); margin: 1.25rem 0 0.5rem; }
+.help-panel__more { margin-top: 1rem; }
 
 .section-title {
   font-size: 0.9rem;
@@ -3857,6 +3856,9 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
 .dash-field__pair { display: flex; gap: 0.4rem; }
 .dash-field__pair .form-input { flex: 1 1 0; min-width: 0; }
 .dash-field .dash-settings__checks label { font-weight: 400; }
+/* A long list of choices (Rule Monitoring's issues): the whole row, in columns. */
+.dash-field--wide { grid-column: 1 / -1; }
+.dash-settings__checks--cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); }
 
 .tech-grid {
   display: grid;
@@ -4556,6 +4558,7 @@ a.metric-card--link:focus-visible { outline: 2px solid var(--color-primary); out
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+  align-items: center;
 }
 
 /* A refusal or warning shown inside the dialog that caused it, next to the control the user
@@ -6005,32 +6008,6 @@ body.is-resizing-slide-panel {
 
 
 /* ================================================================
- * LOADING SPINNER (heatmap variant)
- * ================================================================ */
-.loading-spinner.heatmap-spinner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  width: auto;
-  height: auto;
-  border: 0;
-  border-radius: 0;
-  padding: 2rem;
-  color: var(--color-text-muted);
-  animation: none;
-}
-
-.spinner {
-  width: 24px;
-  height: 24px;
-  border: 2px solid var(--color-border);
-  border-top-color: var(--color-primary);
-  border-radius: 50%;
-  animation: spin 0.8s linear infinite;
-}
-
-/* ================================================================
  * 4.1.0 P5 — UI standards: breadcrumb, page-header, loading-state.
  * Centralised so every page renders the same chrome. The legacy
  * inline-styled breadcrumbs in baseline_detail / cve_detail /
@@ -6119,6 +6096,9 @@ body.is-resizing-slide-panel {
 .loading-state__label {
   font-size: 0.9rem;
 }
+.loading-state--inline { flex-direction: row; justify-content: flex-start; gap: 0.5rem; padding: 0.5rem 0; text-align: left; }
+.loading-state--inline .loading-state__label { font-size: var(--fs-sm); }
+.infinite-scroll-sentinel .loading-state--inline, .lib-more .loading-state--inline { justify-content: center; }
 
 
 /* ================================================================
@@ -7355,7 +7335,7 @@ body.is-resizing-slide-panel {
    counts for :first-child (display:none doesn't remove it from the DOM), so the shadow above
    was landing on an invisible cell with nothing showing. Outside bulk-edit mode, put it on the
    cell that's actually first on screen instead. */
-.rule-browser-page:not(.bulk-on) .rule-row td:first-child + td { box-shadow: inset 3px 0 0 var(--edge); }
+.rule-browser-page:not(.bulk-on) #rules-grid .rule-row td:first-child + td { box-shadow: inset 3px 0 0 var(--edge); }
 .rule-row:hover td { background: var(--color-bg-surface-hover); }
 .rule-row:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
 .rt-name { white-space: normal; }
@@ -7400,6 +7380,8 @@ body.is-resizing-slide-panel {
 /* right side, one gap throughout: primary action(s) · prev/next · "…" · close */
 .rm-header__tools { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 0.5rem; flex-shrink: 0; }
 .rm-header__actions { display: flex; align-items: center; gap: 0.5rem; }
+/* Standard-size text, as tall as the ‹ › ⋮ × boxes beside it */
+.rm-header__actions .btn { height: 2rem; padding: 0 0.875rem; }
 .rm-header__actions .btn:not(.htmx-request) > .htmx-indicator { display: none; }
 .rm-valdate { font-size: 0.7rem; font-variant-numeric: tabular-nums; }
 /* "…" actions menu: the dots turn into a spinner while Sync/Restore run (hx-indicator) */
@@ -8322,7 +8304,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .history-kind-coverage .history-action-badge { color: var(--color-info); border-color: color-mix(in srgb, var(--color-info) 35%, var(--color-border)); background: color-mix(in srgb, var(--color-info) 18%, var(--color-bg-surface)); }
 
 .sm-picker__results { margin-top: 0.5rem; border: 1px solid var(--color-border-muted); border-radius: var(--radius-md); overflow: hidden; max-height: 22rem; overflow-y: auto; }
-.sm-picker__loading { padding: 0.75rem; font-size: 0.82rem; }
 
 /* Add / edit technique form (components/technique_form.html) */
 .tf-form { display: flex; flex-direction: column; gap: 0.85rem; }
@@ -8388,6 +8369,20 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .sys-group--inner .sys-group__label { font-size: 0.85rem; }
 .sys-group__meta { margin-left: auto; font-size: 0.75rem; color: var(--color-text-muted); }
 .sys-group__body { padding: 0 0.8rem 0.8rem; }
+
+/* Rule Monitoring (#67): the Systems page's groups, issue → cause → rules; Rule Health's table. */
+.rmon-list { min-height: 0; }
+.rmon-meaning { margin: 0 0 0.6rem; font-size: 0.82rem; line-height: 1.45; }
+.rmon-table { min-width: 48rem; }
+.rmon-table th:nth-child(2) { width: 10rem; }
+.rmon-table th:nth-child(3) { width: 7rem; }
+.rmon-table th:nth-child(4) { width: 7rem; }
+.rmon-table .rmon-detail { white-space: normal; overflow-wrap: anywhere; }
+.rmon-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.6rem; }
+.rmon-fix { margin-top: 0.4rem; }
+.rmon-md { max-height: 50vh; overflow: auto; margin: 0 0 1rem; padding: 0.75rem 0.9rem; font-family: var(--font-mono);
+           font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
+           background: var(--bg-level-3-inner); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 
 /* Table view: Rule Health's table, narrower column set. */
 .sys-table-wrap { overflow-x: auto; }
@@ -8515,7 +8510,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .row-grid--top { align-items: flex-start; }
 .row-grid--narrow { grid-template-columns: minmax(90px, 120px) 1fr auto; }
 /* Shared: a centred empty state in a list */
-.loading-spinner.loading-spinner--sm { width: 14px; height: 14px; }
 
 /* Settings (app/api/settings.py, pages/admin/settings.html) */
 .preferences-grid.preferences-grid--single { grid-template-columns: 1fr; }
@@ -8652,7 +8646,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 /* Systems (pages/inventory/systems.html, system_detail.html, partials/system_cards.html) */
 .system-pick-list { display: flex; flex-direction: column; gap: .35rem; max-height: 12rem; overflow: auto; border: 1px solid var(--color-border); padding: .6rem; border-radius: var(--radius-sm); }
 .colour-swatch-input { width: 38px; height: 34px; padding: 2px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); cursor: pointer; }
-.btn.btn-h34 { height: 34px; }
 .scroll-9rem { max-height: 9rem; overflow-y: auto; }
 .cve-card-item__id.step-pill-row { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 0.35rem; flex-wrap: nowrap; min-width: 0; width: auto; white-space: nowrap; overflow: hidden; line-height: 1; }
 .step-pill-more { display: inline-flex; align-items: center; font-size: 0.72rem; line-height: 1; white-space: nowrap; transform: translateY(-1px); }

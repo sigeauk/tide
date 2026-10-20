@@ -1,0 +1,28 @@
+{#
+  Rule Monitoring: Copy for engineers. Context: text (Markdown, rule_issues.markdown), count (causes),
+  every (all shown causes, not one). Copy uses app.js's [data-rm-copy] (as the rule window's query).
+#}
+{% from "macros/icons.html" import icon_text %}
+{% from "macros/modal.html" import close_button, empty_state %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-md" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-copy-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="rmon-copy-title">Copy for engineers</h3>
+            {{ close_button() }}
+        </div>
+        {% if text %}
+        <p class="text-secondary mb-md">Markdown for {{ count }} {{ 'cause' if count == 1 else 'causes' }}{{ ' shown' if every }}, ready to paste into a ticket or a chat.</p>
+        <pre class="rmon-md" id="rmon-md">{{ text }}</pre>
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+            <button name="Copy Markdown" type="button" class="btn btn-primary" data-rm-copy="#rmon-md"
+                    data-copied="Copied. Paste it into a ticket or a chat.">{{ icon_text('copy', 'Copy', '14') }}</button>
+        </div>
+        {% else %}
+        {% call empty_state() %}<p>Nothing to copy: no cause matches the filters.</p>{% endcall %}
+        <div class="modal-actions">
+            <button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+        </div>
+        {% endif %}
+    </div>
+</div>

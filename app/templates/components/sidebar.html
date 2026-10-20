@@ -79,6 +79,9 @@ Children are indented, slightly muted, icon-free.
                 <a name="Rule Health" href="/rules" class="nav-child {% if active_page == 'rules' %}active{% endif %}">
                     <span class="nav-label">Rule Health</span>
                 </a>
+                <a name="Rule Monitoring" href="/rule-monitoring" class="nav-child {% if active_page == 'rule_monitoring' %}active{% endif %}">
+                    <span class="nav-label">Rule Monitoring</span>
+                </a>
                 {% endif %}
                 {% if not user or user.can_read('page:sigma') %}
                 <a name="Sigma" href="/sigma" class="nav-child {% if active_page == 'sigma' %}active{% endif %}">

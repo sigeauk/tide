@@ -1,0 +1,22 @@
+{#
+  A page's ? (macros/help.html): its section of the guide in the side panel, the same panel as a
+  technique pill's, with Open in Documentation for the whole page.
+#}
+{% from "macros/icons.html" import icon_text %}
+{% from "macros/modal.html" import close_button %}
+<div name="Dismiss Help Panel" class="slide-panel-overlay" data-click="el.remove">
+    <div name="Help Panel" class="slide-panel help-panel" data-stop-click role="dialog" aria-label="Help: {{ help.title }}">
+        <div class="slide-panel-resize-handle" data-slide-panel-resize title="Resize panel" aria-hidden="true"></div>
+        <div class="slide-panel-header">
+            <div class="rm-header__main">
+                <div class="technique-crumb">{{ help.page }}</div>
+                <h2 class="technique-name">{{ help.title }}</h2>
+            </div>
+            {{ close_button('name="Close Help Panel" data-click="ui.closePanel"') }}
+        </div>
+        <div class="slide-panel-content">
+            <div class="doc-markdown help-panel__body">{{ help.html | safe }}</div>
+            <a class="btn btn-secondary btn-sm help-panel__more" href="{{ help.url }}">{{ icon_text('book-open', 'Open in Documentation', '14') }}</a>
+        </div>
+    </div>
+</div>

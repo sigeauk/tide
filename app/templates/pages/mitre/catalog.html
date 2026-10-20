@@ -7,6 +7,7 @@
 {% extends "base.html" %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "components/ui/loading_state.html" import loading_state %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}MITRE {{ spec.title }} | TIDE{% endblock %}
 
@@ -15,7 +16,7 @@
 
 <div class="page-header">
     <div class="page-header__text">
-        <h1 class="page-title-hero">MITRE {{ spec.title }}</h1>
+        <h1 class="page-title-hero">MITRE {{ spec.title }} {{ help_button('mitre') }}</h1>
         <p class="page-subtitle">{{ spec.subtitle }}</p>
     </div>
 </div>

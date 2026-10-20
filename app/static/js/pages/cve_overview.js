@@ -71,7 +71,7 @@
     async function upload(e, inp) {
         if (!inp.files.length) return;
         var status = $('upload-status'), targetId = inp.dataset.target;
-        if (status) status.innerHTML = '<span class="loading-state flex-row p-0 gap-sm"><span class="loading-spinner loading-spinner--sm"></span><span>Uploading…</span></span>';
+        if (status) status.innerHTML = TIDE.loadingHtml('Uploading…');
         var fd = new FormData();
         fd.append('file', inp.files[0]);
         inp.value = '';   // so the same file can be chosen again

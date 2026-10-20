@@ -43,7 +43,7 @@
         <input id="confirm-{{ p.fix.id }}-{{ p.client.id }}" name="confirm" class="form-input" autocomplete="off" required
                pattern="{{ p.fix.id }}" title="Type {{ p.fix.id }}">
         <button name="Apply Fix" type="submit" class="btn btn-danger btn-sm">{{ icon('zap', '13') }} Back up, then apply</button>
-        <span class="htmx-indicator text-secondary">{{ icon('loader', '13') }} Backing up and applying…</span>
+        <span class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Backing up and applying…</span>
     </form>
     <p class="text-muted diag-fix__note">The client's database is copied aside first, and Undo puts back exactly these rows.</p>
     {% else %}

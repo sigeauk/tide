@@ -401,10 +401,10 @@ def deploy_to_siem(
                                 'the rule: its SIEM did not answer. Nothing was deployed.</div>')
         if state == "found" and resolution != "new_id":
             diffs = conflict_differences(live, payload)
-            prebuilt = bool(live.get("immutable") or (live.get("rule_source") or {}).get("type") == "external")
+            from app.services.rule_origins import is_prebuilt
             return request.app.state.templates.TemplateResponse(
                 request, "partials/sigma_deploy_conflict.html",
-                {"existing": live, "diffs": diffs, "prebuilt": prebuilt,
+                {"existing": live, "diffs": diffs, "prebuilt": is_prebuilt(live),
                  "destination": target_siem.get("name") or target_space},
             )
         if state == "found":

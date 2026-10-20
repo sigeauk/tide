@@ -6,6 +6,7 @@
 
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block content %}
 <div class="p-lg">
@@ -15,7 +16,7 @@
     <!-- Header -->
     <div class="mb-lg">
         <div class="flex items-center gap-ms flex-wrap mb-sm">
-            <h1 class="m-0 fs-2xl fw-700 text-primary">{{ cve.cve_id }}</h1>
+            <h1 class="m-0 fs-2xl fw-700 text-primary">{{ cve.cve_id }} {{ help_button('cves') }}</h1>
             {% if cve.known_ransomware %}
             <span class="badge badge-danger text-sm">{{ icon('zap','14') }} Ransomware</span>
             {% endif %}
@@ -25,11 +26,7 @@
                 <button name="Export Report" class="btn btn-secondary btn-sm cve-export-btn"
                         data-click="cvePage.exportOpen"
                         title="Generate CVE audit report">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                        <polyline points="7 10 12 15 17 10"/>
-                        <line x1="12" y1="15" x2="12" y2="3"/>
-                    </svg>
+                    {{ icon('download', '14') }}
                     Export Report
                 </button>
             </div>
@@ -136,8 +133,8 @@
                 {% endfor %}
             </select>
         </div>
-        <div class="flex gap-ms justify-end">
-            <button name="Cancel" data-click="cvePage.exportClose" class="btn btn-secondary fs-base py-sm px-md"
+        <div class="modal-actions">
+            <button name="Cancel" data-click="cvePage.exportClose" class="btn btn-secondary"
                    >Cancel</button>
             <button name="Download" data-click="cvePage.exportConfirm" class="btn btn-primary">Download</button>
         </div>

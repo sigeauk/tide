@@ -69,7 +69,7 @@
                     <span class="text-danger fw-600">{{ snap.count_red }}</span>
                     <span class="text-muted fw-600">{{ snap.count_grey }}</span>
                 </span>
-                <button name="Delete Snapshots" class="btn btn-danger btn-sm fs-2xs py-2xs px-sm"
+                <button name="Delete Snapshots" class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/snapshots/{{ snap.id }}?system_id={{ system_id }}"
                         hx-target="#audit-history-content"
                         hx-swap="innerHTML"

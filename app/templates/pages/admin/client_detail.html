@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/help.html" import help_button with context %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
 {% block title %}{{ client.name }} | Clients | TIDE{% endblock %}
 
@@ -10,7 +12,7 @@
         <div class="flex items-center gap-sm mb-xs">
             <a name="Clients" href="/settings/management?tab=clients" class="text-muted fs-base">&larr; Clients</a>
         </div>
-        <h1 class="page-title-hero">{{ client.name }}</h1>
+        <h1 class="page-title-hero">{{ client.name }} {{ help_button('client') }}</h1>
         <span class="system-card__classification mt-xs">{{ client.slug }}</span>
         <p class="page-subtitle">
             {% if client.description %}{{ client.description }}{% else %}No description.{% endif %}
@@ -118,7 +120,7 @@
                     <div class="u-bg-surface list-row list-row--plain">
                         <span>{{ sys.name }}{% if sys.classification %} <span class="badge badge-muted fs-2xs">{{ sys.classification }}</span>{% endif %}</span>
                         <div class="flex gap-xs">
-                            <button name="Move" class="btn btn-ghost btn-sm btn-xs"
+                            <button name="Move" class="btn btn-ghost btn-xs"
                                     data-click="clientDetail.moveSystem" data-id="{{ sys.id }}" data-name="{{ sys.name }}"
                                    >
                                 {{ icon('arrow-right-left', '12') }} Move
@@ -176,8 +178,8 @@
                 <button name="Move Here" type="submit" class="btn btn-primary btn-sm">{{ icon('arrow-right-left', '14') }} Move Here</button>
             </form>
             {% endif %}
-            <div class="flex justify-end">
-                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
+            <div class="modal-actions">
+                <button name="Close Modal" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-systems-modal">Close</button>
             </div>
         </div>
@@ -218,7 +220,7 @@
             <div id="move-check-result">
                 <p class="text-muted p-sm fs-base">Select a target client above.</p>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="move-system-modal">Cancel</button>
                 <button name="Move System" type="submit" class="btn btn-primary">{{ icon('arrow-right-left', '14') }} Move System</button>
@@ -297,8 +299,8 @@
                 <button name="Clone Baseline" type="submit" class="btn btn-primary btn-sm">{{ icon('copy', '14') }} Clone Baseline</button>
             </form>
             {% endif %}
-            <div class="flex justify-end">
-                <button name="Close Modal" type="button" class="btn btn-secondary btn-sm"
+            <div class="modal-actions">
+                <button name="Close Modal" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-baselines-modal">Close</button>
             </div>
         </div>
@@ -330,7 +332,7 @@
                 <label for="edit-client-desc" class="form-label">Description</label>
                 <textarea id="edit-client-desc" class="form-input" rows="3">{{ client.description or '' }}</textarea>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-client-modal">Cancel</button>
                 <button name="Save" type="submit" class="btn btn-primary">Save</button>
@@ -359,7 +361,7 @@
              hx-get="/api/management/clients/{{ client.id }}/permissions"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <div class="text-secondary p-md">Loading role templates\u2026</div>
+            {{ loading_state("Loading role templates…") }}
         </div>
     </div>
 </div>

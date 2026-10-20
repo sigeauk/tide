@@ -3,6 +3,8 @@
 {% from "macros/filters.html" import filter_dropdown, filter_choice, filter_multi, choice_rows %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/sync_ui.html" import sync_menu_items %}
 
 {% block title %}Rule Health | TIDE{% endblock %}
 
@@ -14,6 +16,7 @@
     <div>
         <h1 class="page-title-hero">
             Rule Health
+            {{ help_button('rule-health') }}
         </h1>
         <p class="page-subtitle">Assess the quality and validation status of your detection rules.</p>
         <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
@@ -23,41 +26,7 @@
         <div class="rh-more">
             {{ more_button('More actions', title='Sync, cards or table, create a rule, bulk edit', attrs='name="More Actions" id="rh-more-btn"', toggle=false) }}
             <div class="rh-more__menu" id="rh-more-menu" role="menu" hidden>
-                <div class="rh-more__item-wrap">
-                    <button name="Sync" type="button" role="menuitem" class="rh-more__item sync-btn"
-                        hx-post="/api/rules/sync" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                        <span class="sync-default">{{ icon('refresh-cw', '15') }}<span>Sync</span></span>
-                        <span class="htmx-indicator">{{ icon('refresh-cw', '15') }}<span>Syncing&hellip;</span></span>
-                    </button>
-                    {% if client_siems %}
-                    <div class="rh-more__submenu" role="menu">
-                        {% for dest in client_siems %}
-                        <button name="Sync {{ dest.name }} only" type="button" role="menuitem" class="rh-more__item"
-                            hx-post="/api/rules/sync?siem_id={{ dest.id }}&space={{ dest.space }}"
-                            hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                            {{ icon('refresh-cw', '14') }}<span>Sync {{ dest.name }} only</span>
-                        </button>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
-                <div class="rh-more__item-wrap">
-                    <button name="Sync with Mappings" type="button" role="menuitem" class="rh-more__item"
-                        hx-post="/api/rules/sync?force_mapping=true" hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                        {{ icon('database', '15') }}<span>Sync with mappings</span>
-                    </button>
-                    {% if client_siems %}
-                    <div class="rh-more__submenu" role="menu">
-                        {% for dest in client_siems %}
-                        <button name="Sync {{ dest.name }} only, with mappings" type="button" role="menuitem" class="rh-more__item"
-                            hx-post="/api/rules/sync?force_mapping=true&siem_id={{ dest.id }}&space={{ dest.space }}"
-                            hx-target="#sync-status" hx-swap="outerHTML" hx-disabled-elt="this">
-                            {{ icon('database', '14') }}<span>Sync {{ dest.name }} only</span>
-                        </button>
-                        {% endfor %}
-                    </div>
-                    {% endif %}
-                </div>
+                {{ sync_menu_items(client_siems) }}
                 <div class="rh-more__sep" role="separator"></div>
                 <button name="Cards View" type="button" role="menuitem" class="rh-more__item"
                     data-rh-view="cards" aria-pressed="{{ 'false' if view == 'table' else 'true' }}">
@@ -118,7 +87,7 @@
             name="search"
             value="{{ search }}"
             class="form-input" 
-            placeholder="Rule name, Author, ID, MITRE (T1078)..."
+            placeholder="Rule name, Author, ID, MITRE (T1078)…"
             hx-get="/api/rules"
             hx-trigger="keyup changed delay:300ms"
             hx-target="#rules-grid"
@@ -135,7 +104,7 @@
     {{ filter_choice('rh-status', 'enabled', 'Status', [('', 'All'), ('true', 'Enabled'), ('false', 'Disabled')],
                      enabled, counts.enabled or {}, rh_hx) }}
 
-    {{ filter_multi('rh-state', 'state', 'State', [('unlinked', 'Live'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')],
+    {{ filter_multi('rh-state', 'state', 'State', [('unlinked', 'Unlinked'), ('linked', 'Linked'), ('offline', 'SIEM offline'), ('deprecated', 'Deprecated')],
                     state, 'All states', counts.state or {}, rh_hx,
                     {'unlinked': 'Found at the last successful sync, with no copy linked in another destination',
                      'linked': 'Found at the last successful sync, with a copy linked in another destination',
@@ -143,10 +112,12 @@
                      'deprecated': 'Not found at the last successful sync'}) }}
 
     {{ filter_multi('rh-upstream', 'upstream', 'Upstream', upstream_options, upstream, 'Any', counts.upstream or {}, rh_hx,
-                    {'update': "Came from Elastic's or the Sigma rules, which have a newer version of it",
+                    {'update_elastic': "Came from Elastic's rules, which have a newer version of it",
+                     'update_sigma': 'Came from the Sigma rules, which have a newer version of it',
                      'current': "Came from Elastic's or the Sigma rules and matches their current version",
-                     'retired': 'Elastic or Sigma has deprecated the rule it came from',
-                     'removed': 'The rule it came from is no longer in the rules built into TIDE',
+                     'retired_elastic': 'Elastic has deprecated the rule it came from',
+                     'retired_sigma': 'Sigma has deprecated the rule it came from',
+                     'removed': "The rule it came from is no longer in the Elastic or Sigma rules built into TIDE",
                      'own': "Did not come from Elastic's or the Sigma rules"}) }}
 
     {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons. #}
@@ -198,6 +169,7 @@
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="enable">Enable</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="disable">Disable</button>
         <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="validate">{{ icon('circle-check', '14') }} Validate</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-bulk-action="sync">{{ icon('refresh-cw', '14') }} Sync</button>
         <button type="button" class="btn btn-danger btn-sm" data-bulk-action="delete">{{ icon('trash-2', '14') }} Delete</button>
     </span>
     <p class="bulk-bar__hint" id="bulk-hint"></p>

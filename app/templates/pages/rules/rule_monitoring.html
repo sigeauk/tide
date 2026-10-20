@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{#
+  Rule Monitoring (#67): the rules that need action, grouped by cause and who fixes it. As of the
+  last sync (app.services.rule_issues finds them at each sync). Context: api.rule_monitoring.page_context.
+  The filter bar refreshes #rmon-list (which swaps the stat cards out of band) on every change.
+#}
+{% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice, filter_multi %}
+{% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/sync_ui.html" import sync_menu_items %}
+
+{% block title %}Rule Monitoring | TIDE{% endblock %}
+
+{% block content %}
+<div class="rule-browser-page">
+<div class="page-header flex items-start justify-between gap-md">
+    <div>
+        <h1 class="page-title-hero">
+            Rule Monitoring
+            {{ help_button('rule-monitoring') }}
+        </h1>
+        <p class="page-subtitle">Rules that need action: failed runs, missing indexes and fields, rule id problems and stale data, grouped by what causes them.</p>
+        <div id="rh-last-sync" hx-get="/api/rules/sync/last" hx-trigger="load, refreshRules from:body" hx-swap="innerHTML"></div>
+    </div>
+    <div class="flex items-center gap-ms shrink-0">
+        <div id="sync-status"></div>
+        <div class="rh-more" data-more>
+            {{ more_button('More actions', title='Sync, copy for engineers', attrs='name="More Actions"') }}
+            <div class="rh-more__menu" role="menu" hidden>
+                {{ sync_menu_items(client_siems) }}
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Copy Shown for Engineers" type="button" role="menuitem" class="rh-more__item"
+                    title="Every cause the filters show, as Markdown for a ticket or a chat"
+                    hx-get="/api/rule-monitoring/copy?all=1" hx-include="{{ filter_include }}"
+                    hx-target="#modal-container" hx-swap="innerHTML">
+                    {{ icon('copy', '15') }}<span>Copy shown for engineers</span>
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% set rmon_include = filter_include %}
+{% set rmon_hx = 'hx-get="/api/rule-monitoring/list" hx-trigger="change" hx-target="#rmon-list" hx-swap="innerHTML" hx-include="' ~ rmon_include ~ '"' %}
+
+<div class="rule-browser-controls">
+<div class="metrics-grid" id="rmon-metrics">
+    {% include "partials/rule_monitoring_metrics.html" %}
+</div>
+
+<div class="divider"></div>
+
+<div class="filters-bar" id="rmon-filters">
+    <div class="filter-group grow">
+        <label class="form-label" for="rmon-search">Search</label>
+        <input type="text" id="rmon-search" name="search" value="{{ filters.search }}" class="form-input"
+               placeholder="Rule, index pattern, field, message…"
+               hx-get="/api/rule-monitoring/list" hx-trigger="keyup changed delay:300ms" hx-target="#rmon-list"
+               hx-swap="innerHTML" hx-include="{{ rmon_include }}">
+    </div>
+    {{ filter_choice('rmon-scope', 'scope', 'SIEM', scope_options, filters.scope, counts.scope, rmon_hx) }}
+    {{ filter_multi('rmon-severity', 'severity', 'Severity', severity_options, filters.severity, 'Any', counts.severity, rmon_hx,
+                    {'error': "The rule doesn't do its job until this is fixed", 'warning': 'The rule runs, but less well'}) }}
+    {{ filter_multi('rmon-fixer', 'fixer', 'Who fixes', fixer_options, filters.fixer, 'Anyone', counts.fixer, rmon_hx) }}
+    {{ filter_multi('rmon-issue', 'issue', 'Issue', issue_options, filters.issue, 'Any', counts.issue, rmon_hx, issue_titles) }}
+    {{ filter_choice('rmon-rules', 'rules', 'Rules', rules_options, filters.rules, none, rmon_hx,
+                     {'enabled': 'Enabled rules, as they are failing now', 'all': "Disabled rules too: what would fail if they were switched on"}) }}
+    {{ filter_choice('rmon-show', 'show', 'Show', show_options, filters.show, none, rmon_hx,
+                     {'resolved': 'Fixed in the last 14 days'}) }}
+    {{ filter_choice('rmon-group', 'group', 'Group by', group_options, filters.group, none, rmon_hx) }}
+</div>
+</div>
+
+<div class="rule-scroll-region">
+<div id="rmon-list" class="rmon-list" data-rule-list hx-get="/api/rule-monitoring/list" hx-trigger="refreshRules from:body, rmonChanged from:body"
+     hx-swap="innerHTML" hx-include="{{ rmon_include }}">
+    {% include "partials/rule_monitoring_list.html" %}
+</div>
+</div>
+</div>
+{% endblock %}

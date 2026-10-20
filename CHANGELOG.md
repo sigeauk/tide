@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.2] - 2026-10-20
+
+### Added
+- **Rule Monitoring: the rules that need action, in one place.** A new page, below Rule Health, lists every rule that needs action, grouped by what causes it, so ten rules failing on one missing index are one thing to fix. It shows what Kibana reported on each rule's last run (an index pattern matching no index, indexes missing the timestamp override field such as `event.ingested`, queries that won't parse, missing privileges, missed runs), fields the indexes don't have, rule id problems, SIEMs that didn't answer, and destinations not synced for 7 days. Each issue says who fixes it (data / ingest, the rule's author, Kibana / platform, or TIDE), what it means and what to check, and how long it has been happening. Filter by SIEM, severity, who fixes and issue; group by issue, who fixes, destination or rule; include disabled rules to see what would fail if they were switched on; and see what was fixed in the last 14 days. It is up to date as of each destination's last sync.
+  - **Copy for engineers** gives a cause, or everything shown, as Markdown for a ticket or a chat, with the rules it affects.
+  - **Acknowledge…** mutes a cause you know about, with a note, until it affects more rules; **Unmute** brings it back.
+  - **Sync these rules** checks whether a cause is fixed, and rules TIDE can fix itself have the fix on their row.
+  - A cause found through two SIEMs linked to the same cluster is listed once.
+  - A Dashboard can have a Rule Monitoring section, with the page's cards and filters.
+- **Help on every page.** A **?** beside each page's title opens that page's part of the user guide in the side panel, so you can read how to use it without leaving what you're doing. **Open in Documentation** at the foot of the panel goes to the whole guide page.
+- **Editing one of Elastic's prebuilt rules says what it does.** The Edit form now explains, before you save, that Kibana will mark the rule as customised, and that when Elastic's next update for it is installed in Kibana, Kibana either merges your change with Elastic's or replaces it, depending on your Elastic licence. The rule stays Elastic's, so TIDE still shows when Elastic has an update for it. Rules of your own show nothing extra.
+- **Diagnostics shows syncs that can't read every rule, and destinations not synced lately.** Three new checks: destinations whose last two syncs couldn't read every rule, with how many rules TIDE still holds there that Kibana didn't return; rules sharing a rule id in Kibana, naming both rules, which is Elastic's prebuilt one, and which one TIDE holds; and destinations not synced for 7 days, with when each was last synced.
+- **Copies of Elastic's rules no longer get in the way of Elastic's own.** Moving, copying or restoring one of Elastic's prebuilt rules, or any rule under one of Elastic's rule ids, now creates it under a new rule id. Kibana can then still install and update Elastic's own rule in that space, and TIDE still shows Elastic's updates for the copy. Rules made the old way are listed in **Settings → Diagnostics**, and each one's window offers **Give it its own rule id**, keeping its history, links and baseline mappings. Where Kibana holds a custom copy beside Elastic's prebuilt rule, the prebuilt rule's window offers **Give the copy its own rule id**.
+- **Bulk edit can sync rules, and delete them from Elastic.** **Sync** reads just the ticked rules again from their SIEM, and lists any no longer in Kibana, now marked deprecated with their history kept. **Delete** has **Also delete them from Elastic**, as deleting one rule does, and asks once more before it does.
+- **The rule window shows where a rule came from.** A rule taken from Elastic's or the Sigma rules shows an **Elastic** or **Sigma** badge in its window's header, as it already did in the table, with whether an update is available.
+
+### Changed
+- **Loading, messages and buttons look the same everywhere.**
+  - Anything still loading shows the same spinning loader and words, whether it's a whole page, a section of Settings, a list loading more as you scroll, or a suggestion list in a window.
+  - When something can't be done, TIDE says so the same way everywhere: "Could not …", then why. When TIDE can't be reached at all, it gives one message: "TIDE could not be reached, so nothing was changed. Check your connection and try again."
+  - The buttons at the foot of every dialog are the same size and spacing, Cancel or Close first.
+  - Main buttons, such as **Create** and **Save**, were a pixel smaller than the **Cancel** beside them. They're now the same size.
+  - **Validate** in the rule window had smaller text than other buttons. It now has the same text size as other buttons, and is as tall as the buttons beside it.
+  - Settings' lists of clients, SIEMs, threat feeds, GitLab and Keycloak show the same "nothing here yet" panel as the rest of TIDE. Their icons are TIDE's own.
+  - Text cut short ends in "…" everywhere.
+- **Rule Health's Last Synced card shows the date, and warns when data is stale.** It shows the day of the newest sync, with the time beneath, or how many destinations haven't been synced for 7 days, in red. The same card is on Rule Monitoring and a Dashboard's Rule Health section.
+- **Reports say when the rules were last synced.** Threat, system and CVE reports show **Rules last synced** beneath **Generated**, on the PDF's cover and at the top of the Markdown, with how many destinations haven't been synced for 7 days. Whoever reads the report can tell how current its coverage is.
+- **Rule Health's filters say what they mean.**
+  - In **State**, **Live** is now **Unlinked**: found at the last sync, with no copy linked in another destination.
+  - **Upstream** names the source: **Elastic update available**, **Sigma update available**, **Up to date**, **Deprecated by Elastic**, **Deprecated by Sigma**, **No longer in TIDE's Elastic or Sigma rules** and **Your own rules**. Saved links and dashboards that used the old choices still work. A rule's badge reads, for example, *Elastic · Deprecated*.
+
+### Fixed
+- **Rule history showed changes from Kibana at the wrong time, and some edits twice.** Changes found when syncing were timed in UTC while the rest of a rule's history is in your local time, so they could appear an hour or more out of order. Because the times didn't line up, an edit made in TIDE sometimes appeared a second time, as an edit by *elastic*. Changes from Kibana are now shown in local time, entries already recorded are corrected at the next sync, and an edit made in TIDE appears once.
+- **Rules deleted in Kibana kept counting in TIDE.** When Kibana held two rules under the same rule id in a space (usually a copy made under one of Elastic's rule ids, next to Elastic's own prebuilt rule installed later), TIDE thought it hadn't read every rule there. So it never marked rules deleted in Kibana as deprecated in that space, and they kept counting, including as coverage. TIDE now counts every rule Kibana returns, so the next sync marks them deprecated and keeps their history. Log messages about an incomplete sync now name the SIEM as well as the space.
+- **A copy of an Elastic prebuilt rule was described as installed by Kibana.** Moving or copying a prebuilt rule creates it in the other destination as a rule of your own, but its **Upstream** section still said Kibana had installed it. It no longer does, and still shows when Elastic has an update for it. Copies made before are corrected at the next sync.
+- **A failed request showed two error messages.** TIDE showed both "An error occurred" and "Request failed". It now shows one, which says what happened.
+- **Some error messages in Settings showed as plain text.** Errors from the database query console, the threat feed connectors and Hunting appeared as unstyled text instead of in a red box. They now look like every other error.
+- **Client settings showed "Loading role templates…" while loading.** It now shows "Loading role templates…".
+- **Moving or copying a rule with a rule id of your own now links it and shows it straight away.** Rules created from your own JSON often have a readable rule id, such as *acme-k8s-001*, instead of Elastic's long random ones. Moving or copying one reached the target SIEM, but TIDE then couldn't fetch the new copy: Kibana refused the way TIDE asked for it. So the copy was missing from TIDE until the next full sync, and it wasn't linked to its source. TIDE now asks for these rules in the way Kibana accepts. Rules already moved this way can be linked with **Add link** in the rule window.
+- **Saving a rule with a missing field now shows every field that needs filling.** When a required field was in a folded section of the rule form, only the first problem was shown, and other missing fields stayed hidden in their folded sections. Every section with a problem now opens. When the first problem is a dropdown, such as **Target SIEM / space**, the cursor goes to that dropdown.
+
 ## [6.2.1] - 2026-10-19
 
 ### Added

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request, Response, Query, Form
 from fastapi.responses import RedirectResponse, HTMLResponse
 from typing import Optional
 
+from app.services.icons import icon as _icon
 from app.api.deps import AuthDep, SettingsDep, CurrentUser, DbDep
 from app.config import get_settings
 
@@ -58,11 +59,8 @@ async def local_login(
     if not result:
         # Return login page with error
         return HTMLResponse(
-            content='<div class="login-error" id="login-error">'
-                    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-                    '<circle cx="12" cy="12" r="10"/><line x1="15" x2="9" y1="9" y2="15"/>'
-                    '<line x1="9" x2="15" y1="9" y2="15"/></svg>'
-                    ' Invalid username or password</div>',
+            content='<div class="login-error" id="login-error">' + _icon("circle-x", "16")
+                    + ' Invalid username or password</div>',
             status_code=200,
         )
     
@@ -173,7 +171,7 @@ async def auth_callback(
     tokens = await auth.exchange_code(code, redirect_uri)
     
     if not tokens:
-        return HTMLResponse("<h1>Failed to exchange authorization code</h1>", status_code=400)
+        return HTMLResponse("<h1>Could not complete sign-in. Go back and sign in again.</h1>", status_code=400)
 
     # The one place an SSO sign-in is recorded (provisions a first-time user, sets last_login);
     # later requests with the cookie only read the user.

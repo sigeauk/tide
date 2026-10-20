@@ -81,7 +81,7 @@
                     hx-target="#diag-checks" hx-swap="outerHTML" hx-indicator="#diag-running" hx-disabled-elt="this">
                 {{ icon('activity', '14') }} Run all checks
             </button>
-            <span id="diag-running" class="htmx-indicator text-secondary">{{ icon('loader', '14') }} Running…</span>
+            <span id="diag-running" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Running…</span>
         </div>
     </div>
     {{ check_list(checks, {}, fixes, fix_ok) }}
@@ -105,7 +105,7 @@
         <input type="search" name="q" class="form-input" placeholder="Rule name, part of one, or a rule ID"
                aria-label="Search" required minlength="2" autocomplete="off">
         <button name="Look Up" type="submit" class="btn btn-primary">{{ icon('search', '14') }} Look up</button>
-        <span id="diag-looking" class="htmx-indicator text-secondary">{{ icon('loader', '14') }} Looking…</span>
+        <span id="diag-looking" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Looking…</span>
     </form>
     <div id="diag-lookup-results" class="diag-lookup" aria-live="polite"></div>
 </section>

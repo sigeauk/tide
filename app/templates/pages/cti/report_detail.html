@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}{{ report.name or 'Untitled report' }} | CTI Report | TIDE{% endblock %}
 
@@ -7,7 +8,7 @@
 <div class="page-header">
     <div class="page-header__text">
         <p class="cti-back-link"><a name="Back to Reports" href="/cti/reports">{{ icon('arrow-right','12') }} <span>Back to Reports</span></a></p>
-        <h1 class="page-title-hero">{{ icon('file-text','24') }} {{ report.name or 'Untitled report' }}</h1>
+        <h1 class="page-title-hero">{{ icon('file-text','24') }} {{ report.name or 'Untitled report' }} {{ help_button('cti') }}</h1>
         <p class="page-subtitle">
             {% if report.published %}<span>{{ icon('calendar','12') }} {{ report.published }}</span>{% endif %}
             {% if report.source_id %}

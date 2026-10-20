@@ -22,7 +22,7 @@
         var selectedIds = (hidden.value || '').split(',').map(function (v) { return v.trim().toUpperCase(); }).filter(Boolean);
 
         function updateTechniqueSelect(tacticSelect, techniqueSelect, selectedTechnique) {
-            techniqueSelect.replaceChildren(createOption('', 'Select a technique...', false));
+            techniqueSelect.replaceChildren(createOption('', 'Select a technique…', false));
             var group = tacticSelect.value && groups.find(function (item) { return item.tactic === tacticSelect.value; });
             if (!group) return;
             group.options.forEach(function (opt) {
@@ -43,12 +43,12 @@
             var tacticSelect = document.createElement('select');
             tacticSelect.className = 'rule-form-select';
             tacticSelect.setAttribute('data-role', 'tactic');
-            tacticSelect.appendChild(createOption('', 'Select a tactic...', true));
+            tacticSelect.appendChild(createOption('', 'Select a tactic…', true));
             groups.forEach(function (group) { tacticSelect.appendChild(createOption(group.tactic, group.tactic, false)); });
             var techniqueSelect = document.createElement('select');
             techniqueSelect.className = 'rule-form-select';
             techniqueSelect.setAttribute('data-role', 'technique');
-            techniqueSelect.appendChild(createOption('', 'Select a technique...', true));
+            techniqueSelect.appendChild(createOption('', 'Select a technique…', true));
             var removeBtn = document.createElement('button');
             removeBtn.type = 'button';
             removeBtn.className = 'btn btn-secondary btn-sm';
@@ -105,10 +105,12 @@
 
         // A field the user can't see (its section is folded) must say what's wrong: otherwise the
         // browser refuses to submit and shows nothing, and Save looks like it does nothing.
+        // (app.js opens the sections of every invalid field; this names the first.)
         function reveal(field) {
             var section = field.closest('details');
             if (section && !section.open) section.open = true;
-            field.focus();
+            var btn = field.classList.contains('tide-select__native') && field.parentElement.querySelector(':scope > .tide-filter-btn');
+            (btn || field).focus();
         }
         form.addEventListener('invalid', function (evt) {
             var field = evt.target, label = field.id && form.querySelector('label[for="' + field.id + '"]');
@@ -160,7 +162,7 @@
         evt.detail.shouldSwap = false;
         evt.detail.isError = false;
         var text = new DOMParser().parseFromString(evt.detail.xhr.responseText || '', 'text/html').body.textContent;
-        showFormError(form, (text || '').trim() || 'Saving failed (HTTP ' + status + '). Nothing was changed.');
+        showFormError(form, (text || '').trim() || 'Could not save (HTTP ' + status + '). Nothing was changed.');
     });
 
     // A rule saved (create or edit): sync so it shows up. Rule Health shows the sync's progress

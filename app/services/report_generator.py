@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from app.attack_tactics import ORDER as TACTIC_NAMES_ORDER, SHORT, tactic_name
+from app.services import rule_issues
 
 logger = logging.getLogger(__name__)
 
@@ -231,7 +232,8 @@ def build_report_data(
 
     return {
         "generated_at":              datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
-        "selected_actors":           [a.name for a in selected_actors],
+        "rules_synced":              rule_issues.report_synced(db, client_id),
+        "selected_actors":          [a.name for a in selected_actors],
         "actor_details": [
             {
                 "name":        a.name,
@@ -388,6 +390,7 @@ def generate_markdown(data: Dict[str, Any]) -> str:
         "",
         f"**Classification:** {classif}",
         f"**Generated:** {data['generated_at']}",
+        *([f"**Rules last synced:** {data['rules_synced']}"] if data.get("rules_synced") else []),
         f"**Adversaries:** {actors_str}",
         f"**Audience:** {'Technical / Engineer' if level == 'technical' else 'Executive / CISO'}",
         "",

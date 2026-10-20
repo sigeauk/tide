@@ -135,7 +135,7 @@ tbody tr:nth-child(even) td { background:var(--row-alt); }
             <span style="display:inline-block;background:var(--primary-d);color:var(--primary);font-size:7pt;font-weight:600;padding:1.5mm 4mm;border-radius:3mm;border:1px solid #1e4d82;">CISA KEV</span>
         </div>
         {% endif %}
-        <div class="cover-meta">Generated: {{ report.generated_at }}</div>
+        <div class="cover-meta">Generated: {{ report.generated_at }}{% if report.rules_synced %}<br/>Rules last synced: {{ report.rules_synced }}{% endif %}</div>
     </div>
     <div class="cover-bottombar"></div>
 </div>

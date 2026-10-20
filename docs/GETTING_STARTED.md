@@ -23,7 +23,7 @@ The sidebar lists TIDE's pages, grouped as they are in this guide:
 | | **Home**, **Dashboard** | A summary of the client, and dashboards you build |
 | | **Systems** | The systems you protect, and how well their techniques are covered |
 | Risks | **CVE Overview**, **Baselines** | Known exploited vulnerabilities, and the baseline templates systems are measured against |
-| Rules | **Rule Health**, **Sigma**, **Elastic**, **Hunting** | Your detection rules, and the rule libraries built into TIDE |
+| Rules | **Rule Health**, **Rule Monitoring**, **Sigma**, **Elastic**, **Hunting** | Your detection rules, the ones that need action, and the rule libraries built into TIDE |
 | Threats | **Threat Landscape**, **Heatmap** | Threat actors, and how well you cover what they do |
 | MITRE | **Tactics**, **Techniques**, **Groups**, **Software**, **Campaigns**, **Mitigations**, **NIST** | The ATT&CK knowledge base, with your coverage of each part |
 | CTI | **Indicators**, **Actors**, **Reports** | Threat intelligence from your feeds |
@@ -41,7 +41,7 @@ Pages are built from the same few controls, so once you know one page you know t
 Most pages have a filter bar across the top: a **Search** box and a dropdown for each thing you can filter by.
 
 - Click a dropdown to open its list. Where you choose **one** option (a round button beside each), the list closes as you pick. Where you can tick **several** (a tick box beside each), it stays open while you tick; tick none to see everything.
-- The button always names what is chosen, for example **All SIEMs**, or *Live, Linked* when you tick two.
+- The button always names what is chosen, for example **All SIEMs**, or *Unlinked, Linked* when you tick two.
 - On Rule Health, the number beside each option is how many rules it holds.
 - Only one list is open at a time. Click elsewhere or press **Esc** to close it.
 - Filters apply as soon as you choose. Most pages keep your filters in the address bar, so a refresh, a bookmark or a link you share shows the same view.
@@ -83,8 +83,8 @@ The **Dashboard** page shows the figures you choose, from across TIDE. A client 
 If you can edit the Dashboard (Admins and Analysts can, by default):
 
 1. Click **Edit**.
-2. Give the dashboard a **Name**, then add sections: a page's figures (Rule Health, a system, Threat Landscape, Baselines, Asset Inventory, CVE Overview), the state of connected services and built-in data, a **Title** or a **Text block**.
-3. For each section, tick which figures it shows and set its filters. A Rule Health section is filtered like the Rule Health page: by SIEM, status, state, score, validation date and search.
+2. Give the dashboard a **Name**, then add sections: a page's figures (Rule Health, Rule Monitoring, a system, Threat Landscape, Baselines, Asset Inventory, CVE Overview), the state of connected services and built-in data, a **Title** or a **Text block**.
+3. For each section, tick which figures it shows and set its filters. A Rule Health section is filtered like the Rule Health page: by SIEM, status, state, score, validation date and search. A Rule Monitoring section is filtered like its page: by SIEM, severity, who fixes, issue, whether disabled rules count, and search.
 4. Arrange the sections: drag them, use their arrows or the arrow keys, and make them **Narrower** or **Wider** to sit side by side. Click a section's icon to choose another.
 5. Click **Save**, or **Cancel** to leave it as it was.
 
@@ -101,6 +101,7 @@ Click your name at the bottom of the sidebar, then **Settings**. **Profile & Pre
 
 ## Getting help
 
+- Help with the page you're on: the **?** beside its title opens its part of this guide in the side panel, without leaving the page. **Open in Documentation** at the foot of the panel goes to the whole page.
 - This guide: **Settings → Documentation**. Search it from the box at the top of its sidebar.
 - What has changed in each release: **Settings → Changelog**.
 - If something doesn't work as this guide says, your administrator can check TIDE's health in **Settings → Diagnostics**.

@@ -7,6 +7,7 @@
 {% from "macros/icons.html" import icon, tactic_icon %}
 {% from "components/mitre_ui.html" import coverage_pill, source_pills %}
 {% from "macros/modal.html" import empty_state %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
 {% macro sort_arrow(key) -%}
 {%- if sort == key %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-up' if dir == 'asc' else 'chevron-down', '12') }}</span>{% endif -%}
@@ -16,11 +17,11 @@
 {% if next_url %}
     {% if view == 'table' %}
     <tr class="infinite-scroll-sentinel" hx-get="{{ next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
-        <td colspan="{{ spec.columns | length }}"><span class="loading-spinner"></span> <span>Loading more…</span></td>
+        <td colspan="{{ spec.columns | length }}">{{ loading_state("Loading more " ~ spec.title | lower ~ "…", inline=true) }}</td>
     </tr>
     {% else %}
     <div class="infinite-scroll-sentinel" hx-get="{{ next_url }}" hx-trigger="tideLoadMore once" hx-target="this" hx-swap="outerHTML" hx-include="unset">
-        <span class="loading-spinner"></span> <span>Loading more…</span>
+        {{ loading_state("Loading more " ~ spec.title | lower ~ "…", inline=true) }}
     </div>
     {% endif %}
 {% elif page > 1 %}
@@ -103,7 +104,7 @@
         </summary>
         <div class="sys-group__body" hx-get="{{ g.url }}" hx-swap="innerHTML" hx-include="unset"
              hx-trigger="{{ 'load' if loop.first else 'toggle once from:closest details' }}">
-            <p class="rm-empty">Loading…</p>
+            {{ loading_state(inline=true) }}
         </div>
     </details>
     {% endfor %}

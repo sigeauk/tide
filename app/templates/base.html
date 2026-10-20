@@ -67,9 +67,11 @@
          Rule modal, edit form, MITRE-panel rule cards etc. all swap into it. -->
     <div id="modal-container"></div>
     <!-- Loading skeleton, cloned into the container by app.js while a modal request is in flight. -->
+    <!-- A page's ? opens its help here (macros/help.html). -->
+    <div id="help-panel-container"></div>
     <template id="rule-modal-skeleton">{% include "components/rule_modal_skeleton.html" %}</template>
     <!-- The icons scripts draw (TIDE.icon in app.js), from the same macro as every template's. -->
-    <template id="tide-icons">{% for n in ['chevron-up', 'chevron-down', 'chevron-left', 'chevron-right', 'check', 'x', 'arrow-left', 'arrow-right'] %}<span data-icon="{{ n }}">{{ icon(n, '14') }}</span>{% endfor %}</template>
+    <template id="tide-icons">{% for n in ['chevron-up', 'chevron-down', 'chevron-left', 'chevron-right', 'check', 'x', 'arrow-left', 'arrow-right', 'loader'] %}<span data-icon="{{ n }}">{{ icon(n, '14') }}</span>{% endfor %}</template>
 
     {% block scripts %}{% endblock %}
 </body>

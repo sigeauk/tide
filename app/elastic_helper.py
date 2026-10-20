@@ -40,9 +40,11 @@ load_dotenv()
 # hashable). The sync orchestrator reads this to decide whether the
 # subtractive-delete pass is safe for each (siem_id, space) pair.
 #
-# Shape: ``{ <call_token>: { <space>: {"total": int, "fetched": int,
+# Shape: ``{ <call_token>: { <space>: {"total": int, "fetched": int (rows, page repeats too),
+#                                       "returned": int (distinct rules),
 #                                       "complete": bool,
-#                                       "rule_ids": set[str]} } }``
+#                                       "rule_ids": set[str],
+#                                       "duplicates": [{"rule_id", "rules": [...]}]} } }``
 last_sync_diagnostics: dict = {}
 _diag_lock = _threading.Lock()
 
@@ -1307,6 +1309,9 @@ def _process_rules(session, base_url, all_rules, check_mappings=True, catalogue=
     return processed_rules
 
 
+_SAVED_OBJECT_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
 def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elasticsearch_url=None,
                       force_catalogue=True, search_time_history=None, weights=None):
     """Fetch and score ONE rule from its SIEM, without listing the space.
@@ -1318,13 +1323,19 @@ def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elast
     session = _new_session(api_key, kibana_url)
     endpoint = f"{base_url}/s/{space}/api/detection_engine/rules"
     rule = None
-    for param in ("id", "rule_id"):
+    # Kibana's saved-object id is always a UUID, and Kibana refuses (400) anything else as an id.
+    # A rule_id of your own ("acme-k8s-001") is therefore looked up only as a rule_id. Asking for
+    # it as an id first made this call fail, so a rule just moved or copied never reached TIDE and
+    # could not be linked.
+    params = ("id", "rule_id") if _SAVED_OBJECT_ID.match(str(rule_id)) else ("rule_id",)
+    for param in params:
         res = session.get(endpoint, params={param: rule_id}, timeout=60)
         if res.status_code == 200:
             rule = res.json()
             break
-        if res.status_code != 404:
-            raise RuntimeError(f"Kibana returned HTTP {res.status_code} for space '{space}'")
+        if res.status_code == 404 or (param == "id" and res.status_code == 400):
+            continue
+        raise RuntimeError(f"Kibana returned HTTP {res.status_code} for space '{space}'")
     if not isinstance(rule, dict) or not rule:
         return None
     rule['space_id'] = rule.get('space_id') or space
@@ -1333,9 +1344,22 @@ def fetch_single_rule(kibana_url, api_key, space, rule_id, catalogue=None, elast
     return pd.DataFrame(rows)
 
 
+def _object_key(rule: dict) -> str:
+    """A fetched rule's Kibana saved-object id: unique per rule, unlike ``rule_id``, which Kibana
+    lets two rules share (a custom copy under Elastic's id, and Elastic's prebuilt install)."""
+    return str(rule.get("id") or rule.get("rule_id") or "")
+
+
+def _preferred(rules: list) -> dict:
+    """Of rules sharing one rule_id, the one TIDE keeps, the same at every sync: Elastic's prebuilt
+    install, else the oldest."""
+    from app.services.rule_origins import is_prebuilt
+    return min(rules, key=lambda r: (not is_prebuilt(r), str(r.get("created_at") or ""), _object_key(r)))
+
+
 def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, catalogue=None,
                           elasticsearch_url=None, force_catalogue=False, search_time_history=None,
-                          weights=None):
+                          weights=None, siem_label=""):
     """Fetch detection rules from a single SIEM's Kibana instance.
 
     All connection parameters are mandatory and resolved per-tenant from
@@ -1354,6 +1378,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
         search_time_history: ``{(rule_id, space): [(executed_at, ms), ...]}`` recent runs for the
             search-time median.
         weights: the client's points per scoring check (defaults when omitted).
+        siem_label: the SIEM's name, for log messages.
     """
     if not kibana_url or not api_key:
         log_error("fetch_detection_rules: kibana_url and api_key are required")
@@ -1368,8 +1393,8 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
 
     all_rules = []
 
-    # Per-call diagnostics: { space: {"total": int, "fetched": int,
-    # "complete": bool, "rule_ids": set[str]} }. Stashed on the module so the
+    # Per-call diagnostics: { space: {"total", "fetched", "returned", "complete", "rule_ids",
+    # "duplicates"} } (see last_sync_diagnostics). Stashed on the module so the
     # sync orchestrator can decide whether the subtractive-delete pass is safe
     # to run. See app/services/sync.py for the consumer.
     diagnostics: dict = {}
@@ -1387,7 +1412,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
         for space in spaces:
             page = 1
             space_rules: list = []
-            seen_ids: set = set()      # distinct rule_ids collected so far, across all pages
+            seen_objects: set = set()  # distinct rules (saved-object ids) so far, across all pages
             advertised_total: int = -1  # -1 = unknown until first response
             hit_empty_page = False     # Kibana itself said "no more" — the only definitive end
             page_fetch_failed = False  # True only if an HTTP/network error
@@ -1509,10 +1534,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                         rule['space_id'] = space
 
                 space_rules.extend(rules)
-                for rule in rules:
-                    rid = rule.get('rule_id')
-                    if rid:
-                        seen_ids.add(rid)
+                seen_objects.update(k for k in map(_object_key, rules) if k)
 
                 if not rules:
                     # Kibana itself says there is nothing more — the only fully trustworthy end
@@ -1526,7 +1548,8 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                 # page early, before the actual missing rule was ever fetched — and TIDE would
                 # deprecate a rule that is genuinely still in Kibana. Continuing until the DISTINCT
                 # count catches up gives that rule a real chance to show up on a later page.
-                if advertised_total >= 0 and len(seen_ids) >= advertised_total:
+                # Rules are counted by saved-object id: two rules sharing a rule_id are two rules.
+                if advertised_total >= 0 and len(seen_objects) >= advertised_total:
                     break
                 # Safety cap so a ``total`` that never converges (a Kibana bug, or rules being
                 # created faster than pages are fetched) cannot loop forever: allow some slack
@@ -1536,26 +1559,40 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                 page += 1
 
             fetched = len(space_rules)
-            distinct_ids = seen_ids
+            objects = len(seen_objects)
 
+            from app.services.rule_origins import is_prebuilt
             # ``space_rules`` can still hold the same rule twice (it appeared on two pages — see
-            # the loop above). Collapse that before it is fed into scoring/history as if it were
-            # two separate rules.
-            if len(distinct_ids) < len(space_rules):
-                seen: set = set()
-                deduped = []
-                for r in space_rules:
-                    rid = r.get('rule_id')
-                    if rid and rid in seen:
-                        continue
-                    if rid:
-                        seen.add(rid)
-                    deduped.append(r)
-                space_rules = deduped
+            # the loop above): keep it once. Two rules can also share one rule_id (Kibana allows
+            # a custom copy under Elastic's id next to Elastic's prebuilt install). TIDE keys
+            # rules by rule_id, so it keeps one of them (_preferred) and reports the pair.
+            by_object = {}
+            for r in space_rules:
+                by_object.setdefault(_object_key(r), r)
+            by_rule_id: dict = {}
+            for r in by_object.values():
+                by_rule_id.setdefault(r.get('rule_id') or _object_key(r), []).append(r)
+            space_rules = [_preferred(rs) for rs in by_rule_id.values()]
+            distinct_ids = set(by_rule_id)
+            duplicates = [
+                {"rule_id": rid, "rules": [
+                    {"id": r.get("id"), "name": r.get("name"), "created_at": r.get("created_at"),
+                     "prebuilt": is_prebuilt(r), "kept": r is _preferred(rs)}
+                    for r in rs]}
+                for rid, rs in by_rule_id.items() if len(rs) > 1
+            ]
+            where = f"SIEM '{siem_label}' space '{space}'" if siem_label else f"space '{space}'"
+            if duplicates:
+                _logger.warning(
+                    f"{where}: Kibana holds {len(duplicates)} rule id(s) on more than one rule "
+                    f"({', '.join(d['rule_id'] for d in duplicates[:5])}{'…' if len(duplicates) > 5 else ''}); "
+                    f"TIDE keeps one rule for each. See Diagnostics."
+                )
 
             # A fetch is "complete" — safe for the subtractive-delete pass below to trust — only
-            # when every page returned 200 AND the distinct rule count reached what Kibana itself
-            # advertised on page 1. Ending on an empty page short of that total looks identical
+            # when every page returned 200 AND the distinct rules (by saved-object id, so two
+            # sharing a rule_id both count) reached what Kibana itself advertised on page 1.
+            # Ending on an empty page short of that total looks identical
             # whether Kibana's total was simply stale, or a page-boundary duplicate masked a rule
             # that was skipped — those cannot be told apart from the response alone, so both are
             # treated as incomplete. The cost of that is a genuinely-deleted rule takes one more
@@ -1570,23 +1607,23 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                 reason = failure_reason or "unknown (no successful page)"
                 ep = failure_endpoint or endpoint
                 log_error(
-                    f"Sync drift: space '{space}' fetched {fetched}/{total} rules "
+                    f"Sync drift: {where} fetched {fetched}/{total} rules "
                     f"— {reason} — endpoint={ep}. Subtractive delete skipped "
                     f"for this space. Run `docker exec tide-app python -m "
                     f"app.scripts.diag_sync` for a full credential/connectivity "
                     f"breakdown."
                 )
-            elif len(distinct_ids) >= advertised_total:
+            elif objects >= advertised_total:
                 total = advertised_total
                 complete = True
-                if fetched > len(distinct_ids):
+                if fetched > objects:
                     log_info(
-                        f"Space '{space}': fetched {len(distinct_ids)} distinct rule(s) of "
-                        f"advertised total {total} ({fetched - len(distinct_ids)} duplicate row(s) "
+                        f"{where}: fetched {objects} distinct rule(s) of "
+                        f"advertised total {total} ({fetched - objects} duplicate row(s) "
                         f"across page boundaries, collapsed)."
                     )
                 else:
-                    log_info(f"Space '{space}': fetched {len(distinct_ids)}/{total} rules")
+                    log_info(f"{where}: fetched {objects}/{total} rules")
             else:
                 total = advertised_total
                 complete = False
@@ -1595,7 +1632,7 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
                     else f"gave up after {page} page(s) without converging"
                 )
                 log_error(
-                    f"Sync drift: space '{space}' — only {len(distinct_ids)} distinct rule(s) "
+                    f"Sync drift: {where} — only {objects} distinct rule(s) "
                     f"found (advertised total {total}); every page returned HTTP 200 so this is "
                     f"not a connectivity error — {stop_reason}. Either Kibana's advertised total "
                     f"was stale, or a duplicate on one page masked a rule skipped on another; the "
@@ -1609,8 +1646,10 @@ def fetch_detection_rules(kibana_url, api_key, spaces, check_mappings=True, cata
             diagnostics[space] = {
                 "total": total,
                 "fetched": fetched,
+                "returned": objects,
                 "complete": complete,
                 "rule_ids": distinct_ids,
+                "duplicates": duplicates,
             }
             all_rules.extend(space_rules)
 
@@ -1754,8 +1793,8 @@ def _fetch_preview_alerts(session, base_url, space, preview_id, es_direct_url=No
                 log_error(f"Preview alerts search failed ({resp.status_code}): {resp.text[:300]}")
                 return 0, [], msg
         except Exception as e:
-            log_error(f"Failed to fetch preview alerts: {e}")
-            return 0, [], f"Failed to fetch preview alerts: {e}"
+            log_error(f"Could not fetch the preview alerts: {e}")
+            return 0, [], f"Could not fetch the preview alerts: {e}"
     return 0, [], None
 
 
@@ -2186,7 +2225,8 @@ def _put_rule(session, base_url: str, space: str, rule: dict, on_recreated=None)
     # the create fails, and never for an Elastic prebuilt rule (a create would make it a custom one).
     if not existing:
         return response, None
-    if existing.get("immutable") or (existing.get("rule_source") or {}).get("type") == "external":
+    from app.services.rule_origins import is_prebuilt
+    if is_prebuilt(existing):
         _logger.warning("Rule %s is an Elastic prebuilt rule; not re-creating it in space %s.", rule_id, space)
         return response, ("Its API key in Kibana can't be read and couldn't be refreshed. It is an Elastic "
                           "prebuilt rule, so TIDE didn't re-create it: reinstall it in Kibana.")
@@ -2299,7 +2339,7 @@ def apply_rule_changes(
     try:
         live = _lookup_rule_by_rule_id(session, base_url, space, rule_id)
     except Exception as exc:
-        return "error", f"Couldn't read the rule from Kibana, so nothing was changed: {exc}", None
+        return "error", f"Could not read the rule from Kibana, so nothing was changed: {exc}", None
     if not live:
         return "missing", "Kibana no longer has this rule in this space, so nothing was changed.", None
 
@@ -2319,7 +2359,7 @@ def apply_rule_changes(
     try:
         response, note = _put_rule(session, base_url, space, rule, on_recreated)
     except Exception as exc:
-        return "error", f"Couldn't reach Kibana, so nothing was changed: {exc}", live
+        return "error", f"Could not reach Kibana, so nothing was changed: {exc}", live
     if response.status_code not in (200, 201):
         return "error", _kibana_error(response) + (f" {note}" if note else ""), live
     log_info(f"Updated rule {rule_id} in {space}: {', '.join(sorted({*changes, *remove}))}")
@@ -2357,8 +2397,7 @@ def restore_detection_rule(
     rule = copy.deepcopy(rule_data or {})
     if not rule.get("name") or not (rule.get("query") is not None or rule.get("type") in ("machine_learning", "threat_match")):
         return False, "Stored rule data is incomplete (no name or query), so it cannot be recreated.", None
-    for readonly in ("id", "_version", "created_at", "created_by", "updated_at", "updated_by", "execution_summary"):
-        rule.pop(readonly, None)
+    rule = _creatable(rule)
     rule["enabled"] = False
 
     session = _make_session(api_key, kibana_url)
@@ -2381,6 +2420,63 @@ def restore_detection_rule(
     except Exception as e:
         log_error(f"Restore rule failed: {e}")
         return False, str(e), None
+
+
+def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) -> Tuple[bool, str, Optional[dict]]:
+    """Give the custom rule with saved-object ``object_id`` in ``space`` a rule id of its own: create
+    it again under a new rule_id, as Kibana holds it now (its enabled state, actions and exceptions
+    included; its own exception list copied, shared lists kept), then delete the original. For a
+    custom rule holding one of Elastic's prebuilt rule ids, which stops Kibana installing that
+    prebuilt rule in the space or sits beside it. Kibana keeps the original's alerts and run history
+    with it. Returns ``(ok, message, created rule)``; on failure Kibana is left as it was."""
+    from app.services.rule_origins import is_prebuilt
+    if not (kibana_url and api_key):
+        return False, "This SIEM has no Kibana URL or API key configured.", None
+    session = _make_session(api_key, kibana_url)
+    base_url = kibana_url.rstrip("/")
+    url = f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules"
+    try:
+        found = session.get(url, params={"id": object_id})
+        if found.status_code == 404:
+            return False, "Kibana no longer has this rule. Sync, then try again.", None
+        if found.status_code != 200:
+            return False, f"Kibana did not return the rule (HTTP {found.status_code}).", None
+        live = found.json() or {}
+        if is_prebuilt(live):
+            return False, "This is one of Elastic's prebuilt rules, so it keeps Elastic's rule id.", None
+        body = _creatable(live)
+        body["rule_id"] = str(uuid.uuid4())
+        lists = []
+        for exc in live.get("exceptions_list") or []:
+            if exc.get("type") != "rule_default":
+                lists.append(exc)
+                continue
+            source = get_exception_list(exc.get("list_id"), space, session=session, base_url=base_url)
+            copied = source and create_exception_list_for_rule(
+                source, live.get("name"), space, space, source_session=session, source_base_url=base_url,
+                target_session=session, target_base_url=base_url)
+            if not copied:
+                return False, "Its exception list couldn't be copied, so nothing was changed.", None
+            lists.append(copied)
+        body["exceptions_list"] = lists
+        created = session.post(url, json=body)
+        if created.status_code not in (200, 201):
+            for exc in lists:
+                if exc not in (live.get("exceptions_list") or []):
+                    session.delete(f"{_space_api_prefix(base_url, space)}/api/exception_lists",
+                                   params={"list_id": exc.get("list_id"), "namespace_type": "single"})
+            return False, f"Kibana refused it under a new rule id (HTTP {created.status_code}: {created.text[:200]}).", None
+        deleted = session.delete(url, params={"id": object_id})
+        if deleted.status_code not in (200, 204, 404):
+            session.delete(url, params={"rule_id": body["rule_id"]})
+            return False, (f"Kibana would not delete the original (HTTP {deleted.status_code}), so TIDE removed "
+                           "the new copy again. Nothing was changed."), None
+        log_info(f"Rule '{live.get('name')}' in {space} now has its own rule id {body['rule_id']} "
+                 f"(was {live.get('rule_id')})")
+        return True, "", created.json() or body
+    except Exception as exc:
+        log_error(f"Giving rule {object_id} its own rule id failed: {exc}")
+        return False, f"Kibana could not be reached ({exc}).", None
 
 
 def enable_detection_rule(
@@ -2759,7 +2855,7 @@ def promote_rule_to_production(rule_data, source_space="staging", target_space="
     note = _actions_note(left_behind, target_space)
 
     if response.status_code not in (200, 201):
-        error_msg = f"Failed to {action.lower()} rule in {target_space}: {response.status_code} - {response.text}"
+        error_msg = f"Could not {action.lower()[:-1]} the rule in {target_space}: {response.status_code} - {response.text}"
         log_error(error_msg)
         return False, error_msg
     

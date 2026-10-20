@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -127,7 +127,7 @@ _MAX_SYNC_JOBS = 50
 _sync_jobs: "OrderedDict[str, dict]" = OrderedDict()
 
 
-def _start_sync_job(client_id: str, message: str = "Initialising sync...", *, actor: Optional[str] = None,
+def _start_sync_job(client_id: str, message: str = "Initialising sync…", *, actor: Optional[str] = None,
                     scope: Optional[dict] = None, retry_of: Optional[str] = None) -> str:
     """Create a new sync job record and return its id. The run is also recorded in sync_history
     under the same id (app.services.sync_runs), which outlives a restart; this in-memory record
@@ -230,14 +230,14 @@ async def scheduled_sync(force_mapping=False, client_id: str | None = None, job_
     from app.services import sync_runs
     started = datetime.now() - timedelta(seconds=2)   # server time, as DuckDB now() stores it
     if job_id:
-        _update_sync_job(job_id, "running", "Connecting to Elastic...")
+        _update_sync_job(job_id, "running", "Connecting to Elastic…")
 
     try:
         # Import here to avoid circular imports
         from app.services.sync import trigger_sync
 
         if job_id:
-            _update_sync_job(job_id, "running", "Fetching detection rules...")
+            _update_sync_job(job_id, "running", "Fetching detection rules…")
 
         # Run the actual sync
         result = await trigger_sync(client_id=client_id, force_mapping=force_mapping,
@@ -801,6 +801,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/cve-overview": "page:cve_overview",
         "/baselines": "page:baselines",
         "/rules": "page:rules",
+        # Rule Monitoring is Rule Health's: whoever can see rules sees what needs action.
+        "/rule-monitoring": "page:rules",
+        "/api/rule-monitoring": "page:rules",
         "/sigma": "page:sigma",
         "/elastic": "page:elastic",
         "/hunting": "page:hunting",
@@ -875,6 +878,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/api/heatmap": "page:heatmap",
         "/api/threats": "page:threats",
         "/api/rules": "page:rules",
+        "/api/rule-monitoring": "page:rules",
         "/api/promotion": "page:promotion",
         "/api/sigma": "page:sigma",
         "/api/elastic": "page:elastic",
@@ -1781,6 +1785,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(rules.router)
     app.include_router(bulk_edit_api.router)
+    app.include_router(rule_monitoring_api.router)
     app.include_router(heatmap.router)
     app.include_router(threats.router)
     app.include_router(promotion.router)
@@ -1971,14 +1976,14 @@ def create_app() -> FastAPI:
             _metrics_from_rules,
         )
         from app.models.rules import RuleFilters
-        from app.services import rule_origins
+        from app.services import rule_issues, rule_origins
         qp = request.query_params
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
         enabled_q = qp.get("enabled") or ""
         from app.services.database import normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
-        upstream_q = [u for u in qp.getlist("upstream") if u]
+        upstream_q = rule_origins.filter_values(u for u in qp.getlist("upstream") if u)
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
         validated_from_q = qp.get("validated_from") or ""
@@ -2077,6 +2082,7 @@ def create_app() -> FastAPI:
                 "scope_labels": scope_labels,
                 "client_siems": client_siems,
                 "last_sync_time": get_last_sync_time(_all_rules),
+                "last_sync": rule_issues.freshness(db, _cid),
                 "search": search_q,
                 "space": space_q,
                 "enabled": enabled_q,
@@ -2099,6 +2105,16 @@ def create_app() -> FastAPI:
                 "view": qp.get("view") if qp.get("view") in ("cards", "table") else "",
                 "offline_notice": offline_notice,
             }
+        )
+
+    @app.get("/rule-monitoring", response_class=HTMLResponse, name="rule_monitoring")
+    def rule_monitoring_page(request: Request, user: CurrentUser, db: DbDep, client_id: ActiveClient):
+        """Rule Monitoring (#67): the rules that need action, grouped by cause. Its filters can come
+        in the address (a Dashboard section's link)."""
+        from app.api.rule_monitoring import page_context
+        return render_template(
+            "pages/rules/rule_monitoring.html", request,
+            {"user": user, "active_page": "rule_monitoring", **page_context(db, client_id, request.query_params, user)},
         )
 
     @app.get("/heatmap", response_class=HTMLResponse, name="heatmap")
@@ -2683,6 +2699,16 @@ def create_app() -> FastAPI:
         from app.services import docs
         return JSONResponse(docs.search_index(settings.tide_version), headers={"Cache-Control": "no-store"})
 
+    @app.get("/settings/docs/help/{topic}", response_class=HTMLResponse)
+    def docs_help_panel(request: Request, user: CurrentUser, topic: str):
+        """A page's ?: its section of the guide, in the side panel (macros/help.html)."""
+        from fastapi import HTTPException
+        from app.services import docs
+        section = docs.help_section(topic, settings.tide_version)
+        if section is None:
+            raise HTTPException(status_code=404, detail="No help for this page")
+        return render_template("partials/docs_help_panel.html", request, {"user": user, "help": section})
+
     @app.get("/settings/docs", response_class=HTMLResponse)
     @app.get("/settings/docs/{slug}", response_class=HTMLResponse)
     def docs_page(request: Request, user: CurrentUser, slug: str = ""):
@@ -2903,6 +2929,7 @@ def create_app() -> FastAPI:
         state = job["state"]
         message = job["message"]
 
+        from app.services.icons import icon as _icon
         if state == "running":
             elapsed = ""
             if job["started_at"]:
@@ -2921,23 +2948,16 @@ def create_app() -> FastAPI:
         elif state == "complete":
             # Refreshes the rules and their metrics (refreshRules, syncComplete); the tracker
             # clears itself after 4 s (data-clear-after, actions.js).
-            return HTMLResponse("""
+            return HTMLResponse(f"""
             <div id="sync-status" class="sync-tracker sync-complete" data-clear-after="4000">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
-                    <polyline points="22 4 12 14.01 9 11.01"/>
-                </svg>
+                {_icon("check-circle", "16")}
                 <span>Sync complete</span>
             </div>
             """, headers={"HX-Trigger": "refreshRules, syncComplete"})
         elif state == "error":
             return HTMLResponse(f"""
             <div id="sync-status" class="sync-tracker sync-error" data-clear-after="6000">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="15" y1="9" x2="9" y2="15"/>
-                    <line x1="9" y1="9" x2="15" y2="15"/>
-                </svg>
+                {_icon("circle-x", "16")}
                 <span>Sync failed: {message}</span>
             </div>
             """)

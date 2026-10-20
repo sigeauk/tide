@@ -1,0 +1,29 @@
+{#
+  Rule Monitoring: acknowledge (mute) one cause. Context: issue, cause, space, siem_ids (comma-separated:
+  one cause on the SIEM records of one cluster), title, label. Acknowledging closes the dialog and
+  refreshes the list (rmonChanged).
+#}
+{% from "macros/modal.html" import close_button %}
+<div class="modal-overlay" data-click="backdrop.remove">
+    <div class="modal-content modal-sm" data-stop-click role="dialog" aria-modal="true" aria-labelledby="rmon-ack-title">
+        <div class="modal-header">
+            <h3 class="modal-title" id="rmon-ack-title">Acknowledge</h3>
+            {{ close_button('data-click="modal.remove"', 'Cancel') }}
+        </div>
+        <form name="Acknowledge Issue" hx-post="/api/rule-monitoring/ack" hx-target="#modal-container" hx-swap="innerHTML">
+            <input type="hidden" name="issue" value="{{ issue }}">
+            <input type="hidden" name="cause" value="{{ cause }}">
+            <input type="hidden" name="siem_id" value="{{ siem_ids }}">
+            <input type="hidden" name="space" value="{{ space }}">
+            <p class="text-secondary mb-md">{{ title }}: <strong>{{ label }}</strong>. It moves to <strong>Acknowledged</strong>
+                and isn't counted, until it affects more rules than it does now.</p>
+            <label class="form-label" for="rmon-ack-note">Note</label>
+            <textarea id="rmon-ack-note" name="note" class="form-input" rows="3" maxlength="1000"
+                      placeholder="Why, for example: this index isn't onboarded until November."></textarea>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="modal.remove">Cancel</button>
+                <button name="Acknowledge" type="submit" class="btn btn-primary">Acknowledge</button>
+            </div>
+        </form>
+    </div>
+</div>

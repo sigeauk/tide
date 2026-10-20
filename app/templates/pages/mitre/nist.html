@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}NIST 800-53 | TIDE{% endblock %}
 
@@ -9,7 +10,7 @@
 
 <div class="page-header flex items-start justify-between gap-md">
     <div>
-        <h1 class="page-title-hero">NIST 800-53</h1>
+        <h1 class="page-title-hero">NIST 800-53 {{ help_button('nist') }}</h1>
         <p class="page-subtitle">Control families and mapped capability descriptions served from the bundled NIST mappings file.</p>
     </div>
     <div class="page-split__side">

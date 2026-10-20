@@ -29,3 +29,13 @@ def close_button(attrs: str, label: str = "Close") -> str:
 def icon_text(name: str, text: str, size: str = "16") -> str:
     """An icon then its words, as ``{{ icon_text(name, text, size) }}`` gives it."""
     return str(_env().get_template("macros/icons.html").module.icon_text(name, text, size)).strip()
+
+
+def empty_state(icon_name: str, title: str, text: str = "") -> str:
+    """A list or tab with nothing to show, as ``{% call empty_state(icon_name) %}`` draws it: what is
+    missing, then (optionally) what to do. ``title`` and ``text`` are escaped."""
+    from markupsafe import escape
+    body = f'<p class="empty-state-title">{escape(title)}</p>' + (f"<p>{escape(text)}</p>" if text else "")
+    tpl = _env().from_string('{% from "macros/modal.html" import empty_state %}'
+                             '{% call empty_state(n) %}{{ body | safe }}{% endcall %}')
+    return tpl.render(n=icon_name, body=body).strip()

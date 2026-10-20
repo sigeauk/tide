@@ -47,7 +47,7 @@
                     {{ icon('triangle-alert', '18') }} CVE Matches
                 </h2>
                 {% if vulns %}
-                <a name="View All" href="/cve-overview" class="btn btn-secondary btn-sm fs-sm">
+                <a name="View All" href="/cve-overview" class="btn btn-secondary btn-sm">
                     View All {{ icon('external-link', '12') }}
                 </a>
                 {% endif %}
@@ -101,7 +101,7 @@
                     <input name="model" class="form-input" value="{{ host.model or '' }}" placeholder="PowerEdge R740">
                 </div>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-host-modal">Cancel</button>
                 <button name="Save Changes" type="submit" class="btn btn-primary">{{ icon('save','14') }} Save Changes</button>
@@ -140,7 +140,7 @@
                 <label class="form-label">CPE</label>
                 <input class="form-input" name="cpe" placeholder="cpe:2.3:a:apache:http_server:2.4.51:*:*:*:*:*:*:*">
             </div>
-            <div class="flex gap-sm justify-end mt-sm">
+            <div class="modal-actions mt-sm">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-sw-modal">Cancel</button>
                 <button name="Add Package" type="submit" class="btn btn-primary">Add Package</button>

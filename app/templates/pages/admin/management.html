@@ -1,6 +1,7 @@
 {% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
 {% from "macros/modal.html" import close_button %}
+{% from "components/ui/loading_state.html" import loading_state %}
 {% block title %}Management - TIDE{% endblock %}
 
 {% block head %}
@@ -51,7 +52,7 @@
              hx-get="/api/management/tab/{{ tu_tab }}"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <div class="loading-note loading-note--center">Loading&hellip;</div>
+            {{ loading_state() }}
         </div>
     </div>
 </details>
@@ -64,7 +65,7 @@
         <span class="mgmt-section__hint">Portable backup of rules, baselines and users</span>
     </summary>
     <div class="mgmt-section__body" name="Open Data Transfer" hx-get="/api/management/tab/data-transfer" hx-trigger="load" hx-swap="innerHTML">
-        <div class="loading-note">Loading&hellip;</div>
+        {{ loading_state() }}
     </div>
 </details>
 
@@ -75,7 +76,7 @@
         <span class="mgmt-section__hint">Daily copies of every database, and how to restore one</span>
     </summary>
     <div class="mgmt-section__body" name="Open Backups" hx-get="/api/management/backups" hx-trigger="load" hx-swap="innerHTML">
-        <div class="loading-note">Loading&hellip;</div>
+        {{ loading_state() }}
     </div>
 </details>
 {% endif %}
@@ -104,7 +105,7 @@
             </summary>
             <div name="Open Siems" id="mgmt-sub-siems" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/siems" hx-trigger="load" hx-swap="innerHTML">
-                <div class="loading-note">Loading SIEMs…</div>
+                {{ loading_state("Loading SIEMs…") }}
             </div>
         </details>
 
@@ -116,7 +117,7 @@
             </summary>
             <div name="Open Connectors" id="mgmt-sub-connectors" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/connectors" hx-trigger="load" hx-swap="innerHTML">
-                <div class="loading-note">Loading Connectors…</div>
+                {{ loading_state("Loading connectors…") }}
             </div>
         </details>
 
@@ -136,7 +137,7 @@
             </summary>
             <div name="Open Gitlab" id="mgmt-sub-gitlab" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/gitlab" hx-trigger="load" hx-swap="innerHTML">
-                <div class="loading-note">Loading GitLab…</div>
+                {{ loading_state("Loading GitLab…") }}
             </div>
         </details>
 
@@ -148,7 +149,7 @@
             </summary>
             <div name="Open Keycloak" id="mgmt-sub-keycloak" class="mgmt-subsection__body"
                  hx-get="/api/management/tab/keycloak" hx-trigger="load" hx-swap="innerHTML">
-                <div class="loading-note">Loading Keycloak…</div>
+                {{ loading_state("Loading Keycloak…") }}
             </div>
         </details>
         {% else %}
@@ -198,7 +199,7 @@
                 <div class="asset-editor">
                     <div class="asset-editor__col">
                         <div id="pipeline-list" class="asset-editor__list">
-                            <span class="text-muted fs-sm">Loading…</span>
+                            {{ loading_state(inline=true) }}
                         </div>
                         <div class="asset-editor__buttons">
                             <button name="+ New Pipeline" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="pipeline">
@@ -241,7 +242,7 @@
                 <div class="asset-editor">
                     <div class="asset-editor__col">
                         <div id="template-list" class="asset-editor__list">
-                            <span class="text-muted fs-sm">Loading…</span>
+                            {{ loading_state(inline=true) }}
                         </div>
                         <div class="asset-editor__buttons">
                             <button name="+ New Template" type="button" class="btn btn-secondary btn-sm grow" data-click="mgmt.assetNew" data-asset="template">
@@ -290,12 +291,12 @@
             for the tenants you select here.
         </p>
         <div id="sigma-assign-checkboxes" class="check-list">
-            <span class="text-secondary fs-sm">Loading clients…</span>
+            {{ loading_state("Loading clients…", inline=true) }}
         </div>
         <div id="sigma-assign-error" class="text-danger form-error"></div>
-        <div class="form-footer form-footer--end mt-md">
-            <button name="Cancel" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.assignClose">Cancel</button>
-            <button name="Save assignment" type="button" class="btn btn-primary btn-sm" data-click="mgmt.assignSave">Save assignment</button>
+        <div class="modal-actions mt-md">
+            <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.assignClose">Cancel</button>
+            <button name="Save assignment" type="button" class="btn btn-primary" data-click="mgmt.assignSave">Save assignment</button>
         </div>
     </div>
 </div>
@@ -325,7 +326,7 @@
              hx-get="/api/inventory/classifications"
              hx-trigger="load"
              hx-swap="innerHTML">
-            <span class="text-secondary text-sm">Loading...</span>
+            {{ loading_state(inline=true) }}
         </div>
     </div>
 </details>
@@ -346,7 +347,7 @@
          hx-get="/api/management/tab/query"
          hx-trigger="load"
          hx-swap="innerHTML">
-        <div class="loading-note">Loading query console...</div>
+        {{ loading_state("Loading the query console…") }}
     </div>
 </details>
 {% endif %}
@@ -373,9 +374,9 @@
             </div>
             <div>
                 <label for="client-form-desc" class="form-label">Description</label>
-                <textarea id="client-form-desc" class="form-input" rows="3" placeholder="Optional description..."></textarea>
+                <textarea id="client-form-desc" class="form-input" rows="3" placeholder="Optional description…"></textarea>
             </div>
-            <div class="form-footer form-footer--end">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary" data-click="clients.close">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
             </div>
@@ -446,7 +447,7 @@
                 <div class="form-stack">
                     <div>
                         <label class="form-label">Sentinel URL</label>
-                        <input name="Siem Form Sentinel Url" type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/...">
+                        <input name="Siem Form Sentinel Url" type="text" id="siem-form-sentinel-url" class="form-input" placeholder="https://management.azure.com/subscriptions/…">
                     </div>
                     <div>
                         <label class="form-label">API token</label>
@@ -460,7 +461,7 @@
             <div class="form-footer">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.siemTest"
                         id="siem-test-btn">Test Connection</button>
-                <div class="btn-group">
+                <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.siemClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="siem-form-submit">Create</button>
                 </div>
@@ -509,7 +510,7 @@
             <div class="form-footer">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.openctiTest"
                         id="opencti-test-btn">Test Connection</button>
-                <div class="btn-group">
+                <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.openctiClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="opencti-form-submit">Create</button>
                 </div>
@@ -549,7 +550,7 @@
                 <span class="form-hint">GitLab group where reports will be pushed.</span>
             </div>
             {{ tls_verify_row('gitlab-form-tls-verify') }}
-            <div class="form-footer form-footer--end">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.gitlabClose">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="gitlab-form-submit">Create</button>
             </div>
@@ -596,7 +597,7 @@
             <div class="form-footer">
                 <button name="Test Connection" type="button" class="btn btn-secondary btn-sm" data-click="mgmt.keycloakTest"
                         id="keycloak-test-btn">Test Connection</button>
-                <div class="btn-group">
+                <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.keycloakClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="keycloak-form-submit">Create</button>
                 </div>
@@ -649,7 +650,7 @@
             <div id="connector-test-result" class="form-result"></div>
             <div class="form-footer">
                 <span class="form-hint">Secrets are stored encrypted and aren't shown again after saving.</span>
-                <div class="btn-group">
+                <div class="modal-actions">
                     <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.connectorClose">Cancel</button>
                     <button name="Create" type="submit" class="btn btn-primary" id="connector-form-submit">Create</button>
                 </div>
@@ -691,7 +692,7 @@
                           placeholder='{ "vendor": "opencti", "label": "...", "config": { ... } }'></textarea>
             </div>
             <div id="connector-import-result" class="mt-sm"></div>
-            <div class="form-footer form-footer--end mt-md">
+            <div class="modal-actions mt-md">
                 <button name="Cancel" type="button" class="btn btn-secondary" data-click="mgmt.importClose">Cancel</button>
                 <button name="Import" type="submit" class="btn btn-primary">Import</button>
             </div>

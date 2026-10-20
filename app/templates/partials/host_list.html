@@ -77,7 +77,7 @@
             {% if h.hardware_vendor or h.model %}<div><strong>Hardware:</strong> {{ h.hardware_vendor or 'Unknown vendor' }}{% if h.model %} / {{ h.model }}{% endif %}</div>{% endif %}
         </div>
         <div class="mt-sm flex justify-end">
-                <button name="Delete Hosts" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
+                <button name="Delete Hosts" class="btn btn-danger btn-sm"
                         hx-delete="/api/inventory/hosts/{{ h.id }}?system_id={{ system_id }}"
                         hx-confirm="Delete device '{{ h.name }}' and all its packages?"
                         hx-target="#hosts-section"

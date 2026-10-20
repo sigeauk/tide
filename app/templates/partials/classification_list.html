@@ -11,7 +11,7 @@
             <span class="u-bg-dyn clf-swatch" style="--u-bg-color:{{ clf.color }}"></span>
             <span class="fs-base fw-600">{{ clf.name }}</span>
         </div>
-        <button name="Delete Classifications" class="btn btn-danger btn-sm py-2xs px-sm fs-xs"
+        <button name="Delete Classifications" class="btn btn-danger btn-sm"
                 hx-delete="/api/inventory/classifications/{{ clf.id }}"
                 hx-target="#clf-list"
                 hx-swap="innerHTML"

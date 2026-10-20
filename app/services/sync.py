@@ -587,6 +587,14 @@ def _reachable_spaces(db, elastic_helper, siem: dict, kibana_url: str, token: st
     return reachable
 
 
+def _record_space_fetch(db, siem_id: str, space: str, diag: dict) -> None:
+    """``record_space_fetch`` for Diagnostics; never fails the sync."""
+    try:
+        db.record_space_fetch(siem_id, space, diag)
+    except Exception:
+        logger.warning("Could not record how the fetch of space '%s' went", space, exc_info=True)
+
+
 def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: str | None = None,
                      only_space: str | None = None):
     """Per-tenant Elastic detection-rule sync.
@@ -817,6 +825,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         force_catalogue=force_mapping,
                         search_time_history=siem_search_history,
                         weights=scoring_weights,
+                        siem_label=siem.get('label') or '',
                     )
                     # Pull per-space drift diagnostics so the subtractive
                     # passes below can be skipped for any (siem, space) where
@@ -907,10 +916,11 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                             logger.warning(
                                 f"WARN sync incomplete for SIEM '{siem_label}' "
                                 f"(siem_id={siem_id}) space '{space}' — "
-                                f"{space_diag.get('fetched', 0)}/"
+                                f"{space_diag.get('returned', space_diag.get('fetched', 0))}/"
                                 f"{space_diag.get('total', '?')} rules; "
                                 f"preserving existing rows."
                             )
+                            _record_space_fetch(db, siem_id, space, space_diag)
                             continue
                         # Clean fetch — authoritative reconcile.
                         keep_ids = space_diag.get("rule_ids") or set()
@@ -957,6 +967,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                                 space=space,
                                 keep_rule_ids=set(),
                             )
+                        _record_space_fetch(db, siem_id, space, space_diag)
 
                 # ── Orphan-mapping sweep ────────────────────────────────
                 # The mirror reconcile above only visits (siem_id, space)
@@ -1048,6 +1059,11 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 matched = rule_origins.backfill_tenant(db, client_id)
                 if matched:
                     logger.info(f"Matched {matched} rule(s) to their Elastic or Sigma origin for client_id={client_id}")
+
+                # What needs action in the destinations this sync covered (Rule Monitoring).
+                from app.services import rule_issues
+                rule_issues.refresh_tenant(db, client_id,
+                                           scopes={(sid, sp) for sid, sps in client_scope.items() for sp in sps})
 
                 logger.info(f"Synced {count} rules from {len(siems)} SIEM(s) into tenant DB for client_id={client_id}")
                 return count

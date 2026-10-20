@@ -50,13 +50,13 @@
                 });
                 if (!resp.ok) {
                     var err = await resp.json();
-                    showToast(err.detail || 'Request failed', 'error');
+                    showToast(err.detail || 'Could not save the client.', 'error');
                     return;
                 }
                 closeModal();
                 after(form.dataset.after);
             } catch (ex) {
-                showToast('Network error', 'error');
+                showToast(TIDE.UNREACHABLE, 'error');
             }
         },
         delete: async function (e, el) {
@@ -65,12 +65,12 @@
                 var resp = await fetch('/api/clients/' + el.dataset.id, { method: 'DELETE' });
                 if (!resp.ok) {
                     var err = await resp.json();
-                    showToast(err.detail || 'Delete failed', 'error');
+                    showToast(err.detail || 'Could not delete the client.', 'error');
                     return;
                 }
                 after(el.dataset.after);
             } catch (ex) {
-                showToast('Network error', 'error');
+                showToast(TIDE.UNREACHABLE, 'error');
             }
         },
     });

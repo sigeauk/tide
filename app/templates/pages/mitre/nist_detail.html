@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% from "components/mitre_pill.html" import mitre_pill %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}{{ nist_capability.title }} - NIST 800-53 | TIDE{% endblock %}
 
@@ -9,7 +10,7 @@
 
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-split__main">
-        <h1 class="page-title-hero">{{ nist_capability.group_code }} - {{ nist_capability.title }}</h1>
+        <h1 class="page-title-hero">{{ nist_capability.group_code }} - {{ nist_capability.title }} {{ help_button('nist') }}</h1>
         <p class="page-subtitle">Capability detail page with the ATT&CK techniques this control mitigates.</p>
         <h2 class="section-title mt-md">Description</h2>
         <div class="md-content mt-sm">{{ (nist_capability.comments or 'No description available.') | md }}</div>

@@ -1942,6 +1942,13 @@ _PRIORITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 REPORT_TECHNIQUE_SCOPES = ("gaps", "all", "none")
 
 
+def _rules_synced(client_id: Optional[str]) -> str:
+    """A report's "Rules last synced" (rule_issues.report_synced)."""
+    from app.services import rule_issues
+    from app.services.database import get_database_service
+    return rule_issues.report_synced(get_database_service(), client_id)
+
+
 def build_system_report_data(system_id: str, include_devices: bool = True, client_id: str = None,
                              baseline_ids: Optional[List[str]] = None, techniques: str = "gaps") -> Optional[Dict]:
     """Everything a system's report shows, for the chosen baselines (all of them when none are named).
@@ -2000,6 +2007,7 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
                                     if system.classification else None,
         },
         "generated_at": datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "rules_synced": _rules_synced(client_id),
         "baselines": baselines,
         "all_baselines": len(chosen) == len(view["baselines"]),
         "totals": totals,
@@ -2310,6 +2318,7 @@ def build_cve_report_data(cve_id: str, search_filter: str = "", client_id: str =
         "amber_count": amber_count,
         "grey_count": grey_count,
         "generated_at": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+        "rules_synced": _rules_synced(client_id),
     }
 
 

@@ -2,6 +2,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/filters.html" import filter_choice %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}Threat Landscape | TIDE{% endblock %}
 
@@ -12,6 +13,7 @@
     <div>
         <h1 class="page-title-hero">
             Threat Landscape
+            {{ help_button('threat-landscape') }}
         </h1>
         <p class="page-subtitle">Maps known threat actor TTPs directly against active SIEM detection rules.</p>
     </div>
@@ -44,7 +46,7 @@
             type="text" 
             name="search"
             class="form-input" 
-            placeholder="Actor name, alias, description..."
+            placeholder="Actor name, alias, description…"
             hx-get="/api/threats"
             hx-trigger="keyup changed delay:300ms"
             hx-target="#threats-grid"
@@ -83,9 +85,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
-                    <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                </svg>
+                {{ icon('check-square', '16', 'modal-title__icon') }}
                 Create Assurance Baseline
             </h3>
             {{ close_button('name="Close Actor Baseline Modal" data-click="threats.baselineClose"') }}
@@ -109,8 +109,8 @@
                           placeholder="Brief description…"
                           class="form-input"></textarea>
             </div>
-            <div class="flex gap-ms justify-end">
-                <button name="Cancel" type="button" data-click="threats.baselineClose" class="btn btn-secondary fs-base py-sm px-md"
+            <div class="modal-actions">
+                <button name="Cancel" type="button" data-click="threats.baselineClose" class="btn btn-secondary"
                        >Cancel</button>
                 <button name="Generate Baseline" type="submit" class="btn btn-primary">Generate Baseline</button>
             </div>

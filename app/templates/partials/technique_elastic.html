@@ -14,7 +14,7 @@
 <ul class="sm-sigma">
   {% for r in rules %}
   <li class="sm-sigma__item">
-    <span class="sm-sigma__title" title="{{ r.description | truncate(400) }}">{{ r.name }}</span>
+    <span class="sm-sigma__title" title="{{ r.description | truncate(400, end='…') }}">{{ r.name }}</span>
     <span class="sm-sigma__meta">
       {% if r.severity %}<span class="sev-pill sev-{{ r.severity }}">{{ r.severity | upper }}</span>{% endif %}
       <span class="text-muted">{{ 'building block' if r.status == 'building_block' else r.rule_type | replace('_', ' ') }}</span>

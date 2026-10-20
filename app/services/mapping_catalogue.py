@@ -193,6 +193,13 @@ class MappingCatalogue:
                         "checked_at": entry.fetched_at if entry else None, "error": entry.last_error if entry else ""})
         return out
 
+    def entries(self, patterns: Iterable[str]) -> Dict[str, Entry]:
+        """The stored entry of each of ``patterns`` that has been checked (unchecked ones are left
+        out: unknown, never missing)."""
+        patterns = [p for p in dict.fromkeys(patterns) if p]
+        self._load([p for p in patterns if p not in self._entries])
+        return {p: self._entries[p] for p in patterns if p in self._entries}
+
     def describe(self, indices: Iterable[str]) -> Dict[str, Any]:
         """For the Rule modal: how fresh the mapping data behind a rule is."""
         self._load([i for i in indices if i and i not in self._entries])

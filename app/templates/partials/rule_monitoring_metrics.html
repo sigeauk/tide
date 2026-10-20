@@ -1,0 +1,60 @@
+{#
+  Rule Monitoring's stat cards, laid out as Rule Health's (a figure, a label, a line of figures, the
+  detail on hover). Context: metrics, stale_days (rule_issues.view). Of what is open, whichever
+  Show is chosen.
+#}
+{% from "macros/metrics.html" import metric_card %}
+{% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{% set m = metrics %}
+{# Until Rule Monitoring has a week of history, every problem looks new: say since when it has tracked instead. #}
+{% set new_known = m.new_known | default(true) %}
+{% set new_tip %}New: their first problem began in the last 7 days{% if not new_known %}. Shown once Rule Monitoring has a week of history; it began on {{ m.tracked_since.strftime('%d %b') }}{% endif %}.{% endset %}
+
+{% call metric_card('rules', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' danger' if m.errors else ' warning' if m.rules else ' success' }}">{{ m.rules }}</p>
+    <p class="metric-label">Rules Needing Action</p>
+    <p class="metric-sub">{% if filters.rules == 'all' %}of {{ m.rules_total }} rules{% else %}{{ m.rules_enabled }} of {{ m.rules_total }} enabled{% endif %}</p>
+    {% if filters.rules != 'all' and m.rules > m.rules_enabled %}<p class="metric-sub">{{ m.rules - m.rules_enabled }} disabled</p>{% endif %}
+    <div class="metric-tip" role="tooltip">Rules with at least one open issue, for the filters shown{% if filters.rules != 'all' %}: enabled rules, and disabled ones with a rule id problem TIDE can fix. Beneath: the enabled rules needing action, out of the enabled rules in the destinations shown{% endif %}.</div>
+{% endcall %}
+
+{% call metric_card('errors', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' danger' if m.errors }}">{{ m.errors }}</p>
+    <p class="metric-label">Errors</p>
+    <p class="metric-sub">{% if new_known %}{{ m.new_errors }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with an error: they don't do their job until it is fixed. {{ new_tip }}</div>
+{% endcall %}
+
+{% call metric_card('warnings', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' warning' if m.warnings }}">{{ m.warnings }}</p>
+    <p class="metric-label">Warnings</p>
+    <p class="metric-sub">{% if new_known %}{{ m.new_warnings }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>
+    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with warnings only: they run, but less well. {{ new_tip }}</div>
+{% endcall %}
+
+{% call metric_card('causes', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value">{{ m.causes }}</p>
+    <p class="metric-label">Things to Fix</p>
+    {# Who fixes them, in words; a fixer with nothing to fix is left off the face, not the detail. #}
+    {# Two to a line, so the card wraps between them, not inside one. #}
+    {% set fix = namespace(parts=[]) %}
+    {% for key, word in (('data', 'data'), ('author', 'author'), ('platform', 'Kibana'), ('tide', 'TIDE')) if m.by_fixer[key] %}{% set fix.parts = fix.parts + [m.by_fixer[key] ~ ' ' ~ word] %}{% endfor %}
+    {% for pair in fix.parts | batch(2) %}<p class="metric-sub">{{ pair | join(' · ') }}</p>{% else %}<p class="metric-sub">nothing to fix</p>{% endfor %}
+    <div class="metric-tip" role="tooltip">
+        <div class="metric-tip__head">Distinct causes: one missing index or field is one thing to fix, however many rules it affects</div>
+        <div class="metric-tip__row"><b>Data / ingest</b> indexes and pipelines <span>{{ m.by_fixer.data }}</span></div>
+        <div class="metric-tip__row"><b>Rule author</b> the rule's query <span>{{ m.by_fixer.author }}</span></div>
+        <div class="metric-tip__row"><b>Kibana / platform</b> the SIEM itself <span>{{ m.by_fixer.platform }}</span></div>
+        <div class="metric-tip__row"><b>TIDE</b> rule ids, syncs <span>{{ m.by_fixer.tide }}</span></div>
+    </div>
+{% endcall %}
+
+{% call metric_card('resolved', keys, link, 'metric-card--tip', tip=true) %}
+    <p class="metric-value{{ ' success' if m.resolved }}">{{ m.resolved }}</p>
+    <p class="metric-label">Resolved</p>
+    <p class="metric-sub">last 14 days</p>
+    <div class="metric-tip" role="tooltip">Causes a sync found fixed in the last 14 days. Show → Resolved recently lists them.</div>
+{% endcall %}
+
+{% set last_sync = {"at": m.last_synced, "stale": m.stale, "days": stale_days} %}
+{% include "partials/last_synced_card.html" %}

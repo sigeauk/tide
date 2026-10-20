@@ -71,13 +71,13 @@
                 {% for det in ns_applied_all.items %}
                 <span class="badge badge-success fs-xs inline-flex items-center gap-xs">
                     {{ icon('check','10') }} {{ det.note[:30] if det.note else det.rule_ref[:30] if det.rule_ref else 'Rule' }}
-                    <button name="Delete Apply System" class="btn btn-danger btn-sm u-bg-transparent py-0 px-xs fs-2xs leading-none ml-2xs border-0 text-danger cursor-pointer"
+                    <button name="Delete Apply System" type="button" class="rm-x" title="Remove" aria-label="Remove"
                             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}/apply-system/{{ grp.system_id }}"
                             hx-target="#cve-affected-section"
                             hx-swap="innerHTML"
                             hx-confirm="Remove this detection from all hosts in {{ grp.system_name }}?"
                            >
-                        {{ icon('x','9') }}
+                        {{ icon('x', '13') }}
                     </button>
                 </span>
                 {% endfor %}
@@ -94,7 +94,7 @@
                         <option value="{{ det.id }}">{{ det.note[:35] if det.note else det.rule_ref[:35] if det.rule_ref else 'Rule' }}</option>
                         {% endfor %}
                     </select>
-                    <button name="Apply" type="submit" class="btn btn-sm btn-primary fs-xs py-2xs px-sm">
+                    <button name="Apply" type="submit" class="btn btn-sm btn-primary">
                         {{ icon('shield-check','10') }} Apply
                     </button>
                 </form>
@@ -125,10 +125,10 @@
                 {% if bs.host_id == h.host_id %}
                 <div class="fs-xs text-muted italic mt-2xs">
                     {{ icon('info','10') }} {{ bs.reason }}
-                    <button name="Delete Blind Spots" class="btn btn-sm u-bg-transparent py-0 px-xs fs-2xs border-0 text-danger cursor-pointer"
+                    <button name="Delete Blind Spots" type="button" class="rm-x" title="Remove" aria-label="Remove"
                             hx-delete="/api/blind-spots/{{ bs.id }}?entity_type=cve&entity_id={{ cve_id }}"
                             hx-target="#cve-affected-section" hx-swap="innerHTML"
-                            hx-confirm="Remove blind spot for {{ h.name }}?">{{ icon('x','9') }}</button>
+                            hx-confirm="Remove blind spot for {{ h.name }}?">{{ icon('x', '13') }}</button>
                 </div>
                 {% endif %}
                 {% endfor %}
@@ -202,7 +202,7 @@
                             <option value="{{ det.id }}">{{ det.note[:25] if det.note else det.rule_ref[:25] if det.rule_ref else 'Rule' }}</option>
                             {% endfor %}
                         </select>
-                        <button   name="Apply Detection" type="submit" class="btn btn-sm btn-primary fs-2xs py-2xs px-xs">
+                        <button   name="Apply Detection" type="submit" class="btn btn-sm btn-primary">
                             {{ icon('shield-check','9') }}
                         </button>
                     </form>
@@ -269,7 +269,7 @@
                 <textarea name="reason" class="form-input" rows="3" required
                           placeholder="Why can't this host be monitored? e.g. Legacy OS, no agent support, vendor appliance…"></textarea>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="blind-spot-modal">Cancel</button>
                 <button name="Log Blind Spot" type="submit" class="btn btn-primary">Log Blind Spot</button>

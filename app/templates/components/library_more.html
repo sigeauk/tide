@@ -3,7 +3,8 @@
   scrolls into view it loads the next rows in its place, with the list's filters as they are now.
   Context: next_offset (0 when there are no more), url, filters (the hx-include selector), what.
 #}
+{% from "components/ui/loading_state.html" import loading_state %}
 {% if next_offset %}
 <div class="lib-more" hx-get="{{ url }}" hx-include="{{ filters }}" hx-vals='{"offset": {{ next_offset | int }}}'
-     hx-trigger="intersect once" hx-swap="outerHTML" role="status">Loading more {{ what }}…</div>
+     hx-trigger="intersect once" hx-swap="outerHTML">{{ loading_state("Loading more " ~ what ~ "…", inline=true) }}</div>
 {% endif %}

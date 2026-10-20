@@ -40,14 +40,18 @@ class Source:
     page: str = ""                           # where a card goes; "" = its cards are not links
 
 
-# The State filter, one choice per card badge; a saved "live" (before 6.1.4) reads as Live + Linked.
-RULE_STATES = (("unlinked", "Live"), ("linked", "Linked"), ("offline", "SIEM offline"), ("deprecated", "Deprecated"))
+# The State filter, one choice per card badge; a saved "live" (before 6.1.4) reads as Unlinked + Linked.
+RULE_STATES = (("unlinked", "Unlinked"), ("linked", "Linked"), ("offline", "SIEM offline"), ("deprecated", "Deprecated"))
 
 SOURCES: Dict[str, Source] = {
     "rule_health": Source("Rule Health", "shield-check", (
         ("total", "Total Rules"), ("enabled", "Enabled"), ("validated", "Validated"),
         ("quality", "Avg Quality"), ("severity", "Severity"), ("last_synced", "Last Synced"),
     ), ("space", "enabled", "state", "min_score", "max_score", "validated_from", "validated_to", "search"), "/rules"),
+    "rule_monitoring": Source("Rule Monitoring", "triangle-alert", (
+        ("rules", "Rules Needing Action"), ("errors", "Errors"), ("warnings", "Warnings"),
+        ("causes", "Things to Fix"), ("resolved", "Resolved"), ("last_synced", "Last Synced"),
+    ), ("scope", "severity", "fixer", "issue", "rules", "search"), "/rule-monitoring"),
     "system": Source("System", "server", (
         ("covered", "Covered"), ("techniques", "Techniques"), ("no_coverage", "No coverage"),
         ("known_gaps", "Known gaps"), ("unmapped", "Unmapped"), ("not_counted", "Not counted"),
@@ -152,10 +156,21 @@ def _clean_filters(source: str, raw) -> dict:
             text = _one_line(value, SEARCH_LIMIT, "A search")
             if text:
                 out[key] = text
-        elif key in ("space", "system_id"):
+        elif key in ("space", "system_id", "scope"):
             if not isinstance(value, str) or len(value) > 300:
                 raise ValueError("A destination or system is not recognised.")
             out[key] = value
+        elif key in ("severity", "fixer", "issue"):        # Rule Monitoring's choices
+            from app.services import rule_issues
+            allowed_values = {"severity": {s for s, _ in rule_issues.SEVERITIES}, "fixer": set(rule_issues.FIXERS),
+                              "issue": set(rule_issues.KNOWN)}[key]
+            picked = [v for v in ([value] if isinstance(value, str) else value if isinstance(value, list) else [])
+                      if v in allowed_values]
+            if picked:
+                out[key] = picked
+        elif key == "rules":
+            if value == "all":                              # "enabled" is the page's default
+                out[key] = value
     return out
 
 

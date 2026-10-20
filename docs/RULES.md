@@ -31,18 +31,38 @@ Filter by **Search** (name, author, ID or ATT&CK technique), **SIEM**, **Status*
 
 **State** is the badge each rule shows:
 
-- **Live**: found at the last sync, with no copy linked in another destination.
+- **Unlinked**: found at the last sync, with no copy linked in another destination.
 - **Linked**: found at the last sync, with a copy linked in another destination.
 - **SIEM offline**: its SIEM couldn't be reached at the last sync; shown from TIDE's last copy.
 - **Deprecated**: no longer found in the SIEM.
 
-Tick **Live** and **Linked** together for every live rule.
+Tick **Unlinked** and **Linked** together for every rule found at the last sync.
 
 The page's **⋮** menu switches between **Show as cards** and **Show as table**. In the table, click a heading to sort by it, drag a column's edge to resize it, and choose which columns show; **Reset table columns** puts them back.
 
+## Rule Monitoring
+
+**Rule Monitoring** lists the rules that need action, grouped by what causes it, so a problem many rules share is one thing to fix. It is as of each destination's last sync: every sync reads what Kibana says about each rule's last run, and checks the rules against the SIEM's indexes and fields.
+
+- **What it finds:** an index pattern that matches no index, indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, rules sharing a rule id, custom rules using one of Elastic's rule ids, SIEMs that didn't answer, syncs that couldn't read every rule, and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
+- **Who fixes** says who acts: **Data / ingest** (the indexes and pipelines, usually the Elastic engineers), **Rule author** (the rule's query), **Kibana / platform** (the SIEM itself) or **TIDE** (something TIDE can fix, or a sync).
+- Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window.
+- Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**.
+- The cards count the rules needing action (beneath: how many of the enabled rules, and any disabled ones counted because of a rule id problem TIDE can fix), errors and warnings (and how many began in the last 7 days, once Rule Monitoring has a week of history; until then, the day it began), the **Things to Fix** by who fixes them, what was **Resolved** in the last 14 days, and when the client was **Last Synced**.
+- The page's **⋮** menu holds **Sync**, as on Rule Health; what a sync finds fixed moves to **Resolved recently**.
+
+### Act on a cause
+
+Open a cause for its actions. Anyone who can edit Rule Health can use them.
+
+- **Copy for engineers** gives the cause as Markdown, ready to paste into a ticket or a chat: what is wrong, who fixes it, since when, what to check, Kibana's message and a table of the rules. **⋮ › Copy shown for engineers** does the same for every cause the filters show.
+- **Sync these rules** reads the cause's rules again from their SIEM, to see whether it is fixed; for a whole destination, **Sync this destination**.
+- **Acknowledge…** mutes a cause you know about, with a note (for example, an index not onboarded yet). It moves to **Acknowledged** at the bottom of the list and isn't counted, until it affects more rules than when it was acknowledged; then it comes back, saying so. **Unmute** puts it back at once.
+- Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids, **Give the copy its own rule id** where Kibana holds a custom copy beside Elastic's rule.
+
 ## The rule window
 
-Click a rule to open its window. The header shows its score, destination, state, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Move**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
+Click a rule to open its window. The header shows its score, destination, state, whether it came from Elastic's or the Sigma rules, severity and author, with **Validate** and the date it was last validated at the top right, and the rest of its actions in the **⋮** menu: **Edit**, **Sync this rule**, **Move**, **Compare**, **View in Kibana**, **Delete rule**, and **Restore** for a deprecated rule.
 
 | Section | What it holds |
 |---|---|
@@ -81,6 +101,8 @@ Who can: anyone who can edit Rule Health.
 
 Only what you change is sent to Kibana, onto the rule as Kibana holds it at that moment. If someone changed the same field in Kibana since TIDE last synced it, nothing is saved: the form says which field, and TIDE loads Kibana's version so you can check it and make your change again. Editing a rule changes only that copy, never a rule linked to it.
 
+Editing one of Elastic's prebuilt rules keeps it as Elastic's rule, so TIDE still shows when Elastic has an update for it. Kibana marks it as customised. When Elastic's next update for it is installed in Kibana, Kibana merges your change with Elastic's, or replaces it with Elastic's version, depending on your Elastic licence. The form says so above **Save**. Older versions of Kibana refuse changes to prebuilt rules; the form then shows Kibana's reason.
+
 ### Create a rule
 
 Use the page's **⋮ › Create rule**. Choose the **Target SIEM / space**, a **Rule name**, the **Query language** and query, then fill in the rest as when editing, and click **Create Rule**. Rules converted from Sigma or deployed from Elastic's library open this same form, filled in (see [Sigma, Elastic & Hunting](LIBRARIES.md)).
@@ -103,6 +125,8 @@ Who can: anyone who can edit Rule Health.
 A true move takes the rule's baseline mappings with it, so the techniques it covers stay covered.
 
 The copy keeps the rule's actions (notifications and the like) only where the target has the same connector, or one of the same type and name. Any it couldn't take are named afterwards, so you can add them to the rule in Kibana.
+
+A rule under one of Elastic's rule ids, such as one of Elastic's prebuilt rules, is copied under a new rule id. Kibana can then still install Elastic's own rule in the target, and TIDE still shows Elastic's updates for the copy.
 
 ### When the target already has the rule
 
@@ -129,7 +153,8 @@ With every section ticked, Merge copies the whole rule over.
 
 TIDE remembers which of Elastic's or the Sigma rules each of your rules came from, including Elastic's prebuilt rules installed by Kibana. When TIDE is upgraded with newer versions, the rules they changed are flagged.
 
-- The **Upstream** filter on Rule Health shows **Update available**, **Up to date**, **Retired upstream**, **No longer upstream** and **Your own rules**.
+- The **Upstream** filter on Rule Health shows **Elastic update available**, **Sigma update available**, **Up to date**, **Deprecated by Elastic**, **Deprecated by Sigma**, **No longer in TIDE's Elastic or Sigma rules** and **Your own rules**.
+- The rule window's header shows **Elastic** or **Sigma** for a rule that came from either.
 - The rule window's **Upstream** section says what changed, and **⋮ › Compare with *Elastic*** (or *Sigma*) shows your rule beside the new version.
 
 To take an update:
@@ -140,11 +165,22 @@ To take an update:
 
 An Elastic prebuilt rule can take sections too: Kibana keeps it as Elastic's and marks it customised.
 
+### A custom rule using one of Elastic's rule ids
+
+Rules moved, copied or restored by earlier versions of TIDE can be custom rules under the rule id of one of Elastic's prebuilt rules. While one is, Kibana can't install Elastic's own rule in that space, or installs it beside the custom one under the same rule id. **Settings → Diagnostics** lists them.
+
+- In the rule's window, **Upstream** says so. **Give it its own rule id** creates the rule again in Kibana under a new rule id and deletes the original. TIDE keeps its history, links and baseline mappings, and still shows Elastic's updates for it.
+- When Kibana holds a custom copy beside Elastic's prebuilt rule, TIDE shows the prebuilt one, and its **Upstream** section offers **Give the copy its own rule id**, so you keep both.
+
+Kibana keeps the original's past alerts and runs with it; the rule under its new id starts without them.
+
 ## Bulk edit
 
 1. On Rule Health, choose **⋮ › Bulk edit**.
 2. Tick the rules, or tick the box at the top to select every rule the filters show.
-3. Choose **Move**, **Enable**, **Disable**, **Validate** or **Delete**. Move asks for a **Target destination**, and how to treat the rules' validation. Delete removes the rules from TIDE only; a rule still in Elastic comes back at the next sync.
+3. Choose **Move**, **Enable**, **Disable**, **Validate**, **Sync** or **Delete**. Move asks for a **Target destination**, and how to treat the rules' validation.
+   - **Sync** reads each rule again from its SIEM, as **Sync this rule** does. A rule its SIEM no longer has is marked **Deprecated**, keeping its history, and is listed when the sync ends: a quick way to find which of a few rules is no longer in Kibana.
+   - **Delete** removes the rules from TIDE. Tick **Also delete them from Elastic** to delete them in their SIEM too, which asks once more; otherwise a rule still in Elastic comes back at the next sync.
 4. Progress shows each rule by name, with any that failed and why. A Move that meets a rule already at the target moves the rest first, then asks about each that clashed.
 
 **Exit bulk edit** returns to the list.
@@ -152,7 +188,7 @@ An Elastic prebuilt rule can take sections too: Kibana keeps it as Elastic's and
 ## Delete and restore
 
 - **⋮ › Delete rule** removes the rule from TIDE straight away; a sync brings it back if it is still in Elastic. Tick **Also delete it from Elastic** to remove it from the SIEM too.
-- A rule deleted in Elastic becomes **Deprecated** at the next sync. **⋮ › Restore** puts it back in Elastic, disabled, in the destination you choose in **Recreate in**.
+- A rule deleted in Elastic becomes **Deprecated** at the next sync. **⋮ › Restore** puts it back in Elastic, disabled, in the destination you choose in **Recreate in**. A rule under one of Elastic's rule ids comes back under a new one, keeping its history, links and mappings.
 
 ## Find duplicate rules
 

@@ -33,6 +33,7 @@
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, rule_card, section_menu, sections_item, tag, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {% from "macros/menu.html" import more_button %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
 {% set step = detail.step %}
 {% set status = detail.status %}
@@ -234,7 +235,7 @@
                    hx-trigger="input changed delay:300ms, tideOpenPicker"
                    hx-target="#sm-rule-results" hx-swap="innerHTML">
             <div id="sm-rule-results" class="sm-picker__results">
-              <div class="text-muted sm-picker__loading">Loading…</div>
+              {{ loading_state(inline=true) }}
             </div>
             <form id="add-siem-det-form" hx-post="/api/baselines/tactics/{{ step.id }}/detections"
                   hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
@@ -447,7 +448,7 @@
                  aria-label="Search Sigma rules" hx-get="{{ step_url }}/sigma" hx-trigger="input changed delay:300ms, search"
                  hx-target="#sm-sigma-candidates" hx-swap="innerHTML">
           <div id="sm-sigma-candidates" hx-get="{{ step_url }}/sigma" hx-trigger="load" hx-swap="innerHTML">
-            <p class="rm-empty">Looking for Sigma rules…</p>
+            {{ loading_state("Looking for Sigma rules…", inline=true) }}
           </div>
           {% endif %}
         </div>
@@ -467,7 +468,7 @@
                  aria-label="Search Elastic rules" hx-get="{{ step_url }}/elastic" hx-trigger="input changed delay:300ms, search"
                  hx-target="#sm-elastic-candidates" hx-swap="innerHTML">
           <div id="sm-elastic-candidates" hx-get="{{ step_url }}/elastic" hx-trigger="load" hx-swap="innerHTML">
-            <p class="rm-empty">Looking for Elastic rules…</p>
+            {{ loading_state("Looking for Elastic rules…", inline=true) }}
           </div>
           {% endif %}
         </div>

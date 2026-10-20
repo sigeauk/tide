@@ -77,8 +77,7 @@ def already_there(db, client_id: str, upstream_id: str, siem_id: str, space: str
     if state == "unknown":
         return "unknown", ""
     if state == "found":
-        how = " (installed by Kibana as one of Elastic's prebuilt rules)" if (
-            live.get("immutable") or (live.get("rule_source") or {}).get("type") == "external") else ""
+        how = " (installed by Kibana as one of Elastic's prebuilt rules)" if rule_origins.is_prebuilt(live) else ""
         return "yes", f'"{live.get("name") or upstream_id}"{how}'
     from app.services.tenant_manager import tenant_context_for
     with tenant_context_for(client_id):

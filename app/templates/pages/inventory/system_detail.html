@@ -4,6 +4,7 @@
 {% from "components/window_ui.html" import drag_ctl, sections_item, sections_panel %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {#
   A system, in Rule Health's shape: header with a "…" menu, a whole-system metric strip, then
@@ -40,6 +41,7 @@
                   {% if clf_color %}style="--u-bg-color:{{ clf_color }}"{% endif %}
                   title="Classification">{{ system.classification }}</span>
             {% endif %}
+            {{ help_button('system') }}
         </h1>
         <p class="page-subtitle">{{ system.description or 'No description.' }}</p>
     </div>
@@ -224,7 +226,7 @@
                     <input name="os" class="form-input" placeholder="e.g. Windows Server 2022">
                 </div>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-host-modal">Cancel</button>
                 <button name="Add Device" type="submit" class="btn btn-primary">Add Device</button>
@@ -271,7 +273,7 @@
                         hx-push-url="/systems">
                     {{ icon('trash-2', '14') }} Delete
                 </button>
-                <div class="flex justify-end gap-sm">
+                <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="edit-env-modal">Cancel</button>
                 <button name="Save" type="submit" class="btn btn-primary">Save</button>
@@ -346,8 +348,8 @@
             </select>
             <p class="fs-sm text-secondary mt-xs mx-0 mb-0">After the coverage matrix, the report gives each chosen technique its own entry: what covers it and when it was added, its risks and its ATT&amp;CK techniques.</p>
         </div>
-        <div class="flex gap-ms justify-end">
-            <button name="Cancel" data-click="systemPage.exportClose" class="btn btn-secondary fs-base py-sm px-md"
+        <div class="modal-actions">
+            <button name="Cancel" data-click="systemPage.exportClose" class="btn btn-secondary"
                    >Cancel</button>
             <button name="Download" data-click="systemPage.exportConfirm" class="btn btn-primary">Download</button>
         </div>

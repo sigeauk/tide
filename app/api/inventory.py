@@ -3312,6 +3312,7 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
         lines.append(f"**System classification:** {sys['classification']}")
     lines += [
         f"**Generated:** {data['generated_at']}",
+        *([f"**Rules last synced:** {data['rules_synced']}"] if data.get("rules_synced") else []),
         f"**Audience:** {'Technical / Engineer' if mode == 'technical' else 'Executive / CISO'}",
     ]
     if show_baselines:
@@ -3518,6 +3519,7 @@ def _generate_cve_markdown(data: dict, classification: str) -> str:
         "",
         f"**Classification:** {classification}",
         f"**Generated:** {data['generated_at']}",
+        *([f"**Rules last synced:** {data['rules_synced']}"] if data.get("rules_synced") else []),
         f"**Vulnerability:** {data.get('vulnerability_name', '')}",
         "",
         "---",

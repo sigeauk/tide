@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "components/ui/breadcrumb.html" import breadcrumb %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}{{ nist_group.code }} - NIST 800-53 | TIDE{% endblock %}
 
@@ -8,7 +9,7 @@
 
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-split__main">
-        <h1 class="page-title-hero">{{ nist_group.code }} - {{ nist_group.name }}</h1>
+        <h1 class="page-title-hero">{{ nist_group.code }} - {{ nist_group.name }} {{ help_button('nist') }}</h1>
         <p class="page-subtitle">Capability descriptions under this control family, with the ATT&CK techniques they mitigate.</p>
         <h2 class="section-title mt-md">Description</h2>
         <div class="md-content mt-sm">{{ (nist_group.description or 'Capability descriptions under this control family, with mapped ATT&CK techniques.') | md }}</div>

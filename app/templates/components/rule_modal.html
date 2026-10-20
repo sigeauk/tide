@@ -1,11 +1,11 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "components/mitre_ui.html" import technique_list %}
-{% from "macros/rule_ui.html" import state_badge %}
+{% from "macros/rule_ui.html" import state_badge, upstream_badge %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, remove_btn, sections_item, tag, window_menu %}
 {% from "macros/modal.html" import close_button %}
 {#
   Rule modal — opened by clicking a rule card / table row.
-    header : score ring · name · destination/state/severity badges · author |
+    header : score ring · name · destination/state/Elastic-or-Sigma/severity badges · author |
              validation date · Validate · prev/next · "…" (Edit, every other action, Sections) · close
     left   : recent activity (edits/validations) · score-over-time chart · covers (each opens its baseline technique)
     centre : about (description, risk score, language, indexes, tags) · last run (run + schedule, test) ·
@@ -40,6 +40,7 @@
                     <span class="status-pill {% if is_on %}status-enabled{% else %}status-disabled{% endif %}"
                           title="{{ 'Enabled' if is_on else 'Disabled' }} in {{ scope_label }}">{{ scope_label }} · {{ 'Enabled' if is_on else 'Disabled' }}</span>
                     {{ state_badge(lifecycle_state, lifecycle_title | default("")) }}
+                    {{ upstream_badge(upstream) }}
                     <span class="sev-pill sev-{{ sev_value }}">{{ sev_value | upper }}</span>
                     <span class="rm-header__meta">{{ icon('user', '12') }} {{ rule.author | default('-') }}</span>
                 </div>
@@ -54,7 +55,7 @@
                     {% endif %}
                     <span class="status-pill status-{{ val_class }} rm-valdate{% if just_validated %} rm-validated--flash{% endif %}" role="status"
                           title="{{ val_title if rule.validation_date else 'Never validated' }}">{{ rule.validation_date.strftime('%Y-%m-%d') if rule.validation_date else 'N/A' }}</span>
-                    <button name="Validate Rule" class="btn btn-primary btn-sm"
+                    <button name="Validate Rule" class="btn btn-primary"
                             hx-post="/api/rules/{{ rule.rule_id }}/validate?{{ scope_qs }}"
                             hx-target="#modal-container" hx-swap="innerHTML"
                             hx-headers='{"X-Return-Modal": "rule"}' hx-include="unset">
@@ -554,6 +555,31 @@
                     {% else %}
                     <p class="rm-empty">Your own rule: it did not come from Elastic's rules or the Sigma rules.</p>
                     {% endif %}
+                    {# A custom rule under one of Elastic's rule ids, or a prebuilt rule with such a copy beside
+                       it in Kibana: either can be given a rule id of its own (promotion.own_rule_id). #}
+                    {% if holds_elastic_id %}
+                    <div class="rm-upstream">
+                        <p class="text-muted rm-upstream__note">This custom rule uses Elastic's rule id, so Kibana can't install
+                            Elastic's own rule in this space. Give it its own rule id: TIDE creates it again in Kibana under a
+                            new one and deletes this one, keeping its history, links and mappings, and still shows Elastic's
+                            updates for it.</p>
+                        <button name="Give Own Rule Id" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/promotion/{{ rule.rule_id }}/own-rule-id?{{ scope_qs }}"
+                                hx-target="body" hx-swap="beforeend" hx-include="unset"
+                                hx-confirm="Give this rule its own rule id? TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.">{{ icon_text('copy', 'Give it its own rule id', '13') }}</button>
+                    </div>
+                    {% endif %}
+                    {% for copy in shared_copies %}
+                    <div class="rm-upstream">
+                        <p class="text-muted rm-upstream__note">Kibana also holds a custom rule under this rule id:
+                            <strong>{{ copy.name }}</strong>{% if copy.created_at %}, created {{ copy.created_at[:10] }}{% endif %}.
+                            TIDE shows only this one, Elastic's prebuilt rule. Give the copy its own rule id to keep both.</p>
+                        <button name="Give Copy Own Rule Id" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/promotion/{{ rule.rule_id }}/own-rule-id?{{ scope_qs }}&amp;copy_id={{ copy.id | urlencode }}"
+                                hx-target="body" hx-swap="beforeend" hx-include="unset"
+                                hx-confirm="Give the custom copy its own rule id? TIDE creates it again in Kibana under a new rule id and deletes the original copy. Kibana keeps the copy's past alerts and runs with the original.">{{ icon_text('copy', 'Give the copy its own rule id', '13') }}</button>
+                    </div>
+                    {% endfor %}
                 </div>
 
                 <div class="rm-panel rm-panel--linked" data-fold="linked" data-section="linked" data-section-label="Linked">

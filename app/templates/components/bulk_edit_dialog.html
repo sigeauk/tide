@@ -12,12 +12,16 @@
         <div class="modal-actions"><button name="Close" type="button" class="btn btn-secondary" data-click="modal.remove">Close</button></div>
     {% else %}
         <h2 class="modal-section-title">{{ label }} {{ total }} rule{{ '' if total == 1 else 's' }}</h2>
-        <form name="Bulk Edit" hx-post="/api/rules/bulk-edit/start" hx-target="closest .modal-content" hx-swap="innerHTML" hx-include="this">
+        <form name="Bulk Edit" hx-post="/api/rules/bulk-edit/start" hx-target="closest .modal-content" hx-swap="innerHTML" hx-include="this"
+              {% if action == 'delete' %}hx-confirm="The selected rules are permanently deleted from Elastic, and from TIDE. This cannot be undone: they stop alerting immediately."
+              data-confirm-when="[name=from_elastic]:checked" data-confirm-title="Delete from Elastic" data-confirm-label="Delete from Elastic"{% endif %}>
             <input type="hidden" name="action" value="{{ action }}">
             <input type="hidden" name="items" value="{{ items_json }}">
 
             {% if action == 'validate' %}
             <p class="text-secondary mb-md">Marks each selected rule as validated now, by you.</p>
+            {% elif action == 'sync' %}
+            <p class="text-secondary mb-md">Reads each selected rule again from its SIEM, as Sync this rule does: its content, field mappings and score. A rule its SIEM no longer has is marked Deprecated, keeping its history, and is listed when the sync ends.</p>
             {% elif action == 'enable' %}
             <p class="text-secondary mb-md">Enables each selected rule in its SIEM.</p>
             {% elif action == 'disable' %}
@@ -56,8 +60,11 @@
             <p class="text-muted mb-md fs-sm">Unticked, this is a copy: each source rule stays live and gets linked to its new copy (see the Linked panel in the rule window).</p>
             {% elif action == 'delete' %}
             <div class="alert alert-warning mb-md">
-                <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. Elastic is never changed; if any of these rules still exist there, the next sync will bring them straight back.</p>
+                <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. If any of these rules still exist in Elastic, the next sync brings them back unless you delete them there too.</p>
             </div>
+            <label class="flex items-center gap-sm mb-xs">
+                <input type="checkbox" name="from_elastic" value="true"> Also delete them from Elastic
+            </label>
             <label class="flex items-center gap-sm mb-xs">
                 <input type="checkbox" name="remove_links" value="true" checked> Also remove any links to these rules
             </label>

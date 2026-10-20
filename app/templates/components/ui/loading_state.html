@@ -6,9 +6,10 @@
 #}
 {% from "macros/icons.html" import icon %}
 
-{% macro loading_state(label="Loading…", icon_name="loader", size="24") %}
-<div class="loading-state" role="status" aria-live="polite">
-    {{ icon(icon_name, size, class="spin") }}
+{# inline=true: one line, for a list, a table row, a picker or a section of a window. #}
+{% macro loading_state(label="Loading…", icon_name="loader", size="24", inline=false) %}
+<div class="loading-state{{ ' loading-state--inline' if inline }}" role="status" aria-live="polite">
+    {{ icon(icon_name, '14' if inline else size, class="spin") }}
     <span class="loading-state__label">{{ label }}</span>
 </div>
 {% endmacro %}

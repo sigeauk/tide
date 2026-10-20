@@ -30,6 +30,12 @@ def _compute(db, client_id: str, card: dict) -> dict:
     if source == "rule_health":
         from app.api.rules import filtered_rule_metrics
         return filtered_rule_metrics(db, client_id, f)
+    if source == "rule_monitoring":
+        from app.services import rule_issues
+        filters = {"show": "open", "group": "issue", **f}
+        with db.get_connection() as conn:
+            data = rule_issues.view(conn, db.get_client_siems(client_id) or [], filters)
+        return {"metrics": data["metrics"], "filters": filters, "stale_days": rule_issues.STALE_DAYS}
     if source == "system":
         system = eng.get_system(f["system_id"], client_id=client_id) if f.get("system_id") else None
         if not system:
@@ -80,9 +86,14 @@ def _filter_options(db, client_id: str) -> dict:
     from app.inventory_engine import list_systems
     scopes, _ = _filter_scope_options(db, client_id)
     labels = _build_scope_labels(db, client_id)
+    from app.services import rule_issues
     return {
         "scopes": [(s, labels.get(s, s.split("|")[-1].capitalize())) for s in scopes],
         "systems": [(s.id, s.name) for s in list_systems(client_id=client_id)],
+        # Rule Monitoring's choices, as its filter bar offers them.
+        "severities": list(rule_issues.SEVERITIES),
+        "fixers": list(rule_issues.FIXERS.items()),
+        "issues": sorted(((i.id, i.title) for i in rule_issues.KNOWN.values()), key=lambda i: i[1]),
     }
 
 

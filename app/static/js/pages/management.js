@@ -17,21 +17,21 @@
     async function submitTo(url, method, formData, close, panelId) {
         try {
             var resp = await fetch(url, { method: method, body: formData });
-            if (!resp.ok) { showToast('Request failed', 'error'); return; }
+            if (!resp.ok) { showToast('Could not complete that (HTTP ' + resp.status + '). Try again.', 'error'); return; }
             close();
             var html = await resp.text();
             var panel = $(panelId) || $('management-content');
             panel.innerHTML = html;
             htmx.process(panel);
         } catch (ex) {
-            showToast('Network error', 'error');
+            showToast(TIDE.UNREACHABLE, 'error');
         }
     }
 
     async function testConnection(btnId, resultId, url, formData) {
         var btn = $(btnId), result = $(resultId);
         btn.disabled = true;
-        result.innerHTML = '<span class="text-secondary fs-md">Testing...</span>';
+        result.innerHTML = TIDE.loadingHtml('Testing…');
         try {
             var resp = await fetch(url, { method: 'POST', body: formData });
             result.innerHTML = await resp.text();
@@ -249,7 +249,7 @@
     async function onVendorChange() {
         var vendor = $('connector-form-vendor').value, container = $('connector-vendor-fields');
         if (!vendor) { container.innerHTML = ''; return; }
-        container.innerHTML = '<div class="text-secondary fs-md">Loading fields…</div>';
+        container.innerHTML = TIDE.loadingHtml('Loading fields…');
         try {
             var resp = await fetch('/api/management/connectors/vendor-fields/' + encodeURIComponent(vendor));
             container.innerHTML = await resp.text();
@@ -262,7 +262,7 @@
                 });
             }
         } catch (ex) {
-            container.innerHTML = '<span class="badge badge-danger">Failed to load vendor fields</span>';
+            container.innerHTML = '<span class="badge badge-danger">Could not load the vendor\'s fields</span>';
         }
     }
     function submitConnector(e, form) {
@@ -299,7 +299,7 @@
             htmx.process(panel);
             closeImport();
         } catch (ex) {
-            result.innerHTML = '<div class="alert alert-error">Import failed: ' + (ex && ex.message ? ex.message : ex) + '</div>';
+            result.innerHTML = '<div class="alert alert-danger">Could not import: ' + (ex && ex.message ? ex.message : ex) + '</div>';
         }
     }
 
@@ -330,7 +330,7 @@
                 throw new Error('Unexpected response type from API');
             }
             return r.json().then(function (body) {
-                if (!r.ok) throw new Error((body && (body.detail || body.message)) || ('Request failed (' + r.status + ')'));
+                if (!r.ok) throw new Error((body && (body.detail || body.message)) || ('Could not complete that (HTTP ' + r.status + ')'));
                 return body;
             });
         });
@@ -370,7 +370,7 @@
                 var list = $(type + '-list');
                 if (!list) return;
                 if (!items.length) {
-                    list.innerHTML = '<span class="text-muted fs-sm">No ' + a.plural + ' saved.</span>';
+                    list.innerHTML = '<p class="rm-empty">No ' + a.plural + ' saved.</p>';
                     return refreshAssignments(type);
                 }
                 list.innerHTML = items.map(function (it) {
@@ -380,7 +380,7 @@
                 }).join('');
                 return refreshAssignments(type);
             })
-            .catch(function (err) { status(type, err.message || 'Failed to load ' + a.plural + '.', true); });
+            .catch(function (err) { status(type, err.message || 'Could not load the ' + a.plural + '.', true); });
     }
 
     function initEditor(type) {
@@ -411,7 +411,7 @@
                 loadList(type);
                 status(type, '');
             })
-            .catch(function (err) { status(type, err.message || 'Failed to load ' + a.label + '.', true); });
+            .catch(function (err) { status(type, err.message || 'Could not load the ' + a.label + '.', true); });
     }
 
     function newAsset(type) {
@@ -437,7 +437,7 @@
                 status(type, 'Saved: ' + data.filename);
                 return loadList(type);
             })
-            .catch(function (err) { status(type, err.message || 'Failed to save ' + a.label + '.', true); });
+            .catch(function (err) { status(type, err.message || 'Could not save the ' + a.label + '.', true); });
     }
 
     function deleteAsset(type) {
@@ -445,7 +445,7 @@
         if (!a.current || !confirm('Delete this ' + a.label + '?')) return;
         apiJson(a.api + '/' + encodeURIComponent(a.current), { method: 'DELETE' })
             .then(function () { newAsset(type); loadList(type); })
-            .catch(function (err) { status(type, err.message || 'Failed to delete ' + a.label + '.', true); });
+            .catch(function (err) { status(type, err.message || 'Could not delete the ' + a.label + '.', true); });
     }
 
     function openAssign(type) {
@@ -456,7 +456,7 @@
         $('sigma-assign-error').textContent = '';
         $('sigma-assign-modal').style.display = 'flex';
         var box = $('sigma-assign-checkboxes');
-        box.innerHTML = '<span class="text-secondary fs-sm">Loading clients…</span>';
+        box.innerHTML = TIDE.loadingHtml('Loading clients…');
         var assignedIds = new Set(((assignments[type] || {})[current] || []).map(function (c) { return c.id; }));
         var load = clientsCache ? Promise.resolve(clientsCache)
             : apiJson('/api/clients').then(function (clients) { clientsCache = clients || []; return clientsCache; });
@@ -468,7 +468,7 @@
                      + (c.name || c.id) + '</label>';
             }).join('');
         }).catch(function (err) {
-            box.innerHTML = '<span class="text-danger fs-sm">' + (err.message || 'Failed to load clients.') + '</span>';
+            box.innerHTML = '<span class="text-danger fs-sm">' + (err.message || 'Could not load the clients.') + '</span>';
         });
     }
     function closeAssign() {
@@ -491,7 +491,7 @@
             closeAssign();
             refreshAssignments(t.type);
         }).catch(function (err) {
-            errEl.textContent = err.message || 'Failed to save assignment.';
+            errEl.textContent = err.message || 'Could not save the assignment.';
         });
     }
 

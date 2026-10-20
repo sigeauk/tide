@@ -1,0 +1,183 @@
+{#
+  Rule Monitoring's grouped list (rule_issues.view): issue → cause → rules by default; who fixes or a
+  destination → issue → cause → rules; or rule → its findings. Groups are the Systems page's
+  (sys-group); a rule row opens the rule window. With ``oob``, the stat cards are swapped too.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/modal.html" import empty_state %}
+
+{% if oob %}
+<div class="metrics-grid" id="rmon-metrics" hx-swap-oob="true">{% include "partials/rule_monitoring_metrics.html" %}</div>
+{% endif %}
+
+{% macro severity(s) -%}
+<span class="status-pill status-{{ 'danger' if s == 'error' else 'warning' }}">{{ 'Error' if s == 'error' else 'Warning' }}</span>
+{%- endmacro %}
+
+{# How long since ``when``, at the time of this view. #}
+{% macro age(when) -%}
+{%- set days = (now - when).days -%}{{ 'under a day' if days < 1 else '1 day' if days == 1 else days ~ ' days' }}
+{%- endmacro %}
+
+{% macro since(f) -%}
+{%- if f.first_seen -%}<span title="First seen {{ f.first_seen.strftime('%Y-%m-%d %H:%M') }}">{{ f.age }}</span>{%- else -%}<span class="text-muted">—</span>{%- endif -%}
+{%- endmacro %}
+
+{% macro open_attrs(f) -%}
+data-rule-open role="button" tabindex="0" aria-label="Open rule: {{ f.name }}"
+hx-get="/api/rules/{{ f.rule_id | urlencode }}/history-modal?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
+hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="click, keyup[key=='Enter']"
+{%- endmacro %}
+
+{# The rules (or whole destinations) one cause affects. #}
+{% macro rule_rows(rows) -%}
+<div class="sys-table-wrap">
+<table class="rules-table rmon-table">
+    <thead><tr><th>Rule</th><th>Destination</th><th>State</th><th>For</th><th>What was found</th></tr></thead>
+    <tbody>
+    {% for f in rows | sort(attribute='name', case_sensitive=false) %}
+        {% if f.rule_id %}
+        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {{ open_attrs(f) }}>
+            <td class="rt-name"><span class="rt-title" title="{{ f.name }}">{{ f.name or f.rule_id }}</span></td>
+            <td class="rt-sub">{{ f.destination }}</td>
+            <td>{{ 'Enabled' if f.enabled else 'Disabled' }}</td>
+        {% else %}
+        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}">
+            <td class="rt-name"><span class="text-muted">The whole destination</span></td>
+            <td class="rt-sub">{{ f.destination }}</td>
+            <td></td>
+        {% endif %}
+            <td>{{ since(f) }}</td>
+            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}{{ fix(f) }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{%- endmacro %}
+
+{# Fix in TIDE, on a rule TIDE can fix itself (promotion.own_rule_id). ``consume`` keeps the click
+   from also opening the rule window. #}
+{% macro fix(f) -%}
+{%- if f.issue == 'custom_elastic_id' and can_fix %}
+<div class="rmon-fix"><button name="Give Own Rule Id" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/promotion/{{ f.rule_id | urlencode }}/own-rule-id?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
+        hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset"
+        hx-confirm="Give this rule its own rule id? TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.">{{ icon_text('copy', 'Give it its own rule id', '13') }}</button></div>
+{%- elif f.issue == 'shared_rule_id' and can_fix %}
+{%- for copy in f.copies %}
+<div class="rmon-fix"><button name="Give Copy Own Rule Id" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/promotion/{{ f.rule_id | urlencode }}/own-rule-id?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}&amp;copy_id={{ copy.id | urlencode }}"
+        hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset"
+        hx-confirm="Give the custom copy its own rule id? TIDE creates it again in Kibana under a new rule id and deletes the original copy. Kibana keeps the copy's past alerts and runs with the original.">{{ icon_text('copy', 'Give the copy its own rule id', '13') }}</button></div>
+{%- endfor %}
+{%- endif -%}
+{%- endmacro %}
+
+{# A cause's actions: Copy for engineers, Sync, Acknowledge or Unmute. In the group's body, so a click
+   never folds the group. #}
+{% macro cause_actions(node, acked) -%}
+{% set q = 'issue=' ~ (node.issue | urlencode) ~ '&cause=' ~ (node.cause | urlencode) ~ '&siem_id=' ~ (node.siem_ids | join(',') | urlencode) ~ '&space=' ~ (node.space | urlencode) %}
+<div class="rmon-actions">
+    <button name="Copy for Engineers" type="button" class="btn btn-secondary btn-sm"
+            hx-get="/api/rule-monitoring/copy?{{ q }}" hx-include="{{ filter_include }}"
+            hx-target="#modal-container" hx-swap="innerHTML" title="This cause as Markdown, for a ticket or a chat">{{ icon_text('copy', 'Copy for engineers', '13') }}</button>
+    {% if can_fix %}
+    {% if node.rule_keys %}
+    <button name="Sync These Rules" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "sync", "items": {{ node.rule_keys | tojson | tojson }}}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Read these rules again from their SIEM, to see if this is fixed">{{ icon_text('refresh-cw', 'Sync these rules', '13') }}</button>
+    {% else %}
+    <button name="Sync This Destination" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rules/sync?siem_id={{ node.siem_id | urlencode }}&amp;space={{ node.space | urlencode }}"
+            hx-target="#sync-status" hx-swap="outerHTML" hx-include="unset" hx-disabled-elt="this"
+            title="Sync {{ node.where }} now">{{ icon_text('refresh-cw', 'Sync this destination', '13') }}</button>
+    {% endif %}
+    {% if acked %}
+    <button name="Unmute" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rule-monitoring/unack" hx-vals='{{ {"issue": node.issue, "cause": node.cause, "siem_id": node.siem_ids | join(","), "space": node.space} | tojson }}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('bell', 'Unmute', '13') }}</button>
+    {% else %}
+    <button name="Acknowledge" type="button" class="btn btn-secondary btn-sm"
+            hx-get="/api/rule-monitoring/ack-form?{{ q }}&amp;label={{ node.label | urlencode }}"
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Mute this cause until it affects more rules, with a note">{{ icon_text('bell-off', 'Acknowledge…', '13') }}</button>
+    {% endif %}
+    {% endif %}
+</div>
+{% if node.ack %}
+<p class="text-muted rmon-meaning">Acknowledged by {{ node.ack.by }} on {{ node.ack.at.strftime('%Y-%m-%d') }}{% if node.ack.note %}: {{ node.ack.note }}{% else %}.{% endif %}</p>
+{% elif node.ack_lapsed %}
+<p class="text-warning rmon-meaning">Acknowledged by {{ node.ack_lapsed.by }} on {{ node.ack_lapsed.at.strftime('%Y-%m-%d') }}, but it now affects {{ node.ack_lapsed.now }} rules where it affected {{ node.ack_lapsed.rules }} (counting disabled ones), so it is back in the list.{% if node.ack_lapsed.note %} Their note: {{ node.ack_lapsed.note }}{% endif %}</p>
+{% endif %}
+{%- endmacro %}
+
+{# Group by rule: a rule's findings. #}
+{% macro finding_rows(node) -%}
+<div class="sys-table-wrap">
+<table class="rules-table rmon-table">
+    <thead><tr><th>Issue</th><th>Cause</th><th>Severity</th><th>For</th><th>What was found</th></tr></thead>
+    <tbody>
+    {% for f in node.rows %}
+        <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {% if f.rule_id %}{{ open_attrs(f) }}{% endif %}>
+            <td class="rt-name"><span class="rt-title">{{ f.title }}</span> <span class="text-muted">· {{ f.fixer_label }}</span></td>
+            <td class="rt-sub">{{ f.cause or '—' }}</td>
+            <td>{{ severity(f.severity) }}</td>
+            <td>{{ since(f) }}</td>
+            <td class="rt-sub rmon-detail" title="{{ f.detail }}">{{ f.detail | truncate(180, end='…') }}</td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+</div>
+{%- endmacro %}
+
+{% macro group_block(node, level) -%}
+{% set opened = node.kind in ('issue', 'fixer', 'destination') and level == 'outer' or (node.kind == 'issue' and level == 'inner') %}
+<details class="sys-group sys-group--{{ level }}"{% if opened %} open{% endif %}>
+    <summary class="sys-group__head">
+        <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
+        <span class="sys-group__label">{{ node.label }}</span>
+        {% if node.kind in ('issue', 'fixer', 'destination', 'rule') %}{{ severity(node.severity) }}{% endif %}
+        {% if node.kind == 'cause' and node.ack_lapsed %}<span class="status-pill status-warning" title="Acknowledged, but it now affects more rules">Back</span>{% endif %}
+        <span class="sys-group__meta">
+            {%- if node.kind == 'acknowledged' %}{{ metrics.acknowledged }} cause{{ 's' if metrics.acknowledged != 1 }}, muted until they affect more rules · {% endif -%}
+            {%- if node.kind == 'issue' %}{{ node.fixer }} · {% endif -%}
+            {%- if node.kind == 'cause' and node.cause %}{{ node.where }} · {% endif -%}
+            {%- if node.kind == 'rule' %}{{ node.where }} · {% endif -%}
+            {%- if node.kind == 'rule' %}{{ node.rows | length }} issue{{ 's' if node.rows | length != 1 }}
+            {%- elif node.rules %}{{ node.rules }} rule{{ 's' if node.rules != 1 }}
+            {%- else %}the whole destination{% endif -%}
+            {%- if node.first_seen %} · for {{ age(node.first_seen) }}{% endif -%}
+        </span>
+    </summary>
+    <div class="sys-group__body">
+        {% if node.kind == 'issue' %}
+        <p class="text-muted rmon-meaning">{{ node.meaning }} <strong>To fix:</strong> {{ node.check }}</p>
+        {% elif node.kind == 'cause' and filters.show == 'open' %}
+        {{ cause_actions(node, node.ack) }}
+        {% endif %}
+        {% if node.children %}
+            {% for child in node.children %}{{ group_block(child, 'inner') }}{% endfor %}
+        {% elif filters.group == 'rule' %}
+            {{ finding_rows(node) }}
+        {% else %}
+            {{ rule_rows(node.rows) }}
+        {% endif %}
+    </div>
+</details>
+{%- endmacro %}
+
+{% if groups %}
+    {% for node in groups %}{{ group_block(node, 'outer') }}{% endfor %}
+{% else %}
+    {% call empty_state('circle-check') %}
+        {% if filters.show == 'resolved' %}
+        <p>Nothing was fixed in the last 14 days{{ ' that matches the filters' if filters.search or filters.scope or filters.severity or filters.fixer or filters.issue }}.</p>
+        {% else %}
+        <p>No rule needs action{{ ' that matches the filters' if filters.search or filters.scope or filters.severity or filters.fixer or filters.issue }}.</p>
+        <p class="text-muted">As of each destination's last sync.</p>
+        {% endif %}
+    {% endcall %}
+{% endif %}

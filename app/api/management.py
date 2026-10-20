@@ -16,7 +16,7 @@ import requests as http_requests
 from fastapi import APIRouter, Request, Form, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 
-from app.services.icons import close_button as _close_button, icon as _icon, icon_text as _icon_text
+from app.services.icons import close_button as _close_button, icon as _icon, icon_text as _icon_text, empty_state as _empty_state
 from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, ActiveClient, admin_client_ids,
                           can_manage_user, require_client_member, require_manageable_user)
 from app.services import tls
@@ -1996,12 +1996,7 @@ async def move_system(request: Request, client_id: str,
         f'hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
         f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
         f'<div class="loading-row">'
-        f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
-        f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
-        f'<path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/>'
-        f'<path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/>'
-        f'<path d="m4.9 4.9 2.9 2.9"/></svg>'
+        f'{_icon("loader", "20", "spin")}'
         f'<span>Moving system to {_esc(target_client["name"])}…</span>'
         f'</div></div>'
     )
@@ -2021,12 +2016,7 @@ def move_status(task_id: str, client_id: str = "", db: DbDep = None):
             f'hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
             f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
             f'<div class="loading-row">'
-            f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
-            f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
-            f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
-            f'<path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/>'
-            f'<path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/>'
-            f'<path d="m4.9 4.9 2.9 2.9"/></svg>'
+            f'{_icon("loader", "20", "spin")}'
             f'<span>{_esc(task["message"])}</span>'
             f'</div></div>'
         )
@@ -2037,7 +2027,7 @@ def move_status(task_id: str, client_id: str = "", db: DbDep = None):
     del _move_tasks[task_id]
 
     if task["status"] == "error":
-        return _render_client_systems_partial(cid, db, toast=f"Move failed: {toast}")
+        return _render_client_systems_partial(cid, db, toast=f"Could not move the systems: {toast}")
 
     return _render_client_systems_partial(cid, db, toast=toast)
 
@@ -2215,12 +2205,7 @@ async def move_from(request: Request, client_id: str,
         f'<div hx-get="/api/management/move-status/{task_id}?client_id={client_id}" '
         f'hx-trigger="every 1s" hx-swap="innerHTML" hx-target="#client-systems-section">'
         f'<div class="loading-row">'
-        f'<svg class="icon spin" width="20" height="20" viewBox="0 0 24 24" fill="none" '
-        f'stroke="currentColor" stroke-width="2"><path d="M12 2v4"/>'
-        f'<path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/>'
-        f'<path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/>'
-        f'<path d="m4.9 19.1 2.9-2.9"/><path d="M2 12h4"/>'
-        f'<path d="m4.9 4.9 2.9 2.9"/></svg>'
+        f'{_icon("loader", "20", "spin")}'
         f'<span>Moving system from {_esc(source_client["name"])}…</span>'
         f'</div></div>'
     )
@@ -2649,10 +2634,7 @@ def _test_button_html(kind: str, item_id: str, target_id: str) -> str:
         f'hx-target="#{target_id}" hx-swap="outerHTML" '
         f'title="Run test connection now" '
         f'aria-label="Test connection">'
-        f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" '
-        f'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-        f'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>'
-        f'</svg></button>'
+        f'{_icon("arrow-right", "14")}</button>'
     )
 
 
@@ -2694,10 +2676,7 @@ def _render_clients_tab(clients: list) -> str:
         <div class="system-card">
             <div class="system-card__badge">{badge_html}</div>
             <div class="system-card__title-wrap">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/>
-                    <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
-                </svg>
+                {_icon("users", "18")}
                 <a href="/clients/{cid}" class="system-card__title" title="{name_esc}">{name_esc}</a>
             </div>
             <div>
@@ -2706,19 +2685,19 @@ def _render_clients_tab(clients: list) -> str:
             {"<p class='system-card__desc'>" + desc_esc + "</p>" if desc_esc else ""}
             <div class="system-card__footer flex-wrap">
                 <span class="system-card__stat">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg>
+                    {_icon("server", "13")}
                     {siem_count} SIEM{"s" if siem_count != 1 else ""}
                 </span>
                 <span class="system-card__stat">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                    {_icon("users", "13")}
                     {user_count} user{"s" if user_count != 1 else ""}
                 </span>
                 <span class="system-card__stat">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+                    {_icon("monitor", "13")}
                     {system_count} system{"s" if system_count != 1 else ""}
                 </span>
                 <span class="system-card__stat">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>
+                    {_icon("shield-check", "13")}
                     {baseline_count} baseline{"s" if baseline_count != 1 else ""}
                 </span>
             </div>
@@ -2727,21 +2706,13 @@ def _render_clients_tab(clients: list) -> str:
 
     empty = ""
     if not clients:
-        empty = '''
-        <div class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
-                <path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/>
-                <path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>
-            </svg>
-            <p>No clients configured yet.</p>
-        </div>'''
+        empty = _empty_state("users", 'No clients configured yet.')
 
     return f'''
     <div class="mgmt-tab-head">
         <span class="text-secondary">{count} client{"s" if count != 1 else ""} configured</span>
         <button class="btn btn-primary" data-click="clients.create">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {_icon("plus", "16")}
             New Client
         </button>
     </div>
@@ -2925,17 +2896,14 @@ def _render_siems_tab(siems: list) -> str:
                             data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}"
                             data-tls-verify="{'true' if s.get('tls_verify') else 'false'}"
                             title="Edit">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        {_icon("pencil", "14")}
                     </button>
                     <button class="btn btn-ghost btn-sm text-danger"
                             hx-delete="/api/management/siems/{sid}"
                             hx-target="#mgmt-sub-siems" hx-swap="innerHTML"
                             hx-confirm="Delete SIEM '{lbl_esc}'? This will unlink it from all clients."
                             title="Delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        {_icon("trash-2", "14")}
                     </button>
                 </div>
             </div>
@@ -2958,8 +2926,7 @@ def _render_siems_tab(siems: list) -> str:
     <div class="mgmt-tab-head">
         <span class="text-secondary">{count} SIEM{"s" if count != 1 else ""} in inventory</span>
         <button class="btn btn-primary" data-click="mgmt.siemNew">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {_icon("plus", "16")}
             New SIEM
         </button>
     </div>
@@ -2968,10 +2935,7 @@ def _render_siems_tab(siems: list) -> str:
 
 
 def _siem_empty_state() -> str:
-    return '''
-    <div class="loading-note loading-note--center">
-        <p>No SIEMs configured yet. Create one to get started.</p>
-    </div>'''
+    return _empty_state("server", "No SIEMs configured yet.", "Create one with New SIEM.")
 
 
 NO_MANAGE_TITLE = "Only a super admin can change a Platform Admin or a user who is also on a client you don&#39;t administer"
@@ -3281,17 +3245,14 @@ def _render_threat_intel_tab(instances: list) -> str:
                     <button class="btn btn-ghost btn-sm"
                             data-click="mgmt.openctiEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-kind="{escape(kind)}"
                             title="Edit">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        {_icon("pencil", "14")}
                     </button>
                     <button class="btn btn-ghost btn-sm text-danger"
                             hx-delete="/api/management/opencti/{iid}"
                             hx-target="#mgmt-sub-opencti" hx-swap="innerHTML"
                             hx-confirm="Delete OpenCTI instance '{lbl_esc}'? This will unlink it from all clients."
                             title="Delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        {_icon("trash-2", "14")}
                     </button>
                 </div>
             </div>
@@ -3311,20 +3272,11 @@ def _render_threat_intel_tab(instances: list) -> str:
 
     empty = ""
     if not instances:
-        empty = '''
-        <div class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-            </svg>
-            <p>No Threat Intel sources configured yet.</p>
-        </div>'''
+        empty = _empty_state("shield", 'No Threat Intel sources configured yet.')
 
     return f'''
     <div class="info-box info-box--warning mb-md fs-base flex items-start gap-sm">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0">
-            <path d="M12 9v4"/><path d="M12 17h.01"/>
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/>
-        </svg>
+        {_icon("triangle-alert", "16", "shrink-0")}
         <div>
             <strong>Deprecated.</strong> Manage OpenCTI sources on the new <strong>Connectors</strong> tab below — it covers OpenCTI, Mandiant, CrowdStrike and any vendor added in future releases under one consistent surface. Existing instances were copied over automatically; this tab is kept for one release and will be removed in <code>5.0.0</code>.
         </div>
@@ -3332,8 +3284,7 @@ def _render_threat_intel_tab(instances: list) -> str:
     <div class="mgmt-tab-head">
         <span class="text-secondary">{count} OpenCTI instance{"s" if count != 1 else ""} configured</span>
         <button class="btn btn-primary" data-click="mgmt.openctiNew">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {_icon("plus", "16")}
             New OpenCTI
         </button>
     </div>
@@ -3368,17 +3319,14 @@ def _render_gitlab_tab(instances: list) -> str:
                             data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-group="{grp_esc}"
                             data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
                             title="Edit">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        {_icon("pencil", "14")}
                     </button>
                     <button class="btn btn-ghost btn-sm text-danger"
                             hx-delete="/api/management/gitlab/{iid}"
                             hx-target="#mgmt-sub-gitlab" hx-swap="innerHTML"
                             hx-confirm="Delete GitLab instance '{lbl_esc}'?"
                             title="Delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        {_icon("trash-2", "14")}
                     </button>
                 </div>
             </div>
@@ -3399,15 +3347,7 @@ def _render_gitlab_tab(instances: list) -> str:
 
     empty = ""
     if not instances:
-        empty = '''
-        <div class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
-                <path d="m22 16.92-.02.02-2.71 1.6a1 1 0 0 1-1.02-.06l-2.09-1.41a1 1 0 0 0-1.16.08L13 19"/>
-                <path d="M22 22H2"/><path d="M2 12 12 2l10 10"/>
-            </svg>
-            <p>No GitLab instances configured yet.</p>
-            <p>GitLab integration is reserved for future report publishing workflows.</p>
-        </div>'''
+        empty = _empty_state("gitlab", 'No GitLab instances configured yet.', 'GitLab integration is reserved for future report publishing workflows.')
 
     return f'''
     <div class="mgmt-tab-head">
@@ -3416,8 +3356,7 @@ def _render_gitlab_tab(instances: list) -> str:
             <span class="badge badge-secondary badge--xs ml-sm">Planned</span>
         </div>
         <button class="btn btn-primary" data-click="mgmt.gitlabNew">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {_icon("plus", "16")}
             New GitLab
         </button>
     </div>
@@ -3458,17 +3397,14 @@ def _render_keycloak_tab(instances: list) -> str:
                             data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-realm="{realm_esc}"
                             data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
                             title="Edit">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        {_icon("pencil", "14")}
                     </button>
                     <button class="btn btn-ghost btn-sm text-danger"
                             hx-delete="/api/management/keycloak/{iid}"
                             hx-target="#mgmt-sub-keycloak" hx-swap="innerHTML"
                             hx-confirm="Delete Keycloak instance &#39;{lbl_esc}&#39;?"
                             title="Delete">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
-                            <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        {_icon("trash-2", "14")}
                     </button>
                 </div>
             </div>
@@ -3491,22 +3427,13 @@ def _render_keycloak_tab(instances: list) -> str:
 
     empty = ""
     if not instances:
-        empty = '''
-        <div class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
-                <rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>
-                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-            </svg>
-            <p>No Keycloak instances configured yet.</p>
-            <p>Register Keycloak to centralise SSO configuration across clients.</p>
-        </div>'''
+        empty = _empty_state("lock", 'No Keycloak instances configured yet.', 'Register Keycloak to centralise SSO configuration across clients.')
 
     return f'''
     <div class="mgmt-tab-head">
         <span class="text-secondary">{count} Keycloak instance{"s" if count != 1 else ""} configured</span>
         <button class="btn btn-primary" data-click="mgmt.keycloakNew">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {_icon("plus", "16")}
             New Keycloak
         </button>
     </div>
@@ -3842,10 +3769,10 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
             f'<div class="list-row">'
             f'<span>{escape(s.name)}{cls_badge}</span>'
             f'<div class="flex gap-xs">'
-            f'<button class="btn btn-ghost btn-sm btn-xs" data-click="clientDetail.moveSystem" data-id="{s.id}" data-name="{escape(s.name)}">'
-            f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg> Move</button>'
-            f'<button class="btn btn-ghost btn-sm btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/systems/{s.id}" hx-target="#client-systems-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(s.name)}\' from this client?">'
-            f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Remove</button>'
+            f'<button class="btn btn-ghost btn-xs" data-click="clientDetail.moveSystem" data-id="{s.id}" data-name="{escape(s.name)}">'
+            f'{_icon("arrow-right-left", "12")} Move</button>'
+            f'<button class="btn btn-ghost btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/systems/{s.id}" hx-target="#client-systems-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(s.name)}\' from this client?">'
+            f'{_icon("x", "12")} Remove</button>'
             f'</div></div>'
         )
 
@@ -3858,7 +3785,7 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
             f'<form hx-post="/api/management/clients/{client_id}/systems" hx-target="#client-systems-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-systems-modal\').style.display=\'none\'">'
             f'<label class="form-label">Add system</label>'
             f'<select name="system_id" class="form-input" required><option value="" disabled selected>Select a system&hellip;</option>{sys_options}</select>'
-            f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add System</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add System</button></form>'
         )
     if all_clients:
         modal_body += (
@@ -3868,7 +3795,7 @@ def _render_client_systems_partial(client_id: str, db, toast: str = None) -> HTM
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/move-from/systems" hx-target="#edit-move-from-system-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
             f'<select name="system_id" id="edit-move-from-system-select" class="form-input" required><option value="" disabled selected>Select a source client first&hellip;</option></select>'
-            f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg> Move Here</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("arrow-right-left", "14")} Move Here</button></form>'
         )
     modal_body += (
         f'<div class="flex justify-end">'
@@ -3932,8 +3859,8 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
         bl_list_items += (
             f'<div class="list-row">'
             f'<span>{escape(b.name)}</span>'
-            f'<button class="btn btn-ghost btn-sm btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/baselines/{b.id}" hx-target="#client-baselines-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(b.name)}\' from this client?">'
-            f'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Remove</button></div>'
+            f'<button class="btn btn-ghost btn-xs text-danger" hx-delete="/api/management/clients/{client_id}/baselines/{b.id}" hx-target="#client-baselines-section" hx-swap="innerHTML" hx-confirm="Remove \'{escape(b.name)}\' from this client?">'
+            f'{_icon("x", "12")} Remove</button></div>'
         )
 
     bl_options = "".join(
@@ -3954,7 +3881,7 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
             f'<form hx-post="/api/management/clients/{client_id}/baselines" hx-target="#client-baselines-section" hx-swap="innerHTML" class="stack gap-ms" hx-on::before-request="if(event.detail.elt===this) document.getElementById(\'edit-baselines-modal\').style.display=\'none\'">'
             f'<label class="form-label">Add baseline</label>'
             f'<select name="baseline_id" class="form-input" required><option value="" disabled selected>Select a baseline&hellip;</option>{bl_options}</select>'
-            f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg> Add Baseline</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("plus", "14")} Add Baseline</button></form>'
         )
     if other_clients:
         modal_body += (
@@ -3964,7 +3891,7 @@ def _render_client_baselines_partial(client_id: str, db, user, toast: str = None
             f'<select name="source_client_id" class="form-input" required hx-get="/api/management/clients/{client_id}/clone-baseline/baselines" hx-target="#edit-clone-baseline-select" hx-trigger="change" hx-include="this" hx-swap="innerHTML">'
             f'<option value="" disabled selected>Select source client&hellip;</option>{client_opts}</select>'
             f'<select name="baseline_id" id="edit-clone-baseline-select" class="form-input" required><option value="" disabled selected>Select a source client first&hellip;</option></select>'
-            f'<button type="submit" class="btn btn-primary btn-sm"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg> Clone Baseline</button></form>'
+            f'<button type="submit" class="btn btn-primary btn-sm">{_icon("copy", "14")} Clone Baseline</button></form>'
         )
     modal_body += (
         f'<div class="flex justify-end">'
@@ -4242,7 +4169,7 @@ def _render_query_results(rows, cols, elapsed_ms, truncated, source=""):
             else:
                 txt = str(v)
                 if len(txt) > 500:
-                    txt = txt[:500] + "..."
+                    txt = txt[:500] + "…"
                 cells.append(f"<td>{_esc(txt)}</td>")
         body_rows.append("<tr>" + "".join(cells) + "</tr>")
     note = ""
@@ -4494,7 +4421,7 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
     """Execute a single read-only SQL statement against a known DuckDB file."""
     if _duckdb_q is None:
         return HTMLResponse(
-            '<div class="alert alert-error">DuckDB driver not available.</div>'
+            '<div class="alert alert-danger">DuckDB driver not available.</div>'
         )
     form = await request.form()
     target_key = str(form.get("target", "")).strip()
@@ -4502,11 +4429,11 @@ async def query_exec(request: Request, db: DbDep, user: RequireSuperadmin):
     path = _target_path(db, target_key)
     if not path:
         return HTMLResponse(
-            '<div class="alert alert-error">Unknown or unavailable database target.</div>'
+            '<div class="alert alert-danger">Unknown or unavailable database target.</div>'
         )
     cleaned, err = _validate_sql(sql_raw)
     if err:
-        return HTMLResponse(f'<div class="alert alert-error">{_esc(err)}</div>')
+        return HTMLResponse(f'<div class="alert alert-danger">{_esc(err)}</div>')
     fresh = str(form.get("fresh", "")).lower() in ("1", "true", "on")
     # Copying the file and running the query can take seconds: keep it off the event loop.
     return HTMLResponse(await _run_in_threadpool_q(_run_query, path, target_key, cleaned, fresh))
@@ -4660,7 +4587,7 @@ def _run_query(path: str, target_key: str, cleaned: str, fresh: bool = False) ->
         snap = _snapshot_acquire(path, fresh)
     except Exception as exc:
         logger.warning("query_exec: no snapshot of %s: %s", target_key, exc)
-        return f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+        return f'<div class="alert alert-danger">Could not run the query: {_esc(str(exc))}</div>'
     try:
         conn = _snapshot_connect(snap["file"])
         try:
@@ -4671,12 +4598,12 @@ def _run_query(path: str, target_key: str, cleaned: str, fresh: bool = False) ->
         finally:
             conn.close()
     except SqlRejected as exc:
-        return f'<div class="alert alert-error">{_esc(str(exc))}</div>'
+        return f'<div class="alert alert-danger">{_esc(str(exc))}</div>'
     except Exception as exc:
         logger.warning("query_exec failed on %s: %s", target_key, exc)
         if isinstance(exc, (_duckdb_q.IOException, _duckdb_q.InternalException, _duckdb_q.FatalException)):
             _snapshot_retire(path, snap)     # a damaged copy: the next query takes a new one
-        return f'<div class="alert alert-error">Query failed: {_esc(str(exc))}</div>'
+        return f'<div class="alert alert-danger">Could not run the query: {_esc(str(exc))}</div>'
     finally:
         _snapshot_release(snap)
     elapsed_ms = int((_time_q.monotonic() - started) * 1000)
@@ -4856,14 +4783,12 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
             f'hx-post="/api/management/connectors/{cid}/test" '
             f'hx-target="#connector-status-{cid}" hx-swap="outerHTML" '
             f'title="Test connection now" aria-label="Test connection">'
-            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">'
-            f'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></button>'
+            f'{_icon("arrow-right", "14")}</button>'
         )
         edit_btn = (
             f'<button class="btn btn-ghost btn-sm" '
             f'data-click="mgmt.connectorEdit" data-id="{cid}" title="Edit">'
-            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-            f'<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>'
+            f'{_icon("pencil", "14")}</button>'
         )
         del_btn = (
             f'<button class="btn btn-ghost btn-sm text-danger" '
@@ -4871,9 +4796,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
             f'hx-target="#mgmt-sub-connectors" hx-swap="innerHTML" '
             f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients." '
             f'title="Delete">'
-            f'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-            f'<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>'
-            f'<path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg></button>'
+            f'{_icon("trash-2", "14")}</button>'
         )
         cards += f'''
         <div class="system-card stack">
@@ -4902,14 +4825,7 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
 
     empty = ""
     if not connectors:
-        empty = '''
-        <div class="empty-state">
-            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="icon-faint">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-            </svg>
-            <p>No connectors configured yet.</p>
-        </div>'''
+        empty = _empty_state("link", 'No connectors configured yet.')
 
     # Vendors and connector rows for the dialogs (management.js reads #connector-data).
     connector_payload = htmlsafe_json_dumps({"vendors": [
@@ -4930,13 +4846,11 @@ def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | 
         <span class="text-secondary">{count} connector{"s" if count != 1 else ""} configured &middot; {len(vendors)} vendor{"s" if len(vendors) != 1 else ""} available</span>
         <div class="flex gap-sm">
             <button class="btn btn-secondary" data-click="mgmt.importOpen" title="Import a connector from JSON exported elsewhere">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                {_icon("download", "16")}
                 Import
             </button>
             <button class="btn btn-primary" data-click="mgmt.connectorNew">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                {_icon("plus", "16")}
                 New Connector
             </button>
         </div>
@@ -5058,7 +4972,7 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
     generic, cfg, errors = _parse_connector_form(form, vendor)
     if errors:
         return HTMLResponse(
-            '<div class="alert alert-error">' + "; ".join(_esc(e) for e in errors) + '</div>',
+            '<div class="alert alert-danger">' + "; ".join(_esc(e) for e in errors) + '</div>',
             status_code=400,
         )
     try:
@@ -5083,7 +4997,7 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
     except Exception as exc:
         logger.error("create_cti_connector failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Create failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not create the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info("Connector created: %s (%s) by %s", cid, vendor_name, user.username)
@@ -5104,14 +5018,14 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
     raw = str(form.get("payload", "")).strip()
     if not raw:
         return HTMLResponse(
-            '<div class="alert alert-error">Paste a JSON payload to import.</div>',
+            '<div class="alert alert-danger">Paste a JSON payload to import.</div>',
             status_code=400,
         )
     try:
         data = _cn_json.loads(raw)
     except Exception as exc:
         return HTMLResponse(
-            f'<div class="alert alert-error">Invalid JSON: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Invalid JSON: {_esc(str(exc))}</div>',
             status_code=400,
         )
     entries = data.get("connectors") if isinstance(data, dict) and "connectors" in data else data
@@ -5119,7 +5033,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
         entries = [entries]
     if not isinstance(entries, list) or not entries:
         return HTMLResponse(
-            '<div class="alert alert-error">Payload must be a connector object or a list of connectors.</div>',
+            '<div class="alert alert-danger">Payload must be a connector object or a list of connectors.</div>',
             status_code=400,
         )
     created_ids: list[str] = []
@@ -5177,7 +5091,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
     )
     if errors and not created_ids:
         return HTMLResponse(
-            '<div class="alert alert-error"><strong>Import failed.</strong><ul class="list-indent">'
+            '<div class="alert alert-danger"><strong>Could not import the connectors.</strong><ul class="list-indent">'
             + "".join(f"<li>{_esc(e)}</li>" for e in errors)
             + "</ul></div>",
             status_code=400,
@@ -5208,13 +5122,13 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
     existing = db.get_cti_connector(connector_id)
     if not existing:
         return HTMLResponse(
-            '<div class="alert alert-error">Connector not found</div>',
+            '<div class="alert alert-danger">Connector not found.</div>',
             status_code=404,
         )
     vendor = get_vendor(existing.get("vendor") or "")
     if vendor is None:
         return HTMLResponse(
-            f'<div class="alert alert-error">Vendor {_esc(existing.get("vendor") or "?")} is no longer registered</div>',
+            f'<div class="alert alert-danger">Vendor {_esc(existing.get("vendor") or "?")} is no longer registered</div>',
             status_code=400,
         )
     form = await request.form()
@@ -5223,7 +5137,7 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
     )
     if errors:
         return HTMLResponse(
-            '<div class="alert alert-error">' + "; ".join(_esc(e) for e in errors) + '</div>',
+            '<div class="alert alert-danger">' + "; ".join(_esc(e) for e in errors) + '</div>',
             status_code=400,
         )
     try:
@@ -5237,7 +5151,7 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
     except Exception as exc:
         logger.error("update_cti_connector failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Update failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not update the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info("Connector updated: %s by %s", connector_id, user.username)
@@ -5255,7 +5169,7 @@ def delete_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
     except Exception as exc:
         logger.error("delete_cti_connector failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Delete failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not delete the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info("Connector deleted: %s by %s", connector_id, user.username)
@@ -5486,7 +5400,7 @@ def link_connector_to_client(client_id: str, connector_id: str, db: DbDep, user:
     except Exception as exc:
         logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Link failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not link the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info("Connector %s linked to client %s by %s", connector_id, client_id, user.username)
@@ -5511,7 +5425,7 @@ async def add_connector_to_client(request: Request, client_id: str,
     except Exception as exc:
         logger.error("link_cti_connector_client failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Link failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not link the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info(
@@ -5529,7 +5443,7 @@ def unlink_connector_from_client(client_id: str, connector_id: str, db: DbDep, u
     except Exception as exc:
         logger.error("unlink_cti_connector_client failed: %s", exc, exc_info=True)
         return HTMLResponse(
-            f'<div class="alert alert-error">Unlink failed: {_esc(str(exc))}</div>',
+            f'<div class="alert alert-danger">Could not unlink the connector: {_esc(str(exc))}</div>',
             status_code=500,
         )
     logger.info("Connector %s unlinked from client %s by %s", connector_id, client_id, user.username)
@@ -5599,7 +5513,7 @@ def export_data(db: DbDep, user: RequireSuperadmin, tenant: str, include_users: 
 
     client = next((c for c in db.list_clients() if c["id"] == tenant), None)
     if not client:
-        return HTMLResponse('<div class="alert alert-error">Unknown tenant.</div>', status_code=404)
+        return HTMLResponse('<div class="alert alert-danger">Unknown tenant.</div>', status_code=404)
     with tenant_context_for(tenant):
         with db.get_connection(read_only=True) as conn:
             tables = dtx.export_tenant(conn)
@@ -5629,7 +5543,7 @@ async def import_data(
     from app.services.tenant_manager import tenant_context_for
 
     def _err(msg: str, code: int = 400):
-        return HTMLResponse(f'<div class="alert alert-error">{_esc(msg)}</div>', status_code=code)
+        return HTMLResponse(f'<div class="alert alert-danger">{_esc(msg)}</div>', status_code=code)
 
     creating = tenant == "__new__"
     if not creating and not any(c["id"] == tenant for c in db.list_clients()):
@@ -5688,7 +5602,7 @@ async def import_data(
                 lines.append(f"{res['local_without_password']} local user(s) need a password set.")
     except Exception as exc:
         logger.exception("Data import failed")
-        return _err(f"Import failed: {exc}", 500)
+        return _err(f"Could not import: {exc}", 500)
     logger.info("Data import into tenant %s by %s: %s", tenant, user.username, " | ".join(lines))
     body = "".join(f"<div>{_esc(l)}</div>" for l in lines) or "Nothing to import."
     return HTMLResponse(f'<div class="alert alert-success">{body}</div>')

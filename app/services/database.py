@@ -92,10 +92,10 @@ def _compact_exc_message(exc: Exception, max_len: int = 260) -> str:
     return f"{text[:max_len]} ... [truncated {len(text) - max_len} chars]"
 
 def normalize_rule_states(states) -> List[str]:
-    """The State filter's choices as the filter reads them: "unlinked" (Live), "linked", "offline",
+    """The State filter's choices as the filter reads them: "unlinked", "linked", "offline",
     "deprecated" -- one per badge, so each rule has exactly one. "live" is the State filter before
-    Live and Linked were split (6.1.4): in saved dashboards and bookmarks it still means every live
-    rule, so it reads as both."""
+    it was split into Unlinked and Linked (6.1.4): in saved dashboards and bookmarks it still means
+    every live rule, so it reads as both."""
     out: List[str] = []
     for s in states or []:
         s = str(s).strip().lower()
@@ -214,6 +214,25 @@ def rule_json_keys(raw_data) -> Tuple[str, Optional[str]]:
         return "", None
     language = raw_data.get("language")
     return str(raw_data.get("rule_id") or ""), (str(language) if language is not None else None)
+
+
+def kibana_utc(value) -> Optional[datetime]:
+    """A Kibana timestamp (ISO text or datetime) as a naive UTC datetime, or None. History keeps it
+    in this form as ``elastic_timestamp``, which the sync matches on to record a change only once."""
+    if not value:
+        return None
+    if not isinstance(value, datetime):
+        try:
+            value = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
+
+
+def utc_to_local(value: Optional[datetime]) -> Optional[datetime]:
+    """A naive UTC datetime as TIDE's local time (naive): the time every history entry is kept in,
+    as ``now()`` and ``datetime.now()`` give it."""
+    return value.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None) if value else None
 
 
 # Fill kibana_rule_id / rule_language for rows written before they existed (rule_json_keys in SQL).
@@ -5186,10 +5205,11 @@ class DatabaseService:
                 rules = [r for r in rules if _badge(r) in wanted_states]
             if needs_upstream_filter:
                 # Against the Elastic or Sigma rule each came from (rule_origins); "own" = neither.
-                wanted_upstream = set(filters.upstream)
+                from app.services.rule_origins import filter_value, filter_values
+                wanted_upstream = set(filter_values(filters.upstream))
                 upstream = self.upstream_statuses()
                 rules = [r for r in rules
-                         if upstream.get((r.rule_id, r.siem_id, r.space), {}).get("state", "own") in wanted_upstream]
+                         if filter_value(upstream.get((r.rule_id, r.siem_id, r.space))) in wanted_upstream]
             total = len(rules)
         
         # Python-side sort for any order involving validation date.
@@ -5492,6 +5512,55 @@ class DatabaseService:
                 )
                 conn.execute("COMMIT")
                 return len(mappings)
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+    # Tables keyed by a rule's (rule_id, siem_id, space): (table, id column, siem column, space column).
+    _RULE_KEY_COLUMNS = (
+        ("detection_rules", "rule_id", "siem_id", "space"),
+        ("rule_lifecycle_history", "rule_id", "siem_id", "space"),
+        ("rule_score_history", "rule_id", "siem_id", "space"),
+        ("rule_search_time_samples", "rule_id", "siem_id", "space"),
+        ("rule_origins", "rule_id", "siem_id", "space"),
+        ("logical_rule_members", "rule_id", "siem_id", "space"),
+        ("rule_links", "rule_a_id", "siem_a_id", "space_a"),
+        ("rule_links", "rule_b_id", "siem_b_id", "space_b"),
+        ("rule_migrations", "source_rule_id", "source_siem_id", "source_space"),
+        ("rule_migrations", "target_rule_id", "target_siem_id", "target_space"),
+        ("rule_migrations", "master_rule_id", "master_siem_id", "master_space"),
+        ("step_detections", "rule_ref", "siem_id", "space"),
+        ("rule_issues", "rule_id", "siem_id", "space"),
+    )
+
+    def rekey_rule(self, old_rule_id: str, new_rule_id: str, siem_id: str, space: str,
+                   object_id: Optional[str] = None) -> None:
+        """Move everything TIDE holds for the rule ``old_rule_id`` at one destination to
+        ``new_rule_id`` there, when Kibana now holds the rule under a new rule id: the rule row, its
+        history, scores, origin, links and the baseline mappings made at this destination. Copies of
+        the rule at other destinations keep the old id and everything that is theirs. Its
+        validation is copied, since validation is shared by every copy with the same rule id.
+        The stored rule takes the new rule id and ``object_id`` (Kibana's saved-object id for it), so
+        a refresh finds it in Kibana rather than the deleted original."""
+        with self.get_connection() as conn:
+            tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables() "
+                                                   "WHERE database_name = current_database()").fetchall()}
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                for table, id_col, siem_col, space_col in self._RULE_KEY_COLUMNS:
+                    if table in tables:
+                        conn.execute(f"UPDATE {table} SET {id_col} = ? WHERE {id_col} = ? AND {siem_col} = ? "
+                                     f"AND COALESCE({space_col}, 'default') = ?", [new_rule_id, old_rule_id, siem_id, space])
+                patch = {"rule_id": new_rule_id, **({"id": object_id} if object_id else {})}
+                conn.execute("UPDATE detection_rules SET raw_data = json_merge_patch(raw_data, ?::JSON), "
+                             "kibana_rule_id = ? WHERE rule_id = ? AND siem_id = ? AND space = ?",
+                             [json.dumps(patch), new_rule_id, new_rule_id, siem_id, space])
+                if "checkedRule" in tables:
+                    conn.execute("INSERT INTO checkedRule (rule_name, last_checked_on, checked_by, rule_id) "
+                                 "SELECT rule_name, last_checked_on, checked_by, ? FROM checkedRule WHERE rule_id = ? "
+                                 "AND NOT EXISTS (SELECT 1 FROM checkedRule WHERE rule_id = ?)",
+                                 [new_rule_id, old_rule_id, new_rule_id])
+                conn.execute("COMMIT")
             except Exception:
                 conn.execute("ROLLBACK")
                 raise
@@ -5925,6 +5994,57 @@ class DatabaseService:
             conn.execute("INSERT OR REPLACE INTO siem_versions (siem_id, version, checked_at) VALUES (?, ?, now())",
                          [siem_id, version])
 
+    SPACE_FETCH_DDL = """
+        CREATE TABLE IF NOT EXISTS space_fetch_results (
+            siem_id           VARCHAR NOT NULL,
+            space             VARCHAR NOT NULL,
+            synced_at         TIMESTAMP NOT NULL DEFAULT now(),
+            kibana_total      INTEGER,
+            returned          INTEGER,
+            complete          BOOLEAN,
+            held_not_returned INTEGER,
+            duplicates        JSON
+        )
+    """
+    SPACE_FETCH_KEEP = 10   # results kept per (siem_id, space)
+
+    def record_space_fetch(self, siem_id: str, space: str, diag: Dict[str, Any]) -> None:
+        """Keep how a sync's fetch of one SIEM space went (``elastic_helper.fetch_detection_rules``
+        diagnostics): Kibana's total, the rules it returned, whether TIDE trusted it to mark deleted
+        rules deprecated, the rules TIDE holds there that it did not return (when it was not
+        trusted) and rule ids Kibana holds on more than one rule. Diagnostics reads them."""
+        keep = sorted(diag.get("rule_ids") or [])
+        with self.get_connection() as conn:
+            conn.execute(self.SPACE_FETCH_DDL)
+            held_not_returned = 0 if diag.get("complete") else conn.execute(
+                "SELECT count(*) FROM detection_rules WHERE siem_id = ? AND space = ? "
+                "AND NOT COALESCE(deprecated, false) AND NOT list_contains(?::VARCHAR[], rule_id)",
+                [siem_id, space, keep]).fetchone()[0]
+            conn.execute(
+                "INSERT INTO space_fetch_results (siem_id, space, synced_at, kibana_total, returned, complete, "
+                "held_not_returned, duplicates) VALUES (?, ?, now(), ?, ?, ?, ?, ?)",
+                [siem_id, space, diag.get("total"), diag.get("returned", diag.get("fetched")),
+                 bool(diag.get("complete")), held_not_returned, json.dumps(diag.get("duplicates") or [])])
+            conn.execute(
+                "DELETE FROM space_fetch_results WHERE siem_id = ? AND space = ? AND synced_at < ("
+                "SELECT min(synced_at) FROM (SELECT synced_at FROM space_fetch_results WHERE siem_id = ? "
+                "AND space = ? ORDER BY synced_at DESC LIMIT ?))",
+                [siem_id, space, siem_id, space, self.SPACE_FETCH_KEEP])
+
+    def shared_rule_id_copies(self, siem_id: str, space: str, rule_id: str) -> List[Dict[str, Any]]:
+        """The other rules Kibana held under ``rule_id`` in this space at the latest sync (the ones
+        TIDE doesn't hold): ``[{id, name, created_at, prebuilt}]``, empty when there are none."""
+        with self.get_connection() as conn:
+            # No such table until a sync records a fetch: nothing to say, and not an error.
+            if not conn.execute("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
+                                "AND table_name = 'space_fetch_results'").fetchone():
+                return []
+            row = conn.execute(
+                "SELECT arg_max(duplicates, synced_at) FROM space_fetch_results WHERE siem_id = ? AND space = ?",
+                [siem_id, space]).fetchone()
+        pairs = json.loads(row[0]) if row and row[0] else []
+        return [r for d in pairs if d.get("rule_id") == rule_id for r in d.get("rules", []) if not r.get("kept")]
+
     def get_offline_scopes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
         """``(siem_id, space)`` -> ``{reason, checked_at}`` for every destination that failed its
         last reachability check. Empty when none did, or before the first check."""
@@ -5962,7 +6082,8 @@ class DatabaseService:
         other filters, matched as ``get_rules`` matches them: ``scope`` by ``"siem_id|space"``
         (space lowercased; deprecated rules left out, as the SIEM filter leaves them out unless a
         State is picked), ``enabled`` by ``"true"``/``"false"``, ``state`` by the card's badge and
-        ``upstream`` by upstream state (``own`` when the rule has no origin)."""
+        ``upstream`` by ``rule_origins.filter_value`` (``own`` when the rule has no origin)."""
+        from app.services.rule_origins import filter_value
         counts = {"scope": Counter(), "enabled": Counter(), "state": Counter(), "upstream": Counter()}
         with self.get_connection() as conn:
             try:
@@ -5981,7 +6102,7 @@ class DatabaseService:
             counts["enabled"]["true" if enabled else "false"] += 1
             counts["state"]["deprecated" if deprecated else "offline" if (siem_id, space) in offline
                             else "linked" if key in linked else "unlinked"] += 1
-            counts["upstream"][upstream.get(key, {}).get("state", "own")] += 1
+            counts["upstream"][filter_value(upstream.get(key))] += 1
         return counts
 
     def get_rule_links_bulk(
@@ -7348,6 +7469,32 @@ class DatabaseService:
             logger.info("Rule history: attached %d event(s) recorded under a saved-object id.", moved)
         return moved
 
+    @staticmethod
+    def _localise_synced_history_times(conn) -> int:
+        """Give the sync's Elastic events TIDE's local time.
+
+        Until 6.2.2 a 'created' or 'edited' event found at a sync was timed by Kibana's timestamp
+        in UTC, while every other history entry is in local time: they sorted out of order, and a
+        sync took a TIDE edit coming back from Kibana for a new edit. Such an event still has the
+        time of its ``elastic_timestamp``; it moves to that time in local time. Idempotent: once
+        done it changes nothing.
+        """
+        rows = conn.execute(
+            "SELECT id, created_at FROM rule_lifecycle_history "
+            "WHERE json_extract_string(detail, '$.source') = 'elastic_sync' "
+            "AND created_at = TRY_CAST(json_extract_string(detail, '$.elastic_timestamp') AS TIMESTAMP)"
+        ).fetchall()
+        moved = [(history_id, utc_to_local(ts)) for history_id, ts in rows if utc_to_local(ts) != ts]
+        if moved:
+            conn.register("history_times_src", pd.DataFrame(moved, columns=["id", "created_at"]))
+            try:
+                conn.execute("UPDATE rule_lifecycle_history h SET created_at = s.created_at "
+                             "FROM history_times_src s WHERE h.id = s.id")
+            finally:
+                conn.unregister("history_times_src")
+            logger.info("Rule history: moved %d synced event(s) from UTC to local time.", len(moved))
+        return len(moved)
+
     def bootstrap_rule_history_bulk(
         self,
         records: List[Dict[str, Any]],
@@ -7361,24 +7508,15 @@ class DatabaseService:
         and not already recorded. The history table is ensured and the
         existing events are loaded once, and new events are inserted in one
         batch — instead of a table check, a query and 1-2 inserts per rule.
-        Returns the number of events inserted.
+        Returns the number of events inserted. Events are timed in local time, like every other
+        history entry; ``elastic_timestamp`` keeps Kibana's own time (UTC).
         """
-        def _coerce_ts(value: Any) -> Optional[datetime]:
-            if not value:
-                return None
-            if isinstance(value, datetime):
-                return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
-            try:
-                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
-            except Exception:
-                return None
-
         # (rule_id, siem_id, space) -> [has_created, {elastic edit timestamps}]
         state: Dict[Tuple[Any, Any, Any], List[Any]] = {}
         with self.get_connection() as conn:
             self._ensure_rule_lifecycle_history_table(conn)
             self._relink_history_by_object_id(conn)
+            self._localise_synced_history_times(conn)
             for rule_id, siem_id, space, action, detail_json in conn.execute(
                 "SELECT rule_id, siem_id, space, action, detail FROM rule_lifecycle_history "
                 "WHERE action = 'created' OR action = 'edited'"
@@ -7409,9 +7547,11 @@ class DatabaseService:
 
                 created_by = (raw_data.get("created_by") or "").strip()
                 updated_by = (raw_data.get("updated_by") or created_by or "").strip()
-                created_at = _coerce_ts(raw_data.get("created_at")) or datetime.now()
-                updated_at = _coerce_ts(raw_data.get("updated_at"))
-                updated_stamp = updated_at.isoformat() if updated_at else ""
+                created_utc = kibana_utc(raw_data.get("created_at"))
+                created_at = utc_to_local(created_utc) or datetime.now()
+                updated_utc = kibana_utc(raw_data.get("updated_at"))
+                updated_at = utc_to_local(updated_utc)
+                updated_stamp = updated_utc.isoformat() if updated_utc else ""
                 has_created, elastic_edits = state.get((rule_id, siem_id, space), (False, set()))
 
                 if not has_created:
@@ -7420,7 +7560,7 @@ class DatabaseService:
                         json.dumps({
                             "source": "elastic_sync",
                             "message": "Created in Kibana before initial sync.",
-                            "elastic_timestamp": created_at.isoformat(),
+                            "elastic_timestamp": (created_utc or created_at).isoformat(),
                             "kibana_user": created_by or "",
                         }),
                         created_at,
@@ -10374,17 +10514,6 @@ class DatabaseService:
             opposed to ``rule_id`` the DB column, which is Kibana's saved-object id."""
             return str(_parse_raw(raw_val).get('rule_id') or fallback_rule_id)
 
-        def _coerce_ts(value: Any) -> Optional[datetime]:
-            if not value:
-                return None
-            if isinstance(value, datetime):
-                return value.astimezone(timezone.utc).replace(tzinfo=None) if value.tzinfo else value
-            try:
-                parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-                return parsed.astimezone(timezone.utc).replace(tzinfo=None) if parsed.tzinfo else parsed
-            except Exception:
-                return None
-
         def _build_sync_field_diffs(old_row: Dict[str, Any], new_row: Dict[str, Any]) -> List[Dict[str, str]]:
             diffs: List[Dict[str, str]] = []
             tracked_cols = [
@@ -10500,8 +10629,8 @@ class DatabaseService:
                 if actor_norm == 'elastic':
                     continue
 
-                local_ts = _coerce_ts(_created_at)
-                if local_ts and abs((event_ts - local_ts).total_seconds()) <= 120:
+                # Both in local time: event_ts is Kibana's updated_at moved to it (utc_to_local).
+                if isinstance(_created_at, datetime) and abs((event_ts - _created_at).total_seconds()) <= 120:
                     return True
 
                 detail_obj = _parse_raw(detail_raw)
@@ -10632,7 +10761,8 @@ class DatabaseService:
                             continue
 
                         raw_data = _parse_raw(new_row.get('raw_data'))
-                        sync_ts = _coerce_ts(raw_data.get('updated_at'))
+                        sync_utc = kibana_utc(raw_data.get('updated_at'))
+                        sync_ts = utc_to_local(sync_utc)
                         if _is_recent_local_edit_echo(
                             conn,
                             key[0],
@@ -10655,7 +10785,7 @@ class DatabaseService:
                                     'message': 'Rule metadata changed during Elastic sync.',
                                     'changed_fields': ', '.join(diff.get('field') for diff in field_diffs),
                                     'field_diffs': field_diffs,
-                                    'elastic_timestamp': sync_ts.isoformat() if sync_ts else '',
+                                    'elastic_timestamp': sync_utc.isoformat() if sync_utc else '',
                                 },
                             }
                         )

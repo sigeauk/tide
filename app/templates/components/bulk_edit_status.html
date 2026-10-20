@@ -21,6 +21,12 @@
             {% elif job.total == 0 %}No rules matched.
             {% else %}Finished.{% endif %}
         </p>
+        {% if job.deprecated %}
+        <p class="mb-sm"><strong>{{ job.deprecated | length }} rule{{ '' if job.deprecated | length == 1 else 's' }} not in Elastic,</strong> now marked Deprecated:</p>
+        <ul class="mb-md bulk-errors">
+            {% for name in job.deprecated %}<li>{{ name }}</li>{% endfor %}
+        </ul>
+        {% endif %}
         {% if job.errors %}
         <ul class="text-danger mb-md bulk-errors">
             {% for e in job.errors %}<li>{{ e }}</li>{% endfor %}

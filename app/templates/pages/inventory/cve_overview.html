@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}CVE Overview — TIDE{% endblock %}
 
 {% block content %}
 <div class="page-header flex items-start justify-between flex-wrap gap-md">
     <div>
-        <h1 class="page-title-hero">CVE Overview</h1>
+        <h1 class="page-title-hero">CVE Overview {{ help_button('cves') }}</h1>
         <p class="page-subtitle">All CISA CVE entries — matched entries shown first.</p>
     </div>
     <div class="rh-more shrink-0 ml-auto" data-more>

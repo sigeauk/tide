@@ -93,11 +93,5 @@
     </div>
 {% endcall %}
 
-{# ── 6. Last Synced ── #}
-{% call metric_card('last_synced', keys, link) %}
-    <p class="metric-value fs-title">
-        {{ icon('refresh-cw', '24') }}
-    </p>
-    <p class="metric-label">Last Synced</p>
-    <p class="metric-sub">{{ last_sync_time | default('Never') }}</p>
-{% endcall %}
+{# ── 6. Last Synced (as Rule Monitoring's: rule_issues.freshness) ── #}
+{% include "partials/last_synced_card.html" %}

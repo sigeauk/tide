@@ -69,6 +69,13 @@ You can leave the page while a sync runs. The **Last Synced** card shows when th
 
 For anything but **Done**, **Retry** runs the same sync again over the same destinations. Every sync is also listed in **Diagnostics → Sync activity** for 90 days.
 
+A rule deleted in Kibana is marked **Deprecated** at the next sync, keeping its history, links and mappings. TIDE does this only when Kibana returned every rule it says the space holds, so a sync cut short never deprecates a rule that still exists. Two Diagnostics checks show when that keeps happening:
+
+- **Destinations whose last two syncs could not read every rule**: TIDE still counts rules there that may have been deleted in Kibana. To clear one you know was deleted, open it and use **Sync this rule**.
+- **Rules sharing a rule id in Kibana**: Kibana holds two rules under one rule id, usually a copy and Elastic's own prebuilt rule. TIDE holds one of them; delete the one you don't need in Kibana.
+
+Syncs run when someone starts one. TIDE's figures for a destination are as of its last sync, so **Destinations not synced for 7 days** lists those that have fallen behind, with when each was last synced. Rule Health's **Last Synced** card counts them in red, and reports say when the rules were last synced.
+
 ---
 
 ## CTI feeds
@@ -159,7 +166,7 @@ docker compose logs -f tide-app
 
 TIDE upgrades its databases as it starts; the log says `Migrations complete` when it's done.
 
-4. Review rule updates. Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
+4. Review rule updates. Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Elastic update available** and **Sigma update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
 
 ---
 

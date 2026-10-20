@@ -188,6 +188,10 @@
         <div class="rm-form-reason">
           <label class="form-label" for="rule-reason">Reason for change *</label>
           <textarea class="rule-form-textarea" id="rule-reason" name="reason" rows="2" placeholder="Why you're changing this rule. Recorded in its History.">{{ form_values.reason }}</textarea>
+          {% if prebuilt %}
+          <div class="scope-note">This is one of Elastic's prebuilt rules. Saving changes it in Kibana, which then marks it as customised.
+            When Elastic's next update for it is installed in Kibana, Kibana merges your change with Elastic's, or replaces it with Elastic's version, depending on your Elastic licence.</div>
+          {% endif %}
         </div>
         {% endif %}
         {% if min_stack_version %}

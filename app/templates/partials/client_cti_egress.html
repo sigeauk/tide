@@ -74,7 +74,7 @@
             <span id="cti-egress-status-{{ t.id }}" class="fs-sm"></span>
         </div>
         <div class="flex items-center gap-xs">
-            <button name="Run" class="btn btn-ghost btn-sm btn-xs"
+            <button name="Run" class="btn btn-ghost btn-xs"
                     hx-post="/api/management/clients/{{ client.id }}/cti-egress/{{ t.id }}/run"
                     hx-target="#cti-egress-status-{{ t.id }}" hx-swap="innerHTML"
                     title="Run egress now"
@@ -194,10 +194,10 @@
                 </p>
             </div>
             </div>
-            <div class="flex justify-end gap-sm mt-sm">
-                <button name="Cancel" type="button" class="btn btn-secondary btn-sm"
+            <div class="modal-actions mt-sm">
+                <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-cti-egress-modal">Cancel</button>
-                <button name="Create target" type="submit" class="btn btn-primary btn-sm">{{ icon('plus', '14') }} Create target</button>
+                <button name="Create target" type="submit" class="btn btn-primary">{{ icon('plus', '14') }} Create target</button>
             </div>
         </form>
     </div>

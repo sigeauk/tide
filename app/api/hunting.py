@@ -122,7 +122,7 @@ def run_hunt(
     """Run one of a hunt's queries on one of the tenant's SIEMs and show the first rows: an Elastic
     hunting query as written, or a Sigma threat-hunting rule converted to ES|QL with ``pipeline``
     over ``index``. Only bundled queries run; the browser picks which, never the query text."""
-    error = lambda text: HTMLResponse(f'<div class="alert alert-error">{escape(text)}</div>')   # noqa: E731
+    error = lambda text: HTMLResponse(f'<div class="alert alert-danger">{escape(text)}</div>')   # noqa: E731
     siem, _space = hunt_runner.destination(db, client_id, destination)
     if not siem:
         return error("Choose one of this client's destinations to run it on.")

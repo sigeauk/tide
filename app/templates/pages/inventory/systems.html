@@ -2,6 +2,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/filters.html" import filter_choice %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}Systems | TIDE{% endblock %}
 
@@ -14,7 +15,7 @@
 
 <div class="page-header flex items-start justify-between gap-md">
     <div class="page-split__main">
-        <h1 class="page-title-hero">Systems</h1>
+        <h1 class="page-title-hero">Systems {{ help_button('systems') }}</h1>
         <p class="page-subtitle">Track enterprise systems, devices, and map known vulnerabilities (CISA CVE) to packages.</p>
     </div>
     <div class="page-split__side page-split__side--stack">
@@ -54,7 +55,7 @@
             <label class="checkbox-group"><input id="transfer-include-baselines" type="checkbox" checked> Include assigned baselines</label>
             <label class="checkbox-group"><input id="transfer-include-rules" type="checkbox" checked> Include mapped rules</label>
             <label class="checkbox-group"><input id="transfer-include-devices" type="checkbox"> Include hosts and software</label>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" data-click="el.hide" data-target="system-transfer-modal">Cancel</button>
                 <button type="button" class="btn btn-primary" data-click="systems.exportSystems">Download JSON</button>
             </div>
@@ -72,7 +73,7 @@
                     <option value="override">Override existing</option>
                 </select>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" data-click="el.hide" data-target="system-transfer-modal">Cancel</button>
                 <button type="button" class="btn btn-primary" data-click="systems.importSystems">Import JSON</button>
             </div>
@@ -148,7 +149,7 @@
                 <input type="file" name="file" accept=".nessus,.xml" class="form-input" required>
             </div>
 
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="nessus-upload-modal">Cancel</button>
                 <button name="Import" type="submit" class="btn btn-primary">Import</button>
@@ -186,9 +187,9 @@
             </div>
             <div>
                 <label class="form-label">Description</label>
-                <textarea name="description" class="form-input" rows="2" placeholder="Optional description..."></textarea>
+                <textarea name="description" class="form-input" rows="2" placeholder="Optional description…"></textarea>
             </div>
-            <div class="flex justify-end gap-sm">
+            <div class="modal-actions">
                 <button name="Cancel" type="button" class="btn btn-secondary"
                         data-click="el.hide" data-target="add-env-modal">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary">Create</button>
@@ -223,7 +224,7 @@
                 <label class="form-label">Colour</label>
                 <input type="color" name="color" value="#6b7280" class="colour-swatch-input">
             </div>
-            <button name="Add" type="submit" class="btn btn-primary btn-sm btn-h34">Add</button>
+            <button name="Add" type="submit" class="btn btn-primary btn-sm">Add</button>
         </form>
     </div>
 </div>

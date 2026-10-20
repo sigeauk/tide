@@ -16,7 +16,7 @@
               hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
             <input type="hidden" name="sigma_id" value="{{ rule.id }}">
             <p><strong>{{ rule.title or rule.id }}</strong></p>
-            {% if rule.description %}<p class="text-muted sys-dialog__hint">{{ rule.description | truncate(300) }}</p>{% endif %}
+            {% if rule.description %}<p class="text-muted sys-dialog__hint">{{ rule.description | truncate(300, end='…') }}</p>{% endif %}
             <label class="form-label" for="sm-convert-pipeline">Pipeline</label>
             <select id="sm-convert-pipeline" name="pipeline" class="form-input form-select">
                 {% for p in pipelines %}

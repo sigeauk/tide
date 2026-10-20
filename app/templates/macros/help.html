@@ -1,0 +1,14 @@
+{#
+  help_button(topic): a page's ?, beside its title. It opens the guide's section on that page
+  (docs.HELP names it) in the side panel, with Open in Documentation for the rest. Shown to
+  anyone who can read Documentation. Import it with context (it reads user):
+    {% from "macros/help.html" import help_button with context %}
+#}
+{% from "macros/icons.html" import icon %}
+
+{% macro help_button(topic) -%}
+{%- if not user or user.can_read('page:documentation') -%}
+<button type="button" name="Help" class="help-btn" title="Help with this page" aria-label="Help with this page"
+        hx-get="/settings/docs/help/{{ topic }}" hx-target="#help-panel-container" hx-swap="innerHTML">{{ icon('help-circle', '18') }}</button>
+{%- endif -%}
+{%- endmacro %}

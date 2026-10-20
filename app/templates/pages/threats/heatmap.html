@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% from "macros/filters.html" import filter_dropdown, filter_multi %}
 {% from "macros/modal.html" import close_button %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/icons.html" import icon %}
 
 {% block title %}Heatmap | TIDE{% endblock %}
 
@@ -11,6 +13,7 @@
     <div>
         <h1 class="page-title-hero">
             Coverage Heatmap
+            {{ help_button('heatmap') }}
         </h1>
         <p class="page-subtitle">Visualize your detection coverage against adversary techniques used by tracked threat actors.</p>
     </div>
@@ -19,11 +22,7 @@
             class="btn btn-secondary btn-sm heatmap-toggle"
             data-click="heatmap.exportOpen"
             title="Export threat report for selected actors">
-            <svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-                <polyline points="7 10 12 15 17 10"/>
-                <line x1="12" y1="15" x2="12" y2="3"/>
-            </svg>
+            {{ icon('download', '14') }}
             Export Report
         </button>
         {% if not user or user.can_write('page:baselines') %}
@@ -31,9 +30,7 @@
             class="btn btn-primary btn-sm heatmap-toggle"
             data-click="heatmap.baselineOpen"
             title="Generate an Assurance Baseline from selected actors">
-            <svg width="14" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-            </svg>
+            {{ icon('check-square', '14') }}
             Create Baseline
         </button>
         {% endif %}
@@ -51,7 +48,7 @@
             type="text" 
             id="technique-search"
             class="form-input" 
-            placeholder="T1059, Command, Execution..."
+            placeholder="T1059, Command, Execution…"
             data-input="heatmap.filterTechniques">
     </div>
     
@@ -62,7 +59,7 @@
             type="text" 
             id="actor-search"
             class="form-input" 
-            placeholder="Name or alias..."
+            placeholder="Name or alias…"
             data-input="heatmap.filterActors">
     </div>
     
@@ -158,8 +155,8 @@
         </div>
 
         <!-- Actions -->
-        <div class="flex gap-ms justify-end">
-            <button name="Cancel" data-click="heatmap.exportClose" class="btn btn-secondary fs-base py-sm px-md"
+        <div class="modal-actions">
+            <button name="Cancel" data-click="heatmap.exportClose" class="btn btn-secondary"
                    >
                 Cancel
             </button>
@@ -176,9 +173,7 @@
     <div class="modal-content modal-sm">
         <div class="modal-header">
             <h3 class="modal-title">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="modal-title__icon">
-                    <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                </svg>
+                {{ icon('check-square', '16', 'modal-title__icon') }}
                 Create Assurance Baseline
             </h3>
             {{ close_button('name="Close Baseline Generate Modal" data-click="heatmap.baselineClose"') }}
@@ -214,8 +209,8 @@
                           class="form-input"></textarea>
             </div>
 
-            <div class="flex gap-ms justify-end">
-                <button name="Cancel" type="button" data-click="heatmap.baselineClose" class="btn btn-secondary fs-base py-sm px-md"
+            <div class="modal-actions">
+                <button name="Cancel" type="button" data-click="heatmap.baselineClose" class="btn btn-secondary"
                        >
                     Cancel
                 </button>

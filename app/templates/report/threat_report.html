@@ -831,6 +831,7 @@ ul.rule-list li.rule-item::before { content: none; }
         </div>
         <div class="cover-meta">
             Generated: {{ generated_at }}
+            {% if rules_synced %}<br/>Rules last synced: {{ rules_synced }}{% endif %}
         </div>
     </div>
     <div class="cover-bottombar"></div>

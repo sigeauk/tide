@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}{{ actor.name }} | CTI Actor | TIDE{% endblock %}
 
@@ -7,7 +8,7 @@
 <div class="page-header">
     <div class="page-header__text">
         <p class="cti-back-link"><a name="Back to Actors" href="/cti/actors">{{ icon('arrow-right','12') }} <span>Back to Actors</span></a></p>
-        <h1 class="page-title-hero">{{ icon('users','24') }} {{ actor.name }}</h1>
+        <h1 class="page-title-hero">{{ icon('users','24') }} {{ actor.name }} {{ help_button('cti') }}</h1>
         <p class="page-subtitle">
             <span class="badge badge-secondary">{{ actor.stix_type }}</span>
             {% if actor.origin %}

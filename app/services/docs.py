@@ -156,6 +156,46 @@ def page(slug: str, version: str) -> Optional[Dict]:
 _SECTION = re.compile(r'<h([123]) id="([^"]+)">(.*?)</h[123]>', re.S)
 _TAG = re.compile(r"<[^>]+>")
 
+# Each page's ? (macros/help.html): the guide's (page, section) on that page, by the page's name.
+HELP = {
+    "dashboard": ("getting-started", "dashboards"),
+    "systems": ("systems", "the-systems-page"),
+    "system": ("systems", "a-systems-page"),
+    "baselines": ("systems", "baseline-templates"),
+    "cves": ("systems", "devices-and-cves"),
+    "rule-health": ("rules", "rule-health"),
+    "rule-monitoring": ("rules", "rule-monitoring"),
+    "sigma": ("libraries", "sigma-rules"),
+    "elastic": ("libraries", "elastic-rules"),
+    "hunting": ("libraries", "hunting"),
+    "threat-landscape": ("threats", "threat-landscape"),
+    "heatmap": ("threats", "heatmap"),
+    "mitre": ("threats", "the-mitre-pages"),
+    "nist": ("threats", "nist-800-53"),
+    "cti": ("threats", "cti"),
+    "clients": ("clients", "the-order-to-set-things-up"),
+    "client": ("clients", "link-destinations-to-a-client"),
+}
+
+
+def help_section(topic: str, version: str) -> Optional[Dict]:
+    """``{"title", "html", "page", "url"}``: the guide's section for a page's ? (HELP), up to the
+    next heading of its level or above, with its links to the rest of the page made whole."""
+    slug, sid = HELP.get(topic, (None, None))
+    doc = page(slug, version) if slug else None
+    if not doc:
+        return None
+    html = doc["html"]
+    marks = list(_SECTION.finditer(html))
+    at = next((i for i, m in enumerate(marks) if m.group(2) == sid), None)
+    if at is None:
+        return None
+    level = int(marks[at].group(1))
+    end = next((m.start() for m in marks[at + 1:] if int(m.group(1)) <= level), len(html))
+    body = html[marks[at].end():end].replace('href="#', f'href="/settings/docs/{slug}#')
+    title = re.sub(r"\s+", " ", _TAG.sub("", marks[at].group(3))).strip()
+    return {"title": title, "html": body, "page": doc["title"], "url": f"/settings/docs/{slug}#{sid}"}
+
 
 def search_index(version: str) -> List[Dict]:
     """Every section of every written page, for the sidebar's search: ``{slug, page, section, id,

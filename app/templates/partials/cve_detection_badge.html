@@ -29,7 +29,7 @@
         {{ det.source }}
       </div>
     </div>
-    <button name="Delete Detect" class="btn btn-danger btn-sm py-xs px-sm fs-xs"
+    <button name="Delete Detect" class="btn btn-danger btn-sm"
             hx-delete="/api/inventory/cve/{{ cve_id }}/detect/{{ det.id }}"
             hx-target="#detection-section-inner"
             hx-swap="outerHTML"

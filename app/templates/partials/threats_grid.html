@@ -46,12 +46,12 @@
         
         <!-- Aliases -->
         <p class="threat-aliases" title="{{ actor.aliases or 'No known aliases' }}">
-            {{ actor.aliases[:60] + '...' if actor.aliases and actor.aliases | length > 60 else actor.aliases or 'No known aliases' }}
+            {{ actor.aliases[:60] + '…' if actor.aliases and actor.aliases | length > 60 else actor.aliases or 'No known aliases' }}
         </p>
         
         <!-- Description -->
         <p class="threat-desc">
-            {{ actor.description[:100] + '...' if actor.description and actor.description | length > 100 else actor.description or 'No description available.' }}
+            {{ actor.description[:100] + '…' if actor.description and actor.description | length > 100 else actor.description or 'No description available.' }}
         </p>
         
         <!-- Coverage Section -->
@@ -69,9 +69,7 @@
         <details class="ttp-expander">
             <summary class="ttp-summary">
                 <span>View {{ actor.ttp_count }} TTPs</span>
-                <svg class="expand-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="m9 18 6-6-6-6"/>
-                </svg>
+                {{ icon('chevron-right', '16', 'expand-chevron') }}
             </summary>
             <div class="ttp-list">
                 {% for ttp in actor.ttps_with_coverage %}
@@ -85,9 +83,7 @@
         <div class="threat-card-foot">
             <button name="Create Baseline" class="btn btn-primary btn-sm threat-card-foot__btn"
                     data-click="threats.baselineOpen" data-actor="{{ actor.name }}" data-group-id="{{ (actor.group_url or '') | replace('/mitre/groups/', '') }}">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
-                </svg>
+                {{ icon('check-square', '12') }}
                 Create Baseline
             </button>
         </div>

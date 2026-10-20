@@ -357,7 +357,7 @@ a { color:inherit; text-decoration:none; }
         {% endif %}
         <div><span class="cover-level-pill">{% if technical %}Technical / Engineer{% else %}Executive / CISO{% endif %}</span></div>
         <div><span class="cover-clf-badge">{{ report.classification or 'Official' }}</span></div>
-        <div class="cover-meta">Generated: {{ report.generated_at }}</div>
+        <div class="cover-meta">Generated: {{ report.generated_at }}{% if report.rules_synced %}<br/>Rules last synced: {{ report.rules_synced }}{% endif %}</div>
     </div>
     <div class="cover-bottombar"></div>
 </div>

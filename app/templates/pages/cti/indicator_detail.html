@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}{{ indicator.observable_value }} | CTI Indicator | TIDE{% endblock %}
 
@@ -8,7 +9,7 @@
 <div class="page-header">
     <div class="page-header__text">
         <p class="cti-back-link"><a name="Back to Indicators" href="/cti/indicators">{{ icon('arrow-right','12') }} <span>Back to Indicators</span></a></p>
-        <h1 class="page-title-hero break-all">{{ icon('crosshair','24') }} {{ indicator.observable_value }}</h1>
+        <h1 class="page-title-hero break-all">{{ icon('crosshair','24') }} {{ indicator.observable_value }} {{ help_button('cti') }}</h1>
         <p class="page-subtitle">
             <span class="badge badge-secondary">{{ indicator.pattern_type or '—' }}</span>
             <span class="cti-meta-sep">TLP <strong>{{ tlp_v|upper }}</strong></span>

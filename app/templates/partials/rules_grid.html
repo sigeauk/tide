@@ -2,6 +2,7 @@
 
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/modal.html" import empty_state %}
+{% from "components/ui/loading_state.html" import loading_state %}
 {% set state = state | default([]) %}
 {% set view = view | default('cards') %}
 {% set pagination_qs = "search=" ~ (search | urlencode) ~ "&space=" ~ (space | urlencode) ~ "&enabled=" ~ (enabled | urlencode) ~ "&sort_by=" ~ (sort_by | urlencode) ~ "&sort_score=" ~ (sort_score | urlencode) ~ "&sort_validated=" ~ (sort_validated | urlencode) ~ "&sort_name=" ~ (sort_name | urlencode) ~ "&min_score=" ~ (min_score | string | urlencode) ~ "&max_score=" ~ (max_score | string | urlencode) ~ "&validated_from=" ~ (validated_from | urlencode) ~ "&validated_to=" ~ (validated_to | urlencode) ~ "&view=" ~ view ~ "&sort_col=" ~ (sort_col | default("") | urlencode) ~ "&sort_dir=" ~ (sort_dir | default("") | urlencode) %}
@@ -22,7 +23,7 @@
             hx-trigger="tideLoadMore once"
             hx-target="this"
             hx-swap="outerHTML">
-            <td colspan="11"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+            <td colspan="11">{{ loading_state("Loading more rules…", inline=true) }}</td>
         </tr>
         {% else %}
         <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
@@ -55,7 +56,7 @@
                 hx-trigger="tideLoadMore once"
                 hx-target="this"
                 hx-swap="outerHTML">
-                <td colspan="11"><span class="loading-spinner"></span> <span>Loading more rules...</span></td>
+                <td colspan="11">{{ loading_state("Loading more rules…", inline=true) }}</td>
             </tr>
             {% else %}
             <tr class="infinite-scroll-end"><td colspan="11">All {{ total }} rules loaded</td></tr>
@@ -74,8 +75,7 @@
          hx-trigger="tideLoadMore once"
          hx-target="this"
          hx-swap="outerHTML">
-        <span class="loading-spinner"></span>
-        <span>Loading more rules...</span>
+        {{ loading_state("Loading more rules…", inline=true) }}
     </div>
     {% else %}
     <div class="infinite-scroll-end">All {{ total }} rules loaded</div>
@@ -91,8 +91,7 @@
          hx-trigger="tideLoadMore once"
          hx-target="this"
          hx-swap="outerHTML">
-        <span class="loading-spinner"></span>
-        <span>Loading more rules...</span>
+        {{ loading_state("Loading more rules…", inline=true) }}
     </div>
     {% else %}
     <div class="infinite-scroll-end">All {{ total }} rules loaded</div>

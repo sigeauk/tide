@@ -1,9 +1,11 @@
 {% extends "base.html" %}
+{% from "macros/help.html" import help_button with context %}
+{% from "macros/icons.html" import icon %}
 {% block title %}Clients - TIDE{% endblock %}
 
 {% block content %}
 <div class="page-header">
-    <h1 class="page-title-hero">Client Management</h1>
+    <h1 class="page-title-hero">Client Management {{ help_button('clients') }}</h1>
     <p class="page-subtitle">Manage MSSP tenants, user assignments, and SIEM configurations.</p>
 </div>
 
@@ -13,7 +15,7 @@
         <div class="flex items-center justify-between gap-md flex-wrap">
             <span class="text-secondary">{{ clients | length }} client{{ 's' if clients | length != 1 else '' }} configured</span>
             <button name="New Client" class="btn btn-primary" data-click="clients.create">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                {{ icon('plus', '16') }}
                 New Client
             </button>
         </div>
@@ -33,11 +35,11 @@
                 </div>
                 <div class="client-card__actions">
                     <button  name="Edit Client" class="btn btn-ghost btn-sm" data-click="clients.edit" data-id="{{ client.id }}" data-name="{{ client.name }}" data-desc="{{ client.description or '' }}" title="Edit">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+                        {{ icon('pencil', '16') }}
                     </button>
                     {% if not client.is_default %}
                     <button name="Delete" class="btn btn-ghost btn-sm text-danger" data-click="clients.delete" data-id="{{ client.id }}" data-name="{{ client.name }}" title="Delete">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                        {{ icon('trash-2', '16') }}
                     </button>
                     {% endif %}
                 </div>
@@ -102,10 +104,10 @@
             </div>
             <div class="form-group mb-lg">
                 <label for="client-form-desc" class="form-label">Description</label>
-                <textarea id="client-form-desc" class="form-control" rows="3" placeholder="Optional description..."></textarea>
+                <textarea id="client-form-desc" class="form-control" rows="3" placeholder="Optional description…"></textarea>
             </div>
-            <div class="flex gap-ms justify-end">
-                <button name="Cancel" type="button" class="btn btn-ghost" data-click="clients.close">Cancel</button>
+            <div class="modal-actions">
+                <button name="Cancel" type="button" class="btn btn-secondary" data-click="clients.close">Cancel</button>
                 <button name="Create" type="submit" class="btn btn-primary" id="client-form-submit">Create</button>
             </div>
         </form>

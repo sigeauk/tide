@@ -104,6 +104,43 @@
                 </label>
             </div>
         </fieldset>
+        {% elif card.source == 'rule_monitoring' %}
+        <fieldset class="dash-settings__group">
+            <legend>Filters, as on Rule Monitoring</legend>
+            <div class="dash-settings__fields">
+                <label class="dash-field">SIEM
+                    <select class="form-input form-select" data-dash-filter="scope">
+                        <option value="">All SIEMs</option>
+                        {% for value, label in filter_options.scopes %}<option value="{{ value }}"{% if f.scope == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                        {% if f.scope and f.scope not in (filter_options.scopes | map('first') | list) %}<option value="{{ f.scope }}" selected>No longer linked</option>{% endif %}
+                    </select>
+                </label>
+                <label class="dash-field">Rules
+                    <select class="form-input form-select" data-dash-filter="rules">
+                        <option value="">Enabled</option>
+                        <option value="all"{% if f.rules == 'all' %} selected{% endif %}>Include disabled</option>
+                    </select>
+                </label>
+                <div class="dash-field" role="group" aria-label="Severity">Severity
+                    <div class="dash-settings__checks">
+                        {% for value, label in filter_options.severities %}<label><input type="checkbox" data-dash-filter="severity" value="{{ value }}"{% if value in (f.severity or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}
+                    </div>
+                </div>
+                <div class="dash-field" role="group" aria-label="Who fixes">Who fixes
+                    <div class="dash-settings__checks">
+                        {% for value, label in filter_options.fixers %}<label><input type="checkbox" data-dash-filter="fixer" value="{{ value }}"{% if value in (f.fixer or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}
+                    </div>
+                </div>
+                <div class="dash-field dash-field--wide" role="group" aria-label="Issue">Issue
+                    <div class="dash-settings__checks dash-settings__checks--cols">
+                        {% for value, label in filter_options.issues %}<label><input type="checkbox" data-dash-filter="issue" value="{{ value }}"{% if value in (f.issue or []) %} checked{% endif %}> {{ label }}</label>{% endfor %}
+                    </div>
+                </div>
+                <label class="dash-field">Search
+                    <input type="text" class="form-input" data-dash-filter="search" maxlength="{{ search_limit }}" value="{{ f.search or '' }}" placeholder="Rule, index pattern, field, message…">
+                </label>
+            </div>
+        </fieldset>
         {% elif card.source == 'system' %}
         <fieldset class="dash-settings__group">
             <legend>System</legend>

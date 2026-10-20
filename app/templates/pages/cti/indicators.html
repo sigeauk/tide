@@ -1,13 +1,14 @@
 {% extends "base.html" %}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/filters.html" import filter_choice %}
+{% from "macros/help.html" import help_button with context %}
 
 {% block title %}CTI Indicators | TIDE{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title-hero">CTI Indicators</h1>
+        <h1 class="page-title-hero">CTI Indicators {{ help_button('cti') }}</h1>
         <p class="page-subtitle">
             Ingested observables. TLP ceiling <strong>{{ tlp_ceiling|upper }}</strong>.
         </p>

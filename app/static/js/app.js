@@ -294,6 +294,9 @@ console.debug('TIDE app.js loading...');
     // Expose TIDE namespace for debugging
     window.TIDE = TIDE;
 
+    // What a script says when its request never reached TIDE (a lost connection, TIDE restarting).
+    TIDE.UNREACHABLE = 'TIDE could not be reached, so nothing was changed. Check your connection and try again.';
+
     // An icon for markup a script builds: the same SVG as the templates' icon macro, from the
     // <template id="tide-icons"> in base.html. TIDE.icon gives the element, TIDE.iconHtml its markup.
     TIDE.icon = function (name, size) {
@@ -307,6 +310,16 @@ console.debug('TIDE app.js loading...');
     TIDE.iconHtml = function (name, size) {
         var svg = TIDE.icon(name, size);
         return svg ? svg.outerHTML : '';
+    };
+    // The inline loading state (loading_state(label, inline=true) in components/ui/loading_state.html).
+    TIDE.loadingHtml = function (label) {
+        var svg = TIDE.icon('loader', 14);
+        if (svg) svg.classList.add('spin');
+        var span = document.createElement('span');
+        span.className = 'loading-state__label';
+        span.textContent = label || 'Loading…';
+        return '<div class="loading-state loading-state--inline" role="status" aria-live="polite">' +
+            (svg ? svg.outerHTML : '') + span.outerHTML + '</div>';
     };
 
     /**
@@ -509,6 +522,19 @@ console.debug('TIDE app.js loading...');
         var btn = select.parentElement.querySelector(':scope > .tide-filter-btn');
         if (btn) btn.focus();
     });
+
+    // A form that won't send because a field is missing or wrong must show that field: open every
+    // folded section (<details>) holding one, and for a TIDE dropdown put focus on its button, as
+    // the select itself is hidden. Otherwise Save seems to do nothing.
+    document.addEventListener('invalid', function (e) {
+        var field = e.target;
+        for (var d = field.closest && field.closest('details:not([open])'); d; d = d.parentElement && d.parentElement.closest('details:not([open])')) d.open = true;
+        if (!field.classList || !field.classList.contains('tide-select__native')) return;
+        setTimeout(function () {
+            var btn = field.parentElement.querySelector(':scope > .tide-filter-btn');
+            if (btn && document.activeElement === field) btn.focus();
+        }, 0);
+    }, true);
 
     // Any other <select> becomes the same control: the select, still in its form, beside a button
     // and a panel of rows. Its layout classes (a width, a margin) move to the wrapper. A select marked
@@ -862,7 +888,7 @@ console.debug('TIDE app.js loading...');
                 if (busy) busy.removeAttribute('aria-busy');
                 var overlay = target.querySelector('[data-rm-skeleton]');
                 if (overlay) { overlay.remove(); target.innerHTML = ''; }
-                if (typeof showToast === 'function') showToast('Could not load the rule. Please try again.', 'error');
+                if (typeof showToast === 'function') showToast('Could not load the rule. Try again.', 'error');
             }
         });
     });
@@ -876,7 +902,9 @@ console.debug('TIDE app.js loading...');
         if (overlay && overlay.matches && overlay.matches('.modal-overlay[data-rm-overlay]')) closeRuleModal();
     });
 
-    // Copy query
+    // Copy (the rule window's query, Rule Monitoring's Markdown): [data-rm-copy] names what to copy;
+    // data-copied, if set, is said in a toast. Capture phase, so it works inside a dialog, which keeps
+    // its clicks to itself (data-stop-click).
     document.addEventListener('click', function(e) {
         var btn = e.target.closest && e.target.closest('[data-rm-copy]');
         if (!btn) return;
@@ -885,8 +913,11 @@ console.debug('TIDE app.js loading...');
         navigator.clipboard.writeText(src.innerText).then(function() {
             btn.classList.add('is-done');
             setTimeout(function() { btn.classList.remove('is-done'); }, 1200);
+            if (btn.dataset.copied && typeof showToast === 'function') showToast(btn.dataset.copied, 'success');
+        }, function() {
+            if (typeof showToast === 'function') showToast('Could not copy: the browser refused access to the clipboard.', 'danger');
         });
-    });
+    }, true);
 
     // ── prev / next through the list the modal was opened from ──
     // Walks a snapshot of {id, url} taken when the modal opened, not the live grid: the grid
@@ -989,6 +1020,15 @@ console.debug('TIDE app.js loading...');
         try { return JSON.parse(response.headers.get('X-Tide-Rule-Window') || 'null'); } catch (_) { return null; }
     }
     window.tideRuleWindowFrom = ruleWindowFrom;
+    // A rule-window action sent by htmx (Restore, Give it its own rule id) that leaves the rule under a
+    // new id names it in the same header: the window reopens there.
+    document.addEventListener('htmx:afterRequest', function(e) {
+        var xhr = e.detail && e.detail.xhr;
+        if (!xhr || !e.detail.successful) return;
+        var info;
+        try { info = JSON.parse(xhr.getResponseHeader('X-Tide-Rule-Window') || 'null'); } catch (_) { info = null; }
+        if (info) window.tideShowRuleAfterAction(info);
+    });
 
     document.addEventListener('click', function(e) {
         var btn = e.target.closest && e.target.closest('[data-rm-nav]');
@@ -1781,26 +1821,20 @@ console.debug('TIDE app.js loading...');
             }
         });
 
-        // Handle HTMX errors
-        document.addEventListener('htmx:responseError', function(event) {
-            console.error('HTMX Response Error:', event.detail);
-            showToast('An error occurred. Please try again.', 'error');
-        });
-
         // Stale page / network errors: a lost connection says so; a 401 or 403 that slipped
         // through without HX-Redirect goes to sign-in; any other failure says which.
         document.addEventListener('htmx:sendError', function() {
-            showToast('Connection lost — please refresh the page.', 'error');
+            showToast(TIDE.UNREACHABLE, 'error');
         });
         document.addEventListener('htmx:responseError', function(evt) {
             var status = evt.detail.xhr ? evt.detail.xhr.status : 0;
             if (status === 401 || status === 403) window.location.href = '/login';
-            else showToast('Request failed (HTTP ' + status + '). Try refreshing.', 'error');
+            else showToast('Could not complete that (HTTP ' + status + '). Try again, or refresh the page.', 'error');
         });
 
         // Handle HTMX request timeout
         document.addEventListener('htmx:timeout', function(event) {
-            showToast('Request timed out. Please try again.', 'error');
+            showToast('TIDE took too long to answer. Try again.', 'error');
         });
 
         // After HTMX swaps content (page navigation or partial updates)
@@ -1952,13 +1986,18 @@ console.debug('TIDE app.js loading...');
 
     // hx-confirm renders the browser's own dialog; route it through tideConfirm instead so every
     // confirmation in the app looks like the app. htmx issues the request itself once we say yes.
+    // hx-confirm asks in TIDE's own dialog. data-confirm-when (a selector inside the element) asks
+    // only when it matches, such as a ticked box; data-confirm-title / -label name the dialog and button.
     document.addEventListener('htmx:confirm', function (e) {
         if (!e.detail.question) return;
         e.preventDefault();
+        var elt = e.detail.elt;
+        var when = elt && elt.getAttribute && elt.getAttribute('data-confirm-when');
+        if (when && !elt.querySelector(when)) { e.detail.issueRequest(true); return; }
         window.tideConfirm({
-            title: 'Confirm',
+            title: (elt && elt.getAttribute('data-confirm-title')) || 'Confirm',
             body: e.detail.question,
-            confirmLabel: 'Continue',
+            confirmLabel: (elt && elt.getAttribute('data-confirm-label')) || 'Continue',
             danger: /delete|remove|permanent/i.test(e.detail.question),
         }).then(function (ok) { if (ok) e.detail.issueRequest(true); });
     });
@@ -1997,7 +2036,7 @@ console.debug('TIDE app.js loading...');
         var err = root.querySelector('[data-move-conflict-error]');
         var label = btn.innerHTML;
         btn.disabled = true;
-        btn.textContent = 'Working...';
+        btn.textContent = 'Working…';
         err.hidden = true;
         tidePostMove(root.dataset.ruleId, root.dataset.siemId, root.dataset.space, {
             target_scope: root.dataset.targetScope, delete_source: root.dataset.deleteSource,
@@ -2011,7 +2050,7 @@ console.debug('TIDE app.js loading...');
             btn.disabled = false;
             btn.innerHTML = label;
         }).catch(function (e) {
-            err.textContent = 'Error: ' + e.message;
+            err.textContent = TIDE.UNREACHABLE;
             err.hidden = false;
             btn.disabled = false;
             btn.innerHTML = label;
@@ -2058,7 +2097,7 @@ console.debug('TIDE app.js loading...');
             if (!target) return;
             err.hidden = true;
             go.disabled = true;
-            go.textContent = 'Moving...';
+            go.textContent = 'Moving…';
             tidePostMove(ruleId, siemId, space, {
                 target_scope: target,
                 delete_source: overlay.querySelector('[data-move-delete]').checked ? 'true' : 'false',
@@ -2085,7 +2124,7 @@ console.debug('TIDE app.js loading...');
                 .catch(function (e) {
                     go.disabled = false;
                     go.textContent = 'Move';
-                    showError('Error: ' + e.message);
+                    showError(TIDE.UNREACHABLE);
                 });
         };
         host.appendChild(overlay);
@@ -2124,7 +2163,7 @@ console.debug('TIDE app.js loading...');
         var reset = function () { go.disabled = false; go.textContent = 'Delete'; };
         var run = function (fromElastic, removeLinks) {
             go.disabled = true;
-            go.textContent = 'Deleting...';
+            go.textContent = 'Deleting…';
             err.hidden = true;
             var url = '/api/rules/' + encodeURIComponent(ruleId) + '?siem_id=' + encodeURIComponent(siemId) +
                       '&space=' + encodeURIComponent(space) + '&remove_links=' + (removeLinks ? 'true' : 'false') +
@@ -2148,7 +2187,7 @@ console.debug('TIDE app.js loading...');
                     reset();
                 })
                 .catch(function (e) {
-                    err.textContent = 'Error: ' + e.message;
+                    err.textContent = TIDE.UNREACHABLE;
                     err.hidden = false;
                     reset();
                 });
@@ -2247,7 +2286,7 @@ console.debug('TIDE app.js loading...');
 
     function tideRunMerge(root, direction, deleteWhich, sections) {
         root.disabled = true;
-        root.textContent = 'Merging...';
+        root.textContent = 'Merging…';
         var qs = 'siem_id=' + encodeURIComponent(root.dataset.siemId) + '&space=' + encodeURIComponent(root.dataset.space) +
                  '&target_rule_id=' + encodeURIComponent(root.dataset.targetRuleId) +
                  '&target_siem_id=' + encodeURIComponent(root.dataset.targetSiemId) +
@@ -2279,7 +2318,7 @@ console.debug('TIDE app.js loading...');
             .catch(function (err) {
                 root.disabled = false;
                 root.textContent = 'Merge';
-                if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+                if (typeof showToast === 'function') showToast(TIDE.UNREACHABLE, 'error');
             });
     }
 
@@ -2298,7 +2337,7 @@ console.debug('TIDE app.js loading...');
             .then(function (r) { return r.text(); })
             .then(function (html) { if (host) { host.innerHTML = html; if (window.htmx) htmx.process(host); } })
             .catch(function (err) {
-                if (typeof showToast === 'function') showToast('Error: ' + err.message, 'error');
+                if (typeof showToast === 'function') showToast(TIDE.UNREACHABLE, 'error');
             });
     };
 

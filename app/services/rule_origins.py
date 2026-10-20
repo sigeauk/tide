@@ -155,12 +155,14 @@ def mark_current(conn, key: Key, actor: str = "", version: Optional[int] = None,
 
 def copy(conn, source: Key, target: Key, how: str, actor: str = "", parent: bool = False) -> bool:
     """Give ``target`` the same origin and upstream revision as ``source`` (a moved or copied rule).
-    ``parent`` records ``source`` as the copy it was made from. False if ``source`` has no origin."""
+    ``parent`` records ``source`` as the copy it was made from. False if ``source`` has no origin.
+    The copy is never prebuilt: TIDE creates it, so Kibana holds it as a custom rule. A copy of a
+    prebuilt rule keeps the version Kibana had installed, which its updates are compared with."""
     values = get(conn, source)
     if not values:
         return False
     values.update(dict(zip(("rule_id", "siem_id", "space"), target)))
-    values.update({"recorded_how": how, "recorded_by": actor or "TIDE"})
+    values.update({"recorded_how": how, "recorded_by": actor or "TIDE", "prebuilt": False})
     if parent:
         values.update(dict(zip(("parent_rule_id", "parent_siem_id", "parent_space"), source)))
     _write(conn, values)
@@ -190,12 +192,30 @@ def copies_of(conn, origin: str, upstream_id: str, siem_id: str, space: str) -> 
         [origin, upstream_id, siem_id, space]))
 
 
+def is_prebuilt(rule: Optional[Dict[str, Any]]) -> bool:
+    """Whether Kibana installed the rule (as Kibana returns it) as one of Elastic's prebuilt rules:
+    ``rule_source.type`` external since Elastic 8.16, ``immutable`` before."""
+    rule = rule or {}
+    return bool(rule.get("immutable") or (rule.get("rule_source") or {}).get("type") == "external")
+
+
+def elastic_id_held(conn, rule: Optional[Dict[str, Any]], rule_id: str) -> Optional[str]:
+    """The Elastic rule id the rule (as Kibana returns it) is held under, when it is one: it is a
+    prebuilt rule, or a custom rule under the id of one of the Elastic rules built into TIDE. A copy
+    of such a rule is made under a new rule id, so it never stops Kibana installing Elastic's rule."""
+    held = str((rule or {}).get("rule_id") or rule_id or "")
+    return held if held and (is_prebuilt(rule) or upstream(conn, "elastic", held)) else None
+
+
+# ``is_prebuilt`` on detection_rules.raw_data.
+PREBUILT_SQL = ("(COALESCE(TRY_CAST(json_extract_string(raw_data, '$.immutable') AS BOOLEAN), false) "
+                "OR COALESCE(json_extract_string(raw_data, '$.rule_source.type') = 'external', false))")
+
 # A rule's portable id and whether Kibana installed it as one of Elastic's prebuilt rules.
-_SYNCED = """
+_SYNCED = f"""
     SELECT rule_id, siem_id, space,
            COALESCE(NULLIF(kibana_rule_id, ''), rule_id) AS portable,
-           COALESCE(TRY_CAST(json_extract_string(raw_data, '$.immutable') AS BOOLEAN), false)
-             OR COALESCE(json_extract_string(raw_data, '$.rule_source.type') = 'external', false) AS prebuilt,
+           {PREBUILT_SQL} AS prebuilt,
            TRY_CAST(json_extract_string(raw_data, '$.version') AS INTEGER) AS installed_version
     FROM detection_rules
 """
@@ -215,6 +235,13 @@ def backfill(conn) -> int:
     if "detection_rules" not in tables:
         return 0
     before = conn.execute("SELECT COUNT(*) FROM rule_origins").fetchone()[0]
+    # A rule recorded as prebuilt that Kibana now holds as a custom rule (a copy TIDE made before
+    # 6.2.2 kept its source's flag) is known by its version like any other copy.
+    conn.execute(f"""
+        UPDATE rule_origins o SET prebuilt = false FROM ({_SYNCED}) d
+        WHERE o.rule_id = d.rule_id AND o.siem_id = d.siem_id AND o.space = d.space
+          AND COALESCE(o.prebuilt, false) AND NOT d.prebuilt
+    """)
     if "elastic_rules_index" in tables:
         conn.execute(f"""
             INSERT INTO rule_origins (rule_id, siem_id, space, origin, upstream_id, upstream_version,
@@ -268,15 +295,38 @@ def backfill(conn) -> int:
 
 # ── Is there a newer upstream version? ─────────────────────────────────────────────────────────
 
-# State -> (label, filter label). "own" (no origin) is a filter choice only.
+# State -> its label, shown after the source ("Elastic · Deprecated"). "own" (no origin) is a
+# filter choice only.
 STATES = {
     "update": "Update available",
     "current": "Up to date",
-    "retired": "Retired upstream",
-    "removed": "No longer upstream",
+    "retired": "Deprecated",
+    "removed": "No longer in TIDE",
 }
-FILTER_STATES = (("update", "Update available"), ("current", "Up to date"), ("retired", "Retired upstream"),
-                 ("removed", "No longer upstream"), ("own", "Your own rules"))
+# Rule Health's Upstream filter: an update or a deprecation names its source (filter_value).
+FILTER_STATES = (("update_elastic", "Elastic update available"), ("update_sigma", "Sigma update available"),
+                 ("current", "Up to date"), ("retired_elastic", "Deprecated by Elastic"),
+                 ("retired_sigma", "Deprecated by Sigma"), ("removed", "No longer in TIDE's Elastic or Sigma rules"),
+                 ("own", "Your own rules"))
+# Values saved in links and dashboards before the filter named the source (6.2.2).
+_LEGACY_FILTER = {"update": ("update_elastic", "update_sigma"), "retired": ("retired_elastic", "retired_sigma")}
+
+
+def filter_value(status: Optional[Dict[str, Any]]) -> str:
+    """The Upstream filter's value for a rule's upstream status (``statuses``); "own" for none."""
+    if not status:
+        return "own"
+    return f"{status['state']}_{status['origin']}" if status["state"] in ("update", "retired") else status["state"]
+
+
+def filter_values(values: Iterable[str]) -> List[str]:
+    """The Upstream filter's chosen values, with any saved before 6.2.2 read as their new ones."""
+    out: List[str] = []
+    for value in values:
+        for v in _LEGACY_FILTER.get(value, (value,)):
+            if v and v not in out:
+                out.append(v)
+    return out
 
 _STATUS_SQL = """
     SELECT o.rule_id, o.siem_id, o.space, o.origin, o.upstream_id, o.upstream_version, o.upstream_hash,

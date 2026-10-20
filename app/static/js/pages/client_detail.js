@@ -23,13 +23,13 @@
             });
             if (!resp.ok) {
                 var err = await resp.json();
-                showToast(err.detail || 'Update failed', 'error');
+                showToast(err.detail || 'Could not update the client.', 'error');
                 return;
             }
-            showToast('Client updated', 'success');
+            showToast('Client updated.', 'success');
             window.location.reload();
         } catch (ex) {
-            showToast('Network error', 'error');
+            showToast(TIDE.UNREACHABLE, 'error');
         }
     }
 

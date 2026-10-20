@@ -1,4 +1,4 @@
-"""Bulk edit for Rule Health: validate, enable, disable, move or delete many rules at once.
+"""Bulk edit for Rule Health: validate, sync, enable, disable, move or delete many rules at once.
 
 The page keeps the selection in the browser as a list of ``{rule_id, siem_id, space}``. "Select all"
 asks ``/ids`` for every rule matching the current filters (not just the loaded page). A confirm dialog
@@ -31,12 +31,15 @@ router = APIRouter(prefix="/api/rules/bulk-edit", tags=["bulk-edit"])
 
 ACTIONS = {
     "validate": "Validate",
+    "sync": "Sync",
     "enable": "Enable",
     "disable": "Disable",
     "move": "Move",
     "delete": "Delete",
 }
 MAX_ITEMS = 2000
+# A synced rule Kibana no longer has: marked deprecated, and listed when the run ends.
+NOT_IN_ELASTIC = "Not in Elastic: marked deprecated."
 
 # One job per client, in memory. A job starts on a click and ends on its own.
 _EDIT_JOBS: Dict[str, Dict[str, Any]] = {}
@@ -207,19 +210,42 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
                 logger.exception("bulk edit: validation history not written for %s", rule_id)
         return 200, "Validated.", rule.name
 
-    if action == "delete":
-        # TIDE-only, like the single-rule Delete from TIDE button: removes the row, does not
-        # touch Elastic. If the rule still exists there, the next sync brings it straight back.
+    if action == "sync":
+        # The rule window's Sync this rule: read again from its SIEM; one Kibana no longer has is
+        # marked deprecated (its history kept), and listed when the run ends.
         if not siem_id:
             return 400, "Missing SIEM context.", rule.name
+        status, message, done = sync_single_rule(db, client_id, rule_id, siem_id, space, user_id, username)
+        if status not in (200, 202):
+            return status, message, rule.name
+        return 200, (NOT_IN_ELASTIC if done == "deprecated" else "Synced."), rule.name
+
+    if action == "delete":
+        # Like the rule window's Delete: from TIDE, and with from_elastic from its SIEM first, so a
+        # refused Elastic delete never leaves TIDE without a rule that is still live. Without it,
+        # a rule still in Elastic comes back at the next sync. A deprecated rule is already gone there.
+        if not siem_id:
+            return 400, "Missing SIEM context.", rule.name
+        from_elastic = opts.get("from_elastic") and not rule.deprecated
+        if from_elastic:
+            siem = next((s for s in (db.get_client_siems(client_id) or [])
+                         if s.get("id") == siem_id and str(s.get("space") or "default") == space), None)
+            if not siem:
+                return 400, "Its SIEM is no longer linked to this client, so nothing was deleted.", rule.name
+            ok, message = elastic_helper.delete_detection_rule(
+                str((rule.raw_data or {}).get("rule_id") or rule_id), space, siem.get("kibana_url"),
+                siem.get("api_token_enc"))
+            if not ok:
+                return 502, f"Elastic refused the delete ({message[:200]}). Nothing was deleted.", rule.name
         if not db.delete_rule(rule_id, siem_id, space, remove_links=opts.get("remove_links", True)):
             return 404, "Rule not found.", rule.name
+        where = "Elastic and TIDE" if from_elastic else "TIDE"
         db.record_rule_history(
             rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
             action="deleted", actor_user_id=user_id, actor_name=username,
-            detail={"message": "Rule deleted from TIDE (bulk edit)."},
+            detail={"message": f"Rule deleted from {where} (bulk edit)."},
         )
-        return 200, "Deleted from TIDE.", rule.name
+        return 200, f"Deleted from {where}.", rule.name
 
     # enable / disable
     if not siem_id:
@@ -308,6 +334,8 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
             job["done"] += 1
             if status == 200:
                 job["ok"] += 1
+                if message == NOT_IN_ELASTIC:
+                    job["deprecated"].append(name or label(item))
             elif status == 409 and action == "move":
                 # The target already holds this rule id: nothing was written. Asked about at the end,
                 # one rule at a time (link, or a new rule id), once the others have moved.
@@ -329,7 +357,7 @@ async def _run_job(job: Dict[str, Any], db, user_id: str, username: str, client_
         job["errors"].append(str(exc))
     finally:
         job["current"] = ""
-        # No client-wide sync here: move/enable/disable each refresh exactly the
+        # No client-wide sync here: move/enable/disable/sync each refresh exactly the
         # row(s) they touched inside _apply_one (validate never touches Elastic at all).
 
 
@@ -345,6 +373,7 @@ async def bulk_edit_start(
     delete_source: str = Form(""),
     target_scope: str = Form(""),
     remove_links: str = Form(""),  # an unchecked checkbox sends nothing at all, not "false"
+    from_elastic: str = Form(""),
 ):
     """Re-check the selection, then run ``action`` on it in the background."""
     job = _EDIT_JOBS.get(client_id)
@@ -364,6 +393,7 @@ async def bulk_edit_start(
         "delete_source": action == "move" and delete_source.lower() in {"1", "true", "on", "yes"},
         "validation_mode": validation if validation in ("stamp", "keep", "new_only") else "keep",
         "remove_links": remove_links.lower() in {"1", "true", "on", "yes"},
+        "from_elastic": action == "delete" and from_elastic.lower() in {"1", "true", "on", "yes"},
     }
     if action == "move":
         target_siem_id, _, target_space = target_scope.partition("|")
@@ -377,7 +407,7 @@ async def bulk_edit_start(
     job = {
         "state": "running", "action": action, "label": ACTIONS[action], "total": len(parsed),
         "done": 0, "ok": 0, "failed": 0, "errors": [], "current": "", "cancel": False,
-        "started": time.time(), "conflicts": [], "opts": opts,
+        "started": time.time(), "conflicts": [], "deprecated": [], "opts": opts,
     }
     _EDIT_JOBS[client_id] = job
     asyncio.get_running_loop().create_task(

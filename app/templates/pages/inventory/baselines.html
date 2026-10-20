@@ -2,6 +2,7 @@
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/modal.html" import close_button, empty_state %}
 {% from "macros/menu.html" import more_button %}
+{% from "macros/help.html" import help_button with context %}
 
 {#
   Baseline templates, shown the way a system's page shows its baselines: header with a "…" menu,
@@ -20,7 +21,7 @@
 
 <div class="page-header sys-header">
     <div class="sys-header__main">
-        <h1 class="page-title-hero">Baselines</h1>
+        <h1 class="page-title-hero">Baselines {{ help_button('baselines') }}</h1>
         <p class="page-subtitle">Baseline templates: the techniques to watch for. Applying one to a system gives it its own copy, where coverage is tracked.</p>
     </div>
     <div class="rh-more" data-more>

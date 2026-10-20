@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from app.services.rule_issues import STALE_DAYS
+
 logger = logging.getLogger(__name__)
 
 SAMPLE_ROWS = 25
@@ -85,6 +87,58 @@ def _scoped(sql_template: str, needs: Tuple[str, ...]) -> Callable:
         cur = conn.execute(sql_template.format(scopes=f"(VALUES {values}) AS d(siem_id, space, destination)"), params)
         return [d[0] for d in cur.description], cur.fetchall()
     return run
+
+
+def _shared_rule_ids(conn, ctx):
+    """Rule ids Kibana held on more than one rule at each destination's latest sync."""
+    names = {(siem_id, space): name for siem_id, space, name in ctx["scopes"]}
+    if not names or "space_fetch_results" not in _tables(conn):
+        return [], []
+    rows = []
+    for siem_id, space, duplicates in conn.execute(
+            "SELECT siem_id, space, arg_max(duplicates, synced_at) FROM space_fetch_results "
+            "GROUP BY 1, 2 ORDER BY 1, 2").fetchall():
+        if (siem_id, space) not in names:
+            continue
+        for dup in json.loads(duplicates or "[]"):
+            rows += [(names[(siem_id, space)], dup["rule_id"], r.get("name") or "",
+                      "Elastic prebuilt" if r.get("prebuilt") else "Custom", str(r.get("created_at") or "")[:10],
+                      "yes" if r.get("kept") else "no") for r in dup["rules"]]
+    return ["destination", "rule id", "rule", "kind", "created", "the one TIDE holds"], rows
+
+
+def _stale_destinations(conn, ctx):
+    """Linked destinations last synced more than STALE_DAYS ago: the Last Synced card's stale count.
+    One never synced holds no rules, so it is under destination_no_rules instead."""
+    from app.services import rule_issues
+    names = {(siem_id, space): name for siem_id, space, name in ctx["scopes"]}
+    if not names or "detection_rules" not in _tables(conn):
+        return [], []
+    now = datetime.now()
+    rows = sorted((names[(s["siem_id"], s["space"])], s["space"], s["last_synced"].strftime("%Y-%m-%d %H:%M"),
+                   (now - s["last_synced"]).days)
+                  for s in rule_issues.stale(conn, list(names), now) if s["last_synced"])
+    return ["destination", "space", "last synced", "days ago"], rows
+
+
+def _custom_under_elastic_id(conn, ctx):
+    """Custom rules held under the rule id of one of the Elastic rules built into TIDE (attached
+    from the reference database)."""
+    from app.services.rule_origins import PREBUILT_SQL
+    scopes = ctx["scopes"]
+    if not scopes or "detection_rules" not in _tables(conn):
+        return [], []
+    values = ", ".join("(?, ?, ?)" for _ in scopes)
+    try:
+        cur = conn.execute(
+            f"SELECT d.destination, r.name, r.rule_id FROM detection_rules r "
+            f"JOIN (VALUES {values}) AS d(siem_id, space, destination) ON d.siem_id = r.siem_id AND d.space = r.space "
+            f"WHERE NOT COALESCE(r.deprecated, false) AND NOT {PREBUILT_SQL} "
+            f"AND COALESCE(NULLIF(r.kibana_rule_id, ''), r.rule_id) IN (SELECT rule_id FROM elastic_rules_index) "
+            f"ORDER BY 1, 2", [v for s in scopes for v in s])
+    except Exception:       # no Elastic rule index (a reference DB from before it), or an old rule table
+        return [], []
+    return [d[0] for d in cur.description], cur.fetchall()
 
 
 def _rules_column_drift(conn, ctx):
@@ -237,6 +291,50 @@ CHECKS: List[Check] = [
         _scoped("SELECT d.destination, d.space, s.reason, s.checked_at FROM {scopes} "
                 "JOIN siem_space_status s ON s.siem_id = d.siem_id AND s.space = d.space "
                 "WHERE NOT s.reachable ORDER BY 1", needs=("siem_space_status",)),
+    ),
+    Check(
+        "destination_stale", f"Destinations not synced for {STALE_DAYS} days", "client", "warning",
+        f"TIDE hasn't read this destination's rules from Kibana for more than {STALE_DAYS} days. Its rules, "
+        "scores and coverage, Rule Monitoring and exported reports are as of that sync, so they may no longer "
+        "match Kibana. Rule Health's Last Synced card shows it in red.",
+        "Use Sync in Rule Health's ⋮ menu. If the SIEM can't be reached, the destination is listed under "
+        "Destinations TIDE could not reach at the last sync.",
+        _stale_destinations,
+    ),
+    Check(
+        "sync_drift_repeated", "Destinations whose last two syncs could not read every rule", "client", "warning",
+        "At its last two syncs, Kibana returned fewer rules for this destination than it said it holds, so TIDE "
+        "did not mark the rules deleted in Kibana as deprecated there. TIDE still counts them, including as "
+        "coverage. The last column is how many rules TIDE holds that Kibana did not return.",
+        "Check the SIEM is healthy and look for 'Sync drift' in the log, then Sync again. To clear one rule "
+        "you know was deleted, open it and use Sync this rule: it is marked deprecated and keeps its history.",
+        _scoped("WITH r AS (SELECT *, row_number() OVER (PARTITION BY siem_id, space ORDER BY synced_at DESC) AS n "
+                "FROM space_fetch_results) "
+                "SELECT d.destination, d.space, max(r.synced_at) AS last_sync, "
+                "max(CASE WHEN r.n = 1 THEN r.kibana_total END) AS kibana_total, "
+                "max(CASE WHEN r.n = 1 THEN r.returned END) AS returned, "
+                "max(CASE WHEN r.n = 1 THEN r.held_not_returned END) AS held_not_returned "
+                "FROM r JOIN {scopes} ON d.siem_id = r.siem_id AND d.space = r.space WHERE r.n <= 2 "
+                "GROUP BY d.destination, d.space HAVING count(*) = 2 AND NOT bool_or(r.complete) ORDER BY 1",
+                needs=("space_fetch_results",)),
+    ),
+    Check(
+        "kibana_shared_rule_id", "Rules sharing a rule id in Kibana", "client", "warning",
+        "Kibana holds two rules under the same rule id in this destination, usually a copy made under one of "
+        "Elastic's rule ids and Elastic's own prebuilt rule installed there later. TIDE holds one rule per "
+        "rule id, so the other is not shown, scored or counted.",
+        "In Kibana, compare the two. Delete the one you don't need, usually the custom copy (copy any change "
+        "you want to keep into the other first), then Sync.",
+        _shared_rule_ids,
+    ),
+    Check(
+        "custom_rule_elastic_id", "Custom rules using one of Elastic's rule ids", "client", "warning",
+        "A custom rule (usually one moved, copied or restored by an earlier TIDE) uses the rule id of one of "
+        "Elastic's prebuilt rules. While it does, Kibana can't install Elastic's own rule in that space, or "
+        "installs it beside this one under the same rule id.",
+        "Open the rule in Rule Health and use Give it its own rule id in its Upstream section. TIDE keeps its "
+        "history, links and mappings, and still shows Elastic's updates for it.",
+        _custom_under_elastic_id,
     ),
     Check(
         "destination_no_rules", "Linked destinations with no rules", "client", "warning",

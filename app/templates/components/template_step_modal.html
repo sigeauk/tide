@@ -18,6 +18,7 @@
 {% from "components/mitre_ui.html" import technique_list %}
 {% from "components/window_ui.html" import collapse_ctl, drag_ctl, section_menu, sections_item, window_menu %}
 {% from "macros/modal.html" import close_button %}
+{% from "components/ui/loading_state.html" import loading_state %}
 
 {% set step = detail.step %}
 {% set rl = detail.risk_labels %}
@@ -104,7 +105,7 @@
                  aria-label="Search Sigma rules" hx-get="{{ step_url }}/sigma" hx-trigger="input changed delay:300ms, search"
                  hx-target="#sm-sigma-candidates" hx-swap="innerHTML">
           <div id="sm-sigma-candidates" hx-get="{{ step_url }}/sigma" hx-trigger="load" hx-swap="innerHTML">
-            <p class="rm-empty">Looking for Sigma rules…</p>
+            {{ loading_state("Looking for Sigma rules…", inline=true) }}
           </div>
           {% endif %}
         </div>
@@ -122,7 +123,7 @@
                  aria-label="Search Elastic rules" hx-get="{{ step_url }}/elastic" hx-trigger="input changed delay:300ms, search"
                  hx-target="#sm-elastic-candidates" hx-swap="innerHTML">
           <div id="sm-elastic-candidates" hx-get="{{ step_url }}/elastic" hx-trigger="load" hx-swap="innerHTML">
-            <p class="rm-empty">Looking for Elastic rules…</p>
+            {{ loading_state("Looking for Elastic rules…", inline=true) }}
           </div>
           {% endif %}
         </div>

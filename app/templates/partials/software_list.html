@@ -53,7 +53,7 @@
             </span>
         </td>
         <td class="py-sm px-sm text-right">
-            <button name="Delete Software" class="btn btn-ghost btn-sm text-danger py-xs px-sm"
+            <button name="Delete Software" class="btn btn-ghost btn-sm text-danger"
                     hx-delete="/api/inventory/software/{{ sw.id }}?system_id={{ system_id }}"
                     hx-confirm="Remove '{{ sw.name }}'?"
                     hx-target="#software-section"
