@@ -555,6 +555,18 @@
                     {% else %}
                     <p class="rm-empty">Your own rule: it did not come from Elastic's rules or the Sigma rules.</p>
                     {% endif %}
+                    {# Changes Kibana made but TIDE couldn't record (pending_actions: a new rule id, a move, a
+                       restore): Finish in TIDE completes TIDE's part without changing Kibana again. #}
+                    {% for p in pending_changes %}
+                    <div class="rm-upstream">
+                        <p class="text-muted rm-upstream__note">{{ p.text }} on {{ p.at[:16] | replace('T', ' ') }}, but TIDE couldn't
+                            record the change{% if p.error %} ({{ p.error }}){% endif %}. Finish it here, keeping the rule's history,
+                            links and mappings; the next sync also finishes it.</p>
+                        <button name="Finish In TIDE" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/promotion/{{ rule.rule_id }}/finish?{{ scope_qs }}&amp;kind={{ p.kind }}{% if p.copy_id %}&amp;copy_id={{ p.copy_id | urlencode }}{% endif %}"
+                                hx-target="body" hx-swap="beforeend" hx-include="unset">{{ icon_text('check', 'Finish in TIDE', '13') }}</button>
+                    </div>
+                    {% endfor %}
                     {# A custom rule under one of Elastic's rule ids, or a prebuilt rule with such a copy beside
                        it in Kibana: either can be given a rule id of its own (promotion.own_rule_id). #}
                     {% if holds_elastic_id %}

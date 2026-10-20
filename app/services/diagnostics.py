@@ -36,6 +36,7 @@ class Check:
     advice: str              # what to do about it
     run: Callable[..., Tuple[List[str], List[tuple]]]   # (conn, ctx) -> (columns, rows)
     listing: bool = False    # rows are information to read, not problems to fix
+    on_demand: bool = False  # slow (copies files): its own Run only, not Run all checks
 
 
 def _tables(conn) -> set:
@@ -229,6 +230,45 @@ def _background_services_down(conn, ctx):
     return ["service", "state", "what stops"], rows
 
 
+def _database_health(conn, ctx):
+    """The tables of this connection's database whose indexes are missing rows, tested on a copy
+    (db_health)."""
+    from app.services import db_health
+    path = conn.execute("SELECT path FROM duckdb_databases() WHERE database_name = current_database()").fetchone()[0]
+    return ["table", "rows", "problem"], db_health.check_file(path)
+
+
+_HEALTH_MEANING = ("Tables whose indexes are missing rows. DuckDB stops a database at the next delete or update "
+                   "of such a row, and that client's pages then fail until TIDE restarts. The check copies the "
+                   "database and tests every table on the copy, so it takes a while on a large database; "
+                   "Run all checks leaves it out.")
+_HEALTH_ADVICE = ("Restart TIDE: it rebuilds the rule history indexes as it starts. If a table is still listed, "
+                  "stop TIDE and restore the database from a backup (Settings → Management → Backups), which "
+                  "rebuilds every index, or report it with this list.")
+
+
+def _database_fatal(conn, ctx):
+    """The last DuckDB fatal error, when it was in the last 7 days, and any file still unavailable
+    after one (db_fatal)."""
+    from app.services import db_fatal
+    rows, shown = [], set()
+    record = db_fatal.last()
+    try:
+        recent = record and datetime.now() - datetime.fromisoformat(record.get("at") or "") < timedelta(days=7)
+    except ValueError:
+        recent = False
+    for rec in ([record] if recent else []) + list(db_fatal.unavailable().values()):
+        key = (rec.get("at"), rec.get("db"))
+        if key in shown:
+            continue
+        shown.add(key)
+        still = rec.get("db") in db_fatal.unavailable()
+        rows.append((rec.get("at"), os.path.basename(rec.get("db") or ""), rec.get("error") or "",
+                     "unavailable until TIDE restarts" if still
+                     else "restarted TIDE" if rec.get("restarted") else "left it unavailable until a restart"))
+    return ["when", "database", "error", "what TIDE did"], rows
+
+
 CHECKS: List[Check] = [
     Check(
         "background_services", "Background services not running", "install", "error",
@@ -238,6 +278,19 @@ CHECKS: List[Check] = [
         "('Background service not running', and the error before it).",
         _background_services_down,
     ),
+    Check(
+        "database_fatal", "A database stopped after a DuckDB fatal error", "install", "error",
+        "DuckDB stopped one of TIDE's databases after a fatal error (in the last 7 days), which makes that "
+        "client's pages fail until TIDE restarts. TIDE restarts itself once for it, and the restart repairs "
+        "the rule history indexes; a second fatal error on the same file within 10 minutes leaves the file "
+        "unavailable instead, so the other clients keep working.",
+        "If TIDE restarted and the client's pages work, nothing more is needed. If the file is unavailable, "
+        "restart TIDE (docker compose restart tide-app); if the error comes back, back up the data folder "
+        "and report the error shown here.",
+        _database_fatal,
+    ),
+    Check("shared_database_health", "TIDE's own database: indexes missing rows", "install", "error",
+          _HEALTH_MEANING, _HEALTH_ADVICE, _database_health, on_demand=True),
     Check(
         "schema_behind", "Database schema older than this release", "install", "error",
         "TIDE upgraded but the shared database was not migrated, so pages that need newer tables or "
@@ -284,6 +337,8 @@ CHECKS: List[Check] = [
         "Restart TIDE (the rule table is repaired at start-up and on sync), then run Sync for the client.",
         _rules_column_drift,
     ),
+    Check("database_health", "Client database: indexes missing rows", "client", "error",
+          _HEALTH_MEANING, _HEALTH_ADVICE, _database_health, on_demand=True),
     Check(
         "destination_offline", "Destinations TIDE could not reach at the last sync", "client", "warning",
         "The last sync could not reach this SIEM space; its rules are shown from TIDE's last copy.",

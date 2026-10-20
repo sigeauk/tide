@@ -1,18 +1,19 @@
 {#
   Rule Health: a notice under the title when this client's last rule sync
-  (app.services.sync_runs.last_rule_sync) failed, partly finished or was interrupted: why, and Retry.
+  (app.services.sync_runs.last_rule_sync) failed, partly finished, was interrupted or had steps that
+  failed after reading the rules: why, and Retry.
   Reloaded when a sync finishes. A sync that went fine shows nothing here: the Last Synced card says
   when. Context: run or none.
 #}
 {% from "macros/icons.html" import icon %}
-{% from "macros/sync_ui.html" import sync_state, sync_when, sync_what, sync_retry %}
+{% from "macros/sync_ui.html" import sync_state, sync_when, sync_what, sync_retry, sync_steps_failed %}
 {% if run and run.retryable %}
 <div class="rh-last-sync rh-last-sync--problem">
     <span class="rh-last-sync__label">{{ icon('clock', '13') }} Last sync</span>
     <span>{{ sync_when(run) }}</span>
     {{ sync_state(run) }}
     <span class="text-secondary">{{ sync_what(run) }}{% if run.actor %} · by {{ run.actor }}{% endif %}{% if run.retry_of %} · a retry{% endif %}</span>
-    <span class="rh-last-sync__why">{{ run.error }}</span>
+    <span class="rh-last-sync__why">{{ run.error or sync_steps_failed(run) }}</span>
     {{ sync_retry(run) }}
 </div>
 {% endif %}

@@ -1,6 +1,6 @@
 {# Bulk edit progress. Context: job. Polls while running and stops when the job ends. #}
 <div id="bulk-edit-status"{% if job.state == 'running' %} hx-get="/api/rules/bulk-edit/status" hx-trigger="every 1s" hx-swap="outerHTML"{% endif %}>
-    <h2 class="modal-section-title">{{ job.label }} rules</h2>
+    <h2 class="modal-section-title">{{ job.label }} {{ job.total }} rule{{ '' if job.total == 1 else 's' }}</h2>
     {% set pct = (job.done * 100 // job.total) if job.total else 100 %}
     <div class="bulk-progress">
         <div class="bulk-progress__fill" style="--pct: {{ pct }}%"></div>

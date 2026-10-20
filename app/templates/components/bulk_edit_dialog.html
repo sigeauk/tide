@@ -1,6 +1,8 @@
 {#
-  Bulk edit confirm dialog. Context: action, label, total, error, items_json, delete_default; or job (a run in progress).
-  Opened from the Rule Health bulk bar with the selected rules; Start posts them back as items_json.
+  Bulk edit confirm dialog. Context: action, label, total, skipped, error, items_json, delete_default; or job (a run
+  in progress). Opened from the Rule Health bulk bar with the selected rules, or a Rule Monitoring cause with its
+  rules; Start posts them back as items_json. For TIDE's own fixes (own_rule_id, finish) only the rules they apply
+  to are posted back, and ``skipped`` says how many were left out.
 #}
 <div class="modal-overlay" data-bulk-edit-dialog>
     <div class="modal-content modal-md" data-stop-click>
@@ -58,6 +60,13 @@
                 <input type="checkbox" name="delete_source" value="true"{% if delete_default %} checked{% endif %}> Delete each rule from its source after moving
             </label>
             <p class="text-muted mb-md fs-sm">Unticked, this is a copy: each source rule stays live and gets linked to its new copy (see the Linked panel in the rule window).</p>
+            {% elif action == 'own_rule_id' %}
+            <p class="text-secondary mb-md">Gives each of these custom rules, which use one of Elastic's rule ids, a rule id of its own:
+                TIDE creates each again in Kibana under a new rule id and deletes the original, keeping its history, links and
+                mappings, and still shows Elastic's updates for it. Kibana keeps each rule's past alerts and runs with the original.</p>
+            {% elif action == 'finish' %}
+            <p class="text-secondary mb-md">Records in TIDE the changes Kibana made to each of these rules but TIDE couldn't
+                record (a new rule id, a move, a restore), without changing Kibana again.</p>
             {% elif action == 'delete' %}
             <div class="alert alert-warning mb-md">
                 <p>Permanently removes each selected rule from TIDE — baseline links, history and validation go with it. If any of these rules still exist in Elastic, the next sync brings them back unless you delete them there too.</p>
@@ -68,6 +77,9 @@
             <label class="flex items-center gap-sm mb-xs">
                 <input type="checkbox" name="remove_links" value="true" checked> Also remove any links to these rules
             </label>
+            {% endif %}
+            {% if skipped %}
+            <p class="text-muted mb-md fs-sm">{{ skipped }} of the selected rule{{ '' if skipped == 1 else 's' }} {{ 'needs' if skipped == 1 else 'need' }} no {{ 'rule id of its own' if action == 'own_rule_id' else 'finishing' }}, so {{ 'it is' if skipped == 1 else 'they are' }} left out.</p>
             {% endif %}
 
             <div class="modal-actions">

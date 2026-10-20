@@ -47,7 +47,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
     filters = filters_from(params)
     destinations: List[Dict[str, Any]] = db.get_client_siems(client_id) or []
     with db.get_connection() as conn:
-        data = rule_issues.view(conn, destinations, filters)
+        data = rule_issues.view(conn, destinations, filters, client_id=client_id)
     issues = sorted(rule_issues.KNOWN.values(), key=lambda i: i.title)
     return {
         "filters": filters, **data,

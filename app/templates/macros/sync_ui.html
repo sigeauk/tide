@@ -12,9 +12,21 @@
     'interrupted': ('status-warning', 'Interrupted'),
 } %}
 
+{# The steps after the rules were read that failed (sync_runs ``detail.steps_failed``), as one line. #}
+{% macro sync_steps_failed(run) -%}
+{%- for s in (run.detail or {}).get('steps_failed') or [] -%}
+{{ s.step }} failed: {{ s.error }}{{ '. ' if not loop.last }}
+{%- endfor -%}
+{%- endmacro %}
+
 {% macro sync_state(run) -%}
+{%- set steps = (run.detail or {}).get('steps_failed') or [] -%}
+{%- if run.status == 'success' and steps -%}
+{%- set cls, text = ('status-warning', 'Done, steps failed') -%}
+{%- else -%}
 {%- set cls, text = _SYNC_STATES.get(run.status, ('status-muted', run.status)) -%}
-<span class="status-pill {{ cls }}" title="{{ run.error or '' }}">{{ text }}</span>
+{%- endif -%}
+<span class="status-pill {{ cls }}" title="{{ run.error or sync_steps_failed(run) }}">{{ text }}</span>
 {%- endmacro %}
 
 {% macro sync_when(run) -%}

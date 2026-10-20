@@ -34,7 +34,7 @@ def _compute(db, client_id: str, card: dict) -> dict:
         from app.services import rule_issues
         filters = {"show": "open", "group": "issue", **f}
         with db.get_connection() as conn:
-            data = rule_issues.view(conn, db.get_client_siems(client_id) or [], filters)
+            data = rule_issues.view(conn, db.get_client_siems(client_id) or [], filters, client_id=client_id)
         return {"metrics": data["metrics"], "filters": filters, "stale_days": rule_issues.STALE_DAYS}
     if source == "system":
         system = eng.get_system(f["system_id"], client_id=client_id) if f.get("system_id") else None

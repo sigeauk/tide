@@ -96,6 +96,16 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
     Issue("ml_job", "Machine learning job not running", "platform", "error", "rule",
           "The machine learning job the rule reads from isn't running, so the rule has nothing to alert on.",
           "Start the job in Kibana's Machine Learning, and check its datafeed."),
+    Issue("schedule_gap", "Blind windows between runs", "author", "error", "rule",
+          "The rule searches back less time than it waits between runs, so part of every interval is never "
+          "searched: events there can't raise an alert, and Kibana doesn't report it as missed runs.",
+          "Make the rule search back at least its run interval plus a margin: for example, runs every 5 minutes "
+          "with 1 minute of additional look-back time (from now-6m)."),
+    Issue("short_lookback", "Little or no additional look-back", "author", "warning", "rule",
+          "The rule searches back little more than its run interval, so events that reach Elasticsearch late "
+          "(normal ingest delay) fall between runs and are missed.",
+          "Give the rule at least a minute of additional look-back time, more if its data arrives late, or use "
+          "event.ingested as its timestamp override."),
     Issue("never_run", "Enabled but never run", "platform", "warning", "rule",
           "Kibana has no run recorded for this enabled rule.",
           "Check the rule in Kibana and Kibana's task manager."),
@@ -106,12 +116,21 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "At the last two syncs Kibana returned fewer rules than it said it holds, so rules deleted in Kibana "
           "haven't been marked deprecated here.",
           "Check the SIEM is healthy and look for 'Sync drift' in TIDE's log, then sync again."),
+    Issue("sync_step_failed", "A step of the last sync failed", "tide", "warning", "destination",
+          "The last sync read the rules, but a step TIDE runs after reading them failed, so what that step keeps "
+          "(such as rule history, score history or Rule Monitoring itself) wasn't brought up to date.",
+          "Sync again. If the step fails again, Settings → Diagnostics → Sync activity shows its error: report "
+          "it with TIDE's log from that time."),
     Issue("shared_rule_id", "Rules sharing a rule id in Kibana", "tide", "warning", "rule",
           "Kibana holds a custom copy beside this prebuilt rule under the same rule id. TIDE shows only one.",
           "Open the rule and use Give the copy its own rule id."),
     Issue("custom_elastic_id", "Custom rule using one of Elastic's rule ids", "tide", "warning", "rule",
           "While it does, Kibana can't install Elastic's own rule in this space.",
           "Open the rule and use Give it its own rule id."),
+    Issue("change_pending", "Change not finished in TIDE", "tide", "warning", "rule",
+          "Kibana made a change TIDE asked for (giving the rule its own rule id, moving or copying it, or restoring "
+          "it), but TIDE couldn't record it, so TIDE still shows the rule as it was before.",
+          "Use Finish in TIDE on the rule. The next sync that reads the rule also finishes it."),
     Issue("other", "Other Kibana errors", "platform", "warning", "rule",
           "Kibana reported a problem with the rule's last run that TIDE doesn't recognise.",
           "Read Kibana's message on the rule, in Kibana's rule details or TIDE's rule window."),
@@ -139,6 +158,40 @@ def _duration(seconds: float) -> str:
     s = int(seconds)
     return (f"{s} s" if s < 90 else f"{round(s / 60)} min" if s < 5400
             else f"{round(s / 3600)} h" if s < 172800 else f"{round(s / 86400)} days")
+
+
+MIN_EXTRA_LOOKBACK = 60          # seconds of look-back beyond the run interval below which late events are missed
+_SPAN = re.compile(r"(\d+)([smhd])")
+_SPAN_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
+def _span(text) -> Optional[int]:
+    """Kibana's '5m', '360s', '1h' in seconds; None for anything else."""
+    m = _SPAN.fullmatch(str(text or "").strip())
+    return int(m.group(1)) * _SPAN_SECONDS[m.group(2)] if m else None
+
+
+def schedule_findings(interval, lookback_from) -> List[Tuple[str, str, str, str]]:
+    """(issue, cause, severity, detail) for a rule's schedule, from its own JSON (#74): it runs every
+    ``interval`` and searches back to ``from`` ('now-6m'). Searching back less than the interval leaves
+    blind windows between runs; less than a minute more leaves late events unsearched. The cause is
+    the schedule, so rules sharing one are fixed together."""
+    every = _span(interval)
+    m = re.fullmatch(r"now-(\d+[smhd])", str(lookback_from or "").replace(" ", ""))
+    back = _span(m.group(1)) if m else None
+    if not every or back is None:
+        return []
+    cause = f"Runs every {interval}, searches from {lookback_from}"
+    if back < every:
+        return [("schedule_gap", cause, KNOWN["schedule_gap"].severity,
+                 f"Runs every {_duration(every)} but searches only the last {_duration(back)}: {_duration(every - back)} "
+                 "of each interval is never searched.")]
+    if back - every < MIN_EXTRA_LOOKBACK:
+        extra = f"only {_duration(back - every)}" if back > every else "no"
+        return [("short_lookback", cause, KNOWN["short_lookback"].severity,
+                 f"Runs every {_duration(every)} and searches the last {_duration(back)}: {extra} additional look-back, "
+                 "so events that reach Elasticsearch later than that are missed.")]
+    return []
 
 
 def _other_cause(part: str) -> str:
@@ -248,7 +301,9 @@ _RULES_SQL = """
            json_extract(raw_data, '$.index')::VARCHAR AS idx,
            json_extract(raw_data, '$.results')::VARCHAR AS results,
            json_extract_string(raw_data, '$.timestamp_override') AS timestamp_override,
-           json_extract_string(raw_data, '$.updated_at') AS updated_at, last_updated
+           json_extract_string(raw_data, '$.updated_at') AS updated_at, last_updated,
+           json_extract_string(raw_data, '$.interval') AS run_interval,
+           json_extract_string(raw_data, '$.from') AS lookback_from
     FROM detection_rules WHERE NOT COALESCE(deprecated, false)
 """
 
@@ -298,9 +353,12 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
         by_siem.setdefault(r[1], []).append(r)
     for siem_id, siem_rules in by_siem.items():
         parsed = []
-        for rule_id, _s, space, enabled, last, idx, results, override, updated_at, last_updated in siem_rules:
+        for (rule_id, _s, space, enabled, last, idx, results, override, updated_at, last_updated,
+             run_interval, lookback_from) in siem_rules:
             rule = {"index": _json(idx, []), "results": _json(results, []), "timestamp_override": override}
             parsed.append((rule_id, space, enabled, _json(last, {}), rule, updated_at, last_updated))
+            for issue, cause, severity, detail in schedule_findings(run_interval, lookback_from):
+                add(issue, cause, siem_id, space, rule_id, severity, detail)
         patterns = {p for *_x, rule, _u, _l in parsed
                     for p in (rule["index"] or [row[0] for row in rule["results"] if isinstance(row, list) and row])}
         try:
@@ -433,6 +491,7 @@ def refresh(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
 def refresh_tenant(db, client_id: str, scopes: Optional[Iterable[Tuple[str, str]]] = None,
                    rule_keys: Optional[Iterable[Tuple[str, str, str]]] = None) -> Optional[Dict[str, int]]:
     """``refresh`` on one client's database after a sync; never raises (a sync must not fail over it)."""
+    from app.services import sync_runs
     from app.services.tenant_manager import tenant_context_for
     try:
         with tenant_context_for(client_id), db.get_connection() as conn:
@@ -440,8 +499,9 @@ def refresh_tenant(db, client_id: str, scopes: Optional[Iterable[Tuple[str, str]
                              set(rule_keys) if rule_keys is not None else None)
         logger.info("Rule issues for client %s: %s", client_id, counts)
         return counts
-    except Exception:
+    except Exception as exc:
         logger.exception("Could not record rule issues for client %s", client_id)
+        sync_runs.step_failed("Rule Monitoring", exc)
         return None
 
 
@@ -510,6 +570,53 @@ def report_synced(db, client_id: Optional[str], now: Optional[datetime] = None) 
     return text
 
 
+# ── failed sync steps, worked out when asked (#85) ───────────────────────
+
+def failed_steps(client_id: Optional[str], destinations: Iterable[Tuple[str, str]]) -> List[Dict[str, Any]]:
+    """``sync_step_failed`` findings from the client's last finished rule sync (sync_runs
+    ``detail.steps_failed``): one per failed step, its cause, and per destination that sync covered
+    (a sync of one destination covers only it). Gone once a later sync's steps succeed. Never raises."""
+    if not client_id:
+        return []
+    from app.services import sync_runs
+    try:
+        run = sync_runs.last_finished_rule_sync(client_id)
+    except Exception:
+        logger.warning("Could not read the last sync of client %s", client_id, exc_info=True)
+        return []
+    steps = {s["step"]: s["error"] for s in ((run or {}).get("detail") or {}).get("steps_failed") or []}
+    if not steps:
+        return []
+    scope = run.get("scope") or {}
+    covered = [(s, sp) for s, sp in destinations if not scope.get("siem_id")
+               or (s == scope["siem_id"] and sp == str(scope.get("space") or "default"))]
+    when = run.get("finished_at") or run.get("started_at")
+    at = f" at the sync of {when:%Y-%m-%d %H:%M}" if when else ""
+    return [{"issue": "sync_step_failed", "cause": step, "siem_id": siem_id, "space": space, "rule_id": "",
+             "severity": "warning", "first_seen": when, "resolved_at": None, "name": None, "enabled": True,
+             "detail": f"{step} failed{at}: {error}"}
+            for step, error in steps.items() for siem_id, space in covered]
+
+
+def pending_changes(client_id: Optional[str]) -> List[Dict[str, Any]]:
+    """``change_pending`` findings: changes Kibana made but TIDE couldn't record (pending_actions,
+    #83 and #88), on the rule as TIDE still holds it; ``kind`` and ``copy_id`` are for Finish in TIDE."""
+    if not client_id:
+        return []
+    from app.services import pending_actions
+    out = []
+    for e in pending_actions.for_client(client_id):
+        try:
+            since = datetime.fromisoformat(e.get("at") or "")
+        except ValueError:
+            since = None
+        out.append({"issue": "change_pending", "cause": "", "siem_id": e["siem_id"], "space": e["space"],
+                    "rule_id": e["rule_id"], "severity": "warning", "first_seen": since, "resolved_at": None,
+                    "name": e.get("name"), "enabled": True, "kind": e["kind"], "copy_id": e.get("copy_id") or "",
+                    "detail": f"{pending_actions.describe(e)}. TIDE couldn't record that: {e.get('error') or 'unknown error'}."})
+    return out
+
+
 # ── the Rule Monitoring page ─────────────────────────────────────────────
 
 SEVERITIES = (("error", "Error"), ("warning", "Warning"))
@@ -532,11 +639,12 @@ def _item(f: Dict[str, Any]) -> Tuple[str, str, str]:
 
 
 def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
-         now: Optional[datetime] = None) -> Dict[str, Any]:
+         now: Optional[datetime] = None, client_id: Optional[str] = None) -> Dict[str, Any]:
     """Everything the Rule Monitoring page shows for one client: ``rows`` (each finding, filtered),
     ``groups`` (as ``filters["group"]`` asks), ``metrics``, and ``counts`` per filter choice (before
     the choice's own filter). ``destinations`` are the client's linked ones, ``[{id, space, name}]``;
-    findings anywhere else are left out. Stale destinations come in as ``stale_data``."""
+    findings anywhere else are left out. Stale destinations come in as ``stale_data``, and with
+    ``client_id``, steps its last sync failed as ``sync_step_failed``."""
     now = now or datetime.now()
     names = {(d["id"], str(d.get("space") or "default")): d.get("name") or d.get("space") for d in destinations}
     clusters = {d["id"]: cluster_of(d) for d in destinations}
@@ -555,6 +663,8 @@ def view(conn, destinations: List[Dict[str, Any]], filters: Dict[str, Any],
                       "severity": "error", "first_seen": s["since"], "resolved_at": None, "name": None, "enabled": True,
                       "detail": (f"Last synced {when:%Y-%m-%d %H:%M}, {_age(when, now)} ago." if when
                                  else "Never synced.")})
+    found += failed_steps(client_id, names)
+    found += pending_changes(client_id)
     copies = _shared_copies(conn)
     for f in found:
         f["destination"] = names.get((f["siem_id"], f["space"]))
@@ -767,7 +877,8 @@ def markdown(nodes: List[Dict[str, Any]], siem_labels: Dict[str, str], now: date
 
 # Issues TIDE finds itself (its message is TIDE's, not Kibana's).
 _TIDE_FOUND = {"stale_data", "field_missing", "field_conflict", "never_run", "siem_offline", "sync_incomplete",
-               "shared_rule_id", "custom_elastic_id"}
+               "sync_step_failed", "shared_rule_id", "custom_elastic_id", "change_pending", "schedule_gap",
+               "short_lookback"}
 
 
 def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool, now: datetime) -> Dict[str, Any]:

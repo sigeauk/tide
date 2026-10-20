@@ -318,6 +318,8 @@ async def lifespan(app: FastAPI):
     # Runs still marked running were cut off when TIDE last stopped (one pass at startup, no timer).
     from app.services import sync_runs
     sync_runs.mark_interrupted()
+    from app.services import db_fatal
+    db_fatal.note_startup()
 
     # 5.0.0 — the boot-time backfill from ``opencti_inventory`` to
     # ``cti_connectors`` has been retired. It was useful for the 4.1.20
@@ -392,6 +394,20 @@ async def lifespan(app: FastAPI):
                     pass
         except Exception as _e:
             logger.warning(f"Tenant DB warm-up skipped: {_e}")
+
+        # Rule history indexes are rebuilt from their rows at each start (well under a second for
+        # most tenants). One missing rows stops DuckDB at the next delete of them and shuts the
+        # tenant's database until a restart, so the restart repairs it.
+        try:
+            from app.services.tenant_manager import _tenant_db_cache, tenant_context_for
+            for _cid in list(_tenant_db_cache):
+                try:
+                    with tenant_context_for(_cid), db.get_connection() as _hc:
+                        db.rebuild_history_indexes(_hc)
+                except Exception as _e:
+                    logger.warning(f"Rule history index rebuild skipped for client {_cid}: {_e}")
+        except Exception as _e:
+            logger.warning(f"Rule history index rebuild skipped: {_e}")
 
         # Rule validations moved from a shared JSON file into each tenant DB.
         try:
@@ -575,6 +591,9 @@ async def lifespan(app: FastAPI):
         logger.error(f"Background service not running: {name}. {consequence}")
     from app.services import diagnostics as _diagnostics
     _diagnostics.background_status = background_services
+    # From here, a DuckDB fatal error restarts TIDE rather than leaving that client failing (db_fatal);
+    # not during startup, so an error there can't start a restart loop.
+    db_fatal.enable_restart()
 
     yield
 
@@ -1304,18 +1323,24 @@ def create_app() -> FastAPI:
             method=request.method,
         )
         from fastapi.responses import JSONResponse
+        from html import escape
+        from app.services.db_fatal import DatabaseUnavailable
+        # A client database left unavailable after a DuckDB fatal error says so (db_fatal).
+        unavailable = isinstance(exc, DatabaseUnavailable)
+        status = 503 if unavailable else 500
         if request.url.path.startswith("/api/"):
             resp = JSONResponse(
-                status_code=500,
-                content={"detail": "Internal server error.", "request_id": request_id},
+                status_code=status,
+                content={"detail": str(exc) if unavailable else "Internal server error.", "request_id": request_id},
             )
         else:
             resp = HTMLResponse(
                 content=(
-                    f"<h1>Internal server error</h1>"
-                    f"<p>Reference: <code>{request_id}</code></p>"
+                    (f"<h1>This client's database is unavailable</h1><p>{escape(str(exc))}</p>" if unavailable
+                     else "<h1>Internal server error</h1>")
+                    + f"<p>Reference: <code>{request_id}</code></p>"
                 ),
-                status_code=500,
+                status_code=status,
             )
         resp.headers["X-TIDE-Error-Id"] = request_id
         return resp

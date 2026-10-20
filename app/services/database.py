@@ -235,6 +235,29 @@ def utc_to_local(value: Optional[datetime]) -> Optional[datetime]:
     return value.replace(tzinfo=timezone.utc).astimezone().replace(tzinfo=None) if value else None
 
 
+# The rule history tables' secondary indexes: (table, index, columns).
+HISTORY_INDEXES = (
+    ("rule_lifecycle_history", "idx_rule_lifecycle_rule", "rule_id, siem_id, space, client_id"),
+    ("rule_lifecycle_history", "idx_rule_lifecycle_created", "created_at DESC"),
+    ("rule_score_history", "idx_rule_score_history_rule", "rule_id, siem_id, space, client_id"),
+    ("rule_score_history", "idx_rule_score_history_created", "created_at DESC"),
+)
+
+
+@contextmanager
+def history_index_dropped(conn, index: str):
+    """Drop one of ``HISTORY_INDEXES`` while its columns are updated, and build it again after.
+    DuckDB updates an indexed column by deleting and re-inserting the row in every index of the
+    table, and an index missing rows then stops the commit and the process. With the column's
+    index dropped the rows are updated in place, and the index is rebuilt whole from the rows."""
+    table, columns = next((t, c) for t, i, c in HISTORY_INDEXES if i == index)
+    conn.execute(f"DROP INDEX IF EXISTS {index}")
+    try:
+        yield
+    finally:
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {index} ON {table} ({columns})")
+
+
 # Fill kibana_rule_id / rule_language for rows written before they existed (rule_json_keys in SQL).
 RULE_KEY_BACKFILL_SQL = (
     "UPDATE detection_rules SET "
@@ -6865,7 +6888,23 @@ class DatabaseService:
             "CREATE INDEX IF NOT EXISTS idx_rule_lifecycle_created "
             "ON rule_lifecycle_history (created_at DESC)"
         )
-    
+
+    @staticmethod
+    def rebuild_history_indexes(conn) -> int:
+        """Build the rule history tables' indexes again from their rows (TIDE does it at startup).
+        An index missing rows stops DuckDB at the next delete or update of those rows ("Failed to
+        delete all rows from index") and shuts the tenant's database until TIDE restarts; the
+        restart then puts it right. A few seconds at most. Returns how many indexes were rebuilt."""
+        tables = {r[0] for r in conn.execute("SELECT table_name FROM duckdb_tables() "
+                                             "WHERE database_name = current_database()").fetchall()}
+        rebuilt = 0
+        for table, index, columns in HISTORY_INDEXES:
+            if table in tables:
+                conn.execute(f"DROP INDEX IF EXISTS {index}")
+                conn.execute(f"CREATE INDEX {index} ON {table} ({columns})")
+                rebuilt += 1
+        return rebuilt
+
     def record_rule_history(
         self,
         rule_id: str,
@@ -7451,11 +7490,14 @@ class DatabaseService:
         duplicates (the same event under both keys) is dropped, keeping the earliest.
         Idempotent: once done it matches nothing.
         """
-        moved = conn.execute(
-            "UPDATE rule_lifecycle_history h SET rule_id = r.rule_id FROM detection_rules r "
-            "WHERE h.siem_id = r.siem_id AND h.space = r.space "
-            "AND h.rule_id = json_extract_string(r.raw_data, '$.id') AND h.rule_id <> r.rule_id"
-        ).fetchone()[0]
+        match = ("h.siem_id = r.siem_id AND h.space = r.space "
+                 "AND h.rule_id = json_extract_string(r.raw_data, '$.id') AND h.rule_id <> r.rule_id")
+        if not conn.execute(f"SELECT count(*) FROM rule_lifecycle_history h, detection_rules r "
+                            f"WHERE {match}").fetchone()[0]:
+            return 0
+        with history_index_dropped(conn, "idx_rule_lifecycle_rule"):
+            moved = conn.execute(f"UPDATE rule_lifecycle_history h SET rule_id = r.rule_id "
+                                 f"FROM detection_rules r WHERE {match}").fetchone()[0]
         if moved:
             conn.execute(
                 "DELETE FROM rule_lifecycle_history WHERE id IN ("
@@ -7488,8 +7530,9 @@ class DatabaseService:
         if moved:
             conn.register("history_times_src", pd.DataFrame(moved, columns=["id", "created_at"]))
             try:
-                conn.execute("UPDATE rule_lifecycle_history h SET created_at = s.created_at "
-                             "FROM history_times_src s WHERE h.id = s.id")
+                with history_index_dropped(conn, "idx_rule_lifecycle_created"):
+                    conn.execute("UPDATE rule_lifecycle_history h SET created_at = s.created_at "
+                                 "FROM history_times_src s WHERE h.id = s.id")
             finally:
                 conn.unregister("history_times_src")
             logger.info("Rule history: moved %d synced event(s) from UTC to local time.", len(moved))

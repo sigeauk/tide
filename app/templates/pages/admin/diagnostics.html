@@ -1,7 +1,7 @@
 {% extends "pages/admin/settings_layout.html" %}
 {% from "macros/icons.html" import icon %}
 {% from "macros/diagnostics_ui.html" import check_list %}
-{% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry %}
+{% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry, sync_steps_failed %}
 {% block title %}Diagnostics - TIDE{% endblock %}
 
 {#
@@ -170,7 +170,7 @@
             <td>{{ sync_state(r) }}</td>
             <td>{{ r.total_count if r.status in ('success', 'partial') else '—' }}</td>
             <td class="diag-nowrap">{{ sync_took(r) }}</td>
-            <td>{{ r.error or '' }}</td>
+            <td>{{ r.error or '' }}{% set steps = sync_steps_failed(r) %}{% if steps %}{{ ' ' if r.error }}{{ steps }}{% endif %}</td>
             <td class="diag-nowrap">{% if r.client_id == active_client %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
         </tr>
         {% endfor %}

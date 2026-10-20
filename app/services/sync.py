@@ -649,6 +649,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
         try:
             import time as _time
             import elastic_helper
+            from app.services import sync_runs
             from app.services.database import get_database_service
             from app.services.tenant_manager import (
                 resolve_tenant_db_path, set_tenant_context, get_tenant_db_path,
@@ -863,14 +864,22 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                 logger.info(f"[perf] fetch_detection_rules (per-SIEM) completed in {(_t_save - _t_fetch)*1000:.0f}ms")
                 audit_records = df.to_dict('records')
 
+                # Changes Kibana made but TIDE couldn't record (pending_actions, #83, #88): a new rule id
+                # or a restore is finished before saving, which would otherwise add the rule as new and
+                # deprecate the old row; a move after, since linking needs the target's row.
+                from app.services import pending_actions
+                pending_actions.finish_for_sync(db, client_id, audit_records, "before_save")
+
                 count = db.save_audit_results(audit_records, client_id=client_id)
+                pending_actions.finish_for_sync(db, client_id, audit_records, "after_save")
                 try:
                     db.record_search_time_samples([
                         {**rec["search_sample"], "siem_id": rec.get("siem_id")}
                         for rec in audit_records if isinstance(rec.get("search_sample"), dict)
                     ])
-                except Exception:
+                except Exception as _exc:
                     logger.warning("Failed to record rule search-time samples", exc_info=True)
+                    sync_runs.step_failed("Search times", _exc)
                 logger.info(f"[perf] save_audit_results completed in {(_time.perf_counter() - _t_save)*1000:.0f}ms")
                 logger.info(f"[perf] Total sync time: {(_time.perf_counter() - _t_start)*1000:.0f}ms")
                 
@@ -880,6 +889,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                     logger.info("Bootstrapped rule lifecycle history from Elastic metadata")
                 except Exception as _exc:
                     logger.warning(f"Failed to bootstrap rule history: {_exc!r}")
+                    sync_runs.step_failed("Rule history", _exc)
                 
                 # --- Mirror-Kibana sync (drift-aware) ---
                 # For each (siem_id, space):
@@ -1044,6 +1054,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         f"Orphan sweep failed for client_id={client_id}: "
                         f"{type(_orphan_exc).__name__}: {_orphan_exc}"
                     )
+                    sync_runs.step_failed("Removing rules of unlinked destinations", _orphan_exc)
 
                 # Score history of rules that are gone (removed above, or deleted/re-created in
                 # Kibana) can never be shown again: drop it rather than let the file grow.
@@ -1053,6 +1064,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                         logger.info(f"Removed {pruned} score-history row(s) of deleted rules for client_id={client_id}")
                 except Exception as _prune_exc:  # noqa: BLE001
                     logger.error(f"Score-history prune failed for client_id={client_id}: {_prune_exc}")
+                    sync_runs.step_failed("Score history clean-up", _prune_exc)
 
                 # Rules seen for the first time: note the Elastic or Sigma rule each came from.
                 from app.services import rule_origins

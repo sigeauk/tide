@@ -63,6 +63,7 @@ You can leave the page while a sync runs. The **Last Synced** card shows when th
 | Result | What it means |
 |--------|---------------|
 | **Done** | Every destination answered and its rules were read. |
+| **Done, steps failed** | The rules were read, but a step TIDE runs afterwards failed, such as cleaning up score history; the result names it, and Rule Monitoring lists it until a sync's steps succeed. |
 | **Partly done** | Some destinations didn't answer; the result names them. Their rules keep their last state and show **SIEM offline**. |
 | **Failed** | The sync stopped with an error, shown with the reason. |
 | **Interrupted** | TIDE restarted while the sync ran. |
@@ -118,7 +119,7 @@ Files are written to `data/log/rules/<SIEM>/<date>-<space>-rules.log`, one JSON 
 
 Turn them on in **Settings → Management → Backups** (super admins): tick **Back up every day at**, choose the time (server time) and how many backups to keep, and **Save**. **Back up now** makes one straight away.
 
-- Each backup is a folder, `tide-backup-<date>-<time>`, in the folder `BACKUP_PATH` names (default `backups/` next to `docker-compose.yml`). Put it on another disk if you can (see [Configuration](CONFIGURATION.md#optional)).
+- Each backup is a folder named for when it was made and the TIDE version that made it, `tide-backup-<date>-<time>-v<version>` (for example `tide-backup-20261020-181056-v6.2.3`), in the folder `BACKUP_PATH` names (default `backups/` next to `docker-compose.yml`). Put it on another disk if you can (see [Configuration](CONFIGURATION.md#optional)). Backups made before 6.2.3 have no version in their name; the Backups panel's **TIDE** column shows it.
 - It holds a copy of every database, `credentials.key` and your Sigma pipelines and templates. TIDE keeps running while it's made.
 - Copies hold only live data, so a backup is usually far smaller than `data/` (database files never shrink on their own).
 - Older backups beyond the number you keep are removed. A backup refuses to start when the disk lacks room, and the Backups panel shows the last result and why it failed.
@@ -126,47 +127,87 @@ Turn them on in **Settings → Management → Backups** (super admins): tick **B
 
 Keep a copy of `.env` and `certs/` somewhere safe as well; they aren't in the backup.
 
-### Restore a backup
-
-On the host, in TIDE's folder, with the name of the backup to restore (the Backups panel shows these commands for the newest one):
-
-```bash
-docker compose stop tide-app
-old=data-before-restore-$(date +%Y%m%d-%H%M%S) && mkdir "$old" && mv data/*.duckdb* data/credentials.key "$old"/
-cp -a backups/<backup>/. data/ && rm data/manifest.json
-docker compose start tide-app
-```
-
-Your current databases are moved to a `data-before-restore-<date>` folder, not deleted; remove it once TIDE runs normally. Restore into the same TIDE version, or restore an older backup into a newer TIDE, which upgrades the databases as it starts. If `BACKUP_PATH` is set, use that folder instead of `backups/`.
-
 ### Back up by hand
 
-Without the scheduled backups, stop TIDE and copy `data/`:
+Without the scheduled backups, copy `data/` yourself, on the host in TIDE's folder. As with a restore, each command is one way to carry out its step. If a command says `Permission denied`, run it with `sudo`.
 
-```bash
-docker compose stop
-cp -a data/ /backup/tide-data-$(date +%F)/
-docker compose up -d
-```
+1. **Stop TIDE.** Then nothing writes to its databases while they're copied, so the copy is whole.
 
-**`data/credentials.key` must always be backed up with the databases**, or the stored SIEM and connector credentials can't be read after a restore.
+    `docker compose stop tide-app`
+
+2. **Copy `data/`** into a folder named with today's date and the TIDE version, such as `/backup/tide-data-2026-10-20-v6.2.3`. Put it on another disk if you can.
+
+    `cp -a data/ "/backup/tide-data-$(date +%F)-v$(sed -n 's/^TIDE_VERSION=//p' .env)/"`
+
+    `cp -a` copies the folder and everything in it, keeping the files' dates and permissions. The name is built as the command runs: `$(date +%F)` is today's date, such as `2026-10-20`, and `$(sed -n 's/^TIDE_VERSION=//p' .env)` is the version in `.env`: `sed` finds the line that starts with `TIDE_VERSION=` and prints what follows it (`-n` prints nothing else). Unlike the restore's `sed -i`, this only reads `.env`. `/backup/` is an example: use the folder you keep backups in. If `.env` says `latest`, or your deployment keeps the version somewhere else, type the version number into the name instead, so you know which version made the copy.
+
+3. **Start TIDE** again.
+
+    `docker compose up -d tide-app`
+
+**`data/credentials.key` must always be backed up with the databases**, or the stored SIEM and connector credentials can't be read after a restore. A copy of `data/` includes it.
+
+### Restore a backup
+
+A backup holds TIDE's data. The TIDE version that runs it is set separately, by `TIDE_VERSION` in `.env`, so when you restore you also choose the version:
+
+- **The version that made the backup** (the version at the end of its name) puts TIDE back exactly as it was. Use it to go back after an upgrade that went wrong.
+- **A newer version** upgrades the restored databases as it starts. For example: you run 6.5.1 and back up, then upgrade to 6.5.2, which breaks something. When 6.5.3 is out, upgrade to it and restore the 6.5.1 backup into it; the version doesn't change during the restore.
+- **Never an older version** than the one that made the backup: an older TIDE can't read a newer TIDE's databases.
+
+In **Settings → Management → Backups**, **Restore steps** on a backup's row shows these steps with that backup's name and version filled in. Run them on the host, in TIDE's folder. Each command is one way to carry out its step: do each step however suits how you run TIDE. If a command says `Permission denied`, run it with `sudo` (TIDE writes the files in `data/` as root).
+
+1. **Stop TIDE.** Then nothing writes to its databases while they're replaced. The container is kept, only stopped, and nginx keeps running.
+
+    `docker compose stop tide-app`
+
+2. **Set the TIDE version, only to change it.** Skip this step to restore into the version TIDE runs now. To go back to the version that made the backup, set `TIDE_VERSION` in `.env` to that version: edit the file (for example `nano .env`), or run
+
+    `sed -i 's/^TIDE_VERSION=.*/TIDE_VERSION=<version>/' .env`
+
+    which rewrites the line that starts with `TIDE_VERSION=` (`-i` changes the file itself; `s/old/new/` replaces the matched line). `grep ^TIDE_VERSION .env` shows the version set. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment. That version's image must be on the host, or Docker must be able to pull it; without internet access, `docker load` it first, as in the [Quick start](../README.md#2-get-the-images).
+
+3. **Set your current data aside.** Every database and `credentials.key` move to a new folder named for this moment, such as `data-before-restore-20261020-183000`. Nothing is deleted, and the rest of `data/`, such as logs and the backup schedule, stays as it is.
+
+    `old=data-before-restore-$(date +%Y%m%d-%H%M%S) && mkdir "$old" && mv data/*.duckdb* data/credentials.key "$old"/`
+
+    `old=…` names the folder, `mkdir` creates it, and `mv` moves the files (each `.duckdb` file and its `.wal`). `&&` runs each part only if the one before it worked.
+
+4. **Copy the backup in.** Everything in the backup's folder is copied into `data/`, keeping the files' dates and permissions (`-a`), then the copied `manifest.json`, which only describes the backup, is deleted. The Sigma pipelines and templates are replaced by the backup's copies; any added since stay. The backup itself isn't changed, so you can restore it again. If `BACKUP_PATH` is set, copy from that folder instead of `backups/`; for a copy made by hand, copy from it (it has no `manifest.json` to delete).
+
+    `cp -a backups/<backup>/. data/ && rm data/manifest.json`
+
+5. **Start TIDE.** TIDE's container is created from `docker-compose.yml` and `.env`, so it runs the version `.env` names, on the restored data; a newer version than the backup's upgrades the databases as it starts. `-d` leaves it running in the background. If your deployment starts TIDE, run it instead.
+
+    `docker compose up -d tide-app`
+
+6. **Check it.** Watch TIDE start (Ctrl+C stops showing the log, not TIDE). When the log says `Application startup complete`, sign in, check your clients are there, and sync each client's rules: what was changed in TIDE after the backup was made is lost, but what TIDE changed in Kibana since is still there. Remove the `data-before-restore-…` folder once TIDE runs normally.
+
+    `docker compose logs -f tide-app`
 
 ### Upgrade
 
 Read the release's notes in the [Changelog](../CHANGELOG.md) first: some releases ask you to do something before or after upgrading.
 
-1. Back up: **Back up now** in Management → Backups, or by hand as above.
-2. Set `TIDE_VERSION` in `.env` to the new release, and get its image: `docker compose pull`, or `docker load` as in the [Quick start](../README.md#2-get-the-images).
-3. Start it, and watch it upgrade:
+1. **Back up.** **Back up now** in Management → Backups, or by hand as above. Keep that backup until the new version runs well. If it doesn't, restore the backup into the version that made it, or into a later release once there is one (see [Restore a backup](#restore-a-backup)).
 
-```bash
-docker compose up -d
-docker compose logs -f tide-app
-```
+2. **Set the new version.** Set `TIDE_VERSION` in `.env` to the new release: edit the file (for example `nano .env`), or run the command below, which rewrites the line that starts with `TIDE_VERSION=`. If `.env` is written by your deployment, for example an Ansible playbook, set the version there instead: a change made on the host is overwritten at the next deployment.
 
-TIDE upgrades its databases as it starts; the log says `Migrations complete` when it's done.
+    `sed -i 's/^TIDE_VERSION=.*/TIDE_VERSION=<version>/' .env`
 
-4. Review rule updates. Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Elastic update available** and **Sigma update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
+3. **Get its image.** With internet access, `docker compose pull` downloads it; without, `docker load` it as in the [Quick start](../README.md#2-get-the-images).
+
+    `docker compose pull`
+
+4. **Start it.** TIDE's container is created again with the new version, and TIDE upgrades its databases as it starts. If your deployment starts TIDE, run it instead.
+
+    `docker compose up -d`
+
+5. **Watch it upgrade.** When the release changes the databases, the log says `Migrations complete` once they're upgraded; `Application startup complete` says TIDE is ready (Ctrl+C stops showing the log, not TIDE).
+
+    `docker compose logs -f tide-app`
+
+6. **Review rule updates.** Each release brings Elastic's rules and the Sigma rules as they were when it was built. In **Rule Health**, set the **Upstream** filter to **Elastic update available** and **Sigma update available** to see your rules whose Elastic or Sigma original has changed since, and open each one: **Upstream → Review update** shows the changes section by section, so you take only what you want. Kibana updates Elastic's prebuilt rules itself (Rules → Rule updates).
 
 ---
 
@@ -226,7 +267,7 @@ The file is rewritten and checked table by table before it replaces the original
 **Settings → Diagnostics** is for super admins, and for people with the **Support** role on a client (who see that client only).
 
 - **Snapshot:** the TIDE version, database schema, clients and their destinations (with whether each SIEM answered at the last sync), and recent errors from the log.
-- **Checks:** **Run all checks**, or one, for every client or one. Each finding says what it means and what to do. Checks only read data.
+- **Checks:** **Run all checks**, or one, for every client or one. Each finding says what it means and what to do. Checks only read data. The two database health checks (a client's database, and TIDE's own) copy the database and test every table's indexes on the copy, so they take a while on a large database and run only on their own **Run**.
 - **Look up:** everything TIDE holds for one rule, user or destination, with names and spaces shown exactly as stored, so stray spaces or invisible characters are marked.
 - **Sync activity:** every rule and CTI sync for the last 90 days, with **Retry**.
 - **Fixes:** some checks offer a fix. Fixes are off for every client until a super admin turns on **Allow diagnostic fixes** for it. A fix shows what it will change first, copies the client's database to `data/diagnostics-backups/` before changing anything, and can be undone.
@@ -242,6 +283,8 @@ Every check, look-up, fix and access change is recorded in the audit log.
 |--------------|------------|
 | A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test Connection** in Management → Integrations → SIEMs, then click **Retry**. |
 | A rule sync shows **Interrupted** | TIDE restarted during it. Click **Retry**. |
+| A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
+| Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
 | Rules show **SIEM offline** | That destination didn't answer at the last sync. Fix the connection, then sync that destination. |
 | A connector shows **Failed**, or a CTI sync badge is red | Hover for the reason, fix the address, credentials or certificate in the connector's form, test it with the arrow button, then sync again. |
 | A certificate is refused | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |

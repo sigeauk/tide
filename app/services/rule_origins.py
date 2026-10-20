@@ -498,7 +498,7 @@ def backfill_tenant(db, client_id: str, keys: Optional[Iterable[Key]] = None) ->
     """``backfill`` on one tenant's DB, then ``rule_updates.settle_unchanged`` (of ``keys``, or
     all), so a sync never flags an Elastic update that changes nothing. Returns how many origins
     were added; never raises (a sync must not fail over it)."""
-    from app.services import rule_updates
+    from app.services import rule_updates, sync_runs
     from app.services.tenant_manager import tenant_context_for
     try:
         with tenant_context_for(client_id):
@@ -506,9 +506,11 @@ def backfill_tenant(db, client_id: str, keys: Optional[Iterable[Key]] = None) ->
                 added = backfill(conn)
                 try:
                     rule_updates.settle_unchanged(conn, keys)
-                except Exception:
+                except Exception as exc:
                     logger.exception("Settling unchanged Elastic updates failed for client %s", client_id)
+                    sync_runs.step_failed("Elastic updates check", exc)
                 return added
-    except Exception:
+    except Exception as exc:
         logger.exception("Rule origin backfill failed for client %s", client_id)
+        sync_runs.step_failed("Rule origins", exc)
         return 0

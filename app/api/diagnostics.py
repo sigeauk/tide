@@ -226,7 +226,8 @@ def run_diagnostics(request: Request, db: DbDep, user: RequireUser, client_id: A
     from app.services.log_context import audit_log
     scope = _required(db, user, client_id)
     allowed = {c.id: c for c in scope.checks}
-    ids = list(allowed) if check == "all" else [check]
+    # Run all checks leaves out the slow ones (they copy files): those run on their own Run only.
+    ids = [i for i, c in allowed.items() if not c.on_demand] if check == "all" else [check]
     if not all(i in allowed for i in ids):
         return HTMLResponse('<p class="text-muted">Unknown check.</p>', status_code=404)
     clients = scope.clients if client in ("", "all") else [c for c in scope.clients if c["id"] == client]

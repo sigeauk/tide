@@ -42,6 +42,7 @@ _MIGRATION_LOCK = threading.Lock()
 
 import duckdb
 
+from app.services import db_fatal
 from app.services.apm import capture_duckdb_span
 
 logger = logging.getLogger(__name__)
@@ -67,29 +68,43 @@ class _Slot:
 
 
 class _InstrumentedDuckDBConnection:
-    """Proxy that preserves DuckDB chaining while capturing query spans."""
+    """Proxy that preserves DuckDB chaining while capturing query spans. A DuckDB fatal error is
+    passed to db_fatal here, even when the caller goes on to catch it."""
 
-    __slots__ = ("_conn",)
+    __slots__ = ("_conn", "_path")
 
-    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+    def __init__(self, conn: duckdb.DuckDBPyConnection, db_path: str = "") -> None:
         self._conn = conn
+        self._path = db_path
 
     def execute(self, *args, **kwargs):
         statement = args[0] if args else kwargs.get("query", "")
         with capture_duckdb_span(statement):
-            self._conn.execute(*args, **kwargs)
+            try:
+                self._conn.execute(*args, **kwargs)
+            except Exception as exc:
+                db_fatal.handle(self._path, exc)
+                raise
         return self
 
     def executemany(self, *args, **kwargs):
         statement = args[0] if args else kwargs.get("query", "")
         with capture_duckdb_span(statement):
-            self._conn.executemany(*args, **kwargs)
+            try:
+                self._conn.executemany(*args, **kwargs)
+            except Exception as exc:
+                db_fatal.handle(self._path, exc)
+                raise
         return self
 
     def sql(self, *args, **kwargs):
         statement = args[0] if args else kwargs.get("query", "")
         with capture_duckdb_span(statement):
-            return self._conn.sql(*args, **kwargs)
+            try:
+                return self._conn.sql(*args, **kwargs)
+            except Exception as exc:
+                db_fatal.handle(self._path, exc)
+                raise
 
     def __getattr__(self, name):
         return getattr(self._conn, name)
@@ -194,21 +209,29 @@ class ConnectionPool:
             than recycling it — DuckDB does not document recoverability
             from arbitrary exceptions and a poisoned connection would
             silently break the next request.
+          * A DuckDB fatal error restarts TIDE (db_fatal); a file left
+            unavailable after one is refused, saying why.
         """
+        db_fatal.check_available(db_path)
         slot = self._get_or_create_slot(db_path)
         conn: Optional[duckdb.DuckDBPyConnection]
         try:
             conn = slot.queue.get_nowait()
             self.hits += 1
         except Empty:
-            conn = self._open(db_path)
+            try:
+                conn = self._open(db_path)
+            except Exception as exc:
+                db_fatal.handle(db_path, exc)
+                raise
             self.misses += 1
 
         poisoned = False
         try:
-            yield _InstrumentedDuckDBConnection(conn)
-        except Exception:
+            yield _InstrumentedDuckDBConnection(conn, db_path)
+        except Exception as exc:
             poisoned = True
+            db_fatal.handle(db_path, exc)
             raise
         finally:
             if conn is not None:

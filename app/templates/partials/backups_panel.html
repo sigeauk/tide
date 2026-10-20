@@ -1,8 +1,10 @@
 {#
   Management -> Backups (super admins): the last result, the daily schedule, Back up now, the
-  backups kept, and how to restore one (app.services.backups). While a backup runs the panel
-  reloads itself every 2 s until it ends.
-  Context: schedule, backups, run, last, mapped, disk, host_folder, restore, size, message, ok.
+  backups kept, and how to restore one (app.services.backups): Restore steps on a row shows that
+  backup's, into the TIDE version that made it or a newer one (restore_relation: same, older,
+  newer or unknown). While a backup runs the panel reloads itself every 2 s until it ends.
+  Context: schedule, backups, run, last, mapped, disk, host_folder, restore, restore_backup,
+  restore_open, restore_relation, running_version, size, message, ok.
 #}
 {% from "macros/icons.html" import icon %}
 {% set newest = backups[0] if backups else none %}
@@ -58,7 +60,7 @@
 
     {% if backups %}
     <div class="diag-table-wrap backups__list"><table class="diag-table">
-        <thead><tr><th>Backup</th><th>Made</th><th>By</th><th>Clients</th><th>Size</th><th>TIDE</th></tr></thead>
+        <thead><tr><th>Backup</th><th>Made</th><th>By</th><th>Clients</th><th>Size</th><th>TIDE</th><th></th></tr></thead>
         <tbody>
         {% for b in backups %}
         <tr>
@@ -67,19 +69,53 @@
             <td>{{ 'Schedule' if b.trigger == 'scheduled' else b.by }}</td>
             <td>{{ b.clients }}</td>
             <td class="diag-nowrap">{{ size(b.size) }}</td>
-            <td>{{ b.tide_version }}</td>
+            <td class="diag-nowrap">{{ b.tide_version or 'Not recorded' }}{% if b.tide_version == running_version %} <span class="text-secondary">· running</span>{% endif %}</td>
+            <td><button name="Restore Steps" type="button" class="btn btn-secondary btn-sm"
+                        hx-get="/api/management/backups?restore={{ b.name | urlencode }}" hx-target="#backups-panel"
+                        hx-swap="outerHTML">Restore steps</button></td>
         </tr>
         {% endfor %}
         </tbody>
     </table></div>
     {% endif %}
 
-    <details class="backups__restore">
+    <details class="backups__restore" {% if restore_open %}open{% endif %}>
         <summary class="cursor-pointer fw-600">How to restore a backup</summary>
-        <p class="text-secondary">On the host, in TIDE's folder. Your current databases are moved to a <code>data-before-restore-&lt;date&gt;</code> folder, not deleted.
-            Restore a backup into the same TIDE version, or an older backup into a newer TIDE (it upgrades the databases as it starts).</p>
+        <p class="text-secondary">On the host, in TIDE's folder. A backup can go back into the TIDE version that made it, the version at the end of its name,
+            or into a newer one, which upgrades its databases as it starts; never into an older one.
+            Your current databases are moved to a <code>data-before-restore-&lt;date&gt;</code> folder, not deleted.</p>
+        {% if restore_backup %}
+        {% set made_by = restore_backup.tide_version %}
+        {% if restore_relation == 'same' %}
+        <p class="form-hint">For <code>{{ restore_backup.name }}</code>, made by this version of TIDE ({{ running_version }}).</p>
+        {% elif restore_relation == 'older' %}
+        <div class="alert alert-info backups__alert">
+            <code>{{ restore_backup.name }}</code> was made by TIDE {{ made_by }}, older than this TIDE {{ running_version }}.
+            To restore it into {{ running_version }}, which upgrades its databases as it starts, leave out the line that sets <code>TIDE_VERSION</code>.
+            Keep it to go back to {{ made_by }}, for example after an upgrade that went wrong.
+        </div>
+        {% elif restore_relation == 'newer' %}
+        <div class="alert alert-warning backups__alert">
+            <code>{{ restore_backup.name }}</code> was made by TIDE {{ made_by }}, newer than this TIDE {{ running_version }}, which can't read its databases.
+            The steps set TIDE to {{ made_by }} first; a newer version works too.
+        </div>
+        {% elif made_by %}
+        <div class="alert alert-warning backups__alert">
+            <code>{{ restore_backup.name }}</code> was made by TIDE {{ made_by }}, and this is TIDE {{ running_version }}.
+            The steps set TIDE to {{ made_by }} first: restore it into that version or a newer one, never an older one.
+        </div>
+        {% else %}
+        <p class="form-hint">For <code>{{ restore_backup.name }}</code>. The TIDE version that made it isn't recorded: restore it into the version you made it with, or a newer one.</p>
+        {% endif %}
+        {% if made_by and restore_relation != 'same' %}
+        <p class="form-hint">Set the version however you manage <code>.env</code>: the <code>sed</code> line, editing the file, or your deployment if it writes
+            <code>.env</code> (a change made on the host is overwritten at the next deployment). The version's image must be on the host, or Docker must be
+            able to pull it; without internet access, <code>docker load</code> it first.</p>
+        {% endif %}
+        {% endif %}
         <pre class="code-block">{% for line in restore %}{{ line }}
 {% endfor %}</pre>
-        {% if newest %}<p class="form-hint">Shown for the newest backup; use any backup's name from the list above.</p>{% endif %}
+        <p class="form-hint">{% if backups | length > 1 %}For another backup, choose <strong>Restore steps</strong> on its row. {% endif %}What each step does, and other ways to do it:
+            <a href="/settings/docs/operations#restore-a-backup">Operations → Restore a backup</a>.</p>
     </details>
 </div>

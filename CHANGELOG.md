@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.3] - 2026-10-20
+
+### Added
+- **Rule Monitoring finds rules whose schedule misses events.** A rule that searches back less time than it waits between runs leaves part of every interval unsearched, so events there never raise an alert; it is now listed as **Blind windows between runs**, saying how much is missed. A rule with under a minute of additional look-back is listed as **Little or no additional look-back**, since events that arrive late fall between its runs. Kibana reports neither.
+- **Fix many rules at once from Rule Monitoring.** **Custom rule using one of Elastic's rule ids** has **Give them their own rule ids**, which gives every rule of the cause its own rule id in one go, and **Change not finished in TIDE** has **Finish them in TIDE**. Rule Health's bulk edit has **Give own rule id** for any rules you tick; selected rules that don't need one are left out.
+- **Diagnostics can test a database's indexes.** Two new checks copy a client's database, or TIDE's own, and test every table on the copy for indexes missing rows, the damage that stopped syncs in 6.2.2. The database itself is only read. They take a while on a large database, so they run on their own **Run**, not with **Run all checks**.
+
+### Changed
+- **Backups are named with the TIDE version that made them,** for example `tide-backup-20261020-181056-v6.2.3`, and each backup in **Settings → Management → Backups** has **Restore steps** for that backup. They say whether the backup was made by the version you run, and if not, how to restore it into the version that made it, or into the newer one you run, which upgrades it as it starts. The Operations guide explains each step of a restore, and that you can carry each one out your own way, for example in the deployment that writes your `.env`.
+
+### Fixed
+- **Syncing rules and Give it its own rule id no longer stop TIDE.** A damaged record of a tenant's rule history and score history could stop TIDE at a sync, or make **Give it its own rule id** fail with an error, and that tenant then failed until TIDE was restarted. The first sync after upgrading to 6.2.2 was the usual trigger. TIDE now repairs that record each time it starts.
+- **TIDE restarts itself when its database engine stops a client's data.** After a fatal database error, every page for that client failed until someone restarted TIDE. TIDE now restarts on its own, which also repairs the rule history. If the same error comes back within 10 minutes, it doesn't restart again: it leaves that client's data closed, says why on its pages and in **Diagnostics**, and keeps the other clients working.
+- **Changes TIDE makes in Kibana can be finished when TIDE couldn't record them.** If Kibana gave a rule its own rule id, moved or copied it, or restored it, but TIDE then couldn't save the change, TIDE showed an error and kept showing the rule as it was. Trying again failed, because Kibana no longer had the original, or, for a restore, created the rule in Kibana a second time. TIDE now says what happened, and **Finish in TIDE** on the rule, in its window or in **Rule Monitoring**, completes it without changing Kibana again, keeping the rule's history, links and mappings. Trying the action again, or the next sync, also completes it.
+- **A sync whose later steps fail now says so.** A sync could read the rules and show **Done** while a step it runs afterwards, such as cleaning up score history, had failed, and only TIDE's log said so. It now shows **Done, steps failed**, naming the step and the error, with **Retry**, and **Rule Monitoring** lists it until a sync's steps succeed.
+
 ## [6.2.2] - 2026-10-20
 
 ### Added

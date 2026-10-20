@@ -2323,16 +2323,20 @@ def _build_rule_modal_context(
         for s in (db.get_client_siems(client_id) or [])
         if not (s.get("id") == actual_siem and str(s.get("space") or "default").lower() == str(space).lower())
     ]
-    from app.services import rule_origins
+    from app.services import pending_actions, rule_origins
     key = (rule.rule_id, actual_siem, space)
     raw = rule.raw_data or {}
+    # Changes Kibana made but TIDE couldn't record (a new rule id, a move, a restore): Finish in TIDE.
+    pending = pending_actions.for_rule(client_id, key)
+    own_pending = [e for e in pending if e["kind"] == "own_rule_id"]
     with db.get_connection() as conn:
         upstream = rule_origins.statuses(conn, [key]).get(key)
         # A custom rule under one of Elastic's rule ids can be given its own (promotion.own_rule_id).
-        holds_elastic_id = (not rule.deprecated and not is_prebuilt(raw)
+        holds_elastic_id = (not rule.deprecated and not is_prebuilt(raw) and not any(not e.get("copy_id") for e in own_pending)
                             and bool(rule_origins.elastic_id_held(conn, raw, rule.rule_id)))
     # Custom rules Kibana held beside this prebuilt one under the same rule id at the last sync.
-    shared_copies = db.shared_rule_id_copies(actual_siem, space, rule.rule_id) if is_prebuilt(raw) else []
+    shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
+                     if not any(e.get("copy_id") == c.get("id") for e in own_pending)] if is_prebuilt(raw) else []
     if upstream and upstream["parent"]:
         parent = db.get_rule_by_id(upstream["parent"][0], upstream["parent"][2], siem_id=upstream["parent"][1],
                                    client_id=client_id)
@@ -2341,6 +2345,7 @@ def _build_rule_modal_context(
         "upstream": upstream,
         "holds_elastic_id": holds_elastic_id,
         "shared_copies": shared_copies,
+        "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
         "rule": rule,
         "space": space,
         "siem_id": actual_siem,

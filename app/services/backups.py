@@ -1,15 +1,18 @@
 """Backups of everything TIDE keeps: Settings & Administration -> Management -> Backups.
 
-A backup is one folder, tide-backup-<YYYYMMDD-HHMMSS>/, in BACKUP_DIR (the host folder
-BACKUP_PATH names in docker-compose.yml). It holds a fresh copy of the shared database and of each
-client's two databases, credentials.key (without it the stored SIEM and connector credentials
-can't be read), the Sigma pipelines and templates, and manifest.json. Each database is copied with
+A backup is one folder, tide-backup-<YYYYMMDD-HHMMSS>-v<version>/ (when, then the TIDE version
+that made it; backups made before 6.2.3 have the version only in their manifest), in BACKUP_DIR
+(the host folder BACKUP_PATH names in docker-compose.yml). It holds a fresh copy of the shared
+database and of each client's two databases, credentials.key (without it the stored SIEM and
+connector credentials can't be read), the Sigma pipelines and templates, and manifest.json (with
+the TIDE version). Each database is copied with
 DuckDB's COPY FROM DATABASE through TIDE's own connection, inside one transaction: a consistent
 copy while TIDE is in use, holding only live data, so a backup is a fraction of data/'s size (a
 database file never shrinks) and restoring one also compacts. The folder is written under a
 .partial name and renamed when complete, so a listed backup is always whole.
 
-Restoring is copying a backup's files back into data/ with TIDE stopped (restore_steps()).
+Restoring is copying a backup's files back into data/ with TIDE stopped (restore_steps()), into the
+TIDE version that made the backup or a newer one.
 
 The schedule (on, time, how many to keep) is in data/backup_schedule.json rather than a database,
 so it can be read whatever state the databases are in. app.main schedules the daily run
@@ -37,6 +40,7 @@ PREFIX = "tide-backup-"
 DEFAULT_SCHEDULE = {"enabled": False, "time": "02:00", "keep": 7}
 KEEP_RANGE = (1, 90)
 _TIME = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]*$")   # a version safe in a folder name and a shell command
 
 _lock = threading.Lock()
 _running: Dict[str, object] = {}          # {"started": datetime, "trigger": str, "by": str} while one runs
@@ -155,10 +159,17 @@ def _run_locked(db, trigger: str, by: str) -> Dict:
         _lock.release()
 
 
+def backup_name(started: datetime, version: str) -> str:
+    """``tide-backup-<YYYYMMDD-HHMMSS>-v<version>``: when, then the TIDE version that made it.
+    Characters a folder name can't hold become '-'."""
+    safe = re.sub(r"[^0-9A-Za-z._-]+", "-", version or "").strip("-.") or "unknown"
+    return f"{PREFIX}{started.strftime('%Y%m%d-%H%M%S')}-v{safe}"
+
+
 def _run(db, trigger: str, by: str) -> Dict:
     from app.services.log_context import audit_log
     started = datetime.now()
-    name = PREFIX + started.strftime("%Y%m%d-%H%M%S")
+    name = backup_name(started, get_settings().tide_version)
     partial = BACKUP_DIR / (name + ".partial")
     result: Dict = {"name": name, "trigger": trigger, "by": by, "at": started.isoformat(timespec="seconds")}
     try:
@@ -261,16 +272,48 @@ def host_folder() -> str:
     return (os.environ.get("BACKUP_PATH") or "").rstrip("/") or "backups"
 
 
-def restore_steps(name: str = "<backup>") -> List[str]:
+def _version_key(version: str) -> Optional[tuple]:
+    """``6.2.10`` as (6, 2, 10), to compare; None for a version that isn't numbers and dots."""
+    return tuple(int(p) for p in version.split(".")) if re.fullmatch(r"\d+(\.\d+)*", version or "") else None
+
+
+def version_relation(version: Optional[str]) -> str:
+    """How the TIDE version that made a backup compares with the one running: ``same``, ``older``,
+    ``newer``, or ``unknown`` (not recorded, or not a plain version number)."""
+    running = get_settings().tide_version
+    if version and version == running:
+        return "same"
+    made, now = _version_key(version), _version_key(running)
+    if made is None or now is None:
+        return "unknown"
+    return "older" if made < now else "newer" if made > now else "same"
+
+
+def restore_steps(name: str = "<backup>", version: Optional[str] = None) -> List[str]:
     """The commands that restore backup ``name``, run on the host in TIDE's folder. The current
     databases are moved aside to a folder named for the moment, not deleted, so running them
-    twice never overwrites what the first run set aside."""
-    return [
-        "docker compose stop tide-app",
+    twice never overwrites what the first run set aside. A backup can go back into the TIDE
+    version that made it (``version``, from its manifest) or a newer one, which upgrades it as it
+    starts, never an older one. So for a backup made by another version there is a line setting
+    TIDE_VERSION in .env to it: needed for a backup from a newer TIDE than this one, and for one
+    from an older TIDE only to go back to that version. ``up -d`` then starts whichever version
+    .env names."""
+    relation = version_relation(version)
+    steps = ["docker compose stop tide-app"]
+    if version and relation != "same":
+        target = version if _VERSION.match(version) else "<version>"
+        line = f"sed -i 's/^TIDE_VERSION=.*/TIDE_VERSION={target}/' .env"
+        if relation == "older":
+            running = get_settings().tide_version
+            line += (f"  # only to go back to {target}; leave this line out to stay on "
+                     f"{running if _VERSION.match(running) else 'this version'}")
+        steps.append(line)
+    steps += [
         'old=data-before-restore-$(date +%Y%m%d-%H%M%S) && mkdir "$old" && mv data/*.duckdb* data/credentials.key "$old"/',
         f"cp -a {host_folder()}/{name}/. data/ && rm data/manifest.json",
-        "docker compose start tide-app",
+        "docker compose up -d tide-app",
     ]
+    return steps
 
 
 def _folder_size(path: Path) -> int:

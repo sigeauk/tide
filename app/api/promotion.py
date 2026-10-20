@@ -284,9 +284,19 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
     """Recreate a deprecated rule in the SIEM it came from (blocking).
 
     Returns ``(status_code, message, effective_rule_id)`` — ``effective_rule_id`` is ``rule_id``
-    unless Kibana issued a new identity on recreation, in which case it is the new one (see the
-    remap below); the caller needs it to refresh the right row afterwards."""
+    unless Kibana issued a new identity on recreation, in which case it is the new one (see
+    pending_actions._apply_restore); the caller needs it to refresh the right row afterwards.
+
+    TIDE's part runs through pending_actions: if it fails once Kibana has the rule again, it is kept
+    and the answer is 202; trying again then finishes it rather than creating the rule twice."""
+    from datetime import datetime
     from app.elastic_helper import restore_detection_rule
+    from app.services import pending_actions
+
+    pending = pending_actions.get(client_id, "restore", rule_id, siem_id, space)
+    if pending:
+        status, message, key = pending_actions.finish(db, pending, user_id, username, refresh=False)
+        return status, message, key[0]
 
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
@@ -315,43 +325,23 @@ def _restore_rule_sync(db, user_id: str, username: str, client_id: str, rule_id:
         new_rule_id = str(uuid.uuid4())
         rule_data = {**copy.deepcopy(rule.raw_data), "rule_id": new_rule_id}
 
+    started = datetime.now().isoformat(timespec="seconds")
     ok, message, saved_id = restore_detection_rule(
         rule_data, space=space, kibana_url=siem.get("kibana_url"), api_key=siem.get("api_token_enc"),
     )
     if not ok:
         return 400, f"Could not restore the rule: {message}", None
 
-    # TIDE's row is keyed by the id it last synced. If that is the rule's own Kibana rule_id it survives
-    # the restore, so the row just becomes active again. If it was the saved-object id, Kibana has now
-    # issued a new one: keep the old row for history and move baseline links to the new identity.
-    kibana_rule_id = (rule.raw_data or {}).get("rule_id")
-    effective_rule_id = rule_id
     if new_rule_id:
-        with db.get_connection() as conn:
-            if not rule_origins.get(conn, (rule_id, siem_id, space)):
-                rule_origins.record(conn, (rule_id, siem_id, space), "elastic", elastic_id, "first_seen", username,
-                                    version=rule.raw_data.get("version"))
-        db.rekey_rule(rule_id, new_rule_id, siem_id, space, object_id=saved_id)
-        db.set_rule_deprecated(new_rule_id, siem_id, space, False)
-        effective_rule_id = new_rule_id
         message += f" under its own rule id, {new_rule_id} (Elastic's is {elastic_id})"
-    elif kibana_rule_id and kibana_rule_id == rule_id:
-        db.set_rule_deprecated(rule_id, siem_id, space, False)
-    elif saved_id and saved_id != rule_id:
-        db.remap_rule_references(rule_id, saved_id, client_id, siem_id, space, siem_id, space, actor=username)
-        effective_rule_id = saved_id
-    else:
-        db.set_rule_deprecated(rule_id, siem_id, space, False)
-    db.record_rule_history(
-        rule_id=new_rule_id or rule_id, siem_id=siem_id, space=space, client_id=client_id, action="restored",
-        actor_user_id=user_id, actor_name=username,
-        detail={"message": message, "restored_disabled": True},
-    )
-    logger.info("Restored deprecated rule '%s' in %s by %s", rule.name, space, username)
-    own_id = (f" It has its own rule id now, so Kibana can still install Elastic's own rule here; TIDE still shows "
-              "Elastic's updates for it." if new_rule_id else "")
-    return (200, f'Restored "{rule.name}". It was recreated disabled; enable it when you are ready.{own_id}',
-            effective_rule_id)
+    entry = {"kind": "restore", "client_id": client_id, "siem_id": siem_id, "space": space, "rule_id": rule_id,
+             "name": rule.name, "new_id": new_rule_id, "saved_id": saved_id, "elastic_id": elastic_id,
+             "kibana_rule_id": (rule.raw_data or {}).get("rule_id"), "version": rule.raw_data.get("version"),
+             "history_message": message, "started": started}
+    status, text, key = pending_actions.finish(db, entry, user_id, username, refresh=False)
+    if status == 200:
+        logger.info("Restored deprecated rule '%s' in %s by %s", rule.name, space, username)
+    return status, text, key[0]
 
 
 @router.post("/{rule_id}/restore", response_class=HTMLResponse)
@@ -369,6 +359,11 @@ async def restore_rule(
     status, message, effective_rule_id = await _run_in_context(
         _restore_rule_sync, db, user.id, username, client_id, rule_id, siem_id, space,
     )
+    if status == 202:
+        # Kibana has it again but TIDE couldn't record that: the window offers Finish in TIDE.
+        response = _toast("warning", message, 200, trigger="refreshRules")
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+        return response
     if status != 200:
         return _toast("danger", message, status)
     from app.api.rules import sync_single_rule
@@ -387,11 +382,18 @@ def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: 
     Kibana held beside this prebuilt rule under the same rule id at the last sync, which TIDE does not
     hold; only a copy that sync reported is accepted. In TIDE everything this destination holds for
     the rule moves to the new id (``rekey_rule``), and the rule keeps Elastic's rule as its upstream,
-    so Elastic's updates are still shown. Returns ``(status, message, new_rule_id)``."""
+    so Elastic's updates are still shown.
+
+    When Kibana's part succeeds but TIDE's doesn't, what TIDE still has to do is kept
+    (pending_actions) and the answer is 202: trying again (Finish in TIDE) then finishes TIDE's part
+    without changing Kibana again, as does the next sync. Returns ``(status, message, new_rule_id)``."""
     import uuid
     from app import elastic_helper
-    from app.api.rules import sync_single_rule
-    from app.services import rule_origins
+    from app.services import pending_actions, rule_origins
+
+    pending = pending_actions.get(client_id, "own_rule_id", rule_id, siem_id, space, copy_id)
+    if pending:
+        return _own_rule_id_result(pending_actions.finish(db, pending, user_id, username), pending)
 
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
     if not rule:
@@ -420,30 +422,19 @@ def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: 
                                                            siem.get("api_token_enc"))
     if not ok:
         return 502, message, None
-    new_id = str(created.get("rule_id") or uuid.uuid4())
-    new_key = (new_id, siem_id, space)
-    with db.get_connection() as conn:
-        if not copy_id and not rule_origins.get(conn, (rule_id, siem_id, space)):
-            rule_origins.record(conn, (rule_id, siem_id, space), "elastic", elastic_id, "first_seen", username,
-                                version=version)
-    if copy_id:
-        rule_origins.record_for_client(db, client_id, new_key, "elastic", elastic_id, "copied", username,
-                                       version=created.get("version"))
-    else:
-        db.rekey_rule(rule_id, new_id, siem_id, space, object_id=created.get("id"))
-    text = (f'Gave "{name}" its own rule id, {new_id}, in place of Elastic\'s {elastic_id}. Kibana keeps its '
-            "past alerts and runs with the original. TIDE still shows Elastic's updates for it.")
-    db.record_rule_history(rule_id=new_id, siem_id=siem_id, space=space, client_id=client_id, action="new_rule_id",
-                           actor_user_id=user_id, actor_name=username,
-                           detail={"message": text, "previous_rule_id": elastic_id})
-    if copy_id:
-        db.record_rule_history(rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="new_rule_id",
-                               actor_user_id=user_id, actor_name=username,
-                               detail={"message": f'Kibana\'s custom copy of this rule, "{name}", now has its own '
-                                                  f"rule id, {new_id}."})
-    sync_single_rule(db, client_id, new_id, siem_id, space, user_id, username)
-    logger.info("Rule %s in %s/%s given its own rule id %s by %s", elastic_id, siem_id, space, new_id, username)
-    return 200, text, new_id
+    entry = {"kind": "own_rule_id", "client_id": client_id, "siem_id": siem_id, "space": space, "rule_id": rule_id,
+             "copy_id": copy_id, "new_id": str(created.get("rule_id") or uuid.uuid4()), "object_id": created.get("id"),
+             "name": name, "elastic_id": elastic_id, "version": version, "created_version": created.get("version")}
+    return _own_rule_id_result(pending_actions.finish(db, entry, user_id, username), entry)
+
+
+def _own_rule_id_result(result, entry: dict):
+    """``(status, message, new_rule_id)`` from pending_actions.finish; the new rule id only on success."""
+    status, message, key = result
+    if status == 200:
+        logger.info("Rule %s in %s/%s given its own rule id %s by %s", entry["elastic_id"], entry["siem_id"],
+                    entry["space"], entry["new_id"], entry.get("username"))
+    return status, message, key[0] if status == 200 else None
 
 
 @router.post("/{rule_id}/own-rule-id", response_class=HTMLResponse)
@@ -458,16 +449,58 @@ async def own_rule_id(
     copy_id: str = Query(""),
 ):
     """Give a custom rule holding one of Elastic's rule ids its own rule id (``_own_rule_id_sync``),
-    then reopen the rule window on it."""
+    then reopen the rule window on it. Also Finish in TIDE, when Kibana's part was done before but
+    TIDE's wasn't: then a 202 reopens the window on the rule as TIDE still holds it."""
     username = user.name or user.username if user else "Unknown"
     status, message, new_id = await _run_in_context(
         _own_rule_id_sync, db, user.id, username, client_id, rule_id, siem_id, space, copy_id,
     )
+    if status == 202:
+        response = _toast("warning", message, 200, trigger="refreshRules")
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+        return response
     if status != 200:
         return _toast("danger", f"Could not give this rule its own rule id: {message}", status)
     response = _toast("success", message, 200, trigger="refreshRules")
     response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(new_id, siem_id, space))
     return response
+
+
+def _finish_pending_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str,
+                         kind: str, copy_id: str = ""):
+    """Finish in TIDE: TIDE's part of a change Kibana made but TIDE couldn't record (pending_actions),
+    without changing Kibana again. Returns ``(status, message, key)``: 200 and the rule's key now, 202
+    if it failed again (kept), 404 if nothing is left to finish."""
+    from app.services import pending_actions
+    entry = pending_actions.get(client_id, kind, rule_id, siem_id, space, copy_id)
+    if not entry:
+        return 404, "Nothing is left to finish for this rule.", None
+    return pending_actions.finish(db, entry, user_id, username)
+
+
+@router.post("/{rule_id}/finish", response_class=HTMLResponse)
+async def finish_pending(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+    kind: str = Query(...),
+    copy_id: str = Query(""),
+):
+    """Finish in TIDE (the rule window, Rule Monitoring): complete a give-its-own-rule-id, move or
+    restore that Kibana made but TIDE couldn't record, then open the rule as it now is."""
+    username = user.name or user.username if user else "Unknown"
+    status, message, key = await _run_in_context(
+        _finish_pending_sync, db, user.id, username, client_id, rule_id, siem_id, space, kind, copy_id,
+    )
+    if status == 200:
+        response = _toast("success", message, 200, trigger="refreshRules")
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(*key))
+        return response
+    return _toast("warning" if status == 202 else "danger", message, 200 if status == 202 else status)
 
 
 def _toast(kind: str, message: str, status_code: int = 200, trigger: Optional[str] = None) -> HTMLResponse:
@@ -543,9 +576,10 @@ def _settle_onto_identical(db, user_id: str, username: str, client_id: str, rule
                            source_siem_row: dict):
     """The target already holds this rule, unchanged (index patterns and enabled state aside): a
     copy links the two; a move deletes this one and points its baseline mappings at that one.
-    Nothing is written to the target."""
+    Nothing is written to the target. TIDE's part runs through pending_actions (as a move with
+    resolution "link"), so it can be finished if it fails once Kibana has deleted this one."""
     from app.api.rules import sync_single_rule
-    from app.services import rule_origins
+    from app.services import pending_actions
 
     if not existing:
         try:
@@ -558,25 +592,13 @@ def _settle_onto_identical(db, user_id: str, username: str, client_id: str, rule
                                         source_siem_row.get("api_token_enc"))
         if not ok:
             return 502, f"Could not delete this copy from its SIEM ({msg}), so nothing was changed.", rule.name, None, None
-        db.set_rule_deprecated(*source_key, True)
-        db.remap_rule_references(rule.rule_id, target_key[0], client_id, source_key[1], source_key[2],
-                                 target_key[1], target_key[2], actor=username)
-        message = (f'{target_name} already had "{rule.name}" unchanged, so it now lives there only: this copy '
-                   f"was deleted and its baseline mappings point at {target_name}.")
-    else:
-        linked = db.create_rule_link(*source_key, *target_key, username)
-        message = (f'{target_name} already had "{rule.name}" unchanged; the two are now linked.' if linked
-                   else f'{target_name} already had "{rule.name}" unchanged, and the two were already linked.')
-    with db.get_connection() as conn:
-        if not rule_origins.get(conn, target_key):
-            rule_origins.copy(conn, source_key, target_key, "copied", username)
-    db.record_rule_history(
-        rule_id=rule.rule_id, siem_id=source_key[1], space=source_key[2], client_id=client_id,
-        action="moved", actor_user_id=user_id, actor_name=username,
-        detail={"message": message, "target_siem_id": target_key[1], "target_space": target_key[2],
-                "target_rule_id": target_key[0], "delete_source": delete_source, "resolution": "link"},
-    )
-    return 200, message, rule.name, target_key[0], (target_key[1], target_key[2])
+    entry = {"kind": "move", "client_id": client_id, "rule_id": source_key[0], "siem_id": source_key[1],
+             "space": source_key[2], "target_rule_id": target_key[0], "target_siem_id": target_key[1],
+             "target_space": target_key[2], "target_name": target_name, "name": rule.name,
+             "delete_source": delete_source, "resolution": "link"}
+    status, message, _key = pending_actions.finish(db, entry, user_id, username)
+    return status, message, rule.name, (target_key[0] if status == 200 else None), \
+        ((target_key[1], target_key[2]) if status == 200 else None)
 
 
 def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: str,
@@ -602,9 +624,17 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
     import copy
     import uuid
     from app.elastic_helper import promote_rule_to_production
-    from app.services import rule_origins
-    from app.services.database import validation_for, validation_key
+    from app.services import pending_actions, rule_origins
+    from app.services.database import validation_key
     from app.services.rule_diff import conflict_differences
+
+    # A move Kibana made before but TIDE couldn't record: finish it rather than move again.
+    pending = pending_actions.get(client_id, "move", rule_id, source_siem_id, source_space)
+    if pending:
+        status, message, _key = pending_actions.finish(db, pending, user_id, username)
+        done = status == 200
+        return status, message, pending["name"], (pending["target_rule_id"] if done else None), \
+            ((pending["target_siem_id"], pending["target_space"]) if done else None)
 
     rule = db.get_rule_by_id(rule_id, source_space, siem_id=source_siem_id, client_id=client_id)
     if not rule:
@@ -697,76 +727,30 @@ def _move_rule_sync(db, user_id: str, username: str, client_id: str, rule_id: st
             delete_source = False
             logger.warning("Move: copied '%s' under a new rule id but could not delete the source: %s", rule.name, msg)
 
+    # TIDE's part (validation, reading the new copy, its origin, deprecating the source, moving the
+    # mappings or linking, history) runs through pending_actions._apply_move: if it fails now that
+    # Kibana has moved the rule, it is kept and finished later (Finish in TIDE, a retry, the sync).
     # Validation is stored under Kibana's own rule id, which the copy keeps, so "keep" needs no
-    # work: the copy is already validated exactly like the source. A copy under a new rule id is
-    # a different rule and starts unvalidated.
-    key = validation_key(rule.rule_id, rule.raw_data)
-    validated_before = bool(validation_for(db._load_validation_data(), key, rule.name))
-    if validation_mode == "stamp" or (validation_mode == "new_only" and not validated_before):
-        db.save_validation(validation_key(target_rule_id) if new_rule_id else key, rule.name, username)
-
-    # Bring the new copy into TIDE's own tables *before* trying to link to it -- a fresh copy
-    # from promote_rule_to_production only exists in Kibana until this runs, and create_rule_link
-    # requires both sides to already exist in detection_rules. Doing this here, once, means every
-    # caller (the Move route, bulk edit) gets a link that actually gets created, instead of each
-    # needing to get this ordering right itself.
-    from app.api.rules import sync_single_rule
-    try:
-        sync_single_rule(db, client_id, target_rule_id, target_siem_id, target_space, user_id, username)
-    except Exception:
-        logger.exception("Move: post-move sync of the new copy failed; link may not be created")
-    # The copy keeps where the rule came from (Elastic's or the Sigma rules); under a new rule id
-    # it also records this rule as the one it was copied from.
-    with db.get_connection() as conn:
-        if not rule_origins.copy(conn, source_key, (target_rule_id, target_siem_id, target_space),
-                                 "copied", username, parent=bool(new_rule_id)) and elastic_id:
-            rule_origins.record(conn, (target_rule_id, target_siem_id, target_space), "elastic", elastic_id,
-                                "copied", username, parent=source_key if new_rule_id else None,
-                                version=(rule.raw_data or {}).get("version"))
-
-    dest_name = target_name
+    # work; a copy under a new rule id is a different rule and starts unvalidated.
+    source_validation = validation_key(rule.rule_id, rule.raw_data)
     under = ("" if not new_rule_id
-             else f" under a new rule id, because {dest_name} already has a different rule with this one's id"
+             else f" under a new rule id, because {target_name} already has a different rule with this one's id"
              if state == "found" else
              " under a new rule id, so Kibana can still install Elastic's own rule there. TIDE still shows "
              "Elastic's updates for it")
-    db.set_rule_deprecated(rule_id, source_siem_id, source_space, delete_source)
-    if delete_source:
-        # A true move: baseline references follow the rule to its new home.
-        db.remap_rule_references(
-            rule_id, target_rule_id, client_id,
-            source_siem_id, source_space, target_siem_id, target_space, actor=username,
-        )
-        friendly_message = f'Moved "{rule.name}" to {dest_name}{under}.'
-        friendly_message += actions_note
-    else:
-        # Both copies stay live -- link them so the rule window shows each from the other,
-        # regardless of whether Kibana happened to give the copy the same portable id.
-        link_id = db.create_rule_link(
-            rule_id, source_siem_id, source_space,
-            target_rule_id, target_siem_id, target_space, username,
-        )
-        friendly_message = f'Copied "{rule.name}" to {dest_name}{under}.'
-        friendly_message += actions_note
-        if not link_id:
-            logger.warning(
-                "Move: copied '%s' to %s but could not record a link (target not found in "
-                "detection_rules after sync) -- link the two rows manually from the rule window.",
-                rule.name, dest_name,
-            )
-            friendly_message += " Could not link it to the source automatically — use Add link in the rule window."
-    db.record_rule_history(
-        rule_id=rule_id, siem_id=source_siem_id, space=source_space, client_id=client_id,
-        action="moved", actor_user_id=user_id, actor_name=username,
-        detail={
-            "message": friendly_message, "target_siem_id": target_siem_id, "target_space": target_space,
-            "target_rule_id": target_rule_id, "delete_source": delete_source,
-            "resolution": "new_id" if new_rule_id else "",
-        },
-    )
+    entry = {"kind": "move", "client_id": client_id, "rule_id": rule_id, "siem_id": source_siem_id,
+             "space": source_space, "target_rule_id": target_rule_id, "target_siem_id": target_siem_id,
+             "target_space": target_space, "target_name": target_name, "name": rule.name,
+             "delete_source": delete_source, "new_id_used": bool(new_rule_id), "elastic_id": elastic_id,
+             "version": (rule.raw_data or {}).get("version"), "under": under, "actions_note": actions_note,
+             "validation_mode": validation_mode, "source_validation_key": source_validation,
+             "stamp_validation_key": validation_key(target_rule_id) if new_rule_id else source_validation}
+    status, message, _key = pending_actions.finish(db, entry, user_id, username)
+    if status != 200:
+        return status, message, rule.name, None, None
     logger.info(f"Moved rule '{rule.name}' from {source_space} to {target_space} by {username} "
                 f"(delete_source={delete_source}, new_rule_id={bool(new_rule_id)})")
-    return 200, friendly_message, rule.name, target_rule_id, (target_siem_id, target_space)
+    return 200, message, rule.name, target_rule_id, (target_siem_id, target_space)
 
 
 @router.post("/{rule_id}/move", response_class=HTMLResponse)
@@ -802,7 +786,7 @@ async def move_rule(
     if form.get("reply") == "row":
         # A conflict resolved from bulk Move's list: the outcome replaces that rule's row.
         from html import escape
-        kind = "success" if status == 200 else "danger"
+        kind = "success" if status == 200 else "warning" if status == 202 else "danger"
         response = HTMLResponse(f'<li class="bulk-conflict text-{kind}">{escape(message)}</li>')
         if status == 200:
             response.headers["HX-Trigger"] = "refreshRules"
@@ -822,6 +806,11 @@ async def move_rule(
             )
             response.headers["X-Tide-Move-Conflict"] = "1"
             return response
+    if status == 202:
+        # Kibana moved it but TIDE couldn't record that: the source's window offers Finish in TIDE.
+        response = _toast("warning", message, 200, trigger="refreshRules")
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+        return response
     if status != 200:
         return _toast("danger", message, status)
     # The rule window stays open (#62): on the moved copy when the source is gone, else on this rule.

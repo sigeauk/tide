@@ -59,7 +59,7 @@
     </summary>
     <div class="diag-check__body">
         {% if o is none %}
-        <p class="text-muted">Not run yet. Use Run, or Run all checks.</p>
+        <p class="text-muted">{{ 'Not run yet. Use Run: Run all checks leaves this check out, because it copies each database.' if c.on_demand else 'Not run yet. Use Run, or Run all checks.' }}</p>
         {% else %}
         {% if o.status != 'ok' and o.count %}
         <p class="diag-advice">{{ icon('info', '14') }} <span><strong>What to do:</strong> {{ c.advice }}</span></p>

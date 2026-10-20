@@ -13,11 +13,16 @@ Writes are best-effort: a sync never fails because its record couldn't be writte
 Every start and end is also one structured log line (``event`` sync_run_start / sync_run_end) with
 the run's id, client, kind, trigger, retry_of, status, count and error, the same error text the UI
 shows, so a run on screen can be found in the log and the other way round.
+
+A rule sync's steps after the rules are saved (history, clean-ups, rule origins, Rule Monitoring)
+don't fail the sync, but each failure is noted (:func:`step_failed`) and kept on the run as
+``detail.steps_failed``: Diagnostics → Sync activity shows it, and Rule Monitoring raises it (#85).
 """
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +45,27 @@ KIND_LABELS = {
 
 _COLUMNS = ("id", "sync_kind", "status", "started_at", "finished_at", "duration_ms", "total_count", "error",
             "client_id", "trigger", "actor", "label", "scope_json", "retry_of", "detail_json")
+
+_steps_failed: Dict[str, List[Dict[str, str]]] = {}     # run id -> its failed steps, until it finishes
+_steps_lock = threading.Lock()
+
+
+def step_failed(step: str, error: Any) -> None:
+    """Note that ``step`` (named as the user reads it) failed during the sync running in this
+    context. The sync carries on; :func:`finish` keeps the note on the run. Outside a run, nothing
+    is kept (the caller has logged it)."""
+    from app.services.log_context import get_context
+    run_id = (get_context() or {}).get("run_id")
+    if not run_id or run_id == "-":
+        return
+    text = str(error).strip().splitlines()[0][:300] if str(error).strip() else type(error).__name__
+    with _steps_lock:
+        _steps_failed.setdefault(run_id, []).append({"step": step, "error": text})
+
+
+def _pop_steps_failed(run_id: str) -> List[Dict[str, str]]:
+    with _steps_lock:
+        return _steps_failed.pop(run_id, [])
 
 
 def _db():
@@ -78,9 +104,13 @@ def _log_end(run_id: str, status: str, total: int = 0, error: Optional[str] = No
 
 def finish(run_id: str, status: str, *, total: int = 0, error: Optional[str] = None,
            detail: Optional[Dict[str, Any]] = None) -> None:
-    """Record how a run ended, then drop finished runs older than the retention period."""
+    """Record how a run ended, with any steps that failed during it, then drop finished runs older
+    than the retention period."""
     if status not in FINISHED:
         status = "failed"
+    failed = _pop_steps_failed(run_id)
+    if failed:
+        detail = {**(detail or {}), "steps_failed": failed}
     try:
         with _db().get_shared_connection() as conn:
             conn.execute(
@@ -126,7 +156,8 @@ def _row(r) -> Dict[str, Any]:
         except ValueError:
             d[key[:-5]] = {}
     d["kind_label"] = KIND_LABELS.get(d["sync_kind"], d["sync_kind"])
-    d["retryable"] = d["sync_kind"] == "rules" and d["status"] in ("failed", "partial", "interrupted")
+    d["retryable"] = d["sync_kind"] == "rules" and (d["status"] in ("failed", "partial", "interrupted")
+                                                    or (d["status"] == "success" and bool(d["detail"].get("steps_failed"))))
     return d
 
 
@@ -160,3 +191,8 @@ def last_rule_sync(client_id: str) -> Optional[Dict[str, Any]]:
     """The client's most recent rule sync, running or finished."""
     rows = recent([client_id], kind="rules", limit=1)
     return rows[0] if rows else None
+
+
+def last_finished_rule_sync(client_id: str) -> Optional[Dict[str, Any]]:
+    """The client's most recent rule sync that has finished, however it ended."""
+    return next((r for r in recent([client_id], kind="rules", limit=10) if r["status"] != "running"), None)

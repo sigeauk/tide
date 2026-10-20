@@ -57,9 +57,14 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 {%- endmacro %}
 
 {# Fix in TIDE, on a rule TIDE can fix itself (promotion.own_rule_id). ``consume`` keeps the click
-   from also opening the rule window. #}
+   from also opening the rule window. Finish in TIDE (promotion.finish_pending) completes a change
+   Kibana made but TIDE couldn't record, without changing Kibana again. #}
 {% macro fix(f) -%}
-{%- if f.issue == 'custom_elastic_id' and can_fix %}
+{%- if f.issue == 'change_pending' and can_fix %}
+<div class="rmon-fix"><button name="Finish In TIDE" type="button" class="btn btn-secondary btn-sm"
+        hx-post="/api/promotion/{{ f.rule_id | urlencode }}/finish?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}&amp;kind={{ f.kind | urlencode }}{% if f.copy_id %}&amp;copy_id={{ f.copy_id | urlencode }}{% endif %}"
+        hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset">{{ icon_text('check', 'Finish in TIDE', '13') }}</button></div>
+{%- elif f.issue == 'custom_elastic_id' and can_fix %}
 <div class="rmon-fix"><button name="Give Own Rule Id" type="button" class="btn btn-secondary btn-sm"
         hx-post="/api/promotion/{{ f.rule_id | urlencode }}/own-rule-id?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
         hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset"
@@ -83,6 +88,17 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             hx-get="/api/rule-monitoring/copy?{{ q }}" hx-include="{{ filter_include }}"
             hx-target="#modal-container" hx-swap="innerHTML" title="This cause as Markdown, for a ticket or a chat">{{ icon_text('copy', 'Copy for engineers', '13') }}</button>
     {% if can_fix %}
+    {% if node.rule_keys and node.issue == 'custom_elastic_id' %}
+    <button name="Give Them Own Rule Ids" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "own_rule_id", "items": {{ node.rule_keys | tojson | tojson }}}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Give each of these rules a rule id of its own, in one go">{{ icon_text('copy', 'Give them their own rule ids', '13') }}</button>
+    {% elif node.rule_keys and node.issue == 'change_pending' %}
+    <button name="Finish Them In TIDE" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "finish", "items": {{ node.rule_keys | tojson | tojson }}}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Record in TIDE the changes Kibana made to these rules">{{ icon_text('check', 'Finish them in TIDE', '13') }}</button>
+    {% endif %}
     {% if node.rule_keys %}
     <button name="Sync These Rules" type="button" class="btn btn-secondary btn-sm"
             hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "sync", "items": {{ node.rule_keys | tojson | tojson }}}'

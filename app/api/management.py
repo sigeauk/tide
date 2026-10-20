@@ -5610,20 +5610,25 @@ async def import_data(
 
 # ── Backups (super admins): schedule, run now, list, how to restore (app.services.backups) ──
 
-def _backups_panel(request: Request, message: str = "", ok: bool = True):
+def _backups_panel(request: Request, message: str = "", ok: bool = True, restore: str = ""):
+    """The panel; ``restore`` names the backup whose restore steps to show (default the newest)."""
+    from app.config import get_settings
     from app.services import backups
     found = backups.list_backups()
+    chosen = next((b for b in found if b["name"] == restore), found[0] if found else None)
     return request.app.state.templates.TemplateResponse(request, "partials/backups_panel.html", {
         "schedule": backups.get_schedule(), "backups": found, "run": backups.running(),
         "last": backups.last_result(), "mapped": backups.folder_is_mapped(), "disk": backups.disk(),
-        "host_folder": backups.host_folder(), "restore": backups.restore_steps(found[0]["name"] if found else "<backup>"),
-        "size": backups.size, "message": message, "ok": ok,
+        "host_folder": backups.host_folder(), "restore_backup": chosen, "restore_open": bool(restore and chosen),
+        "restore": backups.restore_steps(chosen["name"], chosen["tide_version"]) if chosen else backups.restore_steps(),
+        "restore_relation": backups.version_relation(chosen["tide_version"]) if chosen else None,
+        "running_version": get_settings().tide_version, "size": backups.size, "message": message, "ok": ok,
     })
 
 
 @router.get("/backups", response_class=HTMLResponse)
-def backups_panel(request: Request, user: RequireSuperadmin):
-    return _backups_panel(request)
+def backups_panel(request: Request, user: RequireSuperadmin, restore: str = ""):
+    return _backups_panel(request, restore=restore)
 
 
 @router.post("/backups/schedule", response_class=HTMLResponse)

@@ -36,6 +36,9 @@ ACTIONS = {
     "disable": "Disable",
     "move": "Move",
     "delete": "Delete",
+    # TIDE's own fixes (Rule Monitoring, #81): only the selected rules they apply to run.
+    "own_rule_id": "Give own rule ids to",
+    "finish": "Finish in TIDE for",
 }
 MAX_ITEMS = 2000
 # A synced rule Kibana no longer has: marked deprecated, and listed when the run ends.
@@ -78,6 +81,39 @@ def _eligibility(action: str, count: int) -> Optional[str]:
     if not count:
         return "Select at least one rule."
     return None
+
+
+_NONE_ELIGIBLE = {
+    "own_rule_id": "None of these rules is a custom rule using one of Elastic's rule ids, so none needs a rule id "
+                   "of its own.",
+    "finish": "None of these rules has a change left to finish in TIDE.",
+}
+
+
+def _applicable(db, action: str, client_id: str, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Of ``items``, the rules TIDE's own fix ``action`` applies to: own_rule_id, a custom rule (not
+    deprecated) under one of Elastic's rule ids with no such change already pending; finish, a rule
+    with a change Kibana made but TIDE couldn't record (pending_actions). Other actions: all of them."""
+    if action not in _NONE_ELIGIBLE:
+        return items
+    from app.services import pending_actions, rule_origins
+    out = []
+    for item in items:
+        key = (item["rule_id"], item["siem_id"], item["space"])
+        pending = pending_actions.for_rule(client_id, key)
+        if action == "finish":
+            if pending:
+                out.append(item)
+            continue
+        if any(e["kind"] == "own_rule_id" and not e.get("copy_id") for e in pending):
+            continue
+        rule = db.get_rule_by_id(item["rule_id"], item["space"], siem_id=item["siem_id"] or None, client_id=client_id)
+        if not rule or rule.deprecated or rule_origins.is_prebuilt(rule.raw_data or {}):
+            continue
+        with db.get_connection() as conn:
+            if rule_origins.elastic_id_held(conn, rule.raw_data or {}, rule.rule_id):
+                out.append(item)
+    return out
 
 
 @router.get("/ids")
@@ -139,11 +175,17 @@ def bulk_edit_dialog(
     if job and job["state"] == "running":
         return _render(request, "components/bulk_edit_dialog.html", {"job": job})
     parsed = _parse_items(items)
-    ctx: Dict[str, Any] = {"action": action, "label": ACTIONS[action], "total": len(parsed)}
+    ctx: Dict[str, Any] = {"action": action, "label": ACTIONS[action], "total": len(parsed), "skipped": 0}
     if len(parsed) > MAX_ITEMS:
         ctx["error"] = f"That is {len(parsed)} rules. Bulk edit handles up to {MAX_ITEMS} at a time; narrow the filters first."
     else:
         ctx["error"] = _eligibility(action, len(parsed))
+        if not ctx["error"] and action in _NONE_ELIGIBLE:
+            applicable = _applicable(db, action, client_id, parsed)
+            ctx.update(total=len(applicable), skipped=len(parsed) - len(applicable))
+            parsed = applicable
+            if not applicable:
+                ctx["error"] = _NONE_ELIGIBLE[action]
     if not ctx["error"] and action == "move":
         destinations = db.get_client_siems(client_id) or []
         if not destinations:
@@ -191,6 +233,21 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
             opts["target_siem_id"], opts["target_space"], opts["delete_source"], opts["validation_mode"],
         )
         return status, message, name
+
+    if action == "own_rule_id":
+        # As the rule window's Give it its own rule id: 202 when Kibana changed but TIDE couldn't record it.
+        from app.api.promotion import _own_rule_id_sync
+        status, message, _new_id = _own_rule_id_sync(db, user_id, username, client_id, rule_id, siem_id, space)
+        return status, message, None
+
+    if action == "finish":
+        from app.services import pending_actions
+        pending = pending_actions.for_rule(client_id, (rule_id, siem_id, space))
+        if not pending:
+            return 404, "Nothing is left to finish for this rule.", None
+        results = [pending_actions.finish(db, e, user_id, username) for e in pending]
+        status, message, _key = next((r for r in results if r[0] != 200), results[-1])
+        return status, message, pending[0].get("name")
 
     thresholds = db.get_client_validation_thresholds(client_id)
     rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id or None, thresholds=thresholds, client_id=client_id)
