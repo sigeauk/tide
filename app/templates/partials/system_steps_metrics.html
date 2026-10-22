@@ -1,47 +1,56 @@
-{% from "macros/metrics.html" import metric_card %}
+{% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip %}
 {% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
 {#
   Metric strip for one system's baseline steps.
   Whole-system rollups, never the filtered page's counts — mirrors Rule Health.
-  Context: totals, coverage_undefined.
+  Context: totals, coverage_undefined; a Dashboard section comparing with an earlier day adds
+  each card's change (changes).
 #}
 {% set t = totals %}
 {% set scored = t.total - t.na %}
+{% set changes = changes | default({}) %}
 
-{% call metric_card('covered', keys, link) %}
+{% call metric_card('covered', keys, link, 'metric-card--tip' if changes.covered else '', tip=changes.covered is defined) %}
     <p class="metric-value {% if coverage_undefined %}{% elif scored and (t.covered / scored) >= 0.8 %}success{% elif scored and (t.covered / scored) >= 0.4 %}warning{% else %}danger{% endif %}">
         {% if coverage_undefined %}—{% else %}{{ ((t.covered / scored * 100) | round | int) if scored else 0 }}%{% endif %}
     </p>
     <p class="metric-label">Covered</p>
     <p class="metric-sub">{% if coverage_undefined %}no counted destinations{% else %}{{ t.covered }} of {{ scored }} scored{% endif %}</p>
+    {{ metric_change(changes.covered) }}
+    {% if changes.covered %}<div class="metric-tip" role="tooltip">{{ metric_change_tip(changes.covered) }}</div>{% endif %}
 {% endcall %}
 
 {% call metric_card('techniques', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ t.total }}</p>
     <p class="metric-label">Techniques</p>
-    <div class="metric-tip" role="tooltip">Across this system's baselines</div>
+    {{ metric_change(changes.techniques) }}
+    <div class="metric-tip" role="tooltip">Across this system's baselines{{ metric_change_tip(changes.techniques) }}</div>
 {% endcall %}
 
 {% call metric_card('no_coverage', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value danger">{{ t.none }}</p>
     <p class="metric-label">No coverage</p>
-    <div class="metric-tip" role="tooltip">Nothing catching this yet</div>
+    {{ metric_change(changes.no_coverage) }}
+    <div class="metric-tip" role="tooltip">Nothing catching this yet{{ metric_change_tip(changes.no_coverage) }}</div>
 {% endcall %}
 
 {% call metric_card('known_gaps', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value warning">{{ t.gap }}</p>
     <p class="metric-label">Known gaps</p>
-    <div class="metric-tip" role="tooltip">Accepted, with a reason</div>
+    {{ metric_change(changes.known_gaps) }}
+    <div class="metric-tip" role="tooltip">Accepted, with a reason{{ metric_change_tip(changes.known_gaps) }}</div>
 {% endcall %}
 
 {% call metric_card('unmapped', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ t.unmapped }}</p>
     <p class="metric-label">Unmapped</p>
-    <div class="metric-tip" role="tooltip">No rule chosen for them</div>
+    {{ metric_change(changes.unmapped) }}
+    <div class="metric-tip" role="tooltip">No rule chosen for them{{ metric_change_tip(changes.unmapped) }}</div>
 {% endcall %}
 
 {% call metric_card('not_counted', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {% if t.uncounted %}warning{% endif %}">{{ t.uncounted }}</p>
     <p class="metric-label">Not counted</p>
-    <div class="metric-tip" role="tooltip">Rule is only where this system isn't measured</div>
+    {{ metric_change(changes.not_counted) }}
+    <div class="metric-tip" role="tooltip">Rule is only where this system isn't measured{{ metric_change_tip(changes.not_counted) }}</div>
 {% endcall %}

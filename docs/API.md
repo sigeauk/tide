@@ -124,7 +124,6 @@ The most useful tables in a client's database:
 | `step_detections`, `applied_detections` | Rules mapped to baseline techniques, and where they apply |
 | `blind_spots` | Known gaps and N/A marks |
 | `system_baselines`, `system_coverage_destinations` | Baselines applied to systems, and which destinations count for each system |
-| `system_baseline_snapshots` | Point-in-time coverage captures |
 
 ---
 

@@ -1183,10 +1183,11 @@ def get_metrics(
     return request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
 
 
-def filtered_rule_metrics(db, client_id: str, params: dict) -> dict:
+def filtered_rule_metrics(db, client_id: str, params: dict, keep_rules: bool = False) -> dict:
     """Rule Health's metric strip for these filters, given as the page takes them (``space`` is
     "<siem_id>|<space>"): the context partials/metrics_row.html needs. The page's metrics and a
-    Dashboard section built from it both come from here, so they always agree."""
+    Dashboard section built from it both come from here, so they always agree. ``keep_rules`` adds
+    the rules counted (``rules``), for a section working out the same figures on an earlier day."""
     from app.main import get_last_sync_time
 
     def _int(value):
@@ -1224,6 +1225,7 @@ def filtered_rule_metrics(db, client_id: str, params: dict) -> dict:
         "last_sync": rule_issues.freshness(db, client_id),
         "space_labels": _build_space_labels(db, client_id),
         "scope_labels": _build_scope_labels(db, client_id),
+        **({"rules": deduped_rules} if keep_rules else {}),
     }
 
 
@@ -2331,12 +2333,21 @@ def _build_rule_modal_context(
     own_pending = [e for e in pending if e["kind"] == "own_rule_id"]
     with db.get_connection() as conn:
         upstream = rule_origins.statuses(conn, [key]).get(key)
+        held = rule_origins.elastic_id_held(conn, raw, rule.rule_id)
         # A custom rule under one of Elastic's rule ids can be given its own (promotion.own_rule_id).
         holds_elastic_id = (not rule.deprecated and not is_prebuilt(raw) and not any(not e.get("copy_id") for e in own_pending)
-                            and bool(rule_origins.elastic_id_held(conn, raw, rule.rule_id)))
-    # Custom rules Kibana held beside this prebuilt one under the same rule id at the last sync.
+                            and bool(held))
+        # A custom rule linked to an Elastic rule can be unlinked, and is flagged when it doesn't match it.
+        origin = rule_origins.get(conn, key)
+        can_unlink = not rule.deprecated and not rule_origins.unlink_refused(origin)
+        from app.services.rule_diff import sections_text
+        from app.services.rule_updates import unconfirmed_links
+        link_unconfirmed = (unconfirmed_links(conn, [key]).get(key) or {}).get("sections", []) if can_unlink else []
+        unlinked_from = (((rule_origins.upstream(conn, "elastic", origin["upstream_id"]) or {}).get("name")
+                          or origin["upstream_id"]) if origin and origin["origin"] == "none" else "")
+    # Custom rules Kibana held beside this one under the same rule id at the last sync (TIDE holds one).
     shared_copies = [c for c in db.shared_rule_id_copies(actual_siem, space, rule.rule_id)
-                     if not any(e.get("copy_id") == c.get("id") for e in own_pending)] if is_prebuilt(raw) else []
+                     if not c.get("prebuilt") and not any(e.get("copy_id") == c.get("id") for e in own_pending)]
     if upstream and upstream["parent"]:
         parent = db.get_rule_by_id(upstream["parent"][0], upstream["parent"][2], siem_id=upstream["parent"][1],
                                    client_id=client_id)
@@ -2344,6 +2355,10 @@ def _build_rule_modal_context(
     return {
         "upstream": upstream,
         "holds_elastic_id": holds_elastic_id,
+        "can_unlink": can_unlink,
+        "link_unconfirmed": link_unconfirmed,
+        "link_unconfirmed_text": sections_text(link_unconfirmed),
+        "unlinked_from": unlinked_from,
         "shared_copies": shared_copies,
         "pending_changes": [{**e, "text": pending_actions.describe(e)} for e in pending],
         "rule": rule,
@@ -2864,7 +2879,8 @@ def delete_rule(
     TIDE's row, so a failed Elastic delete never leaves TIDE believing a live rule is gone.
     ``remove_links`` (default on) also removes any rule_links row this rule was part of, so its
     counterpart doesn't end up pointing at a rule that no longer exists."""
-    if not siem_id or not db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id):
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id) if siem_id else None
+    if not rule:
         return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     if from_elastic:
         from html import escape
@@ -2886,7 +2902,7 @@ def delete_rule(
     db.record_rule_history(
         rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
         action="deleted", actor_user_id=user.id, actor_name=user.username,
-        detail={"message": message + ("" if remove_links else " Its links were kept.")},
+        detail={"message": message + ("" if remove_links else " Its links were kept."), "enabled": bool(rule.enabled)},
     )
     # The rule window's Delete (app.js showDeleteRuleDialog) closes the window itself. The grid
     # refreshes so the deleted card disappears without the user having to reload.

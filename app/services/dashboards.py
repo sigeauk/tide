@@ -1,8 +1,9 @@
 """Dashboards: a client's named dashboards, what each one shows, and which one each user last opened.
 
 A dashboard is a list of cards, each ``{"type": ..., "w": ...}``: a title or text block (plus
-``text``), or a section (``type`` "section", plus ``source``, ``name``, ``icon``, ``metrics`` and
-``filters``) showing chosen metric cards from one source. A source mirrors a page's metric strip
+``text``), or a section (``type`` "section", plus ``source``, ``name``, ``icon``, ``metrics``,
+``filters`` and ``compare``, how many days back its cards show their change since, or "")
+showing chosen metric cards from one source. A source mirrors a page's metric strip
 (Rule Health, a system, Threat Landscape, ...): its cards and, where the page's cards follow its
 filters, those filters. Any source can be added any number of times. ``w`` is the card's width in
 twelfths of the page.
@@ -24,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote, urlencode
 
-from app.services import builtin_data
+from app.services import builtin_data, past_figures
 from app.services.database import normalize_rule_states
 from app.services.tenant_manager import tenant_context_for
 
@@ -97,10 +98,11 @@ DEFAULT_LAYOUT = [{"type": "section", "source": s, "w": 12, "name": "",
 
 
 def new_section(source: str) -> dict:
-    """A section as Add puts it on a dashboard: every card, no filters, and no name or icon of its
-    own, so it is headed by its source's (a System section by the system's name) until given one."""
+    """A section as Add puts it on a dashboard: every card, no filters, no comparison, and no name
+    or icon of its own, so it is headed by its source's (a System section by the system's name)
+    until given one."""
     return {"type": "section", "source": source, "w": 12, "name": "", "icon": "",
-            "metrics": [k for k, _ in SOURCES[source].metrics], "filters": {}}
+            "metrics": [k for k, _ in SOURCES[source].metrics], "filters": {}, "compare": ""}
 
 
 @lru_cache(maxsize=1)
@@ -177,7 +179,7 @@ def _clean_filters(source: str, raw) -> dict:
 def clean(cards) -> List[dict]:
     """A layout as it may be stored. Cards of a type TIDE no longer has and empty titles and text
     blocks are dropped; a width snaps to the nearest one offered; a section keeps only its
-    source's cards and filters. A section saved before dashboards ({"type": "rule_health"})
+    source's cards and filters, and a comparison only when its source has changes to show. A section saved before dashboards ({"type": "rule_health"})
     becomes the same section with every card. Raises ValueError when ``cards`` is not a layout
     or a text is too long."""
     if not isinstance(cards, list) or len(cards) > MAX_CARDS:
@@ -213,6 +215,8 @@ def clean(cards) -> List[dict]:
                 "icon": card.get("icon") if card.get("icon") in available_icons() else "",
                 "metrics": [k for k in keys if k in chosen] or keys,
                 "filters": _clean_filters(source, card.get("filters")),
+                "compare": card["compare"] if source in past_figures.FIGURES and isinstance(card.get("compare"), str)
+                           and card["compare"] in dict(past_figures.COMPARE) else "",
             })
         elif kind in TEXT_CARDS:
             text = card.get("text")

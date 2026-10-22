@@ -533,11 +533,15 @@ def _create_tenant_schema(conn):
             id           VARCHAR PRIMARY KEY DEFAULT (uuid()),
             -- Append-only history of how a system's baseline technique (a step) came to be
             -- covered, or not: rules mapped and unmapped, known gaps and N/A added and removed,
-            -- the technique itself added or edited, and changes to which SIEM destinations the
-            -- system counts. Every step belongs to one system, so every event has its system_id.
+            -- the technique itself added, edited or removed, the system's baselines applied and
+            -- removed, and changes to which SIEM destinations the system counts. Every step
+            -- belongs to one system, so every event has its system_id. Kept when a technique or
+            -- baseline is removed, so past figures still count it while it existed; deleting the
+            -- system deletes its history.
             event        VARCHAR NOT NULL,
             step_id      VARCHAR,
             system_id    VARCHAR,
+            baseline_id  VARCHAR,     -- the system's baseline the step belongs to (Migration 91)
             detection_id VARCHAR,
             rule_id      VARCHAR,
             siem_id      VARCHAR,
@@ -564,22 +568,6 @@ def _create_tenant_schema(conn):
             playbook_id VARCHAR NOT NULL,
             client_id VARCHAR,
             applied_at TIMESTAMP DEFAULT now()
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS system_baseline_snapshots (
-            id VARCHAR PRIMARY KEY,
-            system_id VARCHAR NOT NULL,
-            baseline_id VARCHAR NOT NULL,
-            captured_at TIMESTAMP NOT NULL,
-            captured_by VARCHAR,
-            label VARCHAR,
-            score_percentage FLOAT,
-            count_green INTEGER DEFAULT 0,
-            count_amber INTEGER DEFAULT 0,
-            count_red INTEGER DEFAULT 0,
-            count_grey INTEGER DEFAULT 0,
-            client_id VARCHAR
         )
     """)
 

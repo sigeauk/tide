@@ -5,7 +5,7 @@
       • Figures are the system page's own: the metric strip, statuses and each technique as its
         window shows it, for the baselines chosen at export.
       • Technical reports add the coverage matrix and a detail entry per technique.
-      • Device and CVE sections are partials (system_report_devices / _trend / _cves).
+      • Coverage trend, device and CVE sections are partials (system_report_trend / _devices / _cves).
     Airgap-safe: NO external fonts, images or URLs.
 -->
 {%- set _clf_colors = {'Official':'#1a7f37','Confidential':'#9a6700','Secret':'#c0392b','Top Secret':'#c0392b'} -%}
@@ -371,7 +371,7 @@ a { color:inherit; text-decoration:none; }
   {%- set _ = toc.append(('sec-baselines', 'Baselines')) -%}
   {%- set _ = toc.append(('sec-gaps', 'Priority Gaps')) -%}
   {%- set _ = toc.append(('sec-siem', 'Coverage by SIEM')) -%}
-  {%- if report.snapshots -%}{%- set _ = toc.append(('sec-trend', 'Baseline Coverage Trend')) -%}{%- endif -%}
+  {%- if report.trend -%}{%- set _ = toc.append(('sec-trend', 'Coverage Trend')) -%}{%- endif -%}
 {%- endif -%}
 {%- if show_devices -%}{%- set _ = toc.append(('sec-devices', 'Device Exposure')) -%}{%- endif -%}
 {%- if technical and show_baselines -%}

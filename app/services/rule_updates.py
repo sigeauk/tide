@@ -20,7 +20,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from app.services import rule_origins
-from app.services.rule_diff import NOT_TAKEN, build_rule_diff, section_changes
+from app.services.rule_diff import NOT_TAKEN, build_rule_diff, link_differences, section_changes, sections_text
 
 logger = logging.getLogger(__name__)
 
@@ -105,11 +105,53 @@ def settle_unchanged(conn, keys: Optional[List[Key]] = None) -> int:
     return settled
 
 
+# How a link is confirmed: reviewed against the upstream rule in Compare with Elastic (sections taken,
+# or kept as it is), or an update that changed nothing compared.
+_REVIEWED = {"updated", "unchanged"}
+
+
+def link_unconfirmed(status: Optional[Dict[str, Any]], diffs: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """The sections in which a custom rule differs from the Elastic rule TIDE links it to (``diffs``,
+    this rule against it), while that link hasn't been reviewed: it may be a copy changed on purpose,
+    or not that rule at all. Empty for a confirmed link, Elastic's own rules and Sigma's."""
+    if (not status or not diffs or status["origin"] != "elastic" or status["prebuilt"]
+            or status["state"] not in ("current", "update") or status.get("recorded_how") in _REVIEWED):
+        return []
+    return link_differences(diffs)
+
+
+def unconfirmed_links(conn, keys: Optional[List[Key]] = None) -> Dict[Key, Dict[str, Any]]:
+    """``link_unconfirmed`` for each custom rule linked to an Elastic rule (of ``keys``, or all):
+    ``{key: {"name": Elastic's rule, "sections": [...]}}`` for those that differ. Rule Monitoring's
+    elastic_link_differs. Needs the tenant DB's pooled connection (the reference DB attached)."""
+    candidates = {k: s for k, s in rule_origins.statuses(conn, keys).items()
+                  if s["origin"] == "elastic" and not s["prebuilt"] and s.get("recorded_how") not in _REVIEWED}
+    if not candidates:
+        return {}
+    origins = rule_origins.get_bulk(conn, candidates)
+    raw = {(r, s, sp): data for r, s, sp, data in conn.execute(
+        "WITH k AS (SELECT unnest(?::VARCHAR[]) AS r, unnest(?::VARCHAR[]) AS s, unnest(?::VARCHAR[]) AS sp) "
+        "SELECT d.rule_id, d.siem_id, d.space, d.raw_data FROM detection_rules d "
+        "JOIN k ON d.rule_id = k.r AND d.siem_id = k.s AND d.space = k.sp WHERE NOT COALESCE(d.deprecated, false)",
+        [[k[0] for k in candidates], [k[1] for k in candidates], [k[2] for k in candidates]]).fetchall()}
+    out: Dict[Key, Dict[str, Any]] = {}
+    for key, status in candidates.items():
+        deployed = json.loads(raw[key]) if isinstance(raw.get(key), str) else raw.get(key)
+        if not deployed or key not in origins:
+            continue
+        payload, _ = upstream_payload(conn, origins[key], deployed)
+        sections = link_unconfirmed(status, build_rule_diff(deployed, payload)) if payload else []
+        if sections:
+            out[key] = {"name": status["name"] or status["upstream_id"], "sections": sections}
+    return out
+
+
 def review(db, client_id: str, key: Key) -> Dict[str, Any]:
     """Everything the update dialog shows: the rule, its upstream status, the upstream payload and
     the differences (``old`` = this rule, ``new`` = upstream), and which sections can be taken."""
     rule = db.get_rule_by_id(key[0], key[2], siem_id=key[1], client_id=client_id)
-    out: Dict[str, Any] = {"rule": rule, "status": None, "diffs": None, "note": "", "payload": None, "sections": []}
+    out: Dict[str, Any] = {"rule": rule, "status": None, "diffs": None, "note": "", "payload": None, "sections": [],
+                           "unconfirmed": []}
     if not rule:
         out["note"] = "This rule is no longer in TIDE."
         return out
@@ -125,6 +167,8 @@ def review(db, client_id: str, key: Key) -> Dict[str, Any]:
     if payload is not None:
         out["diffs"] = build_rule_diff(rule.raw_data or {}, payload)
         out["sections"] = [d["key"] for d in out["diffs"] if d["key"] not in NOT_TAKEN]
+        out["unconfirmed"] = link_unconfirmed(status, out["diffs"])
+        out["unconfirmed_text"] = sections_text(out["unconfirmed"])
     return out
 
 
@@ -172,6 +216,9 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
     elif unchanged:
         message = (f"Moved this rule to {status['source']}'s{version or ' current rule'}: it changes nothing TIDE "
                    "compares.")
+    elif status["state"] == "current":    # Keep the link: a rule that differs from it, reviewed
+        message = (f'Kept the link to {status["source"]}\'s "{status["name"]}": TIDE goes on showing its updates '
+                   "for this rule.")
     else:
         message = f"Kept this rule as it is; marked as reviewed against {status['source']}'s{version}."
     if taken and status["prebuilt"]:
@@ -190,4 +237,7 @@ def apply(db, client_id: str, key: Key, sections: List[str], actor_id: str, acto
             sync_single_rule(db, client_id, key[0], key[1], key[2], actor_id, actor)
         except Exception:
             logger.exception("Post-update sync of %s failed", key[0])
+    else:   # reviewed: a link Rule Monitoring asked to confirm is confirmed (a sync did it above)
+        from app.services import rule_issues
+        rule_issues.refresh_tenant(db, client_id, rule_keys=[key])
     return 200, message

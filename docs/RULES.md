@@ -44,7 +44,7 @@ The page's **⋮** menu switches between **Show as cards** and **Show as table**
 
 **Rule Monitoring** lists the rules that need action, grouped by what causes it, so a problem many rules share is one thing to fix. It is as of each destination's last sync: every sync reads what Kibana says about each rule's last run, and checks the rules against the SIEM's indexes and fields.
 
-- **What it finds:** an index pattern that matches no index, indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, schedules that leave part of each interval unsearched or too little look-back for late events, rules sharing a rule id, custom rules using one of Elastic's rule ids, changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
+- **What it finds:** an index pattern that matches no index, indexes missing the rule's timestamp override field (such as `event.ingested`), fields no index has or that have conflicting types, queries Kibana can't parse or Elasticsearch refuses, missing privileges, missed runs, schedules that leave part of each interval unsearched or too little look-back for late events, rules sharing a rule id, custom rules using one of Elastic's rule ids, custom rules linked to an Elastic rule they don't match, changes TIDE made in Kibana but couldn't finish recording (a new rule id, a move, a restore), SIEMs that didn't answer, syncs that couldn't read every rule, a step of the last sync that failed (such as cleaning up score history), and destinations not synced for 7 days. Anything else Kibana reports goes under **Other Kibana errors**, in Kibana's words.
 - **Who fixes** says who acts: **Data / ingest** (the indexes and pipelines, usually the Elastic engineers), **Rule author** (the rule's query), **Kibana / platform** (the SIEM itself) or **TIDE** (something TIDE can fix, or a sync).
 - Each issue opens to its causes, such as an index pattern or a field in a data stream, with how many rules each affects and for how long. Open a cause for its rules; click a rule to open its window.
 - Filter by **Search**, **SIEM**, **Severity**, **Who fixes** and **Issue**. **Rules** shows enabled rules, or **Include disabled** for what would fail if they were switched on. **Show** lists what is open, or what was fixed in the last 14 days. **Group by** lists by **Issue**, **Who fixes**, **SIEM / destination** or **Rule**.
@@ -58,8 +58,9 @@ Open a cause for its actions. Anyone who can edit Rule Health can use them.
 - **Copy for engineers** gives the cause as Markdown, ready to paste into a ticket or a chat: what is wrong, who fixes it, since when, what to check, Kibana's message and a table of the rules. **⋮ › Copy shown for engineers** does the same for every cause the filters show.
 - **Sync these rules** reads the cause's rules again from their SIEM, to see whether it is fixed; for a whole destination, **Sync this destination**.
 - **Give them their own rule ids**, on **Custom rule using one of Elastic's rule ids**, gives every rule of the cause its own rule id in one go; **Finish them in TIDE**, on **Change not finished in TIDE**, finishes them all. Each shows what it will do first, then its progress, with any rule that failed and why.
+- **Compare them one by one**, on **Rules sharing a rule id in Kibana**, opens **Compare with the copy** for each rule of the cause in turn. Choose for each, or **Skip** it; what each choice did shows at the top of the next.
 - **Acknowledge…** mutes a cause you know about, with a note (for example, an index not onboarded yet). It moves to **Acknowledged** at the bottom of the list and isn't counted, until it affects more rules than when it was acknowledged; then it comes back, saying so. **Unmute** puts it back at once.
-- Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids, **Give the copy its own rule id** where Kibana holds a custom copy beside Elastic's rule, and **Finish in TIDE** where Kibana made a change (a new rule id, a move, a restore) but TIDE couldn't record it.
+- Where TIDE can fix it, the rule's row has the fix: **Give it its own rule id** for a custom rule using one of Elastic's rule ids, **Compare with the copy** where Kibana holds a custom copy beside Elastic's rule, **Compare with *Elastic*** for a rule linked to an Elastic rule it doesn't match (both below), and **Finish in TIDE** where Kibana made a change (a new rule id, a move, a restore) but TIDE couldn't record it.
 
 ## The rule window
 
@@ -168,15 +169,34 @@ To take an update:
 
 An Elastic prebuilt rule can take sections too: Kibana keeps it as Elastic's and marks it customised.
 
+### Rules linked to an Elastic rule they don't match
+
+TIDE links a custom rule to one of Elastic's rules when it uses that rule's id, or was copied or deployed from it, and then shows Elastic's updates for it. A link found by the rule id can be wrong: the rule may only share the id, or have become another detection since. So at each sync TIDE compares every custom rule linked to an Elastic rule with that rule, and **Rule Monitoring** lists those whose rule type, query or filters differ under **Linked to an Elastic rule it doesn't match**. Their name, index patterns and timestamp override are each destination's own, so they don't count.
+
+- **Compare with Elastic**, on the rule's row or in its window's **Upstream** section, shows the two side by side.
+- **Keep the link** if it is a copy you changed on purpose: TIDE goes on showing Elastic's updates for it, and doesn't ask again.
+- **Unlink from Elastic** if it isn't Elastic's rule: it becomes your own rule, and TIDE no longer shows Elastic's updates for it. This works for any custom rule linked to an Elastic rule, from its window's **Upstream** section too, and holds even while it still uses Elastic's rule id. Nothing changes in Kibana.
+
 ### A custom rule using one of Elastic's rule ids
 
 Rules moved, copied or restored by earlier versions of TIDE can be custom rules under the rule id of one of Elastic's prebuilt rules. While one is, Kibana can't install Elastic's own rule in that space, or installs it beside the custom one under the same rule id. **Settings → Diagnostics** lists them.
 
 - In the rule's window, **Upstream** says so. **Give it its own rule id** creates the rule again in Kibana under a new rule id and deletes the original. TIDE keeps its history, links and baseline mappings, and still shows Elastic's updates for it.
 - If Kibana made the change but TIDE couldn't record it, TIDE says so, and the rule's window offers **Finish in TIDE**, which completes it without changing Kibana again. The next sync of that destination also completes it.
-- When Kibana holds a custom copy beside Elastic's prebuilt rule, TIDE shows the prebuilt one, and its **Upstream** section offers **Give the copy its own rule id**, so you keep both.
+- If Kibana no longer has the rule, TIDE marks it deprecated rather than changing it.
 
 Kibana keeps the original's past alerts and runs with it; the rule under its new id starts without them.
+
+### A custom copy beside Elastic's rule
+
+Kibana can hold a custom copy beside Elastic's prebuilt rule under the same rule id, and now and then two custom rules under one rule id. TIDE holds one rule per rule id in a destination, so it shows only one of them, whatever their names: Elastic's prebuilt rule, or the older of two custom rules. **Rule Monitoring** lists it under **Rules sharing a rule id in Kibana**, naming the other. The two are usually the same detection, so with both enabled each alert is raised twice. Compare them before you choose.
+
+- **Compare with the copy**, on the rule's row in **Rule Monitoring** or in its window's **Upstream** section, reads both rules from Kibana and shows how they differ, whether they detect the same thing (the same rule type, query, index patterns and filters), and which of them is enabled.
+- **Delete the copy** deletes it in Kibana, after asking. Its past alerts stay there; the rule TIDE shows is not changed.
+- **Keep both** gives the copy a rule id of its own, and TIDE then shows it as a rule of its own. A copy beside Elastic's rule still shows Elastic's updates; if it doesn't match Elastic's rule, **Rule Monitoring** says so (see above).
+- **Keep both and disable Elastic's** (**Keep both and disable the original**, for two custom rules) does the same, then disables the rule TIDE shows.
+
+Only the copy takes a new rule id: Elastic's rule always keeps Elastic's. If Kibana no longer has the copy, TIDE stops listing it.
 
 ## Bulk edit
 

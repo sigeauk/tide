@@ -64,7 +64,14 @@ def get_promotion_rule_diff(
     target_rule_id: Optional[str] = Query(None),
     target_siem_id: Optional[str] = Query(None),
     target_space: Optional[str] = Query(None),
+    copy_id: str = Query(""),
+    back: bool = Query(False),
 ):
+    """Compare: this rule with a linked rule; or, with ``copy_id``, Elastic's prebuilt rule with the
+    custom copy Kibana holds beside it under the same rule id (Compare with the copy). ``back`` (from
+    the rule window) offers Back to rule rather than Close."""
+    if copy_id and siem_id:
+        return _copy_compare(request, db, user, client_id, (rule_id, siem_id, space, copy_id), back=back)
     all_links = db.get_rule_links_bulk([(rule_id, siem_id, space)]).get((rule_id, siem_id, space), []) if siem_id else []
     all_links = [l for l in all_links if not l.get("missing")]
     link = _pick_link(db, rule_id, siem_id, space, target_rule_id, target_siem_id, target_space) if siem_id else None
@@ -379,10 +386,11 @@ def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: 
     """Give a custom rule holding one of Elastic's rule ids a rule id of its own (blocking).
 
     Without ``copy_id`` it is this rule (the rule TIDE holds). With ``copy_id`` it is the custom copy
-    Kibana held beside this prebuilt rule under the same rule id at the last sync, which TIDE does not
-    hold; only a copy that sync reported is accepted. In TIDE everything this destination holds for
-    the rule moves to the new id (``rekey_rule``), and the rule keeps Elastic's rule as its upstream,
-    so Elastic's updates are still shown.
+    Kibana held beside this rule under the same rule id at the last sync, which TIDE does not hold;
+    only a copy that sync reported is accepted. In TIDE everything this destination holds for the rule
+    moves to the new id (``rekey_rule``), and the rule keeps Elastic's rule as its upstream, so
+    Elastic's updates are still shown; a copy takes Elastic's rule as its upstream only when the id it
+    shared is Elastic's (beside a prebuilt rule, not two custom rules sharing one).
 
     When Kibana's part succeeds but TIDE's doesn't, what TIDE still has to do is kept
     (pending_actions) and the answer is 202: trying again (Finish in TIDE) then finishes TIDE's part
@@ -405,34 +413,57 @@ def _own_rule_id_sync(db, user_id: str, username: str, client_id: str, rule_id: 
     if not siem:
         return 400, "This rule's destination is no longer linked to this client.", None
     raw = rule.raw_data or {}
-    elastic_id = str(raw.get("rule_id") or rule_id)
+    elastic_id = old_id = str(raw.get("rule_id") or rule_id)
     if copy_id:
         copy = next((c for c in db.shared_rule_id_copies(siem_id, space, rule_id) if c.get("id") == copy_id), None)
         if not copy or copy.get("prebuilt"):
-            return 400, "Kibana no longer reports that copy. Sync, then try again.", None
+            return 400, NO_COPY, None
+        with db.get_connection() as conn:
+            elastic_id = rule_origins.elastic_id_held(conn, raw, rule_id) or ""
         object_id, name, version = copy_id, copy.get("name") or rule.name, None
     else:
         if rule_origins.is_prebuilt(raw):
             return 400, "This is one of Elastic's prebuilt rules, so it keeps Elastic's rule id.", None
+        with db.get_connection() as conn:
+            origin = rule_origins.get(conn, (rule_id, siem_id, space))
+        if origin and origin["origin"] == "none":
+            elastic_id = ""     # unlinked from Elastic's rule: it stays the tenant's own
         object_id, name, version = str(raw.get("id") or ""), rule.name, raw.get("version")
     if not object_id:
         return 400, "TIDE doesn't have this rule's Kibana id. Sync this rule, then try again.", None
 
     ok, message, created = elastic_helper.give_rule_own_id(object_id, space, siem.get("kibana_url"),
                                                            siem.get("api_token_enc"))
+    if not ok and message == elastic_helper.RULE_GONE:
+        return 410, _rule_gone(db, user_id, username, client_id, (rule_id, siem_id, space), copy_id, name), None
     if not ok:
         return 502, message, None
     entry = {"kind": "own_rule_id", "client_id": client_id, "siem_id": siem_id, "space": space, "rule_id": rule_id,
              "copy_id": copy_id, "new_id": str(created.get("rule_id") or uuid.uuid4()), "object_id": created.get("id"),
-             "name": name, "elastic_id": elastic_id, "version": version, "created_version": created.get("version")}
+             "name": name, "elastic_id": elastic_id, "old_id": old_id, "version": version,
+             "created_version": created.get("version")}
     return _own_rule_id_result(pending_actions.finish(db, entry, user_id, username), entry)
+
+
+def _rule_gone(db, user_id: str, username: str, client_id: str, key: tuple, copy_id: str, name: str) -> str:
+    """Kibana no longer has the rule TIDE was asked to change: TIDE stops listing a custom copy, and
+    reads a rule it holds again, which marks it deprecated when Kibana confirms it is gone."""
+    from app.services import pending_actions
+    if copy_id:
+        pending_actions.forget_copy(db, client_id, key, copy_id)
+        return f'Kibana no longer has the copy, "{name}", so TIDE no longer lists it.'
+    from app.api.rules import sync_single_rule
+    _status, _message, action = sync_single_rule(db, client_id, *key, user_id, username)
+    if action == "deprecated":
+        return "Kibana no longer has this rule, so TIDE now shows it as deprecated."
+    return "Kibana no longer has this rule under the Kibana id TIDE knew it by. TIDE has read it again: try again."
 
 
 def _own_rule_id_result(result, entry: dict):
     """``(status, message, new_rule_id)`` from pending_actions.finish; the new rule id only on success."""
     status, message, key = result
     if status == 200:
-        logger.info("Rule %s in %s/%s given its own rule id %s by %s", entry["elastic_id"], entry["siem_id"],
+        logger.info("Rule %s in %s/%s given its own rule id %s by %s", entry.get("old_id"), entry["siem_id"],
                     entry["space"], entry["new_id"], entry.get("username"))
     return status, message, key[0] if status == 200 else None
 
@@ -447,22 +478,219 @@ async def own_rule_id(
     siem_id: str = Query(...),
     space: str = Query("default"),
     copy_id: str = Query(""),
+    then: str = Query(""),
 ):
     """Give a custom rule holding one of Elastic's rule ids its own rule id (``_own_rule_id_sync``),
     then reopen the rule window on it. Also Finish in TIDE, when Kibana's part was done before but
-    TIDE's wasn't: then a 202 reopens the window on the rule as TIDE still holds it."""
+    TIDE's wasn't: then a 202 reopens the window on the rule as TIDE still holds it.
+
+    With ``copy_id`` it is Compare with the copy's Keep both; ``then=disable`` (Keep both and disable
+    Elastic's) then disables Elastic's rule, once it is the only rule under its rule id. From Compare
+    them one by one (a ``queue`` in the form) the answer is the walk's next dialog."""
+    form = await request.form()
     username = user.name or user.username if user else "Unknown"
     status, message, new_id = await _run_in_context(
         _own_rule_id_sync, db, user.id, username, client_id, rule_id, siem_id, space, copy_id,
     )
-    if status == 202:
+    kind = "success" if status == 200 else "warning" if status in (202, 410) else "danger"
+    if then == "disable" and copy_id and status in (200, 202):
+        # Kibana has given the copy its own rule id (202: TIDE's part is still to finish), so the rule
+        # id now names the rule TIDE shows alone.
+        from app.api.bulk_edit import _apply_one
+        d_status, d_message, shown = await _run_in_context(
+            _apply_one, db, "disable", user.id, username, client_id,
+            {"rule_id": rule_id, "siem_id": siem_id, "space": space}, {})
+        if d_status == 200:
+            message += f' "{shown}" is now disabled.'
+        else:
+            message += f' Could not disable "{shown or rule_id}": {d_message}'
+            kind = "warning"
+    if "queue" in form:
+        failed = status not in (200, 202, 410)
+        return await _run_in_context(
+            _walk_reply, request, db, user, client_id, form,
+            (kind, f"Could not give the copy its own rule id: {message}" if failed else message),
+            (rule_id, siem_id, space, copy_id) if failed else None)
+    if status == 410:
         response = _toast("warning", message, 200, trigger="refreshRules")
+        response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+        return response
+    if status == 202:
+        response = _toast(kind, message, 200, trigger="refreshRules")
         response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
         return response
     if status != 200:
         return _toast("danger", f"Could not give this rule its own rule id: {message}", status)
-    response = _toast("success", message, 200, trigger="refreshRules")
+    response = _toast(kind, message, 200, trigger="refreshRules")
     response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(new_id, siem_id, space))
+    return response
+
+
+# ── Compare with the copy: a custom copy Kibana holds beside the rule TIDE shows, under its rule id ─────
+# Usually beside Elastic's prebuilt rule; also two custom rules (Kibana makes both when two are created at
+# once). TIDE shows Elastic's, or the older of two custom rules (elastic_helper._preferred).
+
+NO_COPY = "Kibana no longer holds that copy under this rule id."
+
+
+def _listed_copy(db, client_id: str, rule_id: str, siem_id: str, space: str, copy_id: str):
+    """``(rule, siem, copy)``: the rule TIDE holds, its destination's SIEM and the custom copy the last
+    sync found beside it under its rule id; or ``(None, None, why not)``."""
+    rule = db.get_rule_by_id(rule_id, space, siem_id=siem_id, client_id=client_id)
+    if not rule or rule.deprecated:
+        return None, None, "Kibana no longer has this rule."
+    siem = next((s for s in (db.get_client_siems(client_id) or [])
+                 if s.get("id") == siem_id and str(s.get("space") or "default") == space), None)
+    if not siem:
+        return None, None, "This rule's destination is no longer linked to this client."
+    copy = next((c for c in db.shared_rule_id_copies(siem_id, space, rule_id)
+                 if c.get("id") == copy_id and not c.get("prebuilt")), None)
+    return (rule, siem, copy) if copy else (None, None, NO_COPY)
+
+
+def _copy_compare_context(db, user_id: str, username: str, client_id: str, item: tuple) -> Dict[str, Any]:
+    """Compare with the copy's dialog: the rule TIDE shows (``shown``, Elastic's when ``prebuilt``) and
+    the copy, both read from Kibana now, how they differ and whether they detect the same thing.
+    ``gone`` when Kibana no longer has one of them (TIDE then shows that), ``error`` when they can't
+    be compared."""
+    from app.elastic_helper import find_rule_by_object_id
+    from app.services.rule_diff import build_rule_diff, same_detection
+    from app.services.rule_origins import is_prebuilt
+    rule_id, siem_id, space, copy_id = item
+    ctx: Dict[str, Any] = {"rule_id": rule_id, "siem_id": siem_id, "space": space, "copy_id": copy_id}
+    rule, siem, copy = _listed_copy(db, client_id, rule_id, siem_id, space, copy_id)
+    if not rule:
+        return {**ctx, "error": copy}
+    dest_name = siem.get("name") or space
+    ctx.update(rule=rule, copy=copy, dest_name=dest_name)
+    url, key = siem.get("kibana_url"), siem.get("api_token_enc")
+    copy_state, live_copy = find_rule_by_object_id(copy_id, space, url, key)
+    shown_object = str((rule.raw_data or {}).get("id") or "")
+    shown_state, shown = (find_rule_by_object_id(shown_object, space, url, key) if shown_object
+                          else ("found", rule.raw_data or {}))
+    if "unknown" in (copy_state, shown_state):
+        return {**ctx, "error": f"Could not read the two rules from Kibana: {dest_name}'s SIEM did not answer."}
+    if copy_state == "absent":
+        return {**ctx, "gone": _rule_gone(db, user_id, username, client_id, (rule_id, siem_id, space), copy_id,
+                                          copy.get("name") or rule.name)}
+    if shown_state == "absent":
+        return {**ctx, "gone": _rule_gone(db, user_id, username, client_id, (rule_id, siem_id, space), "", rule.name)}
+    diffs = build_rule_diff(shown, live_copy)
+    return {**ctx, "shown": shown, "live_copy": live_copy, "prebuilt": is_prebuilt(shown), "diffs": diffs,
+            "same": same_detection(diffs)}
+
+
+def _copy_compare(request: Request, db, user, client_id: str, item: Optional[tuple], back: bool = False,
+                  walk: Optional[Dict[str, Any]] = None, outcome: Optional[tuple] = None) -> HTMLResponse:
+    """Render Compare with the copy for ``item`` (rule_id, siem_id, space, copy_id); with ``walk``,
+    as one step of Compare them one by one, and with no ``item`` its end. ``outcome`` is the
+    ``(kind, message)`` of the choice just made, shown at the top."""
+    username = user.name or user.username if user else "TIDE"
+    ctx = _copy_compare_context(db, user.id if user else None, username, client_id, item) if item else {}
+    ctx.update(back=back, walk=walk, outcome=outcome, can_apply=not user or user.can_write("page:rules"))
+    response = request.app.state.templates.TemplateResponse(request, "components/rule_copy_compare.html", ctx)
+    if outcome:
+        response.headers["HX-Trigger"] = "refreshRules"
+    return response
+
+
+def _walk_items(db, client_id: str, keys) -> list:
+    """Compare them one by one's queue: ``[rule_id, siem_id, space, copy_id]`` for each custom copy
+    Kibana holds beside these prebuilt rules, in this client's destinations only."""
+    scopes = set(db.get_client_siem_scopes(client_id) or [])
+    out = []
+    for k in keys if isinstance(keys, list) else []:
+        if not isinstance(k, (dict, list)):
+            continue
+        rule_id, siem_id, space = ((k.get("rule_id"), k.get("siem_id"), k.get("space")) if isinstance(k, dict)
+                                   else (list(k) + [None] * 3)[:3])
+        copy_ids = [k[3]] if isinstance(k, list) and len(k) > 3 else None
+        if not rule_id or (siem_id, space) not in scopes:
+            continue
+        out += [[str(rule_id), str(siem_id), str(space), str(c.get("id"))]
+                for c in db.shared_rule_id_copies(siem_id, space, rule_id)
+                if not c.get("prebuilt") and (copy_ids is None or c.get("id") in copy_ids)]
+    return out
+
+
+def _walk_reply(request: Request, db, user, client_id: str, form, outcome: Optional[tuple] = None,
+                current: Optional[tuple] = None) -> HTMLResponse:
+    """The next step of Compare them one by one: the next copy in the form's ``queue``, or, after a
+    choice that failed, ``current`` again; the end when none is left."""
+    try:
+        queue = _walk_items(db, client_id, json.loads(str(form.get("queue") or "[]")))
+    except ValueError:
+        queue = []
+    item = current or (tuple(queue.pop(0)) if queue else None)
+    total = max(int(form.get("total") or 0) if str(form.get("total") or "").isdigit() else 0, len(queue) + 1)
+    walk = {"queue": json.dumps(queue), "total": total, "position": total - len(queue)}
+    return _copy_compare(request, db, user, client_id, item, walk=walk, outcome=outcome)
+
+
+@router.post("/compare-copies", response_class=HTMLResponse)
+async def compare_copies(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
+    """Compare them one by one (Rule Monitoring, Rules sharing a rule id in Kibana): Compare with the
+    copy for each custom copy beside the posted prebuilt rules (``items``), choosing for each in turn;
+    Skip posts the rest (``queue``) back here."""
+    form = await request.form()
+    if "queue" in form:
+        return await _run_in_context(_walk_reply, request, db, user, client_id, form)
+    try:
+        queue = _walk_items(db, client_id, json.loads(str(form.get("items") or "[]")))
+    except ValueError:
+        queue = []
+    start = {"queue": json.dumps(queue), "total": str(len(queue))}
+    return await _run_in_context(_walk_reply, request, db, user, client_id, start)
+
+
+def _delete_copy_sync(db, user_id: str, username: str, client_id: str, rule_id: str, siem_id: str, space: str,
+                      copy_id: str):
+    """Delete the custom copy Kibana holds beside this prebuilt rule under its rule id: by the copy's
+    own saved-object id, since the rule id names both. Elastic's rule is not touched. Returns
+    ``(status, message)``."""
+    from app.elastic_helper import delete_detection_rule
+    from app.services import pending_actions
+    rule, siem, copy = _listed_copy(db, client_id, rule_id, siem_id, space, copy_id)
+    if not rule:
+        return 404, copy
+    ok, message = delete_detection_rule(rule_id, space, siem.get("kibana_url"), siem.get("api_token_enc"),
+                                        object_id=copy_id)
+    if not ok:
+        return 502, f"Kibana refused it ({message[:200]}), so nothing was deleted."
+    text = f'Deleted Kibana\'s custom copy of this rule, "{copy.get("name")}". Its past alerts stay in Kibana.'
+    db.record_rule_history(rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id, action="copy_deleted",
+                           actor_user_id=user_id, actor_name=username, detail={"message": text, "copy_id": copy_id})
+    pending_actions.forget_copy(db, client_id, (rule_id, siem_id, space), copy_id)
+    logger.info("Custom copy %s of rule %s in %s/%s deleted by %s", copy_id, rule_id, siem_id, space, username)
+    return 200, text
+
+
+@router.post("/{rule_id}/delete-copy", response_class=HTMLResponse)
+async def delete_copy(
+    request: Request,
+    rule_id: str,
+    db: DbDep,
+    user: RequireUser,
+    client_id: ActiveClient,
+    siem_id: str = Query(...),
+    space: str = Query("default"),
+    copy_id: str = Query(...),
+):
+    """Compare with the copy's Delete the copy, then reopen the window on Elastic's rule (or, from
+    Compare them one by one, the walk's next dialog)."""
+    form = await request.form()
+    username = user.name or user.username if user else "Unknown"
+    status, message = await _run_in_context(
+        _delete_copy_sync, db, user.id, username, client_id, rule_id, siem_id, space, copy_id)
+    if "queue" in form:
+        return await _run_in_context(
+            _walk_reply, request, db, user, client_id, form,
+            ("success", message) if status == 200 else ("danger", f"Could not delete the copy: {message}"),
+            None if status == 200 else (rule_id, siem_id, space, copy_id))
+    if status != 200:
+        return _toast("danger", f"Could not delete the copy: {message}", status)
+    response = _toast("success", message, 200, trigger="refreshRules")
+    response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
     return response
 
 

@@ -45,7 +45,7 @@ Who can: anyone who can edit Systems.
 1. In the **Baselines** section's **⋮** menu, choose **Manage baselines**.
 2. Pick a template and click **Apply a baseline**. The system gets its own copy, with each technique's risks as a starting point.
 
-In the same dialog you can **Edit** a baseline's name and description on this system, **Remove** it from the system (its techniques, mappings, known gaps and history go with it), or start an empty baseline of the system's own.
+In the same dialog you can **Edit** a baseline's name and description on this system, **Remove** it from the system (its techniques, mappings and known gaps go with it), or start an empty baseline of the system's own.
 
 ### Choose which destinations count
 
@@ -86,7 +86,7 @@ Your choices are remembered in this browser and kept in the address bar. Each gr
 4. For a technical report, choose its **Technique detail pages**: every technique, only those with no coverage or a known gap, or none.
 5. Click **Download**.
 
-The report shows the same figures as the page, the priority gaps, and coverage by SIEM, with rules mapped somewhere the system isn't measured highlighted in red. Its cover says when it was generated and when the rules were last synced, with how many destinations haven't been synced for 7 days; threat and CVE reports say the same.
+The report shows the same figures as the page, the priority gaps, and coverage by SIEM, with rules mapped somewhere the system isn't measured highlighted in red. Its coverage trend charts each chosen baseline's coverage at the end of every week, from the system's history (kept from TIDE's 6.0 upgrade on, up to a year), and lists the weeks where it changed. Its cover says when it was generated and when the rules were last synced, with how many destinations haven't been synced for 7 days; threat and CVE reports say the same.
 
 ## Baseline templates
 

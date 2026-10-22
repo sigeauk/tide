@@ -85,8 +85,9 @@ If you can edit the Dashboard (Admins and Analysts can, by default):
 1. Click **Edit**.
 2. Give the dashboard a **Name**, then add sections: a page's figures (Rule Health, Rule Monitoring, a system, Threat Landscape, Baselines, Asset Inventory, CVE Overview), the state of connected services and built-in data, a **Title** or a **Text block**.
 3. For each section, tick which figures it shows and set its filters. A Rule Health section is filtered like the Rule Health page: by SIEM, status, state, score, validation date and search. A Rule Monitoring section is filtered like its page: by SIEM, severity, who fixes, issue, whether disabled rules count, and search.
-4. Arrange the sections: drag them, use their arrows or the arrow keys, and make them **Narrower** or **Wider** to sit side by side. Click a section's icon to choose another.
-5. Click **Save**, or **Cancel** to leave it as it was.
+4. To see how a section's figures have changed, choose **Compare with**: **Yesterday**, **7 days ago**, **30 days ago** or **90 days ago**. Each figure that can show a change then says how much it has gone up or down since the end of that day: green when that is better, red when worse. Hover over the figure to see what it was then. A Rule Health section shows the change in **Total Rules**, **Enabled**, **Validated** and **Avg Quality**, when it has no filter other than SIEM; a rule counts from the day it was created in Kibana. A system's section shows the change in each of its cards, and a Baselines section in **Rules Mapped**, **Uncovered** and **Fully Covered**; TIDE has the history for these from its 6.0 upgrade on. Avg Quality shows no change from before most of its rules were scored the way TIDE scores them now.
+5. Arrange the sections: drag them, use their arrows or the arrow keys, and make them **Narrower** or **Wider** to sit side by side. Click a section's icon to choose another.
+6. Click **Save**, or **Cancel** to leave it as it was.
 
 The **⋮** menu beside the dashboard makes a **New dashboard**, **Duplicate**s this one, **Set as default** for everyone on the client, or **Delete**s it (other than the default). Figures are worked out each time a dashboard opens, and clicking one opens its page with the same filters.
 

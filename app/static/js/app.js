@@ -1370,8 +1370,8 @@ console.debug('TIDE app.js loading...');
         if (e.target.closest && e.target.closest('[data-dash-text], [data-dash-name], [data-dash-editbar]')) dashDirty = true;
     });
 
-    // A card as the server stores it. A section: its name, the cards it shows and its filters
-    // (each [data-dash-filter] by name; ticked boxes of one name make a list).
+    // A card as the server stores it. A section: its name, the cards it shows, its filters (each
+    // [data-dash-filter] by name; ticked boxes of one name make a list) and what it compares with.
     function dashCardData(c) {
         var card = { type: c.getAttribute('data-type'), w: +c.getAttribute('data-w') }, text = c.querySelector('[data-dash-text]');
         if (text) card.text = text.value;
@@ -1379,6 +1379,8 @@ console.debug('TIDE app.js loading...');
         card.source = c.getAttribute('data-source');
         card.name = c.querySelector('[data-dash-name]').value;
         card.icon = c.getAttribute('data-icon') || '';
+        var compare = c.querySelector('[data-dash-compare]');
+        card.compare = compare ? compare.value : '';
         card.metrics = Array.prototype.map.call(c.querySelectorAll('[data-dash-metric]:checked'), function(b) { return b.value; });
         card.filters = {};
         c.querySelectorAll('[data-dash-filter]').forEach(function(el) {

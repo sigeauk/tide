@@ -100,7 +100,7 @@
                 {% if upstream and upstream.state in ('update', 'current') %}
                 <button name="Compare With Upstream" type="button" role="menuitem" class="rh-more__item"
                         title="Compare this rule with the {{ upstream.source }} rule it came from, and merge the new version into it section by section"
-                        hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}"
+                        hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}&amp;back=1"
                         hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">
                     {{ icon('git-branch', '14') }}<span>Compare with {{ upstream.source }}{% if upstream.state == 'update' %} (update){% endif %}</span>
                 </button>
@@ -548,12 +548,31 @@
                         {% endif %}
                         {% if upstream.state == 'update' %}
                         <button name="Review Update" type="button" class="btn btn-secondary btn-sm"
-                                hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}"
+                                hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}&amp;back=1"
                                 hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', 'Review update', '13') }}</button>
+                        {% endif %}
+                        {# A custom rule linked to an Elastic rule it doesn't match (rule_updates.unconfirmed_links):
+                           compare, then keep the link or unlink it. Any custom rule linked to one can be unlinked
+                           (rule_origins.unlink). #}
+                        {% if link_unconfirmed %}
+                        <p class="text-muted rm-upstream__note">Its {{ link_unconfirmed_text }}
+                            {{ 'differs' if link_unconfirmed | length == 1 else 'differ' }} from Elastic's rule, so it may not be that
+                            rule at all. Compare them, then keep the link or unlink it.</p>
+                        {% if upstream.state != 'update' %}
+                        <button name="Compare With Upstream" type="button" class="btn btn-secondary btn-sm"
+                                hx-get="/api/rules/{{ rule.rule_id }}/upstream?{{ scope_qs }}&amp;back=1"
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', 'Compare with Elastic', '13') }}</button>
+                        {% endif %}
+                        {% endif %}
+                        {% if can_unlink %}
+                        <button name="Unlink From Elastic" type="button" class="btn btn-secondary btn-sm"
+                                hx-post="/api/rules/{{ rule.rule_id }}/unlink-upstream?{{ scope_qs }}"
+                                hx-target="body" hx-swap="beforeend" hx-include="unset"
+                                hx-confirm="Unlink this rule from Elastic's &quot;{{ upstream.name or upstream.upstream_id }}&quot;? TIDE then treats it as your own rule and no longer shows Elastic's updates for it. Nothing changes in Kibana.">{{ icon_text('unlink', 'Unlink from Elastic', '13') }}</button>
                         {% endif %}
                     </div>
                     {% else %}
-                    <p class="rm-empty">Your own rule: it did not come from Elastic's rules or the Sigma rules.</p>
+                    <p class="rm-empty">{% if unlinked_from %}Your own rule: unlinked from Elastic's &ldquo;{{ unlinked_from }}&rdquo;.{% else %}Your own rule: it did not come from Elastic's rules or the Sigma rules.{% endif %}</p>
                     {% endif %}
                     {# Changes Kibana made but TIDE couldn't record (pending_actions: a new rule id, a move, a
                        restore): Finish in TIDE completes TIDE's part without changing Kibana again. #}
@@ -567,14 +586,15 @@
                                 hx-target="body" hx-swap="beforeend" hx-include="unset">{{ icon_text('check', 'Finish in TIDE', '13') }}</button>
                     </div>
                     {% endfor %}
-                    {# A custom rule under one of Elastic's rule ids, or a prebuilt rule with such a copy beside
-                       it in Kibana: either can be given a rule id of its own (promotion.own_rule_id). #}
+                    {# A custom rule under one of Elastic's rule ids can be given a rule id of its own
+                       (promotion.own_rule_id); a rule with a custom copy beside it in Kibana under its rule id is
+                       first compared with the copy, which offers the choices (components/rule_copy_compare.html). #}
                     {% if holds_elastic_id %}
                     <div class="rm-upstream">
                         <p class="text-muted rm-upstream__note">This custom rule uses Elastic's rule id, so Kibana can't install
                             Elastic's own rule in this space. Give it its own rule id: TIDE creates it again in Kibana under a
-                            new one and deletes this one, keeping its history, links and mappings, and still shows Elastic's
-                            updates for it.</p>
+                            new one and deletes this one, keeping its history, links and mappings{% if upstream %}, and still
+                            shows Elastic's updates for it{% endif %}.</p>
                         <button name="Give Own Rule Id" type="button" class="btn btn-secondary btn-sm"
                                 hx-post="/api/promotion/{{ rule.rule_id }}/own-rule-id?{{ scope_qs }}"
                                 hx-target="body" hx-swap="beforeend" hx-include="unset"
@@ -585,11 +605,11 @@
                     <div class="rm-upstream">
                         <p class="text-muted rm-upstream__note">Kibana also holds a custom rule under this rule id:
                             <strong>{{ copy.name }}</strong>{% if copy.created_at %}, created {{ copy.created_at[:10] }}{% endif %}.
-                            TIDE shows only this one, Elastic's prebuilt rule. Give the copy its own rule id to keep both.</p>
-                        <button name="Give Copy Own Rule Id" type="button" class="btn btn-secondary btn-sm"
-                                hx-post="/api/promotion/{{ rule.rule_id }}/own-rule-id?{{ scope_qs }}&amp;copy_id={{ copy.id | urlencode }}"
-                                hx-target="body" hx-swap="beforeend" hx-include="unset"
-                                hx-confirm="Give the custom copy its own rule id? TIDE creates it again in Kibana under a new rule id and deletes the original copy. Kibana keeps the copy's past alerts and runs with the original.">{{ icon_text('copy', 'Give the copy its own rule id', '13') }}</button>
+                            TIDE shows only this one{% if upstream and upstream.prebuilt %}, Elastic's prebuilt rule{% endif %}. The two
+                            are usually the same detection, so compare them, then delete the copy or keep both.</p>
+                        <button name="Compare With Copy" type="button" class="btn btn-secondary btn-sm"
+                                hx-get="/api/promotion/{{ rule.rule_id }}/diff?{{ scope_qs }}&amp;copy_id={{ copy.id | urlencode }}&amp;back=1"
+                                hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset">{{ icon_text('git-branch', 'Compare with the copy', '13') }}</button>
                     </div>
                     {% endfor %}
                 </div>

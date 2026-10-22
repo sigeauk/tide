@@ -56,9 +56,10 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 </div>
 {%- endmacro %}
 
-{# Fix in TIDE, on a rule TIDE can fix itself (promotion.own_rule_id). ``consume`` keeps the click
-   from also opening the rule window. Finish in TIDE (promotion.finish_pending) completes a change
-   Kibana made but TIDE couldn't record, without changing Kibana again. #}
+{# Fix in TIDE, on a rule TIDE can fix itself (promotion.own_rule_id), or Compare with the copy, whose
+   dialog offers the choices (promotion.get_promotion_rule_diff). ``consume`` keeps the click from also
+   opening the rule window. Finish in TIDE (promotion.finish_pending) completes a change Kibana made but
+   TIDE couldn't record, without changing Kibana again. #}
 {% macro fix(f) -%}
 {%- if f.issue == 'change_pending' and can_fix %}
 <div class="rmon-fix"><button name="Finish In TIDE" type="button" class="btn btn-secondary btn-sm"
@@ -69,12 +70,17 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
         hx-post="/api/promotion/{{ f.rule_id | urlencode }}/own-rule-id?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
         hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset"
         hx-confirm="Give this rule its own rule id? TIDE creates it again in Kibana under a new rule id and deletes this one. Kibana keeps this rule's past alerts and runs with the original.">{{ icon_text('copy', 'Give it its own rule id', '13') }}</button></div>
+{%- elif f.issue == 'elastic_link_differs' and can_fix %}
+<div class="rmon-fix"><button name="Compare With Upstream" type="button" class="btn btn-secondary btn-sm"
+        hx-get="/api/rules/{{ f.rule_id | urlencode }}/upstream?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}"
+        hx-trigger="click consume" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        title="Compare it with Elastic's rule, then keep the link or unlink it">{{ icon_text('git-branch', 'Compare with Elastic', '13') }}</button></div>
 {%- elif f.issue == 'shared_rule_id' and can_fix %}
 {%- for copy in f.copies %}
-<div class="rmon-fix"><button name="Give Copy Own Rule Id" type="button" class="btn btn-secondary btn-sm"
-        hx-post="/api/promotion/{{ f.rule_id | urlencode }}/own-rule-id?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}&amp;copy_id={{ copy.id | urlencode }}"
-        hx-trigger="click consume" hx-target="body" hx-swap="beforeend" hx-include="unset"
-        hx-confirm="Give the custom copy its own rule id? TIDE creates it again in Kibana under a new rule id and deletes the original copy. Kibana keeps the copy's past alerts and runs with the original.">{{ icon_text('copy', 'Give the copy its own rule id', '13') }}</button></div>
+<div class="rmon-fix"><button name="Compare With Copy" type="button" class="btn btn-secondary btn-sm"
+        hx-get="/api/promotion/{{ f.rule_id | urlencode }}/diff?space={{ f.space | urlencode }}&amp;siem_id={{ f.siem_id | urlencode }}&amp;copy_id={{ copy.id | urlencode }}"
+        hx-trigger="click consume" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+        title="Compare {{ copy.name }} with Elastic's rule, then delete the copy or keep both">{{ icon_text('git-branch', 'Compare with the copy', '13') }}</button></div>
 {%- endfor %}
 {%- endif -%}
 {%- endmacro %}
@@ -93,6 +99,11 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "own_rule_id", "items": {{ node.rule_keys | tojson | tojson }}}'
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             title="Give each of these rules a rule id of its own, in one go">{{ icon_text('copy', 'Give them their own rule ids', '13') }}</button>
+    {% elif node.rule_keys and node.issue == 'shared_rule_id' %}
+    <button name="Compare Them One By One" type="button" class="btn btn-secondary btn-sm"
+            hx-post="/api/promotion/compare-copies" hx-vals='{"items": {{ node.rule_keys | tojson | tojson }}}'
+            hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
+            title="Compare each copy with Elastic's rule in turn, and choose for each">{{ icon_text('git-branch', 'Compare them one by one', '13') }}</button>
     {% elif node.rule_keys and node.issue == 'change_pending' %}
     <button name="Finish Them In TIDE" type="button" class="btn btn-secondary btn-sm"
             hx-post="/api/rules/bulk-edit/dialog" hx-vals='{"action": "finish", "items": {{ node.rule_keys | tojson | tojson }}}'

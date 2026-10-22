@@ -117,7 +117,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 89
+SCHEMA_VERSION = 91
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -199,6 +199,11 @@ def validation_key(rule_id, raw_data=None) -> str:
 
 # SQL for the same key, for queries that do not load the rule JSON
 VALIDATION_KEY_SQL = "COALESCE(json_extract_string(raw_data, '$.rule_id'), rule_id)"
+
+# Why a rule left TIDE, in its history (record_rule_removals), for each removal TIDE makes itself.
+_NO_RULES_LEFT = "Removed from TIDE: Kibana returned no rules for its space at a sync."
+RULE_REMOVED_UNLINKED = "Removed from TIDE: its destination was unlinked from this client."
+RULE_REMOVED_NOT_LINKED = "Removed from TIDE: its destination is no longer linked to this client."
 
 
 def rule_json_keys(raw_data) -> Tuple[str, Optional[str]]:
@@ -3359,8 +3364,8 @@ class DatabaseService:
         # technique_events is append-only from here on. The backfill reconstructs what can be
         # known -- when each surviving mapping and gap was made, and by whom -- from those rows'
         # own timestamps. Removals before this migration are unrecoverable by any means.
-        # Snapshots hold totals only (no per-technique detail), so they cannot seed it; they are
-        # left in place as early coverage-trend points.
+        # Snapshots held totals only (no per-technique detail), so they could not seed it
+        # (migration 90 removed them).
         if current_version < 70:
             try:
                 rows = conn.execute(
@@ -3454,8 +3459,8 @@ class DatabaseService:
         # or a technique edited for one system changed all of them. From here a baseline with no
         # system_id is a template (techniques and descriptions only), and applying it makes the
         # system its own copy. Each existing (system, baseline) pair becomes a copy carrying what
-        # that system showed: the rule mappings applied to it, its known gaps and N/A, its history
-        # and snapshots. Templates then keep only their techniques (and Sigma suggestions), so
+        # that system showed: the rule mappings applied to it, its known gaps and N/A, and its
+        # history. Templates then keep only their techniques (and Sigma suggestions), so
         # SIEM/manual mappings on a template no system used are not carried anywhere. Coverage
         # Quests are retired with the quests table. No rollback other than a copy of data/.
         if current_version < 71:
@@ -3867,6 +3872,71 @@ class DatabaseService:
             self._set_schema_version(conn, 89)
             logger.info("Migration 89: page:hunting seeded from page:elastic for every client.")
 
+        # ── Migration 90: coverage snapshots retired ──
+        # Snapshots were totals captured by a button removed in 6.0.0; a technique's history
+        # (technique_events, migration 70) is the record, and the Dashboard works past figures out
+        # from it. Destructive: stored snapshots are deleted (no rollback other than a copy of data/).
+        if current_version < 90:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 90: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            dropped = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 90: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        tconn.execute("DROP TABLE IF EXISTS system_baseline_snapshots")
+                        dropped += 1
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 90: failed on {fname} ({cname}): {exc}")
+            conn.execute("DROP TABLE IF EXISTS system_baseline_snapshots")
+            self._set_schema_version(conn, 90)
+            logger.info("Migration 90: coverage snapshots removed from %d tenant DB(s).", dropped)
+
+        # ── Migration 91: technique history keeps what was removed ──
+        # From here removing a technique or a baseline keeps its history and records the removal,
+        # and each event names the system baseline its technique belongs to, so a past figure can
+        # count a technique for the days it existed (a deleted system's history still goes). Adds technique_events.baseline_id,
+        # fills it for existing events from their technique's baseline, and reconstructs when each
+        # system's current baselines were applied from system_baselines.applied_at. Additive only.
+        if current_version < 91:
+            try:
+                rows = conn.execute(
+                    "SELECT id, name, db_filename FROM clients WHERE db_filename IS NOT NULL"
+                ).fetchall()
+            except Exception as exc:
+                logger.warning(f"Migration 91: could not list tenant DBs: {exc}")
+                rows = []
+            data_dir = os.path.dirname(self.db_path)
+            applied_total = 0
+            for cid, cname, fname in rows:
+                tdb_path = os.path.join(data_dir, fname)
+                if not os.path.exists(tdb_path):
+                    logger.warning(f"Migration 91: tenant DB missing for client {cname} ({cid[:8]}) — skipping")
+                    continue
+                try:
+                    tconn = duckdb.connect(tdb_path)
+                    try:
+                        applied_total += self.add_event_baselines(tconn, cid)
+                    finally:
+                        tconn.close()
+                except Exception as exc:
+                    logger.error(f"Migration 91: failed on {fname} ({cname}): {exc}")
+            self._set_schema_version(conn, 91)
+            logger.info("Migration 91: technique history keeps removals; %d applied baseline(s) dated "
+                        "from their own records.", applied_total)
+
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
     @staticmethod
@@ -3926,6 +3996,32 @@ class DatabaseService:
             created_at TIMESTAMP DEFAULT now()
         )
     """
+
+    @staticmethod
+    def add_event_baselines(tconn, client_id: str = None) -> int:
+        """Migration 91 for one tenant DB. Idempotent. Gives each technique event the system
+        baseline its technique belongs to, and dates each system baseline's application from its
+        own record (a reconstructed ``baseline_applied``). Returns how many baselines were dated."""
+        tables = {r[0] for r in tconn.execute("SHOW TABLES").fetchall()}
+        if "technique_events" not in tables:
+            return 0
+        tconn.execute("ALTER TABLE technique_events ADD COLUMN IF NOT EXISTS baseline_id VARCHAR")
+        if "playbook_steps" in tables:
+            tconn.execute(
+                "UPDATE technique_events SET baseline_id = s.playbook_id FROM playbook_steps s "
+                "WHERE s.id = technique_events.step_id AND technique_events.baseline_id IS NULL"
+            )
+        if not {"system_baselines", "playbooks"} <= tables:
+            return 0
+        return len(tconn.execute("""
+            INSERT INTO technique_events (event, system_id, baseline_id, detail, client_id, source_ref, created_at)
+            SELECT 'baseline_applied', sb.system_id, sb.playbook_id, p.name, ?, sb.id, sb.applied_at
+            FROM system_baselines sb JOIN playbooks p ON p.id = sb.playbook_id
+            WHERE sb.applied_at IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM technique_events e
+                              WHERE e.source_ref = sb.id AND e.event = 'baseline_applied')
+            RETURNING 1
+        """, [client_id]).fetchall())
 
     @classmethod
     def add_step_risk_columns(cls, tconn) -> None:
@@ -4194,11 +4290,6 @@ class DatabaseService:
                         f"UPDATE applied_detections SET detection_id = ? WHERE detection_id = ? AND ({applied_where})",
                         [new_det, old_det] + applied_params,
                     )
-            if has("system_baseline_snapshots"):
-                tconn.execute(
-                    "UPDATE system_baseline_snapshots SET baseline_id = ? WHERE system_id = ? AND baseline_id = ?",
-                    [copy_id, system_id, template_id],
-                )
             tconn.execute("UPDATE system_baselines SET playbook_id = ? WHERE id = ?", [copy_id, link_id])
 
         # Templates keep their techniques and Sigma suggestions; everything about coverage has
@@ -5433,6 +5524,24 @@ class DatabaseService:
             ).fetchone()
         return row is not None
 
+    @staticmethod
+    def record_rule_removals(conn, where: str, params: list, message: str, client_id: str = None,
+                             actor: str = None) -> None:
+        """Record, in each rule's history, that the rules ``DELETE FROM detection_rules WHERE
+        <where>`` is about to remove are going, and whether each was enabled, so figures for an
+        earlier day still count a rule while it existed. Call it just before that delete, on its
+        connection. Never raises: the history is a record of the removal, not a condition of it."""
+        try:
+            conn.execute(
+                "INSERT INTO rule_lifecycle_history (rule_id, siem_id, space, client_id, action, actor_name, detail) "
+                "SELECT rule_id, siem_id, space, COALESCE(client_id, ?), 'deleted', ?, "
+                "       json_object('message', ?, 'enabled', COALESCE(CAST(enabled AS BOOLEAN), false)) "
+                f"FROM detection_rules WHERE {where}",
+                [client_id or "", actor, message] + list(params),
+            )
+        except Exception:
+            logger.warning("Could not record removed rules in their history (%s)", message, exc_info=True)
+
     def delete_rule(self, rule_id: str, siem_id: str, space: str, remove_links: bool = False) -> bool:
         """Permanently delete one rule from TIDE only. ``remove_links=True`` also deletes any
         rule_links row this rule was part of (on either side) -- otherwise the other side of any
@@ -6067,6 +6176,27 @@ class DatabaseService:
                 [siem_id, space]).fetchone()
         pairs = json.loads(row[0]) if row and row[0] else []
         return [r for d in pairs if d.get("rule_id") == rule_id for r in d.get("rules", []) if not r.get("kept")]
+
+    def forget_shared_copy(self, siem_id: str, space: str, rule_id: str, copy_id: str) -> None:
+        """Take the copy ``copy_id`` out of the latest sync's record of rules sharing ``rule_id``, once
+        Kibana no longer holds it under that id (deleted, given its own, or gone): the rule window and
+        Rule Monitoring stop offering it now, not at the next sync of the destination."""
+        with self.get_connection() as conn:
+            if not conn.execute("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
+                                "AND table_name = 'space_fetch_results'").fetchone():
+                return
+            row = conn.execute(
+                "SELECT synced_at, duplicates FROM space_fetch_results WHERE siem_id = ? AND space = ? "
+                "ORDER BY synced_at DESC LIMIT 1", [siem_id, space]).fetchone()
+            if not row or not row[1]:
+                return
+            pairs = []
+            for d in json.loads(row[1]):
+                if d.get("rule_id") == rule_id:
+                    d = {**d, "rules": [r for r in d.get("rules", []) if r.get("id") != copy_id]}
+                pairs += [d] if len(d.get("rules", [])) > 1 else []
+            conn.execute("UPDATE space_fetch_results SET duplicates = ? WHERE siem_id = ? AND space = ? "
+                         "AND synced_at = ?", [json.dumps(pairs), siem_id, space, row[0]])
 
     def get_offline_scopes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
         """``(siem_id, space)`` -> ``{reason, checked_at}`` for every destination that failed its
@@ -10924,6 +11054,7 @@ class DatabaseService:
                             [space],
                         ).fetchone()[0]
                         if before > 0:
+                            self.record_rule_removals(conn, "space = ?", [space], _NO_RULES_LEFT)
                             conn.execute(
                                 "DELETE FROM detection_rules WHERE space = ?",
                                 [space],
@@ -10941,6 +11072,8 @@ class DatabaseService:
                             [space, siem_id],
                         ).fetchone()[0]
                         if before > 0:
+                            self.record_rule_removals(conn, "space = ? AND siem_id = ?", [space, siem_id],
+                                                      _NO_RULES_LEFT)
                             conn.execute(
                                 "DELETE FROM detection_rules "
                                 "WHERE space = ? AND siem_id = ?",

@@ -1,8 +1,7 @@
 /*
- * Small partials: snapshots history search (partials/audit_history.html), a template's Manage
- * dialog (partials/template_manage_dialog.html: apply to a system, export), a new technique's
- * title focus (partials/technique_new_form.html), and a CVE's Add detection form
- * (partials/cve_detection_badge.html).
+ * Small partials: a template's Manage dialog (partials/template_manage_dialog.html: apply to a
+ * system, export), a new technique's title focus (partials/technique_new_form.html), and a CVE's
+ * Add detection form (partials/cve_detection_badge.html).
  */
 (function () {
     'use strict';
@@ -11,19 +10,6 @@
 
     // The title first, after the window's own focus handling (app.js focuses Close on open).
     TIDE.page('#tf-name', function (t) { setTimeout(function () { t.focus(); }, 50); });
-
-    TIDE.actions('audit', {
-        // A baseline group shows when its name, or one of its techniques, matches.
-        filter: function (e, input) {
-            var q = input.value.toLowerCase();
-            document.querySelectorAll('.audit-group').forEach(function (grp) {
-                var match = grp.dataset.baseline.indexOf(q) >= 0 || Array.prototype.some.call(grp.querySelectorAll('.tech-card'), function (card) {
-                    return card.dataset.search && card.dataset.search.toLowerCase().indexOf(q) >= 0;
-                });
-                grp.style.display = match ? '' : 'none';
-            });
-        },
-    });
 
     TIDE.actions('tpl', {
         apply: function (e, btn) {

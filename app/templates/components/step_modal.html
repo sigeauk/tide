@@ -46,7 +46,7 @@
     'na_added': 'Not applicable', 'na_removed': 'N/A removed', 'na_edited': 'N/A edited',
     'technique_added': 'Technique added', 'technique_edited': 'Technique edited', 'risks_edited': 'Risks edited',
     'sigma_dismissed': 'Sigma dismissed', 'sigma_restored': 'Sigma restored',
-    'siem_coverage': 'SIEM coverage',
+    'siem_coverage': 'SIEM coverage', 'siem_counted': 'SIEM coverage', 'siem_uncounted': 'SIEM coverage',
 } %}
 {% set step_url = '/api/systems/' ~ system_id ~ '/steps/' ~ step.id %}
 {% set mark = detail.blind_spots[0] if detail.blind_spots else none %}
@@ -109,7 +109,7 @@
         <button name="Remove Technique" type="button" role="menuitem" class="rh-more__item rh-more__item--danger"
                 title="Delete this technique from this system's baseline"
                 hx-delete="{{ step_url }}" hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-                hx-confirm="Delete this technique from this system? Its rule mappings, known gap and history on this system go with it. The template and other systems are not affected.">
+                hx-confirm="Delete this technique from this system? Its rule mappings and known gap on this system go with it. The template and other systems are not affected.">
           {{ icon('trash-2', '14') }}<span>Delete technique</span>
         </button>
         {% endcall %}

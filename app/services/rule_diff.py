@@ -234,6 +234,32 @@ def conflict_differences(ours: Dict[str, Any], theirs: Dict[str, Any]) -> List[D
     return [d for d in build_rule_diff(ours, theirs) if d["key"] not in CONFLICT_IGNORED]
 
 
+# What a rule detects: two rules alike in these raise the same alerts from the same data, whatever
+# they are named, described or tagged.
+DETECTION_KEYS = {"type", "language", "query", "index", "filters", "type_settings", "timestamp_override"}
+
+
+def same_detection(diffs: List[Dict[str, Any]]) -> bool:
+    """Whether two rules ``build_rule_diff`` compared detect the same thing (Compare with the copy)."""
+    return not any(d["key"] in DETECTION_KEYS for d in diffs)
+
+
+# A rule and the upstream rule it is linked to: a difference here means it may be another detection
+# altogether. Index patterns and a timestamp override are each destination's own, like its name.
+LINK_KEYS = DETECTION_KEYS - {"index", "timestamp_override"}
+
+
+def link_differences(diffs: List[Dict[str, Any]]) -> List[str]:
+    """The labels of the ``LINK_KEYS`` sections that differ ("Query", "Rule type")."""
+    return [d["label"] for d in diffs if d["key"] in LINK_KEYS]
+
+
+def sections_text(labels: List[str]) -> str:
+    """Section labels as words in a sentence: "rule type, query language and query"."""
+    words = [str(label).lower() for label in labels]
+    return " and ".join([", ".join(words[:-1]), words[-1]]) if len(words) > 1 else "".join(words)
+
+
 def section_changes(dest: Dict[str, Any], donor: Dict[str, Any], sections) -> tuple:
     """``(changes, remove)`` that make ``dest`` take ``donor``'s value for each chosen section, for
     ``elastic_helper.apply_rule_changes``: a field the donor leaves empty is removed from ``dest``.

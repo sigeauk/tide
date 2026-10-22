@@ -393,3 +393,19 @@ async def get_active_client(
 
 # Active tenant type alias
 ActiveClient = Annotated[str, Depends(get_active_client)]
+
+
+async def get_optional_client(
+    request: Request,
+    user: CurrentUser,
+    db: Annotated[DatabaseService, Depends(get_db)],
+) -> Optional[str]:
+    """``get_active_client`` for a page that opens without a client too (the guide): the client, or
+    None when none can be resolved or the user may not open it."""
+    try:
+        return await get_active_client(request, user, db)
+    except HTTPException:
+        return None
+
+
+OptionalClient = Annotated[Optional[str], Depends(get_optional_client)]

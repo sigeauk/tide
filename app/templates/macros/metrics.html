@@ -1,3 +1,4 @@
+{% from "macros/icons.html" import icon %}
 {#
   One card in a metric strip, its face from the call block. A Dashboard section passes ``keys``
   (the cards it shows: one not among them is left out) and ``link`` (the whole card opens its
@@ -8,4 +9,18 @@
 {% if link %}<a class="metric-card metric-card--link{{ ' ' ~ classes if classes }}" href="{{ link }}">{{ caller() }}</a>
 {% else %}<div class="metric-card{{ ' ' ~ classes if classes }}"{% if tip %} tabindex="0"{% endif %}>{{ caller() }}</div>{% endif %}
 {% endif %}
+{%- endmacro %}
+
+{#
+  A Dashboard card's change since an earlier day (``change``, from app/services/past_figures.py):
+  an arrow, how much and over what period, green when that is better and red when worse. Nothing
+  when the card has no value for that day. ``metric_change_tip`` is the value then, a row of the
+  card's tip.
+#}
+{% macro metric_change(change) -%}
+{% if change %}<p class="metric-change metric-change--{{ change.tone }}">{% if change.direction %}{{ icon('arrow-' ~ change.direction, '12') }}<span class="sr-only">{{ change.direction }}</span>{% endif %}{{ change.text }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro metric_change_tip(change) -%}
+{% if change %}<div class="metric-tip__row">{{ change.then_label }} <span>{{ change.then }}</span></div>{% endif %}
 {%- endmacro %}

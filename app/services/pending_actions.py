@@ -221,7 +221,19 @@ def _take_new_identity(db, entry: Dict[str, Any], old: Key, new_id: str, object_
     db.rekey_rule(rule_id, new_id, siem_id, space, object_id=object_id)
 
 
+def forget_copy(db, client_id: str, key: Key, copy_id: str) -> None:
+    """Kibana no longer holds the custom copy ``copy_id`` beside the prebuilt rule ``key`` under its
+    rule id: stop offering it there and on Rule Monitoring (the next sync of the destination agrees)."""
+    from app.services import rule_issues
+    rule_id, siem_id, space = key
+    db.forget_shared_copy(siem_id, space, rule_id, copy_id)
+    rule_issues.refresh_tenant(db, client_id, rule_keys=[key])
+
+
 def own_rule_id_message(entry: Dict[str, Any]) -> str:
+    if not entry.get("elastic_id"):     # not linked to Elastic's rule (a copy sharing a custom rule's id, or unlinked)
+        return (f'Gave "{entry["name"]}" its own rule id, {entry["new_id"]}, in place of '
+                f'{entry.get("old_id") or entry["rule_id"]}. Kibana keeps its past alerts and runs with the original.')
     return (f'Gave "{entry["name"]}" its own rule id, {entry["new_id"]}, in place of Elastic\'s '
             f'{entry["elastic_id"]}. Kibana keeps its past alerts and runs with the original. TIDE still shows '
             "Elastic's updates for it.")
@@ -237,16 +249,18 @@ def _apply_own_rule_id(db, entry: Dict[str, Any], refresh: bool) -> Tuple[str, K
         if entry.get("copy_id"):
             with db.get_connection() as conn:
                 recorded = rule_origins.get(conn, (new, siem_id, space))
-            if not recorded:
+            if not recorded and entry.get("elastic_id"):
                 rule_origins.record_for_client(db, client_id, (new, siem_id, space), "elastic", entry["elastic_id"],
                                                "copied", by, version=entry.get("created_version"))
+            forget_copy(db, client_id, (old, siem_id, space), entry["copy_id"])
         else:
             _take_new_identity(db, entry, (old, siem_id, space), new, entry.get("object_id"))
         text = own_rule_id_message(entry)
         if not _recorded(db, (new, siem_id, space), "new_rule_id"):
             db.record_rule_history(rule_id=new, siem_id=siem_id, space=space, client_id=client_id,
                                    action="new_rule_id", actor_user_id=entry.get("user_id"), actor_name=by,
-                                   detail={"message": text, "previous_rule_id": entry["elastic_id"]})
+                                   detail={"message": text,
+                                           "previous_rule_id": entry.get("elastic_id") or entry.get("old_id")})
             if entry.get("copy_id"):
                 db.record_rule_history(rule_id=old, siem_id=siem_id, space=space, client_id=client_id,
                                        action="new_rule_id", actor_user_id=entry.get("user_id"), actor_name=by,

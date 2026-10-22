@@ -122,11 +122,20 @@ KNOWN: Dict[str, Issue] = {i.id: i for i in (
           "Sync again. If the step fails again, Settings → Diagnostics → Sync activity shows its error: report "
           "it with TIDE's log from that time."),
     Issue("shared_rule_id", "Rules sharing a rule id in Kibana", "tide", "warning", "rule",
-          "Kibana holds a custom copy beside this prebuilt rule under the same rule id. TIDE shows only one.",
-          "Open the rule and use Give the copy its own rule id."),
+          "Kibana holds a custom copy beside this rule under the same rule id, usually beside one of Elastic's "
+          "prebuilt rules. TIDE shows only one of them; the row names the other. The two are usually the same "
+          "detection, so with both enabled each alert is raised twice.",
+          "Use Compare with the copy, on the rule's row or in its window, then choose: delete the copy, keep both (the "
+          "copy gets a rule id of its own), or keep both and disable the rule TIDE shows."),
     Issue("custom_elastic_id", "Custom rule using one of Elastic's rule ids", "tide", "warning", "rule",
           "While it does, Kibana can't install Elastic's own rule in this space.",
           "Open the rule and use Give it its own rule id."),
+    Issue("elastic_link_differs", "Linked to an Elastic rule it doesn't match", "tide", "warning", "rule",
+          "TIDE links this custom rule to one of Elastic's rules, by its rule id or because it was copied from it, "
+          "but its rule type, query or filters differ from Elastic's. It may be a copy changed on purpose, or not "
+          "Elastic's rule at all; either way TIDE shows Elastic's updates for it.",
+          "Use Compare with Elastic, on the rule's row or in its window, then keep the link (a copy you changed on "
+          "purpose) or unlink it from Elastic (your own rule)."),
     Issue("change_pending", "Change not finished in TIDE", "tide", "warning", "rule",
           "Kibana made a change TIDE asked for (giving the rule its own rule id, moving or copying it, or restoring "
           "it), but TIDE couldn't record it, so TIDE still shows the rule as it was before.",
@@ -390,14 +399,26 @@ def detect(db, conn, scopes: Optional[Set[Tuple[str, str]]] = None,
                     f"Uses Elastic's rule id {rule_id}.")
     except Exception:
         logger.debug("No Elastic rule index to check custom rules against", exc_info=True)
+    # Custom rules linked to an Elastic rule they don't match, until the link is reviewed (rule_updates).
+    try:
+        from app.services.rule_diff import sections_text
+        from app.services.rule_updates import unconfirmed_links
+        links = unconfirmed_links(conn, sorted(rule_keys) if rule_keys is not None else None)
+        for (rule_id, siem_id, space), link in links.items():
+            if wanted(siem_id, space, rule_id):
+                what = sections_text(link["sections"])
+                add("elastic_link_differs", "", siem_id, space, rule_id, KNOWN["elastic_link_differs"].severity,
+                    f"Its {what} {'differs' if len(link['sections']) == 1 else 'differ'} from Elastic's \"{link['name']}\".")
+    except Exception:
+        logger.warning("Could not check custom rules against the Elastic rules they are linked to", exc_info=True)
     if "space_fetch_results" in tables:
         for siem_id, space, duplicates in conn.execute(
                 "SELECT siem_id, space, arg_max(duplicates, synced_at) FROM space_fetch_results GROUP BY 1, 2").fetchall():
             for dup in _json(duplicates, []):
                 if wanted(siem_id, space, dup.get("rule_id")):
-                    copies = [r.get("name") or "" for r in dup.get("rules", []) if not r.get("kept")]
+                    copies = ", ".join(f'"{r.get("name") or ""}"' for r in dup.get("rules", []) if not r.get("kept"))
                     add("shared_rule_id", "", siem_id, space, dup.get("rule_id"), KNOWN["shared_rule_id"].severity,
-                        f"Kibana also holds {len(copies)} custom cop{'y' if len(copies) == 1 else 'ies'} under this rule id.")
+                        f"Kibana also holds {copies} under this rule id; TIDE shows only this one.")
         if rule_keys is None:
             for siem_id, space, total, returned, held in conn.execute(
                     "WITH r AS (SELECT *, row_number() OVER (PARTITION BY siem_id, space ORDER BY synced_at DESC) AS n "
@@ -877,8 +898,8 @@ def markdown(nodes: List[Dict[str, Any]], siem_labels: Dict[str, str], now: date
 
 # Issues TIDE finds itself (its message is TIDE's, not Kibana's).
 _TIDE_FOUND = {"stale_data", "field_missing", "field_conflict", "never_run", "siem_offline", "sync_incomplete",
-               "sync_step_failed", "shared_rule_id", "custom_elastic_id", "change_pending", "schedule_gap",
-               "short_lookback"}
+               "sync_step_failed", "shared_rule_id", "custom_elastic_id", "elastic_link_differs", "change_pending",
+               "schedule_gap", "short_lookback"}
 
 
 def _metrics(conn, open_rows, resolved_rows, names, scope: str, all_rules: bool, now: datetime) -> Dict[str, Any]:

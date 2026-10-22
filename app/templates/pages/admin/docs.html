@@ -3,7 +3,7 @@
   Settings & Administration -> Documentation and -> Changelog.
 
   Documentation: the whole guide in one sidebar (app.services.docs): a search over every section
-  (docs.js, /settings/docs/search.json), then the groups (Using TIDE, Detection engineering,
+  (docs.js, /settings/docs/search.json), then the groups (About TIDE, Using TIDE, Detection engineering,
   Administration, Reference) and their pages; the page being read opens out to its sections. The
   main column is the landing page (the groups as cards, in the sidebar's order) or the page. A page
   not written yet is listed as coming. While searching, the results take the groups' place.
@@ -86,10 +86,10 @@
     </aside>
 
     {% if not doc_page %}
-    {# Start here: the groups in the sidebar's order, each page a line. #}
+    {# Start here: the groups in the sidebar's order, each page a line; the first (About TIDE) leads. #}
     <div class="docs-landing">
         {% for g in doc_nav %}
-        <section class="card card-padded docs-card">
+        <section class="card card-padded docs-card{{ ' docs-card--lead' if loop.first }}">
             <h2 class="docs-card__title">{{ icon(g.icon, '18') }} {{ g.title }}</h2>
             <p class="docs-card__about">{{ g.about }}</p>
             <ul class="docs-card__pages">

@@ -58,7 +58,7 @@ from app.inventory_engine import (
     list_playbooks, get_playbook, get_template, get_baselines_overview, count_system_baselines,
     create_playbook, delete_playbook, update_playbook,
     add_playbook_step, delete_playbook_step,
-    apply_baseline, remove_baseline, get_system_baselines, create_system_baseline,
+    apply_baseline, remove_baseline, get_system_baselines, create_system_baseline, link_system_baseline,
     # Techniques (steps)
     add_step_technique, add_step_detection, relink_step_detection, remove_step_detection,
     get_playbook_step, get_step_owner, add_technique, update_technique, parse_technique_ids,
@@ -67,9 +67,6 @@ from app.inventory_engine import (
     # Blind Spots
     add_blind_spot, remove_blind_spot, get_blind_spots, update_blind_spot,
     list_cve_detections, _load_applied_detections, _enrich_detections_with_applied,
-    # Baseline Snapshots
-    create_baseline_snapshot, create_all_baseline_snapshots,
-    get_baseline_snapshots, delete_baseline_snapshot,
 )
 from app.models.inventory import HostCreate, HostUpdate, SoftwareCreate, SoftwareUpdate, SystemCreate, SystemUpdate, MITRE_TACTICS, PlaybookStep
 from app.services.database import get_database_service, rule_json_keys
@@ -1103,6 +1100,7 @@ def _generate_baselines_from_sigma(
     system_id: str,
     groups: list[dict],
     client_id: str,
+    actor: str = None,
 ) -> int:
     """Create baselines of this system's own from Sigma rule groups -- no template behind them.
 
@@ -1157,7 +1155,7 @@ def _generate_baselines_from_sigma(
             f"({scope}) — {len(rule_rows)} Sigma rules covering "
             f"severity levels critical/high/medium."
         )
-        baseline = create_system_baseline(system_id, baseline_name, description, client_id=client_id)
+        baseline = create_system_baseline(system_id, baseline_name, description, client_id=client_id, actor=actor)
 
         # Create one PlaybookStep per Sigma rule
         for step_num, (rule_id, title, file_path, idx_techniques, idx_tactics) in enumerate(rule_rows, 1):
@@ -1229,7 +1227,7 @@ async def api_generate_baselines(
         groups = [g for g in groups if not g["exists"]]
 
     if groups:
-        created = _generate_baselines_from_sigma(system_id, groups, client_id)
+        created = _generate_baselines_from_sigma(system_id, groups, client_id, actor=_actor(user))
         logger.info(
             f"[GENERATE] Created {created} baselines "
             f"({sum(g['count'] for g in groups)} rules) for system {system_id}"
@@ -1640,7 +1638,8 @@ def export_system_configuration(
     )
 
 
-async def _import_baseline_payload(payload: dict, client_id: str, system_id: str = None) -> str:
+async def _import_baseline_payload(payload: dict, client_id: str, system_id: str = None,
+                                   actor: str = None) -> str:
     """Create an imported baseline and return its new ID: a template, or -- given ``system_id``
     -- that system's own baseline, with its rule mappings applied to it. A template carries
     techniques and Sigma suggestions only, so any other mappings in the file are left out."""
@@ -1711,8 +1710,7 @@ async def _import_baseline_payload(payload: dict, client_id: str, system_id: str
     if system_id:
         with db.get_connection() as conn:
             conn.execute("UPDATE playbooks SET system_id = ? WHERE id = ?", [system_id, baseline.id])
-            conn.execute("INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?)",
-                         [system_id, baseline.id, client_id])
+            link_system_baseline(conn, system_id, baseline.id, client_id=client_id, actor=actor)
     for step_data in payload.get("steps") or []:
         step = add_playbook_step(
             baseline.id,
@@ -1838,7 +1836,7 @@ async def import_system_configuration(
             continue
         await _import_baseline_payload(
             baseline_payload if include_rules else {**baseline_payload, "rules": []},
-            client_id, system_id=new_system_id,
+            client_id, system_id=new_system_id, actor=_actor(user),
         )
         assignments_created += 1
     return {
@@ -1992,7 +1990,7 @@ def api_delete_baseline(request: Request, baseline_id: str, user: RequireUser, c
     """Delete a template. Systems keep their own copies of it."""
     if not get_template(baseline_id, client_id=client_id):
         raise HTTPException(status_code=404, detail="Baseline not found")
-    delete_playbook(baseline_id, client_id=client_id)
+    delete_playbook(baseline_id, client_id=client_id, actor=_actor(user))
     resp = HTMLResponse("")
     resp.headers["HX-Redirect"] = "/baselines"
     return resp
@@ -2182,7 +2180,7 @@ def api_template_sigma_convert(request: Request, tactic_id: str, user: RequireUs
 @router.post("/api/baselines/{baseline_id}/apply/{system_id}", response_class=HTMLResponse)
 def api_apply_baseline(request: Request, baseline_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
     try:
-        copy = apply_baseline(system_id, baseline_id, client_id=client_id)
+        copy = apply_baseline(system_id, baseline_id, client_id=client_id, actor=_actor(user))
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
     if request.query_params.get("return") == "system-dialog":
@@ -2199,74 +2197,12 @@ def api_apply_baseline(request: Request, baseline_id: str, system_id: str, user:
 def api_remove_baseline(request: Request, baseline_id: str, system_id: str, user: RequireUser, client_id: ActiveClient):
     """Remove a system's own baseline (``baseline_id`` is the system's copy, not the template)."""
     try:
-        remove_baseline(system_id, baseline_id, client_id=client_id)
+        remove_baseline(system_id, baseline_id, client_id=client_id, actor=_actor(user))
     except ValueError as e:
         return HTMLResponse(str(e), status_code=400)
     resp = _baselines_dialog(request, system_id, client_id)
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
-
-
-# ---------------------------------------------------------------------------
-# Baseline Snapshot Routes
-# ---------------------------------------------------------------------------
-
-@router.post("/api/baselines/system/{system_id}/snapshot", response_class=HTMLResponse)
-def api_snapshot_baseline(
-    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
-    baseline_id: str = Form(...), label: str = Form(""),
-    captured_date: str = Form(""),
-):
-    """Capture a single baseline snapshot."""
-    from datetime import datetime as _dt
-    ts = _dt.strptime(captured_date, "%Y-%m-%d") if captured_date else None
-    create_baseline_snapshot(system_id, baseline_id, label, user.username, captured_at=ts, client_id=client_id)
-    snapshots = get_baseline_snapshots(system_id, client_id=client_id)
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    return _render("partials/audit_history.html", request, {
-        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
-    })
-
-
-@router.post("/api/baselines/system/{system_id}/snapshot-all", response_class=HTMLResponse)
-def api_snapshot_all_baselines(
-    request: Request, system_id: str, user: RequireUser, client_id: ActiveClient,
-    label: str = Form(""),
-    captured_date: str = Form(""),
-):
-    """Snapshot all applied baselines at once."""
-    from datetime import datetime as _dt
-    ts = _dt.strptime(captured_date, "%Y-%m-%d") if captured_date else None
-    create_all_baseline_snapshots(system_id, label, user.username, captured_at=ts, client_id=client_id)
-    snapshots = get_baseline_snapshots(system_id, client_id=client_id)
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    return _render("partials/audit_history.html", request, {
-        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
-    })
-
-
-@router.delete("/api/baselines/snapshots/{snapshot_id}", response_class=HTMLResponse)
-def api_delete_snapshot(
-    request: Request, snapshot_id: str, user: RequireUser, client_id: ActiveClient,
-    system_id: str = Query(...),
-):
-    """Delete a snapshot."""
-    delete_baseline_snapshot(snapshot_id, client_id=client_id)
-    snapshots = get_baseline_snapshots(system_id, client_id=client_id)
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    return _render("partials/audit_history.html", request, {
-        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
-    })
-
-
-@router.get("/api/baselines/system/{system_id}/audit-history", response_class=HTMLResponse)
-def api_audit_history(request: Request, system_id: str, user: CurrentUser, client_id: ActiveClient):
-    """Get audit history partial."""
-    snapshots = get_baseline_snapshots(system_id, client_id=client_id)
-    baselines = get_system_baselines(system_id, client_id=client_id)
-    return _render("partials/audit_history.html", request, {
-        "snapshots": snapshots, "system_id": system_id, "baselines": baselines,
-    })
 
 
 def _system_step_or_404(system_id: str, step_id: str, client_id: str) -> None:
@@ -2763,7 +2699,7 @@ def api_system_technique_update(
 def api_system_technique_remove(request: Request, system_id: str, step_id: str, user: RequireUser, client_id: ActiveClient):
     """Remove a technique from this system's baseline, with its mappings, gaps and history."""
     _system_step_or_404(system_id, step_id, client_id)
-    delete_playbook_step(step_id, client_id=client_id)
+    delete_playbook_step(step_id, client_id=client_id, actor=_actor(user))
     resp = HTMLResponse("")
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
@@ -2878,7 +2814,7 @@ def api_system_baseline_create(
         return missing
     if not name.strip():
         raise HTTPException(status_code=422, detail="A baseline needs a name")
-    create_system_baseline(system_id, name.strip(), description.strip(), client_id=client_id)
+    create_system_baseline(system_id, name.strip(), description.strip(), client_id=client_id, actor=_actor(user))
     resp = _baselines_dialog(request, system_id, client_id)
     resp.headers["HX-Trigger"] = "stepsChanged"
     return resp
@@ -3394,15 +3330,22 @@ def _generate_system_markdown(data: dict, classification: str) -> str:
                              f"{_md(u['baseline'])} | {_md_date(u['added'])} |")
             lines.append("")
 
-        if data.get("snapshots"):
-            lines += ["## Coverage Snapshots", "",
-                      "| Date | Label | Baseline | Score | Covered | Known gaps | No coverage | N/A |",
-                      "|------|-------|----------|-------|---------|------------|-------------|-----|"]
-            for s in data["snapshots"]:
-                when = s["captured_at"].strftime("%Y-%m-%d %H:%M") if s["captured_at"] else "—"
-                lines.append(f"| {when} | {_md(s['label'])} | {_md(s['baseline_name'])} | "
-                             f"{round(s['score_percentage'] or 0)}% | {s['count_green']} | {s['count_amber']} | "
-                             f"{s['count_red']} | {s['count_grey']} |")
+        if data.get("trend"):
+            # The weeks where a baseline's figures changed (and its first), newest first.
+            last, changed = {}, []
+            for p in data["trend"]:
+                figures = (p["green"], p["amber"], p["red"], p["grey"])
+                if last.get(p["baseline_id"]) != figures:
+                    changed.append(p)
+                last[p["baseline_id"]] = figures
+            lines += ["## Coverage Trend", "",
+                      "Each baseline's coverage at the end of each week, from this system's history. "
+                      "Weeks where nothing changed are left out.", "",
+                      "| Week ending | Baseline | Coverage | Covered | Known gaps | No coverage | N/A |",
+                      "|-------------|----------|----------|---------|------------|-------------|-----|"]
+            for p in sorted(changed, key=lambda p: p["day"], reverse=True):
+                lines.append(f"| {p['day']:%Y-%m-%d} | {_md(p['baseline_name'])} | {p['covered']}% | {p['green']} | "
+                             f"{p['amber']} | {p['red']} | {p['grey']} |")
             lines.append("")
 
     if data.get("top5_cves") and data.get("include_devices"):

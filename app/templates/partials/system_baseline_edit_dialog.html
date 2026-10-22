@@ -22,7 +22,7 @@
                 <button name="Remove Baseline" type="button" class="btn btn-danger mr-auto"
                         hx-delete="/api/baselines/{{ baseline.id }}/apply/{{ system.id }}"
                         hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-                        hx-confirm="Remove {{ baseline.name }} from {{ system.name }}? Its techniques, rule mappings, known gaps and history are deleted. Templates and other systems are not affected.">
+                        hx-confirm="Remove {{ baseline.name }} from {{ system.name }}? Its techniques, rule mappings and known gaps are deleted. Templates and other systems are not affected.">
                     {{ icon_text('trash-2', 'Remove from system', '13') }}
                 </button>
                 <button name="Cancel" type="button" class="btn btn-secondary"

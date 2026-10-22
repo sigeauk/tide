@@ -2422,6 +2422,10 @@ def restore_detection_rule(
         return False, str(e), None
 
 
+# give_rule_own_id's message when Kibana has no rule under that saved-object id: the caller marks it gone.
+RULE_GONE = "Kibana no longer has this rule."
+
+
 def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) -> Tuple[bool, str, Optional[dict]]:
     """Give the custom rule with saved-object ``object_id`` in ``space`` a rule id of its own: create
     it again under a new rule_id, as Kibana holds it now (its enabled state, actions and exceptions
@@ -2436,12 +2440,12 @@ def give_rule_own_id(object_id: str, space: str, kibana_url: str, api_key: str) 
     base_url = kibana_url.rstrip("/")
     url = f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules"
     try:
-        found = session.get(url, params={"id": object_id})
-        if found.status_code == 404:
-            return False, "Kibana no longer has this rule. Sync, then try again.", None
-        if found.status_code != 200:
-            return False, f"Kibana did not return the rule (HTTP {found.status_code}).", None
-        live = found.json() or {}
+        try:
+            live = _lookup_rule_by_object_id(session, base_url, space, object_id)
+        except RuntimeError as exc:
+            return False, f"Kibana did not return the rule ({exc}).", None
+        if not live:
+            return False, RULE_GONE, None
         if is_prebuilt(live):
             return False, "This is one of Elastic's prebuilt rules, so it keeps Elastic's rule id.", None
         body = _creatable(live)
@@ -2550,12 +2554,15 @@ def delete_detection_rule(
     space: str = "default",
     kibana_url: str = None,
     api_key: str = None,
+    object_id: str = "",
 ) -> Tuple[bool, str]:
     """Permanently delete a rule from Elastic itself (not just TIDE's cache).
 
     Same DELETE call ``promote_rule_to_production`` already makes on the source side of a true
     move; pulled out standalone for callers -- Merge's "delete after merging" -- that need to
-    remove a rule from Elastic without also copying it anywhere first.
+    remove a rule from Elastic without also copying it anywhere first. With ``object_id`` the rule
+    is named by its Kibana saved-object id instead: the only way to name one of two rules sharing
+    a rule id (a custom copy beside Elastic's prebuilt rule).
 
     Returns: (success, message)
     """
@@ -2565,7 +2572,8 @@ def delete_detection_rule(
     base_url = kibana_url.rstrip("/")
     prefix = _space_api_prefix(base_url, space)
     try:
-        resp = session.delete(f"{prefix}/api/detection_engine/rules?rule_id={rule_id}")
+        resp = session.delete(f"{prefix}/api/detection_engine/rules",
+                              params={"id": object_id} if object_id else {"rule_id": rule_id})
         if resp.status_code in (200, 204, 404):
             # 404 means it's already gone from Elastic -- not a failure for a delete.
             return True, "Deleted."
@@ -2592,6 +2600,20 @@ def _lookup_rule_by_rule_id(session, base_url: str, space: str, rule_id: str):
     except Exception as exc:
         log_error(f"Rule lookup in space '{space}' failed: {exc}")
         raise
+    if resp.status_code == 200:
+        return resp.json() or None
+    if resp.status_code == 404:
+        return None
+    raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
+
+def _lookup_rule_by_object_id(session, base_url: str, space: str, object_id: str):
+    """The rule in ``space`` whose Kibana saved-object id is ``object_id``, or None. Unlike a rule
+    id, it names one rule even where two share a rule id (a custom copy beside Elastic's prebuilt
+    rule). Raises when Kibana can't be reached or answers otherwise."""
+    if not object_id:
+        return None
+    resp = session.get(f"{_space_api_prefix(base_url, space)}/api/detection_engine/rules", params={"id": object_id})
     if resp.status_code == 200:
         return resp.json() or None
     if resp.status_code == 404:
@@ -2644,6 +2666,17 @@ def find_rule_in_space(rule_id: str, space: str, kibana_url: str, api_key: str):
         return "unknown", None
     try:
         found = _lookup_rule_by_rule_id(_make_session(api_key, kibana_url), kibana_url.rstrip("/"), space, rule_id)
+    except Exception:
+        return "unknown", None
+    return ("found", found) if found else ("absent", None)
+
+
+def find_rule_by_object_id(object_id: str, space: str, kibana_url: str, api_key: str):
+    """As ``find_rule_in_space``, for the rule whose Kibana saved-object id is ``object_id``."""
+    if not (kibana_url and api_key and object_id):
+        return "unknown", None
+    try:
+        found = _lookup_rule_by_object_id(_make_session(api_key, kibana_url), kibana_url.rstrip("/"), space, object_id)
     except Exception:
         return "unknown", None
     return ("found", found) if found else ("absent", None)

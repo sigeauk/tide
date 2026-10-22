@@ -650,7 +650,7 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
             import time as _time
             import elastic_helper
             from app.services import sync_runs
-            from app.services.database import get_database_service
+            from app.services.database import RULE_REMOVED_NOT_LINKED, get_database_service
             from app.services.tenant_manager import (
                 resolve_tenant_db_path, set_tenant_context, get_tenant_db_path,
             )
@@ -1029,6 +1029,8 @@ def run_elastic_sync(client_id: str, force_mapping: bool = False, only_siem_id: 
                             ).fetchone()[0]
                             if not before:
                                 continue
+                            db.record_rule_removals(_ocon, "siem_id = ? AND space = ?", [o_sid, o_sp],
+                                                    RULE_REMOVED_NOT_LINKED, client_id=client_id)
                             _ocon.execute(
                                 "DELETE FROM detection_rules "
                                 "WHERE siem_id = ? AND space = ?",

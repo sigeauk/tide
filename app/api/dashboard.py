@@ -13,7 +13,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 
 from app.api.deps import ActiveClient, DbDep, RequireUser, require_write
-from app.services import dashboards
+from app.services import dashboards, past_figures
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,31 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"],
 
 # ── what a section shows ─────────────────────────────────────────────────────────────────────
 
+def _changes(source: str, days: int, now: dict, then_at) -> dict:
+    """``now``'s changes since the end of the day ``days`` ago, from ``then_at(that moment)``. A
+    failure leaves the section without them, never without its figures."""
+    try:
+        return past_figures.changes(source, now, then_at(past_figures.day_end(days)), days)
+    except Exception:
+        logger.exception("Dashboard section %s: could not work out its figures %d day(s) ago", source, days)
+        return {}
+
+
 def _compute(db, client_id: str, card: dict) -> dict:
-    """A section's figures from the database, the same way its page works them out."""
+    """A section's figures from the database, the same way its page works them out, and, when it
+    compares with an earlier day, how much each has changed since (``changes``)."""
     from app import inventory_engine as eng
     source, f = card["source"], card.get("filters") or {}
+    days = past_figures.compare_days(card)
     if source == "rule_health":
         from app.api.rules import filtered_rule_metrics
-        return filtered_rule_metrics(db, client_id, f)
+        view = filtered_rule_metrics(db, client_id, f, keep_rules=bool(days))
+        if days:
+            rules, m = view.pop("rules"), view["metrics"]
+            view["changes"] = _changes(source, days, {"total": m.total_rules, "enabled": m.enabled_rules,
+                                                      "validated": m.validated_count, "quality": m.avg_score},
+                                       lambda at: past_figures.rule_health_then(db, client_id, rules, f.get("space"), at))
+        return view
     if source == "rule_monitoring":
         from app.services import rule_issues
         filters = {"show": "open", "group": "issue", **f}
@@ -42,13 +60,28 @@ def _compute(db, client_id: str, card: dict) -> dict:
             return {"empty": "This system no longer exists." if f.get("system_id") else "No system chosen yet.",
                     "no_link": True}
         data = eng.get_system_steps(system.id, client_id=client_id)
-        return {"default_name": system.name, "totals": data["totals"], "coverage_undefined": data.get("coverage_undefined")}
+        view = {"default_name": system.name, "totals": data["totals"], "coverage_undefined": data.get("coverage_undefined")}
+        if days:
+            t, scored = data["totals"], data["totals"]["total"] - data["totals"]["na"]
+            now = {"covered": None if view["coverage_undefined"] or not scored else int(round(t["covered"] / scored * 100)),
+                   "techniques": t["total"], "no_coverage": t["none"], "known_gaps": t["gap"],
+                   "unmapped": t["unmapped"], "not_counted": t["uncounted"]}
+            view["changes"] = _changes(source, days, now,
+                                       lambda at: past_figures.system_then(db, client_id, system.id, at, now))
+        return view
     if source == "threat_landscape":
         from app.main import get_last_sync_time
         return {"metrics": db.get_threat_landscape_metrics(client_id=client_id), "last_sync_time": get_last_sync_time()}
     if source == "baselines":
-        return {"overview": eng.get_baselines_overview(client_id=client_id),
+        view = {"overview": eng.get_baselines_overview(client_id=client_id),
                 "rollup": eng.get_system_baselines_rollup(client_id=client_id)}
+        if days:
+            ru = view["rollup"]
+            now = {"rules_mapped": ru["rules_mapped"], "uncovered": ru["red"], "fully_covered": ru["green"]}
+            systems = [s.id for s in eng.list_systems(client_id=client_id)]
+            view["changes"] = _changes(source, days, now,
+                                       lambda at: past_figures.baselines_then(db, client_id, systems, at, now))
+        return view
     if source == "asset_inventory":
         return {"stats": eng.get_inventory_stats(client_id=client_id)}
     if source == "cve_overview":
@@ -64,8 +97,8 @@ def _compute(db, client_id: str, card: dict) -> dict:
 def section_view(db, client_id: str, card: dict, done: Optional[dict] = None) -> dict:
     """What a section shows: its source's figures for its filters, worked out afresh each time so
     a change shows as soon as the page is reloaded, and where its cards go. ``done`` shares the
-    figures between sections of one page with the same source and filters."""
-    key = (card["source"], json.dumps(card.get("filters") or {}, sort_keys=True))
+    figures between sections of one page with the same source, filters and comparison."""
+    key = (card["source"], json.dumps(card.get("filters") or {}, sort_keys=True), past_figures.compare_days(card))
     if done is not None and key in done:
         view = dict(done[key])
     else:
@@ -117,6 +150,7 @@ def page_context(db, client_id: str, user, dashboard: dict, editing: bool) -> di
     }
     if editing:
         ctx["filter_options"] = _filter_options(db, client_id)
+        ctx["compare_options"], ctx["compare_notes"] = past_figures.COMPARE, past_figures.NOTES
         ctx["new_cards"] = [("title", {"type": "title", "w": 12, "text": ""}),
                             ("text", {"type": "text", "w": 6, "text": ""})] + \
                            [(f"section:{k}", dashboards.new_section(k)) for k in dashboards.SOURCES]

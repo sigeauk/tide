@@ -300,7 +300,7 @@ def _apply_one(db, action: str, user_id: str, username: str, client_id: str,
         db.record_rule_history(
             rule_id=rule_id, siem_id=siem_id, space=space, client_id=client_id,
             action="deleted", actor_user_id=user_id, actor_name=username,
-            detail={"message": f"Rule deleted from {where} (bulk edit)."},
+            detail={"message": f"Rule deleted from {where} (bulk edit).", "enabled": bool(rule.enabled)},
         )
         return 200, f"Deleted from {where}.", rule.name
 

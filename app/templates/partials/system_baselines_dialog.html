@@ -30,7 +30,7 @@
                 <button name="Remove Baseline" type="button" class="btn btn-danger btn-sm"
                         hx-delete="/api/baselines/{{ b.playbook_id }}/apply/{{ system_id }}"
                         hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
-                        hx-confirm="Remove {{ b.playbook_name }} from this system? This system's copy is deleted: its techniques, rule mappings, known gaps and history. The template and other systems are not affected.">
+                        hx-confirm="Remove {{ b.playbook_name }} from this system? This system's copy is deleted: its techniques, rule mappings and known gaps. The template and other systems are not affected.">
                     {{ icon('x', '12') }}<span class="sr-only">Remove</span>
                 </button>
             </li>

@@ -29,7 +29,7 @@ except Exception:  # pragma: no cover
     ElasticAPM = None
 
 from app.config import get_settings
-from app.api.deps import CurrentUser, DbDep, ActiveClient
+from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
 from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
@@ -875,15 +875,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
     # Baseline templates are the Baselines page's; anything that reads or changes a system --
     # applying a template to one (from either page) or removing it, generating a system's
-    # baselines, mapping rules to its techniques, its snapshots -- is the Systems page's. Once
+    # baselines, mapping rules to its techniques -- is the Systems page's. Once
     # applied, a system's copy has no link to the template, so the two never overlap. "*" is one
     # path segment; the most specific match wins.
     _BASELINE_RESOURCES = {
         "/api/baselines": "page:baselines",
         "/api/baselines/*/apply/": "page:systems",
         "/api/baselines/generate": "page:systems",
-        "/api/baselines/system/": "page:systems",
-        "/api/baselines/snapshots/": "page:systems",
         "/api/baselines/tactics/*/detections": "page:systems",
         "/api/baselines/tactics/detections/": "page:systems",
         "/api/baselines/tactics/*/siem-rules": "page:systems",
@@ -2736,9 +2734,11 @@ def create_app() -> FastAPI:
 
     @app.get("/settings/docs", response_class=HTMLResponse)
     @app.get("/settings/docs/{slug}", response_class=HTMLResponse)
-    def docs_page(request: Request, user: CurrentUser, slug: str = ""):
+    def docs_page(request: Request, user: CurrentUser, db: DbDep, client_id: OptionalClient, slug: str = ""):
         """Documentation: a landing page of the guide's groups, or one page of the guide, with the
-        whole guide in the sidebar. Bookmarks to the README's old address land on the landing page."""
+        whole guide in the sidebar. Bookmarks to the README's old address land on the landing page.
+        A page's own figures (``<tide-figures>``, TIDE at a glance) are the active client's, as its
+        Dashboard shows them, for the pages the reader may open."""
         from fastapi import HTTPException
         from app.services import docs
         from app.services.route_metadata import set_crumbs
@@ -2747,12 +2747,31 @@ def create_app() -> FastAPI:
         current = docs.PAGES_BY_SLUG.get(slug)
         set_crumbs(request, [("Home", "/"), ("Settings", "/settings"),
                              ("Documentation", "/settings/docs" if slug else None)] + ([(current.title, None)] if current else []))
+        doc = docs.page(slug, settings.tide_version) if current else None
+        if doc:
+            doc = docs.live(doc, lambda source, metrics: _doc_figures(request, user, db, client_id, source, metrics))
         return render_template(
             "pages/admin/docs.html",
             request,
-            {"user": user, "active_page": "docs", "doc": docs.page(slug, settings.tide_version) if current else None,
+            {"user": user, "active_page": "docs", "doc": doc,
              "doc_page": current, "doc_nav": docs.nav(), "doc_slug": slug},
         )
+
+    def _doc_figures(request: Request, user, db, client_id: Optional[str], source: str, metrics: list) -> str:
+        """A guide page's ``<tide-figures>``: a Dashboard section's cards for the active client, or ""
+        when there is no client, no such source, or the reader may not open its page."""
+        from app.api.dashboard import section_view
+        from app.services import dashboards
+        src = dashboards.SOURCES.get(source)
+        resource = AuthMiddleware.PATH_RESOURCE_MAP.get(src.page) if src else None
+        if not client_id or not resource or (user and not user.can_read(resource)):
+            return ""
+        card = dashboards.clean([{"type": "section", "source": source, "w": 12, "name": "", "filters": {},
+                                  "metrics": metrics}])[0]
+        cards = request.app.state.templates.get_template("partials/dashboard_section.html").render({
+            "request": request, "card": card, "view": section_view(db, client_id, card),
+            "env": settings, "app_settings": db.get_all_settings()})
+        return f'<div class="doc-figures"><div class="doc-figures__label">In your TIDE now</div><div class="metrics-grid">{cards}</div></div>'
 
     @app.get("/settings/changelog", response_class=HTMLResponse)
     def changelog_page(request: Request, user: CurrentUser):

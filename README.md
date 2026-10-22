@@ -112,6 +112,7 @@ In TIDE, the whole guide is under **Settings → Documentation**, with a search.
 
 | Document | Read it for |
 |----------|-------------|
+| [TIDE at a glance](docs/AT_A_GLANCE.md) | What TIDE does for your team, with your own figures in TIDE, and how to get the most from it. |
 | [Getting started](docs/GETTING_STARTED.md) | Finding your way around: signing in, choosing a client, filters, windows, dashboards and your profile. |
 | [Systems & baselines](docs/SYSTEMS.md) | Systems, baseline templates and their techniques, mapping rules, known gaps, risks, devices and CVEs. |
 | [Threat intelligence](docs/THREATS.md) | Threat Landscape, the Heatmap, the MITRE pages and CTI, and making baselines from threats. |

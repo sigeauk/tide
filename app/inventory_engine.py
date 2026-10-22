@@ -338,7 +338,7 @@ def _cascade_system_client(conn, system_id: str, new_client_id: str):
     """Cascade client_id change to all child tables of a system."""
     child_tables_with_system_id = [
         "hosts", "software_inventory", "applied_detections",
-        "blind_spots", "system_baselines", "system_baseline_snapshots",
+        "blind_spots", "system_baselines",
     ]
     for table in child_tables_with_system_id:
         conn.execute(f"UPDATE {table} SET client_id = ? WHERE system_id = ?",
@@ -580,7 +580,6 @@ def _move_system_multi_db(system_id, source_client_id, target_client_id, check):
         # The system's own baselines, with their techniques, mappings and history
         _cross_db_copy(src, tgt, "playbooks", "system_id = ?", [system_id], target_client_id)
         _cross_db_copy(src, tgt, "system_baselines", "system_id = ?", [system_id], target_client_id)
-        _cross_db_copy(src, tgt, "system_baseline_snapshots", "system_id = ?", [system_id], target_client_id)
         _cross_db_copy(src, tgt, "technique_events", "system_id = ?", [system_id], target_client_id)
         steps_of = "SELECT s.id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id WHERE p.system_id = ?"
         _cross_db_copy(src, tgt, "playbook_steps", "playbook_id IN (SELECT id FROM playbooks WHERE system_id = ?)", [system_id])
@@ -595,7 +594,6 @@ def _move_system_multi_db(system_id, source_client_id, target_client_id, check):
         for (pb_id,) in src.execute("SELECT id FROM playbooks WHERE system_id = ?", [system_id]).fetchall():
             _delete_playbook_rows(src, pb_id)
         src.execute("DELETE FROM system_baselines WHERE system_id = ?", [system_id])
-        src.execute("DELETE FROM system_baseline_snapshots WHERE system_id = ?", [system_id])
         src.execute("DELETE FROM technique_events WHERE system_id = ?", [system_id])
 
         # ── Delete system data from source (reverse FK order) ──
@@ -661,6 +659,8 @@ def edit_system(system_id, data, client_id: str = None):
     return _row_to_system(row) if row else None
 
 def delete_system(system_id, client_id: str = None):
+    """Delete a system and everything on it, its history included: a deleted system is gone, from
+    figures for earlier dates too."""
     frag, params = _cf("", client_id)
     with _get_conn() as conn:
         before = conn.execute("SELECT COUNT(*) FROM systems WHERE id = ?" + frag, [system_id] + params).fetchone()[0]
@@ -2014,12 +2014,12 @@ def build_system_report_data(system_id: str, include_devices: bool = True, clien
         "coverage_pct": coverage_pct,
         "coverage_undefined": undefined,
         "narrative": _coverage_narrative(totals, coverage_pct, len(chosen)),
+        "trend": _coverage_trend(system_id, baselines, client_id),
         "techniques": techs,
         "technique_scope": scope,
         "detailed_techniques": detailed,
         "priority_gaps": gaps,
         **_siem_coverage(techs, details, counted, undefined, dest_names),
-        "snapshots": [s for s in get_baseline_snapshots(system_id, client_id=client_id) if s["baseline_id"] in order],
     }
     data.update(_system_device_report(system_id, client_id=client_id) if include_devices else _NO_DEVICES)
     return data
@@ -2125,6 +2125,23 @@ def _siem_coverage(techs: List[Dict], details: Dict[str, Dict], counted: set, un
 def _css_color(value: Optional[str]) -> Optional[str]:
     """A user-set colour only if it is a plain hex colour: it is written into the report's CSS."""
     return value if value and re.fullmatch(r"#[0-9a-fA-F]{3,8}", value) else None
+
+
+def _coverage_trend(system_id: str, baselines: List[Dict], client_id: str = None) -> List[Dict]:
+    """The report's coverage trend: each chosen baseline's techniques by status at the end of each
+    week, from the technique history (past_figures.weekly_coverage), named. A baseline whose history
+    doesn't replay to the figures the report shows today is left out; nothing when there's none."""
+    from app.services import past_figures
+    from app.services.database import get_database_service
+    try:
+        points = past_figures.weekly_coverage(get_database_service(), client_id, system_id, [b["id"] for b in baselines])
+    except Exception:
+        logger.warning("Coverage trend unavailable for the system report", exc_info=True)
+        return []
+    today = {p["baseline_id"]: (p["green"], p["amber"], p["red"], p["grey"]) for p in points}   # the last is now
+    shown = {b["id"]: b["name"] for b in baselines
+             if today.get(b["id"]) == tuple(b["totals"][k] for k in ("covered", "gap", "none", "na"))}
+    return [{**p, "baseline_name": shown[p["baseline_id"]]} for p in points if p["baseline_id"] in shown]
 
 
 def _coverage_narrative(totals: Dict[str, int], coverage_pct: Optional[int], n_baselines: int) -> str:
@@ -2691,7 +2708,8 @@ def generate_baseline_from_actor(
 
 def _delete_steps(conn, step_ids: List[str]) -> int:
     """Delete steps and everything recorded on them: ATT&CK techniques, rule mappings (and where
-    they were applied), known gaps and N/A, and history. Returns the number of steps deleted."""
+    they were applied), and known gaps and N/A. Their history is kept, so a past figure still
+    counts a technique for the days it existed. Returns the number of steps deleted."""
     if not step_ids:
         return 0
     ph = ",".join("?" for _ in step_ids)
@@ -2701,7 +2719,6 @@ def _delete_steps(conn, step_ids: List[str]) -> int:
     )
     conn.execute(f"DELETE FROM step_detections WHERE step_id IN ({ph})", step_ids)
     conn.execute(f"DELETE FROM step_techniques WHERE step_id IN ({ph})", step_ids)
-    conn.execute(f"DELETE FROM technique_events WHERE step_id IN ({ph})", step_ids)
     conn.execute(f"DELETE FROM step_sigma_dismissals WHERE step_id IN ({ph})", step_ids)
     conn.execute(f"DELETE FROM blind_spots WHERE entity_type = 'tactic' AND entity_id IN ({ph})", step_ids)
     from app.services.database import DatabaseService
@@ -2710,17 +2727,24 @@ def _delete_steps(conn, step_ids: List[str]) -> int:
     return conn.execute(f"DELETE FROM playbook_steps WHERE id IN ({ph})", step_ids).rowcount
 
 
-def _delete_playbook_rows(conn, playbook_id: str) -> int:
-    step_ids = [r[0] for r in conn.execute(
-        "SELECT id FROM playbook_steps WHERE playbook_id = ?", [playbook_id]
-    ).fetchall()]
+def _delete_playbook_rows(conn, playbook_id: str, actor: str = None, client_id: str = None) -> int:
+    """Delete a baseline and its techniques. A system's baseline records its removal, and each of
+    its techniques', first; their history is kept (see ``_delete_steps``)."""
+    owner = conn.execute("SELECT system_id, name FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+    steps = conn.execute("SELECT id, title FROM playbook_steps WHERE playbook_id = ?", [playbook_id]).fetchall()
+    if owner and owner[0]:
+        _record_technique_event(conn, "baseline_removed", system_id=owner[0], baseline_id=playbook_id,
+                                detail=owner[1], actor=actor, client_id=client_id)
+        for step_id, title in steps:
+            _record_technique_event(conn, "technique_removed", step_id=step_id, system_id=owner[0],
+                                    baseline_id=playbook_id, detail=title, actor=actor, client_id=client_id)
+    step_ids = [s for s, _ in steps]
     _delete_steps(conn, step_ids)
     conn.execute("DELETE FROM system_baselines WHERE playbook_id = ?", [playbook_id])
-    conn.execute("DELETE FROM system_baseline_snapshots WHERE baseline_id = ?", [playbook_id])
     return conn.execute("DELETE FROM playbooks WHERE id = ?", [playbook_id]).rowcount
 
 
-def delete_playbook(playbook_id: str, client_id: str = None) -> bool:
+def delete_playbook(playbook_id: str, client_id: str = None, actor: str = None) -> bool:
     """Delete a template, or a system's copy with everything recorded on it. Deleting a template
     leaves the systems' copies of it alone: they belong to those systems."""
     with _get_conn() as conn:
@@ -2728,7 +2752,7 @@ def delete_playbook(playbook_id: str, client_id: str = None) -> bool:
             owner = conn.execute("SELECT client_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
             if not owner or owner[0] != client_id:
                 return False
-        return _delete_playbook_rows(conn, playbook_id) > 0
+        return _delete_playbook_rows(conn, playbook_id, actor=actor, client_id=client_id) > 0
 
 
 def _copy_playbook(src, tgt, playbook_id: str, *, name: str, client_id: str,
@@ -2798,8 +2822,13 @@ def add_playbook_step(playbook_id: str, step_number: int, title: str,
     return step
 
 
-def delete_playbook_step(step_id: str, client_id: str = None) -> bool:
+def delete_playbook_step(step_id: str, client_id: str = None, actor: str = None) -> bool:
+    """Delete a technique. A system's technique records its removal first; its history is kept."""
     with _get_conn() as conn:
+        row = conn.execute("SELECT title FROM playbook_steps WHERE id = ?", [step_id]).fetchone()
+        if row:
+            _record_technique_event(conn, "technique_removed", step_id=step_id, detail=row[0],
+                                    actor=actor, client_id=client_id)
         return _delete_steps(conn, [step_id]) > 0
 
 
@@ -2812,7 +2841,22 @@ def _unique_baseline_name(conn, system_id: str, name: str) -> str:
     return name
 
 
-def apply_baseline(system_id: str, playbook_id: str, client_id: str = None) -> SystemBaseline:
+def link_system_baseline(conn, system_id: str, playbook_id: str, client_id: str = None,
+                         actor: str = None) -> SystemBaseline:
+    """Make the system's own baseline ``playbook_id`` one of its baselines, recording when in its
+    history (kept after the baseline is removed)."""
+    r = conn.execute(
+        "INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?) "
+        "RETURNING id, system_id, playbook_id, applied_at",
+        [system_id, playbook_id, client_id],
+    ).fetchone()
+    name = conn.execute("SELECT name FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
+    _record_technique_event(conn, "baseline_applied", system_id=system_id, baseline_id=playbook_id,
+                            detail=name[0] if name else None, actor=actor, client_id=client_id)
+    return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
+
+
+def apply_baseline(system_id: str, playbook_id: str, client_id: str = None, actor: str = None) -> SystemBaseline:
     """Give a system its own copy of a template. From then on the copy is the system's alone,
     with no link back: its techniques, mappings and gaps never touch the template or any other
     system, and changing the template never reaches it. Applying the same template again makes
@@ -2831,16 +2875,11 @@ def apply_baseline(system_id: str, playbook_id: str, client_id: str = None) -> S
             raise ValueError("Only a baseline template can be applied to a system")
         copy_id, _ = _copy_playbook(conn, conn, playbook_id, client_id=client_id, system_id=system_id,
                                     name=_unique_baseline_name(conn, system_id, template[0]))
-        r = conn.execute(
-            "INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?) "
-            "RETURNING id, system_id, playbook_id, applied_at",
-            [system_id, copy_id, client_id],
-        ).fetchone()
-    return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
+        return link_system_baseline(conn, system_id, copy_id, client_id=client_id, actor=actor)
 
 
 def create_system_baseline(system_id: str, name: str, description: str = "",
-                           client_id: str = None) -> SystemBaseline:
+                           client_id: str = None, actor: str = None) -> SystemBaseline:
     """Start an empty baseline that belongs to this system alone, with no template behind it.
     A name the system already has becomes "<name> (copy)"."""
     import uuid
@@ -2855,17 +2894,12 @@ def create_system_baseline(system_id: str, name: str, description: str = "",
             "INSERT INTO playbooks (id, name, description, client_id, system_id) VALUES (?, ?, ?, ?, ?)",
             [pb_id, name, description, client_id, system_id],
         )
-        r = conn.execute(
-            "INSERT INTO system_baselines (system_id, playbook_id, client_id) VALUES (?, ?, ?) "
-            "RETURNING id, system_id, playbook_id, applied_at",
-            [system_id, pb_id, client_id],
-        ).fetchone()
-    return SystemBaseline(id=r[0], system_id=r[1], playbook_id=r[2], applied_at=r[3])
+        return link_system_baseline(conn, system_id, pb_id, client_id=client_id, actor=actor)
 
 
-def remove_baseline(system_id: str, playbook_id: str, client_id: str = None) -> bool:
-    """Remove a system's own baseline, and with it the rule mappings, known gaps and history
-    recorded on it. The template it came from is untouched."""
+def remove_baseline(system_id: str, playbook_id: str, client_id: str = None, actor: str = None) -> bool:
+    """Remove a system's own baseline, and with it the rule mappings and known gaps recorded on
+    it. Its history is kept, with the removal. The template it came from is untouched."""
     with _get_conn() as conn:
         if client_id:
             sys_client = conn.execute("SELECT client_id FROM systems WHERE id = ?", [system_id]).fetchone()
@@ -2874,7 +2908,7 @@ def remove_baseline(system_id: str, playbook_id: str, client_id: str = None) -> 
         owner = conn.execute("SELECT system_id FROM playbooks WHERE id = ?", [playbook_id]).fetchone()
         if not owner or owner[0] != system_id:
             raise ValueError("That baseline does not belong to this system")
-        return _delete_playbook_rows(conn, playbook_id) > 0
+        return _delete_playbook_rows(conn, playbook_id, actor=actor, client_id=client_id) > 0
 
 
 def get_system_coverage_destinations(system_id: str, client_id: str = None) -> List[Tuple[str, str]]:
@@ -2906,17 +2940,16 @@ def set_system_coverage_destinations(system_id: str, scopes: List[Tuple[str, str
                 "VALUES (?, ?, ?, ?, ?)",
                 [system_id, siem_id, space, client_id, actor],
             )
-        if before != after:
-            name = lambda sc: _destination_name(sc[0], sc[1], client_id) or sc[1]  # noqa: E731
-            parts = []
-            if after - before:
-                parts.append("now counts " + ", ".join(sorted(name(x) for x in after - before)))
-            if before - after:
-                parts.append("stopped counting " + ", ".join(sorted(name(x) for x in before - after)))
-            _record_technique_event(
-                conn, "siem_coverage", system_id=system_id, detail="; ".join(parts),
-                actor=actor, client_id=client_id,
-            )
+        # One event per destination, with its ids, so the counted set on any past day can be
+        # replayed (the rows above are rewritten on every save, so their created_at can't).
+        for event, scopes_changed, verb in (("siem_counted", after - before, "now counts"),
+                                            ("siem_uncounted", before - after, "stopped counting")):
+            for siem_id, space in sorted(scopes_changed):
+                _record_technique_event(
+                    conn, event, system_id=system_id, siem_id=siem_id, space=space,
+                    detail=f"{verb} {_destination_name(siem_id, space, client_id) or space}",
+                    actor=actor, client_id=client_id,
+                )
     return len(after)
 
 
@@ -4140,20 +4173,27 @@ def _destination_name(siem_id: Optional[str], space: Optional[str], client_id: O
 
 
 def _record_technique_event(conn, event: str, *, step_id: str = None, system_id: str = None,
-                            detection_id: str = None, rule_id: str = None, siem_id: str = None,
-                            space: str = None, source: str = None, reason: str = None,
-                            detail: str = None, actor: str = None, client_id: str = None) -> None:
+                            baseline_id: str = None, detection_id: str = None, rule_id: str = None,
+                            siem_id: str = None, space: str = None, source: str = None,
+                            reason: str = None, detail: str = None, actor: str = None,
+                            client_id: str = None) -> None:
     """Append one row to the technique history. Rule name, destination and score are captured
     as they are now, so the history still reads correctly after a rename, move or rescore. A
-    step's event is filed under the system that owns the step; a template's steps have no history.
+    step's event is filed under the system and baseline that own the step (record a removal
+    before the step goes); a template's steps have no history.
 
     Never raises: history is a record of the change, not a condition of it.
     """
     try:
+        if step_id and not baseline_id:
+            owner = conn.execute(
+                "SELECT p.system_id, p.id FROM playbook_steps s JOIN playbooks p ON p.id = s.playbook_id "
+                "WHERE s.id = ?", [step_id],
+            ).fetchone()
+            if owner:
+                system_id, baseline_id = system_id or owner[0], owner[1]
         if step_id and not system_id:
-            system_id = _step_system_id(conn, step_id)
-            if not system_id:
-                return
+            return
         rule_name, score = None, None
         if rule_id:
             if siem_id:
@@ -4165,10 +4205,10 @@ def _record_technique_event(conn, event: str, *, step_id: str = None, system_id:
                 row = None
             rule_name, score = (row[0], row[1]) if row else (None, None)
         conn.execute(
-            "INSERT INTO technique_events (event, step_id, system_id, detection_id, rule_id, siem_id, "
-            "space, rule_name, destination, score, source, reason, detail, actor, client_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            [event, step_id, system_id, detection_id, rule_id, siem_id, space,
+            "INSERT INTO technique_events (event, step_id, system_id, baseline_id, detection_id, rule_id, "
+            "siem_id, space, rule_name, destination, score, source, reason, detail, actor, client_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [event, step_id, system_id, baseline_id, detection_id, rule_id, siem_id, space,
              rule_name or detail if event in ("rule_mapped", "rule_unmapped") else rule_name,
              _destination_name(siem_id, space, client_id), score, source, reason,
              None if event in ("rule_mapped", "rule_unmapped") else detail, actor, client_id],
@@ -4183,8 +4223,11 @@ _EVENT_KIND = {
     "gap_edited": "gaps", "na_edited": "gaps",
     "sigma_dismissed": "technique", "sigma_restored": "technique",
     "technique_added": "technique", "technique_edited": "technique", "risks_edited": "technique",
-    "siem_coverage": "coverage",
+    "siem_coverage": "coverage", "siem_counted": "coverage", "siem_uncounted": "coverage",
 }
+# A system's changes to which destinations count: one event per destination since 6.2.4
+# (siem_counted / siem_uncounted, with its siem_id and space), one by name only before.
+_SIEM_EVENTS = ("siem_coverage", "siem_counted", "siem_uncounted")
 
 
 def get_technique_history(step_id: str, system_id: str, client_id: str = None) -> List[Dict]:
@@ -4195,9 +4238,9 @@ def get_technique_history(step_id: str, system_id: str, client_id: str = None) -
         rows = conn.execute(
             "SELECT id, event, step_id, system_id, rule_id, siem_id, space, rule_name, destination, "
             "score, source, reason, detail, actor, source_ref, created_at FROM technique_events "
-            "WHERE system_id = ? AND (step_id = ? OR (step_id IS NULL AND event = 'siem_coverage')) "
+            "WHERE system_id = ? AND (step_id = ? OR (step_id IS NULL AND event IN (?, ?, ?))) "
             "ORDER BY created_at DESC",
-            [system_id, step_id],
+            [system_id, step_id, *_SIEM_EVENTS],
         ).fetchall()
     cols = ["id", "event", "step_id", "system_id", "rule_id", "siem_id", "space", "rule_name",
             "destination", "score", "source", "reason", "detail", "actor", "source_ref", "created_at"]
@@ -4507,115 +4550,6 @@ def get_blind_spots_for_system(system_id: str) -> List[BlindSpot]:
     for r in host_rows:
         all_rows[r[0]] = r
     return [_bs_from_row(r) for r in all_rows.values()]
-
-
-# ---------------------------------------------------------------------------
-# Baseline Snapshots
-# ---------------------------------------------------------------------------
-
-def create_baseline_snapshot(
-    system_id: str, baseline_id: str, label: str, captured_by: str,
-    captured_at=None, client_id: str = None,
-) -> Dict:
-    """Capture a point-in-time snapshot of baseline coverage for a system."""
-    import uuid
-    from datetime import datetime as _dt
-
-    # Calculate current coverage for this baseline
-    all_baselines = get_system_baselines(system_id, playbook_ids=[baseline_id], include_detection_details=False,
-                                         client_id=client_id)
-    bl = next((b for b in all_baselines if b["playbook_id"] == baseline_id), None)
-    if not bl:
-        return None
-
-    snap_id = str(uuid.uuid4())
-    ts = captured_at or _dt.utcnow()
-
-    count_green = bl["covered_steps"]
-    count_amber = bl.get("gap_steps", 0)
-    count_grey = bl.get("na_steps", 0)
-    count_red = bl["total_steps"] - count_green - count_amber - count_grey
-    score_pct = float(bl["coverage_pct"])
-
-    with _get_conn() as conn:
-        if client_id:
-            conn.execute(
-                "INSERT INTO system_baseline_snapshots "
-                "(id, system_id, baseline_id, captured_at, captured_by, label, "
-                "score_percentage, count_green, count_amber, count_red, count_grey, client_id) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [snap_id, system_id, baseline_id, ts, captured_by, label,
-                 score_pct, count_green, count_amber, count_red, count_grey, client_id],
-            )
-        else:
-            conn.execute(
-                "INSERT INTO system_baseline_snapshots "
-                "(id, system_id, baseline_id, captured_at, captured_by, label, "
-                "score_percentage, count_green, count_amber, count_red, count_grey) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [snap_id, system_id, baseline_id, ts, captured_by, label,
-                 score_pct, count_green, count_amber, count_red, count_grey],
-            )
-
-    return {
-        "id": snap_id, "system_id": system_id, "baseline_id": baseline_id,
-        "captured_at": ts, "captured_by": captured_by, "label": label,
-        "score_percentage": score_pct,
-        "count_green": count_green, "count_amber": count_amber,
-        "count_red": count_red, "count_grey": count_grey,
-    }
-
-
-def create_all_baseline_snapshots(
-    system_id: str, label: str, captured_by: str, captured_at=None, client_id: str = None,
-) -> List[Dict]:
-    """Snapshot all baselines applied to a system with a shared timestamp."""
-    from datetime import datetime as _dt
-
-    ts = captured_at or _dt.utcnow()
-    all_baselines = get_system_baselines(system_id, include_detection_details=False, client_id=client_id)
-    results = []
-    for bl in all_baselines:
-        snap = create_baseline_snapshot(
-            system_id, bl["playbook_id"], label, captured_by, captured_at=ts, client_id=client_id,
-        )
-        if snap:
-            results.append(snap)
-    return results
-
-
-def get_baseline_snapshots(system_id: str, client_id: str = None) -> List[Dict]:
-    """Return all snapshots for a system, newest first, with baseline names."""
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT s.id, s.system_id, s.baseline_id, s.captured_at, s.captured_by, "
-            "s.label, s.score_percentage, s.count_green, s.count_amber, "
-            "s.count_red, s.count_grey, p.name "
-            "FROM system_baseline_snapshots s "
-            "LEFT JOIN playbooks p ON p.id = s.baseline_id "
-            "WHERE s.system_id = ? ORDER BY s.captured_at DESC",
-            [system_id],
-        ).fetchall()
-    return [
-        {
-            "id": r[0], "system_id": r[1], "baseline_id": r[2],
-            "captured_at": r[3], "captured_by": r[4], "label": r[5],
-            "score_percentage": r[6], "count_green": r[7], "count_amber": r[8],
-            "count_red": r[9], "count_grey": r[10],
-            "baseline_name": r[11] or "Deleted Baseline",
-        }
-        for r in rows
-    ]
-
-
-def delete_baseline_snapshot(snapshot_id: str, client_id: str = None) -> bool:
-    """Delete a single snapshot."""
-    frag, params = _cf("", client_id)
-    with _get_conn() as conn:
-        cnt = conn.execute(
-            "DELETE FROM system_baseline_snapshots WHERE id = ?" + frag, [snapshot_id] + params,
-        ).rowcount
-    return cnt > 0
 
 
 # ---------------------------------------------------------------------------

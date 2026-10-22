@@ -1,9 +1,9 @@
 {#
   One Dashboard card: ``card`` is a title or text block ({type, w, text}) or a section ({type:
-  "section", source, w, name, metrics, filters}) with ``view``, what its source worked out
-  (app/api/dashboard.py section_view). With ``editing`` set, the card carries the editor's
-  controls: a section shows its name, which cards it shows and its source page's filters, above
-  a preview that follows them.
+  "section", source, w, name, metrics, filters, compare}) with ``view``, what its source worked
+  out (app/api/dashboard.py section_view). With ``editing`` set, the card carries the editor's
+  controls: a section shows its name, which cards it shows, its source page's filters and, where
+  its cards can show a change, what they compare with, above a preview that follows them.
 #}
 {% from "macros/icons.html" import icon, icon_text %}
 {% from "macros/dashboard.html" import card_tools %}
@@ -150,6 +150,19 @@
                     {% for value, label in filter_options.systems %}<option value="{{ value }}"{% if f.system_id == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
                 </select>
             </label>
+        </fieldset>
+        {% endif %}
+        {% if card.source in compare_notes %}
+        <fieldset class="dash-settings__group">
+            <legend>Change</legend>
+            <div class="dash-settings__fields">
+                <label class="dash-field">Compare with
+                    <select class="form-input form-select" data-dash-compare>
+                        {% for value, label in compare_options %}<option value="{{ value }}"{% if (card.compare or '') == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+                    </select>
+                    <span class="form-hint">{{ compare_notes[card.source] }}</span>
+                </label>
+            </div>
         </fieldset>
         {% endif %}
     </div>

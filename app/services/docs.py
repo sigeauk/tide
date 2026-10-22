@@ -1,7 +1,7 @@
 """TIDE's guide and its changelog, rendered for Settings & Administration.
 
 The guide is the README plus the documents in docs/, a page each (PAGES), grouped by who reads
-them (GROUPS: using TIDE, detection engineering, administration, reference). Documentation opens
+them (GROUPS: about TIDE, using TIDE, detection engineering, administration, reference). Documentation opens
 on a landing page of those groups; each page sits in one sidebar beside its sections, and
 search_index() lets the sidebar's search find any section of any page. A page with no file yet
 is listed as coming. Changelog is the CHANGELOG's entries for the running major version (every
@@ -9,6 +9,12 @@ is listed as coming. Changelog is the CHANGELOG's entries for the running major 
 of them ship in the image beside the app (/app) and are TIDE's own text, so their HTML is rendered
 as written. Links between them (docs/API.md, ../README.md, CHANGELOG.md, with any #section) are
 pointed at their pages here. Rendering is cached until a file or the version changes.
+
+A page may lay out a part in HTML (TIDE at a glance does, with TIDE's own cards, metric cards and
+tags); an icon there is written ``<tide-icon name="…" size="…"></tide-icon>`` and drawn as TIDE's
+own SVG (app.services.icons), never a character or an image. ``<tide-figures source="…"
+metrics="…"></tide-figures>`` is the reader's own figures, a Dashboard section's cards for the
+active client, drawn each time the page is shown (``live``), not cached with the page.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ class Page(NamedTuple):
 
 # Who reads what: (key, heading, icon, what it covers), in the sidebar's (and landing page's) order.
 GROUPS = [
+    ("about", "About TIDE", "lightbulb", "Why TIDE is needed and what it achieves for your team, with your own figures."),
     ("use", "Using TIDE", "monitor", "Working with systems, baselines, coverage and threat intelligence day to day."),
     ("engineer", "Detection engineering", "shield-check", "Your rules: their health, editing, moving and merging, and Elastic's and the Sigma rules."),
     ("admin", "Administration", "settings", "Installing TIDE, setting up clients, configuring and running it."),
@@ -43,6 +50,7 @@ GROUPS = [
 DOCS = ROOT / "docs"
 # The guide's pages, by group, in the sidebar's order.
 PAGES: List[Page] = [
+    Page("at-a-glance", "TIDE at a glance", DOCS / "AT_A_GLANCE.md", "about", "What TIDE does for your team, with your own figures, and how to get the most from it."),
     Page("getting-started", "Getting started", DOCS / "GETTING_STARTED.md", "use", "Signing in, choosing a client, and the controls every page shares."),
     Page("systems", "Systems & baselines", DOCS / "SYSTEMS.md", "use", "Systems, baselines and their techniques, coverage, risks, devices and CVEs."),
     Page("threats", "Threat intelligence", DOCS / "THREATS.md", "use", "Threat Landscape, the Heatmap, the MITRE pages and CTI."),
@@ -62,6 +70,7 @@ _FILE_URLS = {"README": "/settings/docs/install", "CONFIGURATION": "/settings/do
               "GETTING_STARTED": "/settings/docs/getting-started", "SYSTEMS": "/settings/docs/systems",
               "THREATS": "/settings/docs/threats", "RULES": "/settings/docs/rules",
               "LIBRARIES": "/settings/docs/libraries", "CLIENTS": "/settings/docs/clients",
+              "AT_A_GLANCE": "/settings/docs/at-a-glance",
               "CHANGELOG": "/settings/changelog"}
 _DOC_LINK = re.compile(r'href="(?:\.\./)?(?:docs/)?(' + "|".join(_FILE_URLS) + r')\.md(#[^"]*)?"')
 
@@ -72,6 +81,8 @@ def nav() -> List[Dict]:
             for k, t, i, a in GROUPS]
 
 
+_ICON = re.compile(r'<tide-icon name="([a-z0-9-]+)"(?: size="(\d+)")?\s*>\s*</tide-icon>')
+_FIGURES = re.compile(r'<tide-figures source="([a-z_]+)" metrics="([a-z_,]+)"\s*>\s*</tide-figures>')
 _OWN_NAV = re.compile(r'<p><a href="/settings/docs/install">[^<]*Back to the README</a></p>\s*|<p><strong>Contents:</strong>.*?</p>\s*(?:<hr\s*/?>\s*)?', re.S)
 _RELEASE = re.compile(r"^## \[(\d+)\.(\d+)\.(\d+)\]\s*-?\s*(.*)$")
 _cache: Dict[str, tuple] = {}
@@ -129,6 +140,19 @@ def _link(match: re.Match) -> str:
     return f'href="{_FILE_URLS[name]}{anchor}"'
 
 
+def _icon(match: re.Match) -> str:
+    from app.services import icons
+    return icons.icon(match.group(1), match.group(2) or "16")
+
+
+def live(doc: Dict, draw) -> Dict:
+    """``doc`` with its ``<tide-figures>`` drawn by ``draw(source, metrics)`` (HTML, or "" to leave
+    them out: no client, or a page the reader may not open)."""
+    if "<tide-figures" not in doc["html"]:
+        return doc
+    return {**doc, "html": _FIGURES.sub(lambda m: draw(m.group(1), m.group(2).split(",")) or "", doc["html"])}
+
+
 def page(slug: str, version: str) -> Optional[Dict]:
     """``{"html", "contents", "title", "slug"}`` for a page of the guide, or for the Changelog
     (slug "changelog"); None when there is no such page or its file isn't in this installation."""
@@ -145,6 +169,7 @@ def page(slug: str, version: str) -> Optional[Dict]:
             text = whats_new(text, version.split(".")[0])
         md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists", "toc"])
         html = _DOC_LINK.sub(_link, md.convert(text))
+        html = _ICON.sub(_icon, html)
         # The sidebar is the way round the guide in TIDE: a document's own "Back to the README"
         # and "Contents:" lines (for reading the files elsewhere) are left out here.
         html = _OWN_NAV.sub("", html)

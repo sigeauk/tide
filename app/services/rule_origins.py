@@ -4,7 +4,9 @@ image, and which revision of the upstream rule it was taken from.
 One row per rule copy, keyed like ``detection_rules`` by ``(rule_id, siem_id, space)``, in the
 tenant's ``rule_origins`` table:
 
-- ``origin``: ``elastic`` or ``sigma``. A rule with no row is the tenant's own.
+- ``origin``: ``elastic`` or ``sigma``. A rule with no row is the tenant's own, and so is one with
+  ``none``: unlinked by the user (``recorded_how`` ``unlinked``, ``upstream_id`` what it was linked
+  to), which keeps a sync from linking it again by its rule id.
 - ``upstream_id``: the Elastic ``rule_id`` or Sigma ``id`` it came from. A copy made under a new
   rule id keeps its upstream id here, so it is still recognised.
 - ``upstream_version`` / ``upstream_hash`` / ``upstream_date``: the upstream rule as it was when
@@ -167,6 +169,41 @@ def copy(conn, source: Key, target: Key, how: str, actor: str = "", parent: bool
         values.update(dict(zip(("parent_rule_id", "parent_siem_id", "parent_space"), source)))
     _write(conn, values)
     return True
+
+
+def unlink_refused(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Why a rule (``row`` its origin) can't be unlinked from an Elastic rule, or None when it can: it
+    must be linked to one, and not be Elastic's own rule installed by Kibana."""
+    if not row or row.get("origin") != "elastic":
+        return "This rule isn't linked to one of Elastic's rules."
+    if row.get("prebuilt"):
+        return "This is Elastic's own rule, installed by Kibana."
+    return None
+
+
+def unlink(db, client_id: str, key: Key, user_id: Optional[str], actor: str) -> Tuple[int, str]:
+    """Unlink from Elastic: the rule stops tracking the Elastic rule TIDE linked it to (wrongly, or it
+    has gone its own way) and is the tenant's own from then on, even under that rule's id: its row
+    becomes ``none``, which a sync never links again. Nothing changes in Kibana. Returns ``(status,
+    message)``."""
+    from app.services.tenant_manager import tenant_context_for
+    if not db.get_rule_by_id(key[0], key[2], siem_id=key[1], client_id=client_id):
+        return 404, "Rule not found."
+    with tenant_context_for(client_id), db.get_connection() as conn:
+        row = get(conn, key)
+        refused = unlink_refused(row)
+        if refused:
+            return 400, refused
+        name = (upstream(conn, "elastic", row["upstream_id"]) or {}).get("name") or row["upstream_id"]
+        _write(conn, {"rule_id": key[0], "siem_id": key[1], "space": key[2], "origin": "none",
+                      "upstream_id": row["upstream_id"], "recorded_how": "unlinked", "recorded_by": actor or "TIDE"})
+    message = f'Unlinked from Elastic\'s "{name}": TIDE no longer shows its updates for this rule.'
+    db.record_rule_history(rule_id=key[0], siem_id=key[1], space=key[2], client_id=client_id, action="unlinked",
+                           actor_user_id=user_id, actor_name=actor,
+                           detail={"message": message, "upstream_id": row["upstream_id"]})
+    from app.services import rule_issues
+    rule_issues.refresh_tenant(db, client_id, rule_keys=[key])
+    return 200, message
 
 
 def get_bulk(conn, keys: Iterable[Key]) -> Dict[Key, Dict[str, Any]]:
@@ -337,7 +374,7 @@ _STATUS_SQL = """
            e.status AS e_status, e.name AS e_name,
            e.updated AS e_date, s.content_hash AS s_hash, s.status AS s_status, s.title AS s_name,
            s.modified AS s_date
-    FROM rule_origins o
+    FROM (SELECT * FROM rule_origins WHERE origin IN ('elastic', 'sigma')) o
     LEFT JOIN detection_rules d ON d.rule_id = o.rule_id AND d.siem_id = o.siem_id AND d.space = o.space
     LEFT JOIN elastic_rules_index e ON o.origin = 'elastic' AND e.rule_id = o.upstream_id
     LEFT JOIN sigma_rules_index s ON o.origin = 'sigma' AND s.rule_id = o.upstream_id
@@ -387,7 +424,7 @@ def _status(row: Dict[str, Any], running: Optional[str] = None) -> Dict[str, Any
             title = (f"Reviewed against Elastic's version {from_version} in TIDE; Kibana still has version "
                      f"{installed} installed.")
         else:
-            title = f"Matches Elastic's version {to_version}."
+            title = f"Elastic's version {to_version} is installed, the latest built into TIDE."
     else:
         current_hash = row["e_hash"] if elastic else row["s_hash"]
         if row["upstream_hash"]:
@@ -400,8 +437,8 @@ def _status(row: Dict[str, Any], running: Optional[str] = None) -> Dict[str, Any
             change = (f"version {from_version} → {to_version}" if elastic and from_version and to_version
                       and from_version != to_version else f"changed {to_date}" if to_date else "changed")
             title = f'{source} updated "{name}" since it was taken: {change}.'
-        else:
-            title = f'Matches {source}\'s "{name}"' + (f", version {to_version}." if to_version else ".")
+        else:   # the upstream rule is unchanged, not this one: rule_updates.unconfirmed_links compares them
+            title = f'{source} hasn\'t changed "{name}" since it was taken' + (f" (version {to_version})." if to_version else ".")
     return {
         "state": state, "label": STATES[state], "title": title, "source": source, "origin": row["origin"],
         "upstream_id": row["upstream_id"], "name": name, "prebuilt": bool(row["prebuilt"]),

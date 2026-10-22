@@ -24,18 +24,44 @@ def _in_scope(db, client_id: str, siem_id: str, space: str) -> bool:
 
 @router.get("/{rule_id}/upstream", response_class=HTMLResponse)
 def review_update(request: Request, rule_id: str, db: DbDep, user: CurrentUser, client_id: ActiveClient,
-                  siem_id: str = Query(...), space: str = Query("default")):
-    """The update dialog: this rule beside its upstream rule as it is now, a tick per differing section."""
+                  siem_id: str = Query(...), space: str = Query("default"), back: bool = Query(False)):
+    """The update dialog: this rule beside its upstream rule as it is now, a tick per differing section.
+    For a custom rule linked to an Elastic rule it doesn't match (Rule Monitoring's
+    elastic_link_differs), also Keep the link and Unlink from Elastic. ``back``: opened from the rule
+    window, which Back to rule returns to."""
     if not _in_scope(db, client_id, siem_id, space):
         return HTMLResponse('<div class="rm-empty">Rule not found.</div>', status_code=404)
     info = rule_updates.review(db, client_id, (rule_id, siem_id, space))
     dest_name = next((s.get("name") for s in db.get_client_siems(client_id) or []
                       if s.get("id") == siem_id and str(s.get("space") or "default") == space), space)
+    can_apply = not user or user.can_write("page:rules")
+    status = info.get("status")
     return request.app.state.templates.TemplateResponse(
         request, "components/rule_update_diff.html",
-        {**info, "siem_id": siem_id, "space": space, "dest_name": dest_name,
-         "can_apply": not user or user.can_write("page:rules")},
+        {**info, "siem_id": siem_id, "space": space, "dest_name": dest_name, "can_apply": can_apply, "back": back,
+         "can_unlink": can_apply and bool(status and status["origin"] == "elastic" and not status["prebuilt"])},
     )
+
+
+@router.post("/{rule_id}/unlink-upstream", response_class=HTMLResponse)
+async def unlink_upstream(request: Request, rule_id: str, db: DbDep, user: RequireUser, client_id: ActiveClient,
+                          siem_id: str = Query(...), space: str = Query("default")):
+    """Unlink from Elastic (the rule window's Upstream section): see rule_origins.unlink. The window
+    reopens on the rule, now your own."""
+    import json
+    from app.api.promotion import _run_in_context, _toast
+    from app.api.rules import rule_window
+    from app.services import rule_origins
+
+    if not _in_scope(db, client_id, siem_id, space):
+        return _toast("danger", "Rule not found.", 404)
+    status, message = await _run_in_context(
+        rule_origins.unlink, db, client_id, (rule_id, siem_id, space), user.id, user.name or user.username)
+    if status != 200:
+        return _toast("danger", f"Could not unlink it from Elastic: {message}", status)
+    response = _toast("success", message, 200, trigger="refreshRules")
+    response.headers["X-Tide-Rule-Window"] = json.dumps(rule_window(rule_id, siem_id, space))
+    return response
 
 
 @router.post("/{rule_id}/upstream", response_class=HTMLResponse)

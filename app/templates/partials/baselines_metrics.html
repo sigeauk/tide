@@ -1,10 +1,12 @@
 {#  Partial: partials/baselines_metrics.html -- the Dashboard's Baselines cards.
     Context: baselines_overview (the templates), baselines_rollup (the systems' own baselines);
-    metric_keys / metric_link as macros/metrics.html takes them.
+    metric_keys / metric_link as macros/metrics.html takes them; a Dashboard section comparing with
+    an earlier day adds the change in Rules Mapped, Uncovered and Fully Covered (changes).
 #}
 {% from "macros/icons.html" import icon_text %}
-{% from "macros/metrics.html" import metric_card %}
+{% from "macros/metrics.html" import metric_card, metric_change, metric_change_tip %}
 {% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
+{% set changes = changes | default({}) %}
 {% if baselines_overview or (baselines_rollup and baselines_rollup.baselines) %}
 {% call metric_card('templates', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value">{{ baselines_overview | length }}</p>
@@ -28,17 +30,20 @@
 {% call metric_card('rules_mapped', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.rules_mapped > 0 else '' }}">{{ ru.rules_mapped }}</p>
     <p class="metric-label">Rules Mapped</p>
-    <div class="metric-tip" role="tooltip">Detection rules</div>
+    {{ metric_change(changes.rules_mapped) }}
+    <div class="metric-tip" role="tooltip">Detection rules{{ metric_change_tip(changes.rules_mapped) }}</div>
 {% endcall %}
 {% call metric_card('uncovered', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'danger' if ru.red > 0 else 'success' }}">{{ ru.red }}</p>
     <p class="metric-label">Uncovered</p>
-    <div class="metric-tip" role="tooltip">System baselines with gaps</div>
+    {{ metric_change(changes.uncovered) }}
+    <div class="metric-tip" role="tooltip">System baselines with gaps{{ metric_change_tip(changes.uncovered) }}</div>
 {% endcall %}
 {% call metric_card('fully_covered', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value {{ 'success' if ru.green > 0 else '' }}">{{ ru.green }}</p>
     <p class="metric-label">Fully Covered</p>
-    <div class="metric-tip" role="tooltip">All techniques monitored</div>
+    {{ metric_change(changes.fully_covered) }}
+    <div class="metric-tip" role="tooltip">All techniques monitored{{ metric_change_tip(changes.fully_covered) }}</div>
 {% endcall %}
 {% else %}
 <div class="metric-card metric-card--empty">

@@ -52,7 +52,6 @@ TENANT_TABLES: List[str] = [
     "hosts",
     "software_inventory",
     "system_baselines",
-    "system_baseline_snapshots",
     "applied_detections",
     "blind_spots",
     "classifications",
@@ -148,7 +147,7 @@ def import_tenant(conn, tables: Dict[str, dict], client_id: Optional[str] = None
     drop_where = {("playbooks", "id"): set(pb_remap), ("playbook_steps", "playbook_id"): set(pb_remap),
                   ("step_techniques", "step_id"): skip_steps, ("step_detections", "step_id"): skip_steps,
                   ("step_sigma_dismissals", "step_id"): skip_steps}
-    remap_cols = {("system_baselines", "playbook_id"): pb_remap, ("system_baseline_snapshots", "baseline_id"): pb_remap}
+    remap_cols = {("system_baselines", "playbook_id"): pb_remap}
 
     for table in TENANT_TABLES:
         block = tables.get(table)

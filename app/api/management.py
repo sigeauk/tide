@@ -21,7 +21,7 @@ from app.api.deps import (DbDep, ClientAdmin, RequireAdmin, RequireSuperadmin, A
                           can_manage_user, require_client_member, require_manageable_user)
 from app.services import tls
 from app.services.log_context import audit_admin
-from app.services.database import SUPPORT_ROLE
+from app.services.database import RULE_REMOVED_UNLINKED, SUPPORT_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -1807,6 +1807,8 @@ def unlink_siem_from_client(request: Request, client_id: str, siem_id: str,
                     purged_total = 0
                     for _sid, _space in pairs_to_purge:
                         try:
+                            db.record_rule_removals(_tconn, "siem_id = ? AND LOWER(space) = ?", [_sid, _space],
+                                                    RULE_REMOVED_UNLINKED, client_id=client_id, actor=user.username)
                             _res = _tconn.execute(
                                 "DELETE FROM detection_rules "
                                 "WHERE siem_id = ? AND LOWER(space) = ?",

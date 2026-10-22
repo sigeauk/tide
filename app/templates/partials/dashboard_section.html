@@ -14,19 +14,19 @@
 <p class="dash-section-note">{{ view.empty }}</p>
 {% elif src == 'rule_health' %}
     {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}{% set last_sync = view.last_sync %}
-    {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}
+    {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}{% set changes = view.changes or {} %}
     {% include "partials/metrics_row.html" %}
 {% elif src == 'rule_monitoring' %}
     {% set metrics = view.metrics %}{% set filters = view.filters %}{% set stale_days = view.stale_days %}
     {% include "partials/rule_monitoring_metrics.html" %}
 {% elif src == 'system' %}
-    {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}
+    {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}{% set changes = view.changes or {} %}
     {% include "partials/system_steps_metrics.html" %}
 {% elif src == 'threat_landscape' %}
     {% set metrics = view.metrics %}{% set last_sync_time = view.last_sync_time %}
     {% include "partials/threat_metrics.html" %}
 {% elif src == 'baselines' %}
-    {% set baselines_overview = view.overview %}{% set baselines_rollup = view.rollup %}
+    {% set baselines_overview = view.overview %}{% set baselines_rollup = view.rollup %}{% set changes = view.changes or {} %}
     {% include "partials/baselines_metrics.html" %}
 {% elif src == 'asset_inventory' %}
     {% if view.stats %}{% set stats = view.stats %}{% include "partials/inventory_metrics.html" %}

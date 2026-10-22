@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.2.4] - 2026-10-22
+
+### Added
+- **Compare a custom copy with Elastic's rule before choosing what to do.** Where Kibana holds a custom copy beside one of Elastic's prebuilt rules under the same rule id, or two custom rules share one, the two are usually the same detection, so with both enabled each alert is raised twice. **Compare with the copy**, on the rule's row in **Rule Monitoring** and in its window, reads both from Kibana and shows how they differ, whether they detect the same thing and which is enabled. Then choose: **Delete the copy**, **Keep both** (the copy gets a rule id of its own) or **Keep both and disable Elastic's**. **Compare them one by one** takes you through every such rule in turn. This replaces **Give the copy its own rule id**, and **Rule Monitoring** now names the rule TIDE doesn't show.
+- **Rule Monitoring finds rules linked to an Elastic rule they don't match.** TIDE links a custom rule to one of Elastic's rules by its rule id, or because it was copied from it, and shows Elastic's updates for it. At each sync it now compares each such rule with Elastic's, and lists those whose rule type, query or filters differ under **Linked to an Elastic rule it doesn't match**. **Compare with Elastic** shows the two; then **Keep the link** for a copy you changed on purpose, or **Unlink from Elastic** for a rule that isn't Elastic's, which makes it your own rule even while it uses Elastic's rule id. Nothing changes in Kibana.
+
+- **The Dashboard shows how figures have changed.** Set a section to **Compare with** yesterday, or 7, 30 or 90 days ago, and each figure that can show a change says how much it has gone up or down since the end of that day: green when that is better, red when worse, with what it was then on hover. A Rule Health section shows the change in **Total Rules**, **Enabled**, **Validated** and **Avg Quality**, a system's section in each of its cards, and a Baselines section in **Rules Mapped**, **Uncovered** and **Fully Covered**. TIDE works out the earlier figures from the history it already keeps, so there is nothing to capture or schedule.
+
+- **TIDE at a glance, in the guide.** **Settings → Documentation** now opens with **About TIDE → TIDE at a glance**, for decision makers: what TIDE does for rules, their quality, coverage and threat intelligence, and for secure environments, each part with your own figures beside it, plus how to get the most from TIDE and what's new in 6.2.
+
+### Changed
+- **Up to date no longer reads as "Matches Elastic's rule".** For a custom rule linked to one of Elastic's rules, the rule window's **Upstream** section now says Elastic hasn't changed its rule since this one was taken, which is what **Up to date** means; whether the two match is what **Rule Monitoring** now checks.
+- **The system report's coverage trend comes from the system's history.** It charts each chosen baseline's coverage at the end of every week, as far back as TIDE has the history (from its 6.0 upgrade, up to a year), and lists the weeks where it changed, in the PDF and the Markdown. It no longer depends on snapshots someone took.
+- **Removing a technique or a baseline from a system keeps a record of it.** TIDE now keeps the history of what you remove, and when, so the system's coverage figures for earlier dates can still count it. Deleting a system still deletes everything about it. In a technique's **History**, a change to which destinations a system counts now shows one line per destination.
+
+### Removed
+- **Coverage snapshots.** The snapshots of a system's coverage, which could no longer be taken since 6.0.0, are deleted when you upgrade. Each technique's **History** keeps every change to its coverage, and the system report's coverage trend is now drawn from it. To keep the old snapshots, take a backup in **Settings → Management → Backups** before upgrading.
+
+### Fixed
+- **A copy that has been dealt with is no longer offered again.** After the custom copy beside one of Elastic's rules was given its own rule id, the rule's window and **Rule Monitoring** still offered it until the next sync of the destination, and trying again failed. It now goes at once.
+- **A rule Kibana no longer has is marked deprecated.** **Give it its own rule id** on a rule deleted in Kibana since the last sync failed, asking you to sync. TIDE now marks the rule deprecated there and then.
+
 ## [6.2.3] - 2026-10-20
 
 ### Added

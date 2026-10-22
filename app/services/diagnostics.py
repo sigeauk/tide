@@ -378,8 +378,8 @@ CHECKS: List[Check] = [
         "Kibana holds two rules under the same rule id in this destination, usually a copy made under one of "
         "Elastic's rule ids and Elastic's own prebuilt rule installed there later. TIDE holds one rule per "
         "rule id, so the other is not shown, scored or counted.",
-        "In Kibana, compare the two. Delete the one you don't need, usually the custom copy (copy any change "
-        "you want to keep into the other first), then Sync.",
+        "In Rule Monitoring, use Compare with the copy on the rule (or Compare them one by one), then choose: "
+        "delete the copy, keep both (the copy gets a rule id of its own), or keep both and disable the rule TIDE shows.",
         _shared_rule_ids,
     ),
     Check(

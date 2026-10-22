@@ -1,0 +1,109 @@
+{#
+  Compare with the copy (GET /api/promotion/{id}/diff?copy_id=…): the rule TIDE shows, Elastic's
+  prebuilt rule (``prebuilt``) or the original of two custom rules, and the custom copy Kibana holds
+  beside it under the same rule id, both read from Kibana now, then what to do: Delete the copy, Keep
+  both (the copy gets a rule id of its own) or Keep both and disable Elastic's (the original). Laid out
+  like Compare (components/rule_migration_diff.html).
+  With ``walk`` it is one step of Compare them one by one (Rule Monitoring, POST
+  /api/promotion/compare-copies): Skip goes on to the next copy, and each choice answers with the next
+  step here, its outcome at the top; with no ``rule_id`` it is the end.
+  Context: rule_id, siem_id, space, copy_id, rule, copy, shown, live_copy, prebuilt, diffs, same,
+  dest_name, error, gone, back, walk, outcome, can_apply.
+#}
+{% from "macros/icons.html" import icon, icon_text %}
+{% from "macros/rule_diff.html" import diff_fields %}
+{% from "macros/modal.html" import close_button, empty_state %}
+{% set scope_qs = 'siem_id=' ~ (siem_id | urlencode) ~ '&space=' ~ (space | urlencode) %}
+{% set copy_qs = scope_qs ~ '&copy_id=' ~ (copy_id | urlencode) %}
+
+{# Where a choice's answer goes: on its own, a toast and the rule window; in a walk, this dialog. #}
+{% macro reply() -%}
+{%- if walk %}hx-target="#modal-container" hx-swap="innerHTML" hx-vals='{{ {"queue": walk.queue, "total": walk.total} | tojson }}'
+{%- else %}hx-target="body" hx-swap="beforeend"{% endif -%}
+{%- endmacro %}
+
+{# Leaving, and in a walk going on to the next copy. #}
+{% macro leave() -%}
+{%- if back and not walk %}
+<button name="Back To Rule" type="button" class="btn btn-secondary" hx-get="/api/rules/{{ rule_id | urlencode }}/history-modal?{{ scope_qs }}"
+        hx-target="#modal-container" hx-swap="innerHTML">Back to rule</button>
+{%- else %}
+<button type="button" class="btn btn-secondary" data-click="modal.remove">Close</button>
+{%- endif %}
+{%- if walk and rule_id %}
+<button name="Skip" type="button" class="btn btn-secondary" hx-post="/api/promotion/compare-copies" {{ reply() }}
+        hx-disabled-elt="this" title="Leave this one as it is and compare the next">Skip</button>
+{%- endif %}
+{%- endmacro %}
+
+<div class="modal-overlay" data-click="backdrop.remove">
+  <div class="modal-content modal-xl rd-root" data-view="inline" data-stop-click>
+    <div class="modal-header">
+      <h2>{{ icon('git-branch', '18') }} Compare with the copy{% if walk %} <span class="rm-fold__count">{{ walk.position }} of {{ walk.total }}</span>{% endif %}</h2>
+      {{ close_button('data-click="modal.remove"') }}
+    </div>
+    {% if outcome %}<div class="alert alert-{{ outcome[0] }}"><p>{{ outcome[1] }}</p></div>{% endif %}
+
+    {% if not rule_id %}
+    {% call empty_state('circle-check') %}<p>No more copies to compare.</p>{% endcall %}
+    <div class="modal-actions">{{ leave() }}</div>
+
+    {% elif error or gone %}
+    {% if error %}<div class="alert alert-danger"><p>{{ error }}</p></div>{% else %}<p class="rm-empty">{{ gone }}</p>{% endif %}
+    <div class="modal-actions">{{ leave() }}</div>
+
+    {% else %}
+    {% set copy_name = live_copy.name or copy.name %}
+    {% set shown_label = "Elastic's rule" if prebuilt else 'the original' %}
+    <p class="rule-help">
+      Kibana holds two rules under rule id {{ rule_id }} in {{ dest_name }}:
+      {% if prebuilt %}Elastic's prebuilt rule{% else %}a custom rule{% endif %}, <strong>{{ shown.name or rule.name }}</strong>{% if not prebuilt and shown.created_at %},
+      created {{ shown.created_at[:10] }}{% endif %}, which TIDE shows, and a custom copy, <strong>{{ copy_name }}</strong>{% if copy.created_at %},
+      created {{ copy.created_at[:10] }}{% endif %}. Both are read from Kibana now
+      (<span class="text-danger">&minus; {{ shown_label }}</span> / <span class="text-success">+ the copy</span>).
+      {{ 'Both are enabled.' if shown.enabled and live_copy.enabled else ('Only ' ~ shown_label ~ ' is enabled.') if shown.enabled
+         else 'Only the copy is enabled.' if live_copy.enabled else 'Both are disabled.' }}
+      {% if same %}They detect the same thing: the same rule type, query, index patterns and filters{% if shown.enabled and live_copy.enabled %},
+      so each alert is raised twice{% endif %}.{% else %}They differ in what they detect.{% endif %}
+    </p>
+    {% if diffs %}
+    <div class="rd-toolbar">
+      <div class="rd-toggle" role="group" aria-label="Comparison layout">
+        <button type="button" data-rd-view="inline">Inline</button>
+        <button type="button" data-rd-view="side">Side by side</button>
+      </div>
+    </div>
+    {{ diff_fields(diffs, shown_label[0] | upper ~ shown_label[1:], 'The copy') }}
+    {% else %}
+    <p class="rm-empty">The two are the same in every field compared.</p>
+    {% endif %}
+
+    {% if can_apply %}
+    <div class="rm-merge border-t mt-md pt-md">
+      <p class="rd-label mb-sm">What to do</p>
+      <p class="text-muted fs-md mb-sm">
+        <strong>Delete the copy</strong> deletes it in Kibana; its past alerts stay there, and {{ shown_label }} is not changed.
+        <strong>Keep both</strong> gives the copy a rule id of its own, so TIDE shows it as a rule of its own{% if prebuilt %}, still
+        with Elastic's updates{% endif %}. <strong>Keep both and disable {{ "Elastic's" if prebuilt else 'the original' }}</strong>
+        does the same, then disables {{ shown_label }}. {% if prebuilt %}Elastic's rule always keeps Elastic's rule id.{% else %}The
+        original keeps its rule id.{% endif %}
+      </p>
+      <div class="modal-actions">
+        <button name="Delete Copy" type="button" class="btn btn-danger mr-auto"
+                hx-post="/api/promotion/{{ rule_id | urlencode }}/delete-copy?{{ copy_qs }}" {{ reply() }} hx-disabled-elt="this"
+                hx-confirm="Delete the custom copy, &quot;{{ copy_name }}&quot;, in Kibana? Its past alerts stay in Kibana; {{ shown_label }} is not changed.">{{ icon_text('trash-2', 'Delete the copy', '13') }}</button>
+        {{ leave() }}
+        <button name="Keep Both" type="button" class="btn btn-secondary"
+                hx-post="/api/promotion/{{ rule_id | urlencode }}/own-rule-id?{{ copy_qs }}" {{ reply() }} hx-disabled-elt="this"
+                hx-confirm="Give the copy its own rule id? TIDE creates it again in Kibana under a new rule id and deletes it under the old one. Its past alerts and runs stay in Kibana with the old one.">{{ icon_text('copy', 'Keep both', '13') }}</button>
+        <button name="Keep Both Disable Elastic" type="button" class="btn btn-secondary"
+                hx-post="/api/promotion/{{ rule_id | urlencode }}/own-rule-id?{{ copy_qs }}&amp;then=disable" {{ reply() }} hx-disabled-elt="this"
+                hx-confirm="Give the copy its own rule id, then disable {{ shown_label }}? TIDE creates the copy again in Kibana under a new rule id and deletes it under the old one. Its past alerts and runs stay in Kibana with the old one.">{{ icon_text('copy', "Keep both and disable Elastic's" if prebuilt else 'Keep both and disable the original', '13') }}</button>
+      </div>
+    </div>
+    {% else %}
+    <div class="modal-actions">{{ leave() }}</div>
+    {% endif %}
+    {% endif %}
+  </div>
+</div>
