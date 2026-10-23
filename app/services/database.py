@@ -117,7 +117,7 @@ def rule_state(rule, offline_scopes) -> str:
 
 
 # Schema version for migrations
-SCHEMA_VERSION = 91
+SCHEMA_VERSION = 93
 
 # The per-client role that opens Diagnostics for that client. Only a super admin can grant or
 # revoke it (set_user_roles(grant_support=...)).
@@ -3936,6 +3936,55 @@ class DatabaseService:
             self._set_schema_version(conn, 91)
             logger.info("Migration 91: technique history keeps removals; %d applied baseline(s) dated "
                         "from their own records.", applied_total)
+
+        # ── Migration 92: the CTI engine removed (6.3.0) ──
+        # The CTI pages, the CTI database each client had (cti_<slug>_<id8>.duckdb, named as the
+        # removed app.services.cti_database named it), the TAXII feeds and CTI egress are gone;
+        # OpenCTI connectors stay as Threat Landscape's link. Destructive: each client's CTI database
+        # is deleted, with the connectors of the removed vendors, the TAXII cursors and the CTI page
+        # permissions (no rollback other than a backup made before upgrading). A file that is a
+        # client's own database is never deleted, whatever its name.
+        if current_version < 92:
+            data_dir = os.path.dirname(self.db_path)
+            clients = conn.execute("SELECT id, slug, db_filename FROM clients").fetchall()
+            tenant_files = {fname for _cid, _slug, fname in clients if fname}
+            deleted = 0
+            for cid, slug, _fname in clients:
+                safe = re.sub(r"[^a-z0-9_-]+", "_", (slug or "").lower()).strip("_-") or "client"
+                name = f"cti_{safe}_{cid[:8]}.duckdb"
+                if name in tenant_files:
+                    continue
+                for path in (os.path.join(data_dir, name), os.path.join(data_dir, name + ".wal")):
+                    if not os.path.exists(path):
+                        continue
+                    try:
+                        os.remove(path)
+                        deleted += path.endswith(".duckdb")
+                    except OSError as exc:
+                        logger.error(f"Migration 92: could not delete {path}: {exc}")
+            vendors = conn.execute(
+                "SELECT COUNT(*) FROM cti_connectors WHERE vendor <> 'opencti_taxii'").fetchone()[0]
+            conn.execute("DELETE FROM cti_connector_clients WHERE connector_id IN "
+                         "(SELECT id FROM cti_connectors WHERE vendor <> 'opencti_taxii')")
+            conn.execute("DELETE FROM cti_connectors WHERE vendor <> 'opencti_taxii'")
+            conn.execute("DROP TABLE IF EXISTS cti_taxii_cursors")
+            conn.execute("DELETE FROM role_permissions WHERE resource IN "
+                         "('page:cti', 'page:cti_indicators', 'page:cti_actors', 'page:cti_reports')")
+            self._set_schema_version(conn, 92)
+            logger.info("Migration 92: CTI engine removed: %d CTI database(s) and %d connector(s) of "
+                        "removed vendors deleted.", deleted, vendors)
+
+        # ── Migration 93: the Keycloak integration is TIDE's sign-in (6.3.0) ──
+        # What .env held for sign-in, so the Keycloak integration can replace it: the address TIDE
+        # itself calls, the password-grant client, and which row sign-in uses (app.services.
+        # keycloak_config; the first start with Keycloak in .env fills it from there). Additive only.
+        if current_version < 93:
+            for column, kind in (("internal_url", "VARCHAR"), ("pg_client_id", "VARCHAR"),
+                                 ("pg_client_secret_enc", "VARCHAR"),
+                                 ("used_for_signin", "BOOLEAN DEFAULT false")):
+                conn.execute(f"ALTER TABLE keycloak_inventory ADD COLUMN IF NOT EXISTS {column} {kind}")
+            self._set_schema_version(conn, 93)
+            logger.info("Migration 93: keycloak_inventory can hold TIDE's sign-in Keycloak.")
 
         logger.info(f"Migrations complete. Schema v{SCHEMA_VERSION}")
 
@@ -11693,6 +11742,7 @@ class DatabaseService:
         ("opencti_inventory", "id", "token_enc"),
         ("gitlab_inventory", "id", "token_enc"),
         ("keycloak_inventory", "id", "client_secret_enc"),
+        ("keycloak_inventory", "id", "pg_client_secret_enc"),
         ("cti_connectors", "id", "config_json"),
     )
 
@@ -12164,17 +12214,6 @@ class DatabaseService:
                 "DELETE FROM cti_connector_clients WHERE connector_id = ?",
                 [connector_id],
             )
-            # Drop any TAXII watermark rows owned by this connector so
-            # a re-create with the same id starts clean.
-            try:
-                conn.execute(
-                    "DELETE FROM cti_taxii_cursors WHERE connector_id = ?",
-                    [connector_id],
-                )
-            except Exception:
-                # Table only exists from migration 49 onward; ignore on
-                # older shared DBs that haven't migrated yet.
-                pass
             deleted = conn.execute(
                 "DELETE FROM cti_connectors WHERE id = ? RETURNING id",
                 [connector_id],
@@ -12207,70 +12246,6 @@ class DatabaseService:
                 "WHERE connector_id = ? AND client_id = ?",
                 [connector_id, client_id],
             )
-
-    # --- TAXII 2.1 cursor store (migration 49) ---
-
-    def get_taxii_cursor(self, connector_id: str, api_root: str,
-                         collection_id: str) -> Optional[str]:
-        """Return the stored ``added_after`` watermark, if any."""
-        with self.get_shared_connection() as conn:
-            row = conn.execute(
-                "SELECT added_after FROM cti_taxii_cursors "
-                "WHERE connector_id = ? AND api_root = ? "
-                "AND collection_id = ?",
-                [connector_id, api_root, collection_id],
-            ).fetchone()
-        return row[0] if row else None
-
-    def set_taxii_cursor(self, connector_id: str, api_root: str,
-                         collection_id: str, added_after: str) -> None:
-        """Upsert the watermark for one (connector, root, collection)."""
-        with self.get_shared_connection() as conn:
-            conn.execute(
-                "INSERT INTO cti_taxii_cursors "
-                "(connector_id, api_root, collection_id, added_after, "
-                "last_run_at) VALUES (?, ?, ?, ?, now()) "
-                "ON CONFLICT (connector_id, api_root, collection_id) "
-                "DO UPDATE SET added_after = excluded.added_after, "
-                "last_run_at = now()",
-                [connector_id, api_root, collection_id, added_after],
-            )
-
-    def list_taxii_cursors(self,
-                           connector_id: Optional[str] = None) -> List[Dict]:
-        """Return all cursors, optionally scoped to one connector.
-
-        Used by the diag surface (step T8) to report per-collection lag.
-        """
-        sql = (
-            "SELECT connector_id, api_root, collection_id, "
-            "added_after, last_run_at FROM cti_taxii_cursors"
-        )
-        params: list = []
-        if connector_id:
-            sql += " WHERE connector_id = ?"
-            params.append(connector_id)
-        sql += " ORDER BY connector_id, api_root, collection_id"
-        with self.get_shared_connection() as conn:
-            rows = conn.execute(sql, params).fetchall()
-        return [
-            {
-                "connector_id": r[0], "api_root": r[1],
-                "collection_id": r[2], "added_after": r[3],
-                "last_run_at": r[4],
-            }
-            for r in rows
-        ]
-
-    def delete_taxii_cursors_for_connector(self, connector_id: str) -> int:
-        """Drop every cursor row owned by a connector. Returns row count."""
-        with self.get_shared_connection() as conn:
-            n = conn.execute(
-                "DELETE FROM cti_taxii_cursors WHERE connector_id = ? "
-                "RETURNING connector_id",
-                [connector_id],
-            ).fetchall()
-        return len(n)
 
     # --- GitLab Inventory ---
 
@@ -12374,29 +12349,43 @@ class DatabaseService:
 
     # --- Keycloak Inventory ---
 
+    _KEYCLOAK_COLS = ("id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
+                      "is_active", "tls_verify", "last_test_status", "last_test_at", "last_test_message",
+                      "created_at", "updated_at", "internal_url", "pg_client_id", "pg_client_secret_enc",
+                      "used_for_signin")
+
     def list_keycloak_inventory(self) -> List[Dict]:
-        """List all Keycloak instances in the centralized inventory."""
+        """List all Keycloak instances in the centralized inventory, the one TIDE signs in with first."""
         with self.get_shared_connection() as conn:
             rows = conn.execute(
-                "SELECT id, label, url, realm, client_id_enc, client_secret_enc, "
-                "is_active, tls_verify, last_test_status, last_test_at, last_test_message, "
-                "created_at, updated_at "
-                "FROM keycloak_inventory ORDER BY label"
+                f"SELECT {', '.join(self._KEYCLOAK_COLS)} FROM keycloak_inventory "
+                "ORDER BY COALESCE(used_for_signin, false) DESC, label"
             ).fetchall()
-            cols = ["id", "label", "url", "realm", "client_id_enc", "client_secret_enc",
-                    "is_active", "tls_verify", "last_test_status", "last_test_at", "last_test_message",
-                    "created_at", "updated_at"]
-            return [reveal_fields(dict(zip(cols, r)), "client_secret_enc") for r in rows]
+            return [reveal_fields(dict(zip(self._KEYCLOAK_COLS, r)), "client_secret_enc", "pg_client_secret_enc")
+                    for r in rows]
+
+    def get_signin_keycloak(self) -> Optional[Dict]:
+        """The Keycloak integration TIDE signs people in with (app.services.keycloak_config), or None."""
+        with self.get_shared_connection() as conn:
+            row = conn.execute(
+                f"SELECT {', '.join(self._KEYCLOAK_COLS)} FROM keycloak_inventory "
+                "WHERE used_for_signin ORDER BY created_at LIMIT 1"
+            ).fetchone()
+        return reveal_fields(dict(zip(self._KEYCLOAK_COLS, row)), "client_secret_enc", "pg_client_secret_enc") if row else None
 
     def create_keycloak_inventory_item(self, label: str, url: str, realm: str = "master",
                                        client_id_enc: str = None,
-                                       client_secret_enc: str = None, tls_verify: bool = False) -> Dict:
+                                       client_secret_enc: str = None, tls_verify: bool = False,
+                                       internal_url: str = None, pg_client_id: str = None,
+                                       pg_client_secret: str = None, used_for_signin: bool = False) -> Dict:
         """Create a Keycloak instance in the inventory."""
         with self.get_shared_connection() as conn:
             conn.execute(
-                "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc, tls_verify) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                [label, url, realm, client_id_enc, seal(client_secret_enc), bool(tls_verify)],
+                "INSERT INTO keycloak_inventory (label, url, realm, client_id_enc, client_secret_enc, tls_verify, "
+                "internal_url, pg_client_id, pg_client_secret_enc, used_for_signin) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [label, url, realm, client_id_enc, seal(client_secret_enc), bool(tls_verify),
+                 internal_url, pg_client_id, seal(pg_client_secret), bool(used_for_signin)],
             )
             row = conn.execute(
                 "SELECT id, label, url, realm, client_id_enc, client_secret_enc, is_active, "
@@ -12410,12 +12399,14 @@ class DatabaseService:
 
     def update_keycloak_inventory_item(self, keycloak_id: str, **fields) -> bool:
         """Update a Keycloak instance in the inventory."""
-        allowed = {"label", "url", "realm", "client_id_enc", "client_secret_enc", "is_active", "tls_verify"}
+        allowed = {"label", "url", "realm", "client_id_enc", "client_secret_enc", "is_active", "tls_verify",
+                   "internal_url", "pg_client_id", "pg_client_secret_enc", "used_for_signin"}
         updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
         if not updates:
             return False
-        if "client_secret_enc" in updates:
-            updates["client_secret_enc"] = seal(updates["client_secret_enc"])
+        for secret in ("client_secret_enc", "pg_client_secret_enc"):
+            if secret in updates:
+                updates[secret] = seal(updates[secret])
         set_clause = ", ".join(f"{k} = ?" for k in updates)
         values = list(updates.values()) + [keycloak_id]
         with self.get_shared_connection() as conn:

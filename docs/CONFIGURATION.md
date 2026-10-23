@@ -32,7 +32,7 @@ docker compose up -d
 
 ### Single sign-on
 
-Only needed if you use Keycloak. See [Single sign-on with Keycloak](#single-sign-on-with-keycloak).
+Only needed if you use Keycloak. See [Single sign-on with Keycloak](#single-sign-on-with-keycloak). These lines are read once: the first time TIDE starts with them set, it makes them the **Keycloak** integration, and after that you manage Keycloak in TIDE and the lines are not read. Diagnostics says if they still differ from the integration.
 
 | Setting | What it does |
 |---------|--------------|
@@ -41,7 +41,7 @@ Only needed if you use Keycloak. See [Single sign-on with Keycloak](#single-sign
 | `KEYCLOAK_REALM` | The realm TIDE signs people in with. Default `tide`. |
 | `KEYCLOAK_CLIENT_ID`, `KEYCLOAK_CLIENT_SECRET` | The TIDE client in that realm and its secret. Default client `tide-app`. |
 | `KEYCLOAK_PASSWORD_GRANT_CLIENT_ID`, `KEYCLOAK_PASSWORD_GRANT_CLIENT_SECRET` | Optional. A Keycloak client that lets people type their single sign-on password into TIDE's own sign-in form. Without it, TIDE tries the client above. |
-| `SSL_VERIFY` | Whether TIDE checks Keycloak's certificate when signing people in. Default `true`. |
+| `SSL_VERIFY` | Whether TIDE checks Keycloak's certificate when signing people in, until Keycloak is an integration (then its **Verify TLS certificate** box does). Default `true`. |
 
 ### Optional
 
@@ -52,7 +52,7 @@ Only needed if you use Keycloak. See [Single sign-on with Keycloak](#single-sign
 | `ELASTIC_APM_ENABLED` and the other `ELASTIC_APM_*` settings | Send TIDE's own performance traces to an Elastic APM server. `.env.example` turns this on; set `ELASTIC_APM_ENABLED=false` if you have no APM server. |
 | `AUTH_DISABLED` | `true` turns sign-in off entirely. Only for isolated testing; never on a live install. |
 
-Your SIEMs, CTI feeds, GitLab and Keycloak instances are not set in `.env`. They are added in TIDE itself: see [Integrations](#integrations).
+Your SIEMs, OpenCTI, GitLab and Keycloak instances are not set in `.env`. They are added in TIDE itself: see [Integrations](#integrations).
 
 ---
 
@@ -67,7 +67,7 @@ TIDE uses three files in the `certs/` folder next to `docker-compose.yml`:
 
 ### Checking your integrations' certificates
 
-Every SIEM, CTI connector, GitLab and Keycloak entry in TIDE has its own **Verify TLS certificate** box.
+Every SIEM, OpenCTI connector, GitLab and Keycloak entry in TIDE has its own **Verify TLS certificate** box.
 
 - **Off (the default):** TIDE connects without checking the certificate. This suits a standalone network with self-signed certificates.
 - **On:** the integration's certificate must come from a public CA or from the CA in `certs/ca.crt`.
@@ -85,7 +85,7 @@ TIDE checks certificates as strictly as current browsers do. **Test Connection**
 | Does not name this host | The server certificate must list the exact host name (or IP address) used in the integration's URL under *Subject Alternative Name*. |
 | Outside its validity dates | Renew the certificate. |
 
-`SSL_VERIFY` in `.env` covers only TIDE's own Keycloak sign-in, not your integrations.
+`SSL_VERIFY` in `.env` covers only Keycloak sign-in from `.env`, not your integrations. Once Keycloak is an integration, its own box applies.
 
 ---
 
@@ -113,14 +113,17 @@ Add a **Group Membership** mapper to the client (token claim name `groups`), so 
 
 ### 3. Tell TIDE about Keycloak
 
-Set `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID` and `KEYCLOAK_CLIENT_SECRET` in `.env` (and `KEYCLOAK_INTERNAL_URL` if the container reaches Keycloak at a different address), then run `docker compose up -d`.
+In **Settings → Management → Integrations**, click **Add integration** and choose **Keycloak**. Enter its **Address** (as people's browsers reach it), the **Internal address** if the TIDE container reaches it at a different one, the **Realm**, the **Client ID** and the **Client secret**, and a **Password-grant client** if people should type their Keycloak password into TIDE's own sign-in form. Saving checks that the realm answers, so a mistake can't stop everyone signing in.
+
+Or set `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `KEYCLOAK_CLIENT_ID` and `KEYCLOAK_CLIENT_SECRET` in `.env` (and `KEYCLOAK_INTERNAL_URL` if the container reaches Keycloak at a different address), then run `docker compose up -d`: the first start makes them the Keycloak integration, first in the list, and from then on you manage it in TIDE.
+
+There is one Keycloak integration, the one TIDE signs people in with. If you delete it, sign-in uses the Keycloak settings in `.env` again, and the next start makes the integration from them again.
 
 ### How TIDE treats single sign-on users
 
 - **First sign-in creates the account.** TIDE gives the person a role on the Primary Client from their Keycloak groups or realm roles: a group or role named `admin`, `engineer` or `analyst` (or the plural) gives that role; otherwise they become an Analyst.
 - **Platform Admin.** Membership of a Keycloak group named `superadmin` makes someone a TIDE super admin, but only when their account is first created. After that, roles and Platform Admin are managed in TIDE (Management → Users), and Keycloak changes don't alter them.
 - **Matching existing accounts.** A person is matched to an existing TIDE account by their Keycloak ID, then username, then email. Accounts that are only TIDE accounts are never linked to single sign-on automatically.
-- **CTI visibility (optional).** A token claim `tide_tlp_max` (for example `green`) caps the TLP marking of CTI a person can see. Without it, the cap is `amber`.
 
 ---
 
@@ -157,13 +160,13 @@ Each person creates their own API keys for the [External Query API](API.md) in *
 
 ## Integrations
 
-Integrations are added in TIDE, not in `.env`. Super admins add them under **Settings → Management → Integrations**, and each has its own address, credentials and **Verify TLS certificate** setting:
+Integrations are added in TIDE. Super admins add them under **Settings → Management → Integrations** with **Add integration**, choosing what to add, and each has its own address, credentials and **Verify TLS certificate** setting. The list shows every integration, the Keycloak TIDE signs in with first; **Group by** → **Type** puts them in a group for each kind:
 
-| Integration | Used for |
-|-------------|----------|
-| **SIEMs** (Elastic) | Reading and writing detection rules. Splunk and Sentinel SIEMs can be recorded but don't sync yet. |
-| **Connectors** | CTI feeds: OpenCTI, Mandiant, CrowdStrike and other TAXII sources. |
-| **GitLab** | Recorded and linked to clients, for report publishing (planned). |
-| **Keycloak** | The Keycloak instance's connection test and details. |
+| Integration | Group | Used for |
+|-------------|-------|----------|
+| **SIEM** (Elastic) | SIEMs | Reading and writing detection rules. Splunk and Sentinel SIEMs can be recorded but don't sync yet. |
+| **OpenCTI** | Threat intel | The threat actors (intrusion sets) Threat Landscape adds to ATT&CK's. |
+| **GitLab** | Source control | Recorded and linked to clients, for report publishing (planned). |
+| **Keycloak** | Identity | Single sign-on: TIDE signs people in with it (see [Single sign-on with Keycloak](#single-sign-on-with-keycloak)). There is one. |
 
 A client's admins then link the SIEM spaces and connectors their client should use from the client's page. Credentials are stored encrypted with the key in `data/credentials.key`; see [Backups](OPERATIONS.md#backups-and-upgrades).

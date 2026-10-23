@@ -446,31 +446,14 @@ def run_mitre_sync(client_id: str | None = None):
             logger.info(f"MITRE file sync complete. Updated {mitre_actors} actors across {mitre_files} file(s).")
 
             # --- Phase 2: linked OpenCTI intrusion-set refresh (GraphQL) ---
-            # Threat Landscape only needs actor/intrusion-set coverage, not a
-            # full CTI object backfill. Running TAXII connector fetchers here
-            # can page through hundreds of thousands of objects and cause
-            # operator-facing timeout pain. Keep this path lightweight by
-            # using the historical intrusion-set GraphQL pull.
+            # Threat Landscape only needs actor/intrusion-set coverage, so
+            # each linked OpenCTI connector is read through GraphQL.
             octi_actors = 0
             opencti_runs = 0
             if client_id:
                 try:
-                    from urllib.parse import urlsplit, urlunsplit
                     from app.database import save_threat_data
-
-                    def _graphql_from_taxii_root(taxii_root: str) -> str:
-                        root = (taxii_root or "").strip()
-                        if not root:
-                            return ""
-                        parts = urlsplit(root)
-                        path = parts.path or "/"
-                        marker = "/taxii2/"
-                        if marker in path:
-                            path = path.split(marker, 1)[0] or "/"
-                        if not path.endswith("/"):
-                            path += "/"
-                        base = urlunsplit((parts.scheme, parts.netloc, path.rstrip("/"), "", ""))
-                        return base.rstrip("/")
+                    from app.services.cti_connectors.opencti_taxii import graphql_base
 
                     for connector in db.list_cti_connectors(only_active=True) or []:
                         vendor_name = str(connector.get("vendor") or "").strip().lower()
@@ -483,18 +466,18 @@ def run_mitre_sync(client_id: str | None = None):
 
                         cfg = connector.get("config") or {}
                         token = (cfg.get("token") or "").strip()
-                        graphql_base = _graphql_from_taxii_root(cfg.get("taxii_root") or "")
-                        if not (graphql_base and token):
+                        base = graphql_base(cfg.get("taxii_root") or "")
+                        if not (base and token):
                             result["warnings"].append(
                                 f"OpenCTI connector '{connector.get('label') or connector.get('id')}' "
-                                "is missing taxii_root or token."
+                                "is missing its address or token."
                             )
                             continue
 
                         opencti_runs += 1
                         try:
                             df_octi = cti_helper.get_threat_landscape(
-                                graphql_base, token, verify=tls.verify_arg(cfg.get("verify_tls")))
+                                base, token, verify=tls.verify_arg(cfg.get("verify_tls")))
                             if df_octi is None or df_octi.empty:
                                 result["warnings"].append(
                                     f"OpenCTI connector '{connector.get('label') or connector.get('id')}' returned no intrusion sets."

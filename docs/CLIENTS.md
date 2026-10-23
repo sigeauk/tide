@@ -2,7 +2,7 @@
 
 How an administrator connects TIDE to its SIEMs and threat feeds and sets up each client: its destinations, users and roles, rule validation and scoring. For signing in, single sign-on and what each role means, see [Configuration](CONFIGURATION.md); for syncing, backups and upgrades, [Operations](OPERATIONS.md).
 
-Everything here is in **Settings → Management**. Integrations (SIEMs, CTI connectors, GitLab, Keycloak) are set up by Platform Admins; a client's own settings by that client's Admins.
+Everything here is in **Settings → Management**. Integrations (SIEMs, OpenCTI connectors, GitLab, Keycloak) are set up by Platform Admins; a client's own settings by that client's Admins.
 
 ## The order to set things up
 
@@ -17,21 +17,21 @@ Everything here is in **Settings → Management**. Integrations (SIEMs, CTI conn
 
 Who can: Platform Admins.
 
-1. In **Management**, under **Integrations**, open **SIEMs** and click **New SIEM**.
+1. In **Management**, under **Integrations**, click **Add integration** and choose **SIEM**.
 2. Give it a name and choose its type. For Elastic, enter its **Elasticsearch URL**, **Kibana URL** and **API key / token**. (Splunk and Sentinel SIEMs can be recorded but don't sync yet.)
 3. Tick **Verify TLS certificate** if TIDE should check its certificate (see [Certificates](CONFIGURATION.md#certificates)).
 4. Click **Test Connection**: it checks each Kibana space and how long each took to answer. Then save.
 
 The API key needs to read and write detection rules in every space TIDE should use. To deploy rules, run hunts or save searches, it needs those rights too.
 
-**Connectors** (CTI feeds such as OpenCTI, Mandiant, CrowdStrike and other TAXII sources), **GitLab** and **Keycloak** are added the same way, under **Integrations**.
+**OpenCTI** (for Threat Landscape's threat actors), **GitLab** and **Keycloak** (single sign-on, see [Configuration](CONFIGURATION.md#single-sign-on-with-keycloak)) are added the same way, with **Add integration**.
 
 ## Create a client
 
 1. In **Management**, under **Tenants & Users**, open **Clients** and click **New Client**.
 2. Give it a name and create it. Click the client to open its page.
 
-A client's page has a section for each part of its set-up, each with an **Edit** button: **Linked SIEMs**, **Assigned Users**, **Systems**, **Baselines**, **Linked CTI Connectors**, **Linked Threat Intel (OpenCTI)**, **CTI Egress Targets**, **Rule scoring** and **Role Templates**.
+A client's page has a section for each part of its set-up, each with an **Edit** button: **Linked SIEMs**, **Assigned Users**, **Systems**, **Baselines**, **Linked CTI Connectors**, **Rule scoring** and **Role Templates**.
 
 ## Link destinations to a client
 
@@ -66,8 +66,7 @@ Click **Save thresholds**.
 
 ## Connect threat feeds
 
-- **Linked CTI Connectors** and **Linked Threat Intel (OpenCTI)**: **Edit**, then pick a connector or instance set up under **Integrations** and add it. Its actors, indicators and reports then show on the client's CTI pages and Threat Landscape.
-- **CTI Egress Targets** push the client's indicators out: to an Elasticsearch index on one of its SIEM destinations, or as STIX bundles to a folder. Each has a **TLP ceiling**; indicators marked stricter are left out.
+- **Linked CTI Connectors**: **Edit**, then pick an OpenCTI connector set up under **Integrations** and add it. **Sync Threats** on Threat Landscape then brings in its intrusion sets.
 
 ## Move systems and baselines between clients
 
@@ -78,4 +77,4 @@ Click **Save thresholds**.
 
 - **Classifications**: the classification names and colours systems can carry.
 - **Sigma Assets**: **Custom Pipelines** and **Postprocessing Templates** for converting Sigma rules; **Assign tenants** chooses which clients may use each.
-- **Data export & import**, **Backups** and **Query** are covered in [Operations](OPERATIONS.md).
+- **Data export & import** and **Backups** are covered in [Operations](OPERATIONS.md). **Query** is in [Diagnostics](OPERATIONS.md#diagnostics).

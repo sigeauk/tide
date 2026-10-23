@@ -46,16 +46,15 @@ def _row_counts(path: str) -> dict:
         conn.close()
 
 
-def _referenced(data_dir: str) -> tuple[set, set]:
-    """Return (tenant files listed in clients, files derived from them)."""
+def _referenced(data_dir: str) -> set:
+    """Return the tenant files listed in clients."""
     shared = os.path.join(data_dir, "tide.duckdb")
     conn = duckdb.connect(shared, read_only=True)
     try:
-        listed = {r[0] for r in conn.execute(
+        return {r[0] for r in conn.execute(
             "SELECT db_filename FROM clients WHERE db_filename IS NOT NULL").fetchall()}
     finally:
         conn.close()
-    return listed, {"cti_" + name for name in listed}
 
 
 def main() -> int:
@@ -76,12 +75,12 @@ def main() -> int:
     for wal in sorted(f for f in os.listdir(data_dir) if f.endswith(".wal")):
         problems.append(f"{wal}: unflushed WAL; stop the app cleanly (docker compose down) and try again")
 
-    listed, cti = _referenced(data_dir)
+    listed = _referenced(data_dir)
     for name in sorted(listed):
         if name not in dbs:
             problems.append(f"{name}: listed in clients but missing from {data_dir}")
     for name in dbs:
-        if name != "tide.duckdb" and name not in listed and name not in cti:
+        if name != "tide.duckdb" and name not in listed:
             problems.append(f"{name}: not referenced by any tenant (safe to remove if unused)")
 
     current = {}

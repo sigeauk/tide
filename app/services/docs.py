@@ -53,7 +53,7 @@ PAGES: List[Page] = [
     Page("at-a-glance", "TIDE at a glance", DOCS / "AT_A_GLANCE.md", "about", "What TIDE does for your team, with your own figures, and how to get the most from it."),
     Page("getting-started", "Getting started", DOCS / "GETTING_STARTED.md", "use", "Signing in, choosing a client, and the controls every page shares."),
     Page("systems", "Systems & baselines", DOCS / "SYSTEMS.md", "use", "Systems, baselines and their techniques, coverage, risks, devices and CVEs."),
-    Page("threats", "Threat intelligence", DOCS / "THREATS.md", "use", "Threat Landscape, the Heatmap, the MITRE pages and CTI."),
+    Page("threats", "Threat intelligence", DOCS / "THREATS.md", "use", "Threat Landscape, the Heatmap and the MITRE pages."),
     Page("rules", "Rules", DOCS / "RULES.md", "engineer", "Rule Health, the rule window, Move, Compare and Merge, and upstream updates."),
     Page("libraries", "Sigma, Elastic & Hunting", DOCS / "LIBRARIES.md", "engineer", "Converting and deploying Elastic's and the Sigma rules, and running hunts."),
     Page("install", "Installing TIDE", ROOT / "README.md", "admin", "What TIDE needs, and installing it."),
@@ -197,7 +197,6 @@ HELP = {
     "heatmap": ("threats", "heatmap"),
     "mitre": ("threats", "the-mitre-pages"),
     "nist": ("threats", "nist-800-53"),
-    "cti": ("threats", "cti"),
     "clients": ("clients", "the-order-to-set-things-up"),
     "client": ("clients", "link-destinations-to-a-client"),
 }

@@ -2,12 +2,14 @@
 {% from "macros/icons.html" import icon %}
 {% from "macros/diagnostics_ui.html" import check_list %}
 {% from "macros/sync_ui.html" import sync_state, sync_when, sync_took, sync_what, sync_retry, sync_steps_failed %}
+{% from "components/ui/loading_state.html" import loading_state %}
 {% block title %}Diagnostics - TIDE{% endblock %}
 
 {#
   Diagnostics (super admins, and Support for one client): a snapshot of the install and each client,
   read-only checks that say what they found, what it means and what to do, fixes where a client
-  allows them, and (super admins) Access.
+  allows them, and (super admins) Access and the read-only Query console (app/api/management.py).
+  Each section folds open and closed, as Management's do.
   Context: snap (app.services.diagnostics.snapshot), checks, clients, full, fixes, fix_ok, runs,
   and for a super admin h, actions, me, result (partials/diagnostics_access.html).
 #}
@@ -65,177 +67,230 @@
     </div>
 </div>
 
-<section class="card card-padded diag-section" aria-label="Checks">
-    <div class="diag-section__head">
-        <div>
-            <h2 class="section-title">{{ icon('shield-check', '16') }} Checks</h2>
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('shield-check', '18') }}
+        <span class="mgmt-section__title">Checks</span>
+        <span class="mgmt-section__hint">Known problems, looked for without changing anything</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <div class="diag-section__head">
             <p class="text-secondary diag-intro">Each check reads data and reports what it finds, what it means and what to do. Open a check to see its findings.</p>
+            <div class="diag-toolbar">
+                <select id="diag-client" name="client" class="form-input form-select" aria-label="Which clients to check">
+                    {% if clients | length > 1 %}<option value="all">All clients</option>{% endif %}
+                    {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+                </select>
+                <button name="Run All Checks" type="button" class="btn btn-primary"
+                        hx-get="/api/diagnostics/run?check=all" hx-include="#diag-client"
+                        hx-target="#diag-checks" hx-swap="outerHTML" hx-indicator="#diag-running" hx-disabled-elt="this">
+                    {{ icon('activity', '14') }} Run all checks
+                </button>
+                <span id="diag-running" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Running…</span>
+            </div>
         </div>
-        <div class="diag-toolbar">
-            <select id="diag-client" name="client" class="form-input form-select" aria-label="Which clients to check">
-                {% if clients | length > 1 %}<option value="all">All clients</option>{% endif %}
-                {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
-            </select>
-            <button name="Run All Checks" type="button" class="btn btn-primary"
-                    hx-get="/api/diagnostics/run?check=all" hx-include="#diag-client"
-                    hx-target="#diag-checks" hx-swap="outerHTML" hx-indicator="#diag-running" hx-disabled-elt="this">
-                {{ icon('activity', '14') }} Run all checks
-            </button>
-            <span id="diag-running" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Running…</span>
-        </div>
+        {{ check_list(checks, {}, fixes, fix_ok) }}
     </div>
-    {{ check_list(checks, {}, fixes, fix_ok) }}
-</section>
+</details>
 
-<section class="card card-padded diag-section" aria-label="Look up">
-    <div class="diag-section__head">
-        <div>
-            <h2 class="section-title">{{ icon('search', '16') }} Look up</h2>
-            <p class="text-secondary diag-intro">See everything TIDE holds for one {{ 'rule, user or destination, across every client' if full else 'rule or destination in ' ~ clients[0].name }}, with names and spaces shown exactly as stored.</p>
-        </div>
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('search', '18') }}
+        <span class="mgmt-section__title">Look up</span>
+        <span class="mgmt-section__hint">{{ 'A rule, user or destination' if full else 'A rule or destination' }}, exactly as stored</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary diag-intro">See everything TIDE holds for one {{ 'rule, user or destination, across every client' if full else 'rule or destination in ' ~ clients[0].name }}, with names and spaces shown exactly as stored.</p>
+        <form class="diag-lookup__form" hx-get="/api/diagnostics/lookup" hx-target="#diag-lookup-results" hx-swap="innerHTML"
+              hx-indicator="#diag-looking" hx-disabled-elt="find button">
+            <select name="kind" class="form-input form-select" aria-label="What to look up"
+                    data-change="ui.lookupKind">
+                <option value="rule" data-hint="Rule name, part of one, or a rule ID">Rule</option>
+                {% if 'user' in lookup_kinds %}<option value="user" data-hint="Username, email or name">User</option>{% endif %}
+                <option value="destination" data-hint="Destination name or Kibana space">Destination</option>
+            </select>
+            <input type="search" name="q" class="form-input" placeholder="Rule name, part of one, or a rule ID"
+                   aria-label="Search" required minlength="2" autocomplete="off">
+            <button name="Look Up" type="submit" class="btn btn-primary">{{ icon('search', '14') }} Look up</button>
+            <span id="diag-looking" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Looking…</span>
+        </form>
+        <div id="diag-lookup-results" class="diag-lookup" aria-live="polite"></div>
     </div>
-    <form class="diag-lookup__form" hx-get="/api/diagnostics/lookup" hx-target="#diag-lookup-results" hx-swap="innerHTML"
-          hx-indicator="#diag-looking" hx-disabled-elt="find button">
-        <select name="kind" class="form-input form-select" aria-label="What to look up"
-                data-change="ui.lookupKind">
-            <option value="rule" data-hint="Rule name, part of one, or a rule ID">Rule</option>
-            {% if 'user' in lookup_kinds %}<option value="user" data-hint="Username, email or name">User</option>{% endif %}
-            <option value="destination" data-hint="Destination name or Kibana space">Destination</option>
-        </select>
-        <input type="search" name="q" class="form-input" placeholder="Rule name, part of one, or a rule ID"
-               aria-label="Search" required minlength="2" autocomplete="off">
-        <button name="Look Up" type="submit" class="btn btn-primary">{{ icon('search', '14') }} Look up</button>
-        <span id="diag-looking" class="htmx-indicator text-secondary">{{ icon('loader', '14', 'spin') }} Looking…</span>
-    </form>
-    <div id="diag-lookup-results" class="diag-lookup" aria-live="polite"></div>
-</section>
+</details>
 
 {% if full %}
-<section class="card card-padded diag-section" aria-label="Access">
-    <h2 class="section-title">{{ icon('shield', '16') }} Access</h2>
-    <p class="text-secondary diag-intro">Who has <strong>Platform Admin</strong> (every client, and this page) and who has <strong>Support</strong> (Diagnostics for one client). Grant or revoke either by username. Granting Support also adds the user to that client. You can't change your own Platform Admin. Every change is recorded in the audit log.</p>
-    {% include "partials/diagnostics_access.html" %}
-</section>
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('shield', '18') }}
+        <span class="mgmt-section__title">Access</span>
+        <span class="mgmt-section__hint">Who has Platform Admin and Support</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary diag-intro">Who has <strong>Platform Admin</strong> (every client, and this page) and who has <strong>Support</strong> (Diagnostics for one client). Grant or revoke either by username. Granting Support also adds the user to that client. You can't change your own Platform Admin. Every change is recorded in the audit log.</p>
+        {% include "partials/diagnostics_access.html" %}
+    </div>
+</details>
 {% endif %}
 
-<section class="card card-padded diag-section" aria-label="Clients">
-    <h2 class="section-title">{{ icon('database', '16') }} Clients</h2>
-    {% for c in snap.clients %}
-    <div class="diag-client">
-        <div class="diag-client__head">
-            <h3 class="diag-client__name">{{ c.name }} <span class="text-muted diag-client__size" title="Size of this client's database file">{{ size(c.db_size) }}</span></h3>
-            {% with c=c, on=fix_ok.get(c.id), full=full %}{% include "partials/diagnostics_fix_switch.html" %}{% endwith %}
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('database', '18') }}
+        <span class="mgmt-section__title">Clients</span>
+        <span class="mgmt-section__hint">Each client's destinations, and whether its SIEMs answered</span>
+    </summary>
+    <div class="mgmt-section__body">
+        {% for c in snap.clients %}
+        <div class="diag-client">
+            <div class="diag-client__head">
+                <h3 class="diag-client__name">{{ c.name }} <span class="text-muted diag-client__size" title="Size of this client's database file">{{ size(c.db_size) }}</span></h3>
+                {% with c=c, on=fix_ok.get(c.id), full=full %}{% include "partials/diagnostics_fix_switch.html" %}{% endwith %}
+            </div>
+            {% if c.destinations %}
+            <div class="diag-table-wrap"><table class="diag-table diag-table--fixed">
+                <colgroup><col class="diag-col-dest"><col class="diag-col-siem"><col class="diag-col-space"><col class="diag-col-num"><col class="diag-col-when"><col class="diag-col-state"></colgroup>
+                <thead><tr><th>Destination</th><th>SIEM</th><th>Space</th><th>Rules</th><th>Last rule change</th><th>Last sync check</th></tr></thead>
+                <tbody>
+                {% for d in c.destinations %}
+                <tr>
+                    <td>{{ d.name }}</td>
+                    <td>{{ d.siem }}</td>
+                    <td><code>{{ d.space }}</code></td>
+                    <td>{{ d.rules }}</td>
+                    <td>{{ d.last_rule_change.strftime('%Y-%m-%d %H:%M') if d.last_rule_change else '—' }}</td>
+                    <td>
+                        {% if d.reachable is none %}<span class="status-pill status-muted">Not checked yet</span>
+                        {% elif d.reachable %}<span class="status-pill status-success" title="Checked {{ d.checked_at.strftime('%Y-%m-%d %H:%M') if d.checked_at else '' }}">Reachable</span>
+                        {% else %}<span class="status-pill status-danger" title="{{ d.reason }}">Unreachable</span>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table></div>
+            {% else %}
+            <p class="text-muted">No destinations linked.</p>
+            {% endif %}
         </div>
-        {% if c.destinations %}
-        <div class="diag-table-wrap"><table class="diag-table diag-table--fixed">
-            <colgroup><col class="diag-col-dest"><col class="diag-col-siem"><col class="diag-col-space"><col class="diag-col-num"><col class="diag-col-when"><col class="diag-col-state"></colgroup>
-            <thead><tr><th>Destination</th><th>SIEM</th><th>Space</th><th>Rules</th><th>Last rule change</th><th>Last sync check</th></tr></thead>
+        {% endfor %}
+    </div>
+</details>
+
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('refresh-cw', '18') }}
+        <span class="mgmt-section__title">Sync activity</span>
+        <span class="mgmt-section__hint">The last 90 days, with Retry</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary diag-intro">Rule and Threat Landscape syncs{{ '' if full else ' for ' ~ clients[0].name }}, newest first, kept for 90 days. A sync still running when TIDE restarted shows as interrupted. Retry runs a rule sync of the client you have selected again, over the same destinations.</p>
+        {% if sync_runs %}
+        <div class="diag-table-wrap diag-section__table diag-table-wrap--scroll"><table class="diag-table">
+            <thead><tr><th>Started</th><th>Client</th><th>What</th><th>Started by</th><th>Result</th><th>Count</th><th>Took</th><th>Why</th><th></th></tr></thead>
             <tbody>
-            {% for d in c.destinations %}
+            {% for r in sync_runs %}
             <tr>
-                <td>{{ d.name }}</td>
-                <td>{{ d.siem }}</td>
-                <td><code>{{ d.space }}</code></td>
-                <td>{{ d.rules }}</td>
-                <td>{{ d.last_rule_change.strftime('%Y-%m-%d %H:%M') if d.last_rule_change else '—' }}</td>
-                <td>
-                    {% if d.reachable is none %}<span class="status-pill status-muted">Not checked yet</span>
-                    {% elif d.reachable %}<span class="status-pill status-success" title="Checked {{ d.checked_at.strftime('%Y-%m-%d %H:%M') if d.checked_at else '' }}">Reachable</span>
-                    {% else %}<span class="status-pill status-danger" title="{{ d.reason }}">Unreachable</span>{% endif %}
+                <td class="diag-nowrap">{{ sync_when(r) }}</td>
+                <td>{{ r.client }}</td>
+                <td>{{ sync_what(r) }}{% if r.retry_of %} <span class="text-muted">(retry)</span>{% endif %}</td>
+                <td>{{ 'scheduled' if r.trigger == 'scheduled' else (r.actor or '—') }}</td>
+                <td>{{ sync_state(r) }}</td>
+                <td>{{ r.total_count if r.status in ('success', 'partial') else '—' }}</td>
+                <td class="diag-nowrap">{{ sync_took(r) }}</td>
+                <td>{{ r.error or '' }}{% set steps = sync_steps_failed(r) %}{% if steps %}{{ ' ' if r.error }}{{ steps }}{% endif %}</td>
+                <td class="diag-nowrap">{% if r.client_id == active_client %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        {% else %}
+        <p class="text-muted">No syncs recorded yet.</p>
+        {% endif %}
+    </div>
+</details>
+
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('zap', '18') }}
+        <span class="mgmt-section__title">Fixes</span>
+        <span class="mgmt-section__hint">Applied from the checks, with Undo</span>
+    </summary>
+    <div class="mgmt-section__body">
+        <p class="text-secondary diag-intro">Fixes applied from the checks above, newest first. Each backed up the client's database first; Undo puts back exactly what it changed.
+        {%- if full %} Turn fixes on for a client under Clients below.{% endif %}</p>
+        {% if runs %}
+        <div class="diag-table-wrap diag-section__table"><table class="diag-table">
+            <thead><tr><th>When</th><th>Client</th><th>Fix</th><th>Changed</th><th>By</th><th>Backup</th><th></th></tr></thead>
+            <tbody>
+            {% for r in runs %}
+            <tr>
+                <td class="diag-nowrap">{{ r.at.strftime('%Y-%m-%d %H:%M') if r.at else '—' }}</td>
+                <td>{{ r.client }}</td>
+                <td>{{ r.fix.label if r.fix else r.fix_id }}</td>
+                <td>{{ r.changed }}</td>
+                <td>{{ r.actor }}</td>
+                <td><code class="text-muted">{{ r.backup }}</code></td>
+                <td class="diag-nowrap">
+                    {% if r.undone_at %}<span class="text-muted" title="Undone by {{ r.undone_by }} {{ r.undone_at.strftime('%Y-%m-%d %H:%M') }}">Undone</span>
+                    {% else %}
+                    <span class="diag-fix">
+                    <button name="Undo Fix" type="button" class="btn btn-secondary btn-sm"
+                            hx-post="/api/diagnostics/fix/undo/{{ r.id }}?client={{ r.client_id }}"
+                            hx-target="closest .diag-fix" hx-swap="outerHTML" hx-disabled-elt="this"
+                            hx-confirm="Put back exactly what this fix changed?">{{ icon('rotate-ccw', '13') }} Undo</button>
+                    </span>
+                    {% endif %}
                 </td>
             </tr>
             {% endfor %}
             </tbody>
         </table></div>
         {% else %}
-        <p class="text-muted">No destinations linked.</p>
+        <p class="text-muted">No fixes applied yet.</p>
         {% endif %}
     </div>
-    {% endfor %}
-</section>
+</details>
 
-<section class="card card-padded diag-section" aria-label="Sync activity">
-    <h2 class="section-title">{{ icon('refresh-cw', '16') }} Sync activity</h2>
-    <p class="text-secondary diag-intro">Rule and CTI syncs{{ '' if full else ' for ' ~ clients[0].name }}, newest first, kept for 90 days. A sync still running when TIDE restarted shows as interrupted. Retry runs a rule sync of the client you have selected again, over the same destinations.</p>
-    {% if sync_runs %}
-    <div class="diag-table-wrap diag-section__table diag-table-wrap--scroll"><table class="diag-table">
-        <thead><tr><th>Started</th><th>Client</th><th>What</th><th>Started by</th><th>Result</th><th>Count</th><th>Took</th><th>Why</th><th></th></tr></thead>
-        <tbody>
-        {% for r in sync_runs %}
-        <tr>
-            <td class="diag-nowrap">{{ sync_when(r) }}</td>
-            <td>{{ r.client }}</td>
-            <td>{{ sync_what(r) }}{% if r.retry_of %} <span class="text-muted">(retry)</span>{% endif %}</td>
-            <td>{{ 'scheduled' if r.trigger == 'scheduled' else (r.actor or '—') }}</td>
-            <td>{{ sync_state(r) }}</td>
-            <td>{{ r.total_count if r.status in ('success', 'partial') else '—' }}</td>
-            <td class="diag-nowrap">{{ sync_took(r) }}</td>
-            <td>{{ r.error or '' }}{% set steps = sync_steps_failed(r) %}{% if steps %}{{ ' ' if r.error }}{{ steps }}{% endif %}</td>
-            <td class="diag-nowrap">{% if r.client_id == active_client %}{{ sync_retry(r, target='closest td', swap='innerHTML') }}{% endif %}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table></div>
-    {% else %}
-    <p class="text-muted">No syncs recorded yet.</p>
-    {% endif %}
-</section>
+<details class="mgmt-section" open>
+    <summary class="mgmt-section__summary">
+        {{ icon('triangle-alert', '18') }}
+        <span class="mgmt-section__title">Recent errors</span>
+        <span class="mgmt-section__hint">From TIDE's log</span>
+    </summary>
+    <div class="mgmt-section__body">
+        {% if not snap.errors.available %}
+        <p class="text-muted">No log file to read.</p>
+        {% elif not snap.errors.entries %}
+        <p class="text-muted">No errors in the recent log.</p>
+        {% else %}
+        <div class="diag-table-wrap"><table class="diag-table">
+            <thead><tr><th>When (UTC)</th><th>Where</th><th>Message</th></tr></thead>
+            <tbody>
+            {% for e in snap.errors.entries %}
+            <tr>
+                <td class="diag-nowrap">{{ e.at.strftime('%Y-%m-%d %H:%M:%S') if e.at else '—' }}</td>
+                <td>{{ e.route if e.route and e.route != '-' else e.logger }}</td>
+                <td>{{ e.message }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table></div>
+        {% endif %}
+    </div>
+</details>
 
-<section class="card card-padded diag-section" aria-label="Fixes">
-    <h2 class="section-title">{{ icon('zap', '16') }} Fixes</h2>
-    <p class="text-secondary diag-intro">Fixes applied from the checks above, newest first. Each backed up the client's database first; Undo puts back exactly what it changed.
-    {%- if full %} Turn fixes on for a client under Clients below.{% endif %}</p>
-    {% if runs %}
-    <div class="diag-table-wrap diag-section__table"><table class="diag-table">
-        <thead><tr><th>When</th><th>Client</th><th>Fix</th><th>Changed</th><th>By</th><th>Backup</th><th></th></tr></thead>
-        <tbody>
-        {% for r in runs %}
-        <tr>
-            <td class="diag-nowrap">{{ r.at.strftime('%Y-%m-%d %H:%M') if r.at else '—' }}</td>
-            <td>{{ r.client }}</td>
-            <td>{{ r.fix.label if r.fix else r.fix_id }}</td>
-            <td>{{ r.changed }}</td>
-            <td>{{ r.actor }}</td>
-            <td><code class="text-muted">{{ r.backup }}</code></td>
-            <td class="diag-nowrap">
-                {% if r.undone_at %}<span class="text-muted" title="Undone by {{ r.undone_by }} {{ r.undone_at.strftime('%Y-%m-%d %H:%M') }}">Undone</span>
-                {% else %}
-                <span class="diag-fix">
-                <button name="Undo Fix" type="button" class="btn btn-secondary btn-sm"
-                        hx-post="/api/diagnostics/fix/undo/{{ r.id }}?client={{ r.client_id }}"
-                        hx-target="closest .diag-fix" hx-swap="outerHTML" hx-disabled-elt="this"
-                        hx-confirm="Put back exactly what this fix changed?">{{ icon('rotate-ccw', '13') }} Undo</button>
-                </span>
-                {% endif %}
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table></div>
-    {% else %}
-    <p class="text-muted">No fixes applied yet.</p>
-    {% endif %}
-</section>
-
-<section class="card card-padded diag-section" aria-label="Recent errors">
-    <h2 class="section-title">{{ icon('triangle-alert', '16') }} Recent errors</h2>
-    {% if not snap.errors.available %}
-    <p class="text-muted">No log file to read.</p>
-    {% elif not snap.errors.entries %}
-    <p class="text-muted">No errors in the recent log.</p>
-    {% else %}
-    <div class="diag-table-wrap"><table class="diag-table">
-        <thead><tr><th>When (UTC)</th><th>Where</th><th>Message</th></tr></thead>
-        <tbody>
-        {% for e in snap.errors.entries %}
-        <tr>
-            <td class="diag-nowrap">{{ e.at.strftime('%Y-%m-%d %H:%M:%S') if e.at else '—' }}</td>
-            <td>{{ e.route if e.route and e.route != '-' else e.logger }}</td>
-            <td>{{ e.message }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table></div>
-    {% endif %}
-</section>
+{% if full %}
+{# The read-only DuckDB console, loaded when the page opens (app/api/management.py, _render_query_tab). #}
+<details class="mgmt-section" id="diag-query-section">
+    <summary class="mgmt-section__summary">
+        {{ icon('database', '18') }}
+        <span class="mgmt-section__title">Query</span>
+        <span class="mgmt-section__hint">Read-only DuckDB diagnostics (super-admin)</span>
+    </summary>
+    <div name="Open Query" class="mgmt-section__body"
+         hx-get="/api/management/tab/query"
+         hx-trigger="load"
+         hx-swap="innerHTML">
+        {{ loading_state("Loading the query console…") }}
+    </div>
+</details>
+{% endif %}
 {% endblock %}

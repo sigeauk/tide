@@ -1,0 +1,50 @@
+{# The Integrations section of Management (app/api/management.py, _integrations_html): every
+   integration as one list of cards, the Keycloak TIDE signs in with first, or with Group by → Type a
+   group for each type. Group by is remembered per browser (a cookie the list's GET sets). The cards
+   come from each type's card function in management.py; Add integration opens that type's dialog
+   (management.html, management.js). #}
+{% from "macros/icons.html" import icon %}
+{% from "macros/filters.html" import filter_choice %}
+{% set int_hx = 'hx-get="/api/management/tab/integrations" hx-trigger="change" hx-target="#mgmt-integrations" hx-swap="innerHTML"' %}
+{{ banner | safe }}
+<div class="mgmt-tab-head">
+    <span class="text-secondary">{{ total }} integration{{ 's' if total != 1 }}</span>
+    <div class="flex gap-sm items-end">
+        {{ filter_choice('int-group', 'group', 'Group by', group_options, group, none, int_hx) }}
+        <div class="rh-more" data-more>
+            <button name="Add Integration" type="button" class="btn btn-primary" data-more-toggle
+                    aria-haspopup="menu" aria-expanded="false" title="Add a SIEM, OpenCTI, GitLab or Keycloak">
+                {{ icon('plus', '16') }} Add integration {{ icon('chevron-down', '14') }}
+            </button>
+            <div class="rh-more__menu" role="menu" hidden>
+                <button name="Add SIEM" type="button" role="menuitem" class="rh-more__item" data-click="mgmt.siemNew">{{ icon('shield-check', '14') }}<span>SIEM</span></button>
+                <button name="Add OpenCTI" type="button" role="menuitem" class="rh-more__item" data-click="mgmt.connectorNew">{{ icon('target', '14') }}<span>OpenCTI</span></button>
+                <button name="Add GitLab" type="button" role="menuitem" class="rh-more__item" data-click="mgmt.gitlabNew">{{ icon('gitlab', '14') }}<span>GitLab</span></button>
+                {% if can_add_keycloak %}
+                <button name="Add Keycloak" type="button" role="menuitem" class="rh-more__item" data-click="mgmt.keycloakNew">{{ icon('key', '14') }}<span>Keycloak</span></button>
+                {% endif %}
+                <div class="rh-more__sep" role="separator"></div>
+                <button name="Import Connectors" type="button" role="menuitem" class="rh-more__item" data-click="mgmt.importOpen"
+                        title="Import connectors from JSON exported from another TIDE">{{ icon('download', '14') }}<span>Import from JSON…</span></button>
+            </div>
+        </div>
+    </div>
+</div>
+{% if group == 'type' %}
+{% for g in groups %}
+<details class="sys-group sys-group--outer" open data-integration-group="{{ g.key }}">
+    <summary class="sys-group__head">
+        <span class="sys-group__chev">{{ icon('chevron-down', '14') }}</span>
+        <span class="sys-group__label">{{ icon(g.icon, '16') }} {{ g.title }}</span>
+        <span class="sys-group__meta">{{ g.what }} · {{ g.cards | length }}</span>
+    </summary>
+    <div class="sys-group__body">
+        <div class="systems-grid">{% for card in g.cards %}{{ card | safe }}{% endfor %}</div>
+    </div>
+</details>
+{% endfor %}
+{% else %}
+<div class="systems-grid">{% for g in groups %}{% for card in g.cards %}{{ card | safe }}{% endfor %}{% endfor %}</div>
+{% endif %}
+{{ empty | safe }}
+<script type="application/json" id="connector-data">{{ connector_payload | safe }}</script>

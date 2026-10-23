@@ -20,7 +20,6 @@ console.debug('TIDE app.js loading...');
         'nav-group-rules',
         'nav-group-threats',
         'nav-group-mitre',
-        'nav-group-cti',
         'nav-group-account'
     ];
 

@@ -1,11 +1,11 @@
 # Threat intelligence
 
-How to see who might attack you, what they do, and how much of it your rules would catch: Threat Landscape, the Heatmap, the MITRE pages and CTI. Read [Getting started](GETTING_STARTED.md) first for the controls every page shares.
+How to see who might attack you, what they do, and how much of it your rules would catch: Threat Landscape, the Heatmap and the MITRE pages. Read [Getting started](GETTING_STARTED.md) first for the controls every page shares.
 
 ## Where it comes from
 
 - **MITRE ATT&CK**, built into TIDE: the tactics, techniques, groups, software, campaigns and mitigations ATT&CK describes, for Enterprise, ICS and Mobile, and how NIST 800-53 controls map to them.
-- **Your threat feeds**: OpenCTI and other CTI connectors your administrator links to the client bring threat actors, indicators and reports.
+- **OpenCTI**, when your administrator links an OpenCTI connector to the client: its intrusion sets join ATT&CK's groups on Threat Landscape.
 
 **Coverage** here always means: does an *enabled* rule of yours carry the ATT&CK technique? It is worked out from your rules' ATT&CK tags, across all your destinations. It is not a system's coverage, which also needs the rule mapped to a baseline technique (see [Systems & baselines](SYSTEMS.md)).
 
@@ -62,13 +62,3 @@ The baseline has one technique for each ATT&CK technique it uses, each described
 ### NIST 800-53
 
 **NIST** lists NIST 800-53 control families. Open a family to see its capabilities, and a capability to see the ATT&CK techniques it mitigates and whether your rules cover them.
-
-## CTI
-
-The **CTI** pages show what your threat feeds hold for the client. They need a CTI connector linked to the client (see [Setting up clients](CLIENTS.md)).
-
-- **Indicators**: observables (IP addresses, domains, file hashes and so on) with their pattern, confidence, TLP marking and the ATT&CK techniques they relate to. You see only indicators within the client's TLP ceiling. Filter by **Pattern**, **TLP** and **Source**.
-- **Actors**: intrusion sets and threat actors, with their origin, aliases and the indicators linked to them. Filter by **Type**, **Origin** and **Source**.
-- **Reports**: published reports, with the actors and indicators they name. Filter by **Source** and **Label**.
-
-Click one to see its detail and what it is linked to. Each page's **Sync** button (**Sync indicators**, **Sync actors**, **Sync reports**) fetches the latest from the feeds; connectors can also sync on a schedule your administrator sets.

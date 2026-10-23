@@ -184,22 +184,6 @@ def tab_clients(request: Request, db: DbDep, user: RequireAdmin, client_id: Acti
     return _render_clients_tab(clients)
 
 
-@router.get("/tab/siems", response_class=HTMLResponse)
-def tab_siems(request: Request, db: DbDep, user: RequireSuperadmin, client_id: ActiveClient):
-    """SIEMs tab partial for the management hub.
-
-    Restricted to platform super-admins (4.1.6). Tenant admins manage which
-    SIEMs are linked to their tenants from the Settings → Clients → tenant
-    detail page; the global inventory (where API tokens live) is no longer
-    visible to them. Closes the cross-tenant credential-leak path where any
-    tenant admin could read every other tenant's stored API keys.
-    """
-    siems = db.list_siem_inventory()
-    for s in siems:
-        s["_clients"] = db.get_siem_clients(s["id"])
-    return _render_siems_tab(siems)
-
-
 def _filter_users_for_admin(db, user, users):
     """Return only users that share a tenant with the requesting admin.
 
@@ -403,153 +387,160 @@ def tab_threat_intel(request: Request, db: DbDep, user: RequireSuperadmin):
     return HTMLResponse(
         '<div class="text-secondary p-md">'
         'Threat Intel (legacy OpenCTI GraphQL) was retired in 5.0.0. '
-        'Add OpenCTI as an <code>opencti_taxii</code> connector under '
-        '<a href="/settings/management#mgmt-sub-connectors" class="text-primary">Management → Connectors</a> '
+        'Add OpenCTI with <strong>Add integration</strong> under '
+        '<a href="/settings/management#mgmt-integrations" class="text-primary">Management → Integrations</a> '
         'instead.</div>'
     )
 
 
-@router.get("/tab/gitlab", response_class=HTMLResponse)
-def tab_gitlab(request: Request, db: DbDep, user: RequireSuperadmin):
-    """GitLab tab partial for the management hub."""
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(_render_gitlab_tab(instances))
-
-
-@router.get("/tab/keycloak", response_class=HTMLResponse)
-def tab_keycloak(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Keycloak tab partial for the management hub."""
-    instances = db.list_keycloak_inventory()
-    return HTMLResponse(_render_keycloak_tab(instances))
-
-
 # ---------------------------------------------------------------------------
-# Keycloak Inventory CRUD
+# Keycloak: the integration TIDE signs people in with (app.services.keycloak_config)
+#
+# There is one. Saving it first checks that its realm answers at the address TIDE calls, so a
+# typo can't stop everyone signing in; a refusal is a 400 in plain text, which the dialog shows.
 # ---------------------------------------------------------------------------
+
+def _keycloak_realm_check(url: str, realm: str, verify) -> tuple:
+    """Whether the Keycloak at ``url`` serves ``realm`` (its OpenID discovery document): (ok, message)."""
+    import requests as _req
+    discovery_url = f"{url.rstrip('/')}/realms/{realm}/.well-known/openid-configuration"
+    try:
+        resp = _req.get(discovery_url, timeout=8, verify=tls.verify_arg(verify))
+    except Exception as exc:
+        return False, str(exc)[:140]
+    if resp.status_code == 200:
+        return True, f"Realm '{realm}' discovered"
+    if resp.status_code == 404:
+        return False, f"Realm '{realm}' not found (404)"
+    return False, f"HTTP {resp.status_code}"
+
+
+def _form_refused(why: str) -> Response:
+    """An integration dialog's save refused: a 400 in plain text, which the dialog (management.js
+    submitTo) shows while it stays open."""
+    return Response(why, status_code=400, media_type="text/plain")
+
 
 @router.post("/keycloak/test-connection", response_class=HTMLResponse)
 async def test_keycloak_connection(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Test connectivity to a Keycloak instance via its OIDC discovery endpoint."""
+    """Test a Keycloak via its OIDC discovery endpoint, at the address TIDE itself calls."""
+    from starlette.concurrency import run_in_threadpool
     form = await request.form()
     kc_id = str(form.get("keycloak_id", "")).strip()
-    url = str(form.get("url", "")).strip()
+    url = str(form.get("internal_url", "")).strip() or str(form.get("url", "")).strip()
     realm = str(form.get("realm", "master")).strip() or "master"
 
     if not url:
         return HTMLResponse('<span class="badge badge-warning">URL is required</span>')
 
-    def _persist(status: str, msg: str) -> None:
-        if not kc_id:
-            return
+    # In a worker thread: an unreachable Keycloak must not hold up the rest of TIDE.
+    ok, msg = await run_in_threadpool(_keycloak_realm_check, url, realm, _form_tls_verify(form))
+    if kc_id:
         try:
-            db.update_inventory_test_status("keycloak", kc_id, status, msg[:140])
+            db.update_inventory_test_status("keycloak", kc_id, "pass" if ok else "fail", msg[:140])
         except Exception:
             pass
-
-    try:
-        import requests as _req
-        from starlette.concurrency import run_in_threadpool
-        discovery_url = f"{url.rstrip('/')}/realms/{realm}/.well-known/openid-configuration"
-        # In a worker thread: an unreachable Keycloak must not hold up the rest of TIDE.
-        resp = await run_in_threadpool(_req.get, discovery_url, timeout=8,
-                                       verify=tls.verify_arg(_form_tls_verify(form)))
-        if resp.status_code == 200:
-            _persist("pass", f"Realm '{realm}' discovered")
-            return HTMLResponse(
-                f'<span class="badge badge-success">Connected &mdash; realm <strong>{_esc(realm)}</strong> found</span>'
-            )
-        elif resp.status_code == 404:
-            _persist("fail", f"Realm '{realm}' not found (404)")
-            return HTMLResponse(
-                f'<span class="badge badge-danger">Realm &ldquo;{_esc(realm)}&rdquo; not found (404)</span>'
-            )
-        else:
-            _persist("fail", f"HTTP {resp.status_code}")
-            return HTMLResponse(f'<span class="badge badge-danger">HTTP {resp.status_code}</span>')
-    except Exception as exc:
-        logger.warning(f"Keycloak test-connection error: {exc}")
-        _persist("fail", str(exc)[:140])
-        return HTMLResponse(f'<span class="badge badge-danger">Error &mdash; {_esc(str(exc)[:120])}</span>')
+    if ok:
+        return HTMLResponse(
+            f'<span class="badge badge-success">Connected &mdash; realm <strong>{_esc(realm)}</strong> found</span>'
+        )
+    logger.warning(f"Keycloak test-connection failed: {msg}")
+    return HTMLResponse(f'<span class="badge badge-danger">{_esc(msg)}</span>')
 
 
 @router.post("/keycloak", response_class=HTMLResponse)
 async def create_keycloak(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Create a Keycloak instance in the centralized inventory."""
+    """Add the Keycloak TIDE signs in with. Refused when there is one already, or when its realm
+    doesn't answer."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import keycloak_config
     form = await request.form()
     label = str(form.get("label", "")).strip()
     url = str(form.get("url", "")).strip()
+    internal_url = str(form.get("internal_url", "")).strip() or None
     realm = str(form.get("realm", "master")).strip() or "master"
-    client_id_val = str(form.get("client_id", "")).strip() or None
-    client_secret = str(form.get("client_secret", "")).strip() or None
+    verify = bool(_form_tls_verify(form))
 
+    if db.list_keycloak_inventory():
+        return _form_refused("TIDE has its Keycloak already: edit that one instead.")
     if not label or not url:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Label and URL are required.</div>
-        </div>""")
+        return _form_refused("Label and address are required.")
+    ok, msg = await run_in_threadpool(_keycloak_realm_check, internal_url or url, realm, verify)
+    if not ok:
+        return _form_refused(f"Not saved: Keycloak didn't answer for realm '{realm}' at {internal_url or url} "
+                                 f"({msg}). TIDE signs in with this Keycloak, so it is saved only once it answers.")
 
-    db.create_keycloak_inventory_item(label=label, url=url, realm=realm,
-                                      client_id_enc=client_id_val,
-                                      client_secret_enc=client_secret, tls_verify=bool(_form_tls_verify(form)))
+    created = db.create_keycloak_inventory_item(
+        label=label, url=url, realm=realm, internal_url=internal_url,
+        client_id_enc=str(form.get("client_id", "")).strip() or None,
+        client_secret_enc=str(form.get("client_secret", "")).strip() or None, tls_verify=verify,
+        pg_client_id=str(form.get("pg_client_id", "")).strip() or None,
+        pg_client_secret=str(form.get("pg_client_secret", "")).strip() or None,
+        used_for_signin=db.get_signin_keycloak() is None,
+    )
+    db.update_inventory_test_status("keycloak", created["id"], "pass", msg)
+    keycloak_config.invalidate()
     logger.info(f"Keycloak instance created: {label} by {user.username}")
-
-    instances = db.list_keycloak_inventory()
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">Keycloak '{_esc(label)}' created.</div>
-    </div>
-    {_render_keycloak_tab(instances)}""")
+    return _integrations_response(request, db, f"Keycloak '{label}' added: TIDE signs in with it.")
 
 
 @router.put("/keycloak/{keycloak_id}", response_class=HTMLResponse)
 async def update_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireSuperadmin):
-    """Update a Keycloak instance."""
+    """Update the Keycloak. Blank client ID and secrets keep the stored ones. A change to where the
+    Keycloak TIDE signs in with is (address, internal address, realm, TLS) is saved only once its
+    realm answers there."""
+    from starlette.concurrency import run_in_threadpool
+    from app.services import keycloak_config
+    existing = next((k for k in db.list_keycloak_inventory() if k["id"] == keycloak_id), None)
+    if existing is None:
+        return _form_refused("That Keycloak integration no longer exists.")
     form = await request.form()
     updates = {}
     for field in ("label", "url", "realm"):
         val = form.get(field)
         if val is not None and str(val).strip():
             updates[field] = str(val).strip()
-    # client_id and client_secret: only update if a new value was explicitly provided
-    cid = form.get("client_id")
-    if cid is not None and str(cid).strip():
-        updates["client_id_enc"] = str(cid).strip()
-    csecret = form.get("client_secret")
-    if csecret is not None and str(csecret).strip():
-        updates["client_secret_enc"] = str(csecret).strip()
+    for field in ("internal_url", "pg_client_id"):      # blank clears them
+        if form.get(field) is not None:
+            updates[field] = str(form.get(field)).strip()
+    for field, column in (("client_id", "client_id_enc"), ("client_secret", "client_secret_enc"),
+                          ("pg_client_secret", "pg_client_secret_enc")):
+        val = form.get(field)
+        if val is not None and str(val).strip():
+            updates[column] = str(val).strip()
     is_active = form.get("is_active")
     if is_active is not None:
         updates["is_active"] = str(is_active).lower() in ("true", "on", "1")
-
     if _form_tls_verify(form) is not None:
         updates["tls_verify"] = _form_tls_verify(form)
-    db.update_keycloak_inventory_item(keycloak_id, **updates)
-    logger.info(f"Keycloak instance updated: {keycloak_id} by {user.username}")
 
-    instances = db.list_keycloak_inventory()
-    return HTMLResponse(_render_keycloak_tab(instances))
+    after = {**existing, **updates}
+    where = ("url", "internal_url", "realm", "tls_verify")
+    if existing.get("used_for_signin") and any(after.get(f) != existing.get(f) for f in where):
+        target = after.get("internal_url") or after["url"]
+        ok, msg = await run_in_threadpool(_keycloak_realm_check, target, after["realm"], after.get("tls_verify"))
+        if not ok:
+            return _form_refused(f"Not saved: Keycloak didn't answer for realm '{after['realm']}' at {target} "
+                                     f"({msg}). TIDE signs in with this Keycloak, so a change to where it is is "
+                                     "saved only once it answers there.")
+        db.update_inventory_test_status("keycloak", keycloak_id, "pass", msg)
+    db.update_keycloak_inventory_item(keycloak_id, **updates)
+    keycloak_config.invalidate()
+    logger.info(f"Keycloak instance updated: {keycloak_id} by {user.username}")
+    return _integrations_response(request, db)
 
 
 @router.delete("/keycloak/{keycloak_id}", response_class=HTMLResponse)
 def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: RequireSuperadmin):
-    """Delete a Keycloak instance from the inventory."""
+    """Delete a Keycloak integration. Without the one TIDE signs in with, sign-in uses .env's Keycloak
+    settings, and the next start makes the integration again from them (keycloak_config)."""
+    from app.services import keycloak_config
     ok = db.delete_keycloak_inventory_item(keycloak_id)
+    keycloak_config.invalidate()
     if not ok:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Keycloak instance not found.</div>
-        </div>""")
+        return _integrations_response(request, db, "Keycloak instance not found.", "warning")
     logger.info(f"Keycloak instance deleted: {keycloak_id} by {user.username}")
-
-    instances = db.list_keycloak_inventory()
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">Keycloak instance deleted.</div>
-    </div>
-    {_render_keycloak_tab(instances)}""")
-
+    return _integrations_response(request, db, "Keycloak instance deleted.")
 
 
 # ---------------------------------------------------------------------------
@@ -572,325 +563,6 @@ def delete_keycloak(request: Request, keycloak_id: str, db: DbDep, user: Require
 
 
 # ---------------------------------------------------------------------------
-# CTI Egress Targets CRUD  (Phase 1 §4 — per-tenant)
-#
-# An egress target tells TIDE *where* to ship a tenant's CTI indicators.
-# It lives in the tenant's CTI DuckDB (``cti_<slug>_<short>.duckdb``)
-# rather than the shared ``tide.duckdb``, so a tenant's Elastic key
-# never leaves their database. ``siem_id`` is a soft reference to the
-# shared ``siem_inventory`` row — validated at this layer, not via FK.
-# ---------------------------------------------------------------------------
-
-def _validate_siem_id(db, siem_id: Optional[str]) -> Optional[str]:
-    """Return error message if siem_id is set but doesn't exist."""
-    if not siem_id:
-        return None
-    try:
-        with db.get_shared_connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM siem_inventory WHERE id = ?", [siem_id],
-            ).fetchone()
-    except Exception:
-        return "Could not verify siem_id against inventory."
-    if not row:
-        return f"SIEM id {siem_id!r} not found in inventory."
-    return None
-
-
-def _validate_client_id(db, client_id: str) -> bool:
-    try:
-        with db.get_shared_connection() as conn:
-            row = conn.execute(
-                "SELECT 1 FROM clients WHERE id = ?", [client_id],
-            ).fetchone()
-    except Exception:
-        return False
-    return bool(row)
-
-
-def _render_client_cti_egress_partial(client_id: str, db,
-                                      toast: Optional[str] = None,
-                                      ) -> HTMLResponse:
-    """Re-render the client CTI egress section using the Jinja2 partial.
-
-    Mirrors :func:`_render_client_opencti_partial` so create / update /
-    delete endpoints can return a single OOB-aware payload that swaps the
-    full section in place.
-    """
-    from html import escape
-    import os
-    from jinja2 import Environment, FileSystemLoader
-    from app.services import cti_database
-
-    client = db.get_client(client_id)
-    try:
-        cti_targets = cti_database.list_egress_targets(client_id)
-    except Exception as exc:
-        logger.warning(
-            f"cti_targets read for client {client_id} failed: {exc}"
-        )
-        cti_targets = []
-    siems = db.list_siem_inventory()
-
-    templates_dir = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "templates",
-    )
-    env = Environment(loader=FileSystemLoader(templates_dir), autoescape=True)
-    template = env.get_template("partials/client_cti_egress.html")
-    html = template.render(
-        client=client,
-        cti_targets=cti_targets,
-        siems=siems,
-    )
-
-    toast_html = ""
-    if toast:
-        toast_html = (
-            f'<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-success">{escape(toast)}</div></div>'
-        )
-    return HTMLResponse(f"{html}{toast_html}")
-
-
-@router.get("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
-def list_cti_egress_targets(request: Request, client_id: str,
-                            db: DbDep, user: ClientAdmin):
-    """Render the CTI egress targets section for ``client_id``.
-
-    Returns the same partial used inside the client detail page, so HTMX
-    callers can swap it into ``#client-cti-egress-section``.
-    """
-    if not _validate_client_id(db, client_id):
-        return HTMLResponse(
-            '<span class="badge badge-warning">Client not found</span>',
-            status_code=404,
-        )
-    return _render_client_cti_egress_partial(client_id, db)
-
-
-@router.post("/clients/{client_id}/cti-egress", response_class=HTMLResponse)
-async def create_cti_egress_target(request: Request, client_id: str,
-                                   db: DbDep, user: ClientAdmin):
-    """Create a CTI egress target for ``client_id``."""
-    from app.services import cti_database
-
-    if not _validate_client_id(db, client_id):
-        return HTMLResponse(
-            '<span class="badge badge-warning">Client not found</span>',
-            status_code=404,
-        )
-    form = await request.form()
-    label = str(form.get("label", "")).strip()
-    kind = (str(form.get("kind", "")).strip().lower() or "elastic")
-    siem_id = (str(form.get("siem_id", "")).strip() or None)
-    index_pattern = str(form.get("index_pattern", "")).strip() \
-        or "logs-ti_tide.indicator-*"
-    latest_index = str(form.get("latest_index", "")).strip() \
-        or "logs-ti_tide_latest"
-    api_key = (str(form.get("api_key", "")).strip() or None)
-    folder_path = (str(form.get("folder_path", "")).strip() or None)
-    diode_endpoint = (str(form.get("diode_endpoint", "")).strip() or None)
-    tlp_ceiling = (str(form.get("tlp_ceiling", "")).strip() or "amber")
-    is_active_raw = str(form.get("is_active", "true")).strip().lower()
-    is_active = is_active_raw not in ("false", "0", "no", "off")
-
-    if not label:
-        return HTMLResponse(
-            '<span class="badge badge-warning">label is required</span>',
-            status_code=400,
-        )
-    # Per-kind validation: elastic needs a SIEM; file-drop kinds need a path.
-    if kind == "elastic":
-        err = _validate_siem_id(db, siem_id)
-        if err:
-            return HTMLResponse(
-                f'<span class="badge badge-warning">{_esc(err)}</span>',
-                status_code=400,
-            )
-    elif kind == "stix_folder":
-        if not folder_path:
-            return HTMLResponse(
-                '<span class="badge badge-warning">folder_path is required for stix_folder targets</span>',
-                status_code=400,
-            )
-        siem_id = None  # not used by file-drop drivers
-    elif kind == "diode":
-        # diode_endpoint is optional — driver falls back to the per-client
-        # data/diode_outbox/<client_id>/ outbox when blank.
-        siem_id = None
-    else:
-        return HTMLResponse(
-            f'<span class="badge badge-warning">unknown egress kind {_esc(kind)!r}</span>',
-            status_code=400,
-        )
-
-    created = cti_database.create_egress_target(
-        client_id,
-        label=label, kind=kind, siem_id=siem_id,
-        index_pattern=index_pattern, latest_index=latest_index,
-        api_key_enc=api_key,
-        folder_path=folder_path, diode_endpoint=diode_endpoint,
-        tlp_ceiling=tlp_ceiling,
-        is_active=is_active,
-    )
-    logger.info(
-        f"CTI egress target created: client={client_id} label={label!r} "
-        f"siem_id={siem_id} id={created['id']} by {user.username}"
-    )
-    return _render_client_cti_egress_partial(
-        client_id, db, toast=f"Egress target '{label}' created.",
-    )
-
-
-@router.put("/clients/{client_id}/cti-egress/{target_id}",
-            response_class=HTMLResponse)
-async def update_cti_egress_target(request: Request, client_id: str,
-                                   target_id: str, db: DbDep,
-                                   user: ClientAdmin):
-    """Patch a CTI egress target. Only supplied form fields are updated."""
-    from app.services import cti_database
-
-    if not _validate_client_id(db, client_id):
-        return HTMLResponse(
-            '<span class="badge badge-warning">Client not found</span>',
-            status_code=404,
-        )
-    form = await request.form()
-    updates: dict = {}
-    for key in ("label", "kind", "siem_id", "index_pattern", "latest_index",
-                "api_key", "folder_path", "diode_endpoint",
-                "tlp_ceiling", "is_active"):
-        if key in form:
-            raw = str(form.get(key, "")).strip()
-            if key == "is_active":
-                updates[key] = raw.lower() not in ("false", "0", "no", "off")
-            elif key == "api_key":
-                updates["api_key_enc"] = raw or None
-            elif key == "kind":
-                updates[key] = raw.lower() or "elastic"
-            else:
-                updates[key] = raw or None
-
-    # Only validate siem_id when the (possibly updated) effective kind is
-    # elastic. For stix_folder/diode the SIEM is optional/ignored.
-    eff_kind = updates.get("kind")
-    if eff_kind is None:
-        existing = cti_database.get_egress_target(client_id, target_id)
-        eff_kind = (existing or {}).get("kind", "elastic")
-    if eff_kind == "elastic" and "siem_id" in updates:
-        err = _validate_siem_id(db, updates["siem_id"])
-        if err:
-            return HTMLResponse(
-                f'<span class="badge badge-warning">{_esc(err)}</span>',
-                status_code=400,
-            )
-
-    updated = cti_database.update_egress_target(
-        client_id, target_id, **updates,
-    )
-    if updated is None:
-        return HTMLResponse(
-            '<span class="badge badge-warning">Target not found</span>',
-            status_code=404,
-        )
-    logger.info(
-        f"CTI egress target updated: client={client_id} id={target_id} "
-        f"keys={sorted(updates)} by {user.username}"
-    )
-    return _render_client_cti_egress_partial(
-        client_id, db, toast="Egress target updated.",
-    )
-
-
-@router.delete("/clients/{client_id}/cti-egress/{target_id}",
-               response_class=HTMLResponse)
-def delete_cti_egress_target(request: Request, client_id: str, target_id: str,
-                             db: DbDep, user: ClientAdmin):
-    """Delete a CTI egress target."""
-    from app.services import cti_database
-
-    if not _validate_client_id(db, client_id):
-        return HTMLResponse(
-            '<span class="badge badge-warning">Client not found</span>',
-            status_code=404,
-        )
-    removed = cti_database.delete_egress_target(client_id, target_id)
-    if not removed:
-        return HTMLResponse(
-            '<span class="badge badge-warning">Target not found</span>',
-            status_code=404,
-        )
-    logger.info(
-        f"CTI egress target deleted: client={client_id} id={target_id} "
-        f"by {user.username}"
-    )
-    return _render_client_cti_egress_partial(
-        client_id, db, toast="Egress target deleted.",
-    )
-
-
-@router.post("/clients/{client_id}/cti-egress/{target_id}/run",
-             response_class=HTMLResponse)
-def run_cti_egress_target(request: Request, client_id: str, target_id: str,
-                          db: DbDep, user: ClientAdmin):
-    """Trigger an immediate export of indicators to one egress target.
-
-    Returns an HTML badge summarising the result (read / batches /
-    latest_indexed / history_created / failures), in the same shape as
-    the step 6b ``/opencti/.../sync-cti`` button.
-    """
-    from app.services import cti_egress
-
-    if not _validate_client_id(db, client_id):
-        return HTMLResponse(
-            '<span class="badge badge-warning">Client not found</span>',
-            status_code=404,
-        )
-    try:
-        summary = cti_egress.export_cti_for_client(
-            client_id, target_id=target_id,
-        )
-    except Exception as exc:
-        logger.error(
-            f"CTI egress run failed: client={client_id} target={target_id}: "
-            f"{exc}", exc_info=True,
-        )
-        return HTMLResponse(
-            f'<span class="badge badge-danger">Egress failed &mdash; '
-            f"{_esc(str(exc)[:120])}</span>"
-        )
-
-    if summary.get("targets", 0) == 0:
-        return HTMLResponse(
-            '<span class="badge badge-warning">Target not found '
-            "or inactive</span>"
-        )
-
-    read = summary.get("read", 0)
-    batches = summary.get("batches", 0)
-    latest = summary.get("latest_indexed", 0)
-    hist = summary.get("history_created", 0)
-    dup = summary.get("history_duplicates", 0)
-    fails = summary.get("failures", 0)
-    errors = summary.get("errors", [])
-    cls = "badge-success" if not errors and not fails else "badge-warning"
-    err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
-    err_title = f' title="{_esc("; ".join(str(e) for e in errors[:5]))}"' if errors else ""
-    fail_suffix = f" &middot; {fails} failed" if fails else ""
-    logger.info(
-        f"CTI egress run: client={client_id} target={target_id} "
-        f"read={read} batches={batches} latest={latest} "
-        f"hist={hist} dup={dup} fails={fails}"
-    )
-    return HTMLResponse(
-        f'<span class="badge {cls}"{err_title}>'
-        f"{read} read &middot; {batches} batch(es) &middot; "
-        f"{latest} latest &middot; {hist} hist (+{dup} dup)"
-        f"{fail_suffix}{err_suffix}</span>"
-    )
-
-
-# ---------------------------------------------------------------------------
 # GitLab Inventory CRUD
 # ---------------------------------------------------------------------------
 
@@ -904,23 +576,12 @@ async def create_gitlab(request: Request, db: DbDep, user: RequireSuperadmin):
     default_group = str(form.get("default_group", "")).strip() or None
 
     if not label or not url:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Label and URL are required.</div>
-        </div>""")
+        return _form_refused("Label and URL are required.")
 
     db.create_gitlab_inventory_item(label=label, url=url, token_enc=token, tls_verify=bool(_form_tls_verify(form)),
                                     default_group=default_group)
     logger.info(f"GitLab instance created: {label} by {user.username}")
-
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">GitLab '{_esc(label)}' created.</div>
-    </div>
-    {_render_gitlab_tab(instances)}""")
+    return _integrations_response(request, db, f"GitLab '{label}' created.")
 
 
 @router.put("/gitlab/{gitlab_id}", response_class=HTMLResponse)
@@ -942,11 +603,7 @@ async def update_gitlab(request: Request, gitlab_id: str, db: DbDep, user: Requi
         updates["tls_verify"] = _form_tls_verify(form)
     db.update_gitlab_inventory_item(gitlab_id, **updates)
     logger.info(f"GitLab instance updated: {gitlab_id} by {user.username}")
-
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(_render_gitlab_tab(instances))
+    return _integrations_response(request, db)
 
 
 @router.delete("/gitlab/{gitlab_id}", response_class=HTMLResponse)
@@ -954,20 +611,9 @@ def delete_gitlab(request: Request, gitlab_id: str, db: DbDep, user: RequireSupe
     """Delete a GitLab instance from the inventory."""
     ok = db.delete_gitlab_inventory_item(gitlab_id)
     if not ok:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">GitLab instance not found.</div>
-        </div>""")
+        return _integrations_response(request, db, "GitLab instance not found.", "warning")
     logger.info(f"GitLab instance deleted: {gitlab_id} by {user.username}")
-
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">GitLab instance deleted.</div>
-    </div>
-    {_render_gitlab_tab(instances)}""")
+    return _integrations_response(request, db, "GitLab instance deleted.")
 
 
 @router.post("/clients/{client_id}/gitlab", response_class=HTMLResponse)
@@ -979,14 +625,11 @@ async def link_gitlab_to_client(request: Request, client_id: str, db: DbDep, use
         return HTMLResponse("")
     db.link_client_gitlab(client_id, gitlab_id)
     logger.info(f"GitLab {gitlab_id} linked to client {client_id} by {user.username}")
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(f"""
+    # Only the toast: the GitLab inventory serves every client, so a client admin isn't shown it.
+    return HTMLResponse("""
     <div hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">GitLab linked to client.</div>
-    </div>
-    {_render_gitlab_tab(instances)}""")
+    </div>""")
 
 
 @router.delete("/clients/{client_id}/gitlab/{gitlab_id}", response_class=HTMLResponse)
@@ -995,14 +638,10 @@ def unlink_gitlab_from_client(request: Request, client_id: str, gitlab_id: str,
     """Unlink a GitLab instance from a client."""
     db.unlink_client_gitlab(client_id, gitlab_id)
     logger.info(f"GitLab {gitlab_id} unlinked from client {client_id} by {user.username}")
-    instances = db.list_gitlab_inventory()
-    for i in instances:
-        i["_clients"] = db.get_gitlab_clients(i["id"])
-    return HTMLResponse(f"""
+    return HTMLResponse("""
     <div hx-swap-oob="afterbegin:#toast-container">
         <div class="toast toast-success">GitLab unlinked.</div>
-    </div>
-    {_render_gitlab_tab(instances)}""")
+    </div>""")
 
 
 # ---------------------------------------------------------------------------
@@ -1019,22 +658,13 @@ async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     kibana_url = str(form.get("kibana_url", "")).strip() or None
     api_token, tok_err = _normalize_api_token(form.get("api_token"))
     if tok_err:
-        return HTMLResponse(
-            '<div hx-swap-oob="afterbegin:#toast-container">'
-            f'<div class="toast toast-warning">{_esc(tok_err)}</div></div>'
-        )
+        return _form_refused(tok_err)
 
     if not label:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">SIEM label is required.</div>
-        </div>""")
+        return _form_refused("SIEM label is required.")
 
     if siem_type not in ("elastic", "splunk", "sentinel"):
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">Invalid SIEM type.</div>
-        </div>""")
+        return _form_refused("Invalid SIEM type.")
 
     db.create_siem_inventory_item(
         siem_type=siem_type, label=label,
@@ -1043,16 +673,7 @@ async def create_siem(request: Request, db: DbDep, user: RequireSuperadmin):
     )
     tls.invalidate()
     logger.info(f"SIEM inventory item created: {label} by {user.username}")
-
-    siems = db.list_siem_inventory()
-    for s in siems:
-        s["_clients"] = db.get_siem_clients(s["id"])
-    html = _render_siems_tab(siems)
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">SIEM '{label}' created.</div>
-    </div>
-    {html}""")
+    return _integrations_response(request, db, f"SIEM '{label}' created.")
 
 
 @router.put("/siems/{siem_id}", response_class=HTMLResponse)
@@ -1074,10 +695,7 @@ async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireSu
     if raw_token is not None and str(raw_token).strip():
         norm, err = _normalize_api_token(raw_token)
         if err:
-            return HTMLResponse(
-                '<div hx-swap-oob="afterbegin:#toast-container">'
-                f'<div class="toast toast-warning">{_esc(err)}</div></div>'
-            )
+            return _form_refused(err)
         if norm:
             updates["api_token_enc"] = norm
     is_active = form.get("is_active")
@@ -1089,11 +707,7 @@ async def update_siem(request: Request, siem_id: str, db: DbDep, user: RequireSu
     db.update_siem_inventory_item(siem_id, **updates)
     tls.invalidate()
     logger.info(f"SIEM inventory item updated: {siem_id} by {user.username}")
-
-    siems = db.list_siem_inventory()
-    for s in siems:
-        s["_clients"] = db.get_siem_clients(s["id"])
-    return HTMLResponse(_render_siems_tab(siems))
+    return _integrations_response(request, db)
 
 
 @router.delete("/siems/{siem_id}", response_class=HTMLResponse)
@@ -1101,21 +715,10 @@ def delete_siem(request: Request, siem_id: str, db: DbDep, user: RequireSuperadm
     """Delete a SIEM from the inventory."""
     ok = db.delete_siem_inventory_item(siem_id)
     if not ok:
-        return HTMLResponse("""
-        <div hx-swap-oob="afterbegin:#toast-container">
-            <div class="toast toast-warning">SIEM not found.</div>
-        </div>""")
+        return _integrations_response(request, db, "SIEM not found.", "warning")
     tls.invalidate()
     logger.info(f"SIEM inventory item deleted: {siem_id} by {user.username}")
-
-    siems = db.list_siem_inventory()
-    for s in siems:
-        s["_clients"] = db.get_siem_clients(s["id"])
-    return HTMLResponse(f"""
-    <div hx-swap-oob="afterbegin:#toast-container">
-        <div class="toast toast-success">SIEM deleted.</div>
-    </div>
-    {_render_siems_tab(siems)}""")
+    return _integrations_response(request, db, "SIEM deleted.")
 
 
 # ---------------------------------------------------------------------------
@@ -1535,7 +1138,7 @@ async def update_siem_logging(
     db: DbDep,
     user: RequireSuperadmin,
 ):
-    """Persist per-SIEM rule-logging configuration. Returns refreshed SIEMs partial.
+    """Persist per-SIEM rule-logging configuration. Returns the re-drawn Integrations list.
 
     Also reschedules the daily rule-log job so the new HH:MM takes effect immediately.
     """
@@ -1571,11 +1174,7 @@ async def update_siem_logging(
         reschedule_rule_log_job()
     except Exception as exc:
         logger.warning(f"could not reschedule rule_log job: {exc}")
-
-    siems = db.list_siem_inventory()
-    for s in siems:
-        s["_clients"] = db.get_siem_clients(s["id"])
-    return HTMLResponse(_render_siems_tab(siems))
+    return _integrations_response(request, db)
 
 
 # ---------------------------------------------------------------------------
@@ -2841,7 +2440,7 @@ def _siem_logging_block_html(s: dict) -> str:
                 </summary>
                 <div class="mgmt-subsection__body">
                     <form hx-post="/api/management/siems/{sid}/logging"
-                          hx-target="#mgmt-sub-siems" hx-swap="innerHTML" class="logging-form">
+                          hx-target="#mgmt-integrations" hx-swap="innerHTML" class="logging-form">
                         <label class="flex items-center gap-sm">
                             <input type="checkbox" name="enabled" value="on" {"checked" if enabled else ""}>
                             <span>Enabled</span>
@@ -2867,77 +2466,59 @@ def _siem_logging_block_html(s: dict) -> str:
             </details>'''
 
 
-def _render_siems_tab(siems: list) -> str:
-    """Render the SIEMs tab content as cards (matching systems.html pattern)."""
+def _siem_card(s: dict) -> str:
+    """One SIEM's card in the Integrations list (``s["_clients"]``: the clients it is linked to)."""
     from html import escape
-    count = len(siems)
-    cards = ""
-    for s in siems:
-        sid = s["id"]
-        lbl_esc = escape(s["label"])
-        stype_esc = escape(s["siem_type"])
-        es_url = escape(s.get("elasticsearch_url") or "-")
-        kb_url = escape(s.get("kibana_url") or "-")
-        status_pill = _status_pill_html(s, target_id=f"siem-status-{sid}")
-        tenant_chips = _tenant_chips_html(s.get("_clients", []))
-        test_btn = _test_button_html("siems", sid, f"siem-status-{sid}")
-        logging_block = _siem_logging_block_html(s)
-
-        cards += f'''
-        <div class="system-card stack">
-            <div class="system-card__title flex items-center justify-between">
-                <div class="flex items-center gap-sm flex-wrap">
-                    <span class="fw-600">{lbl_esc}</span>
-                    <span class="badge badge-muted">{stype_esc}</span>
-                    {status_pill}
-                </div>
-                <div class="flex gap-xs">
-                    {test_btn}
-                    <button class="btn btn-ghost btn-sm"
-                            data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}"
-                            data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}"
-                            data-tls-verify="{'true' if s.get('tls_verify') else 'false'}"
-                            title="Edit">
-                        {_icon("pencil", "14")}
-                    </button>
-                    <button class="btn btn-ghost btn-sm text-danger"
-                            hx-delete="/api/management/siems/{sid}"
-                            hx-target="#mgmt-sub-siems" hx-swap="innerHTML"
-                            hx-confirm="Delete SIEM '{lbl_esc}'? This will unlink it from all clients."
-                            title="Delete">
-                        {_icon("trash-2", "14")}
-                    </button>
-                </div>
-            </div>
-            <div class="system-card__desc mt-sm">
-                <div class="kv-grid">
-                    <span class="text-secondary">Elasticsearch</span>
-                    <span class="mono-ellipsis">{es_url}</span>
-                    <span class="text-secondary">Kibana</span>
-                    <span class="mono-ellipsis">{kb_url}</span>
-                </div>
-            </div>
-            {logging_block}
-            <div id="siem-test-result-{sid}"></div>
-            <div class="system-card__footer card-footer-wrap">
-                {tenant_chips}
-            </div>
-        </div>'''
+    sid = s["id"]
+    lbl_esc = escape(s["label"])
+    stype_esc = escape(s["siem_type"])
+    es_url = escape(s.get("elasticsearch_url") or "-")
+    kb_url = escape(s.get("kibana_url") or "-")
+    status_pill = _status_pill_html(s, target_id=f"siem-status-{sid}")
+    tenant_chips = _tenant_chips_html(s.get("_clients", []))
+    test_btn = _test_button_html("siems", sid, f"siem-status-{sid}")
+    logging_block = _siem_logging_block_html(s)
 
     return f'''
-    <div class="mgmt-tab-head">
-        <span class="text-secondary">{count} SIEM{"s" if count != 1 else ""} in inventory</span>
-        <button class="btn btn-primary" data-click="mgmt.siemNew">
-            {_icon("plus", "16")}
-            New SIEM
-        </button>
-    </div>
-    <div class="systems-grid">{cards}</div>
-    {_siem_empty_state() if not siems else ""}'''
-
-
-def _siem_empty_state() -> str:
-    return _empty_state("server", "No SIEMs configured yet.", "Create one with New SIEM.")
+    <div class="system-card stack" data-integration="siem">
+        <div class="system-card__title flex items-center justify-between">
+            <div class="flex items-center gap-sm flex-wrap">
+                <span class="fw-600">{lbl_esc}</span>
+                <span class="badge badge-muted">SIEM &middot; {stype_esc}</span>
+                {status_pill}
+            </div>
+            <div class="flex gap-xs">
+                {test_btn}
+                <button class="btn btn-ghost btn-sm"
+                        data-click="mgmt.siemEdit" data-id="{sid}" data-label="{lbl_esc}" data-type="{stype_esc}"
+                        data-es-url="{escape(s.get("elasticsearch_url") or "")}" data-kb-url="{escape(s.get("kibana_url") or "")}"
+                        data-tls-verify="{'true' if s.get('tls_verify') else 'false'}"
+                        title="Edit">
+                    {_icon("pencil", "14")}
+                </button>
+                <button class="btn btn-ghost btn-sm text-danger"
+                        hx-delete="/api/management/siems/{sid}"
+                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
+                        hx-confirm="Delete SIEM '{lbl_esc}'? This will unlink it from all clients."
+                        title="Delete">
+                    {_icon("trash-2", "14")}
+                </button>
+            </div>
+        </div>
+        <div class="system-card__desc mt-sm">
+            <div class="kv-grid">
+                <span class="text-secondary">Elasticsearch</span>
+                <span class="mono-ellipsis">{es_url}</span>
+                <span class="text-secondary">Kibana</span>
+                <span class="mono-ellipsis">{kb_url}</span>
+            </div>
+        </div>
+        {logging_block}
+        <div id="siem-test-result-{sid}"></div>
+        <div class="system-card__footer card-footer-wrap">
+            {tenant_chips}
+        </div>
+    </div>'''
 
 
 NO_MANAGE_TITLE = "Only a super admin can change a Platform Admin or a user who is also on a client you don&#39;t administer"
@@ -3294,153 +2875,132 @@ def _render_threat_intel_tab(instances: list) -> str:
     {empty}'''
 
 
-def _render_gitlab_tab(instances: list) -> str:
-    """Render the GitLab tab as system-card style cards."""
+def _gitlab_card(i: dict) -> str:
+    """One GitLab instance's card in the Integrations list (``i["_clients"]``: its clients)."""
     from html import escape
-    count = len(instances)
-    cards = ""
-    for i in instances:
-        iid = i["id"]
-        lbl_esc = escape(i["label"])
-        url_esc = escape(i["url"])
-        grp_esc = escape(i.get("default_group") or "—")
-        status_pill = _status_pill_html(i, target_id=f"gitlab-status-{iid}")
-        tenant_chips = _tenant_chips_html(i.get("_clients", []))
-        test_btn = _test_button_html("gitlab", iid, f"gitlab-status-{iid}")
-
-        cards += f'''
-        <div class="system-card stack">
-            <div class="system-card__title flex items-center justify-between">
-                <div class="flex items-center gap-sm flex-wrap">
-                    <span class="fw-600">{lbl_esc}</span>
-                    {status_pill}
-                </div>
-                <div class="flex gap-xs">
-                    {test_btn}
-                    <button class="btn btn-ghost btn-sm"
-                            data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-group="{grp_esc}"
-                            data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
-                            title="Edit">
-                        {_icon("pencil", "14")}
-                    </button>
-                    <button class="btn btn-ghost btn-sm text-danger"
-                            hx-delete="/api/management/gitlab/{iid}"
-                            hx-target="#mgmt-sub-gitlab" hx-swap="innerHTML"
-                            hx-confirm="Delete GitLab instance '{lbl_esc}'?"
-                            title="Delete">
-                        {_icon("trash-2", "14")}
-                    </button>
-                </div>
-            </div>
-            <div class="system-card__desc mt-sm">
-                <div class="kv-grid">
-                    <span class="text-secondary">URL</span>
-                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
-                    <span class="text-secondary">Group</span>
-                    <span class="mono text-sm">{grp_esc}</span>
-                    <span class="text-secondary">Token</span>
-                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
-                </div>
-            </div>
-            <div class="system-card__footer card-footer-wrap">
-                {tenant_chips}
-            </div>
-        </div>'''
-
-    empty = ""
-    if not instances:
-        empty = _empty_state("gitlab", 'No GitLab instances configured yet.', 'GitLab integration is reserved for future report publishing workflows.')
+    iid = i["id"]
+    lbl_esc = escape(i["label"])
+    url_esc = escape(i["url"])
+    grp_esc = escape(i.get("default_group") or "—")
+    status_pill = _status_pill_html(i, target_id=f"gitlab-status-{iid}")
+    tenant_chips = _tenant_chips_html(i.get("_clients", []))
+    test_btn = _test_button_html("gitlab", iid, f"gitlab-status-{iid}")
 
     return f'''
-    <div class="mgmt-tab-head">
-        <div>
-            <span class="text-secondary">{count} GitLab instance{"s" if count != 1 else ""} configured</span>
-            <span class="badge badge-secondary badge--xs ml-sm">Planned</span>
+    <div class="system-card stack" data-integration="gitlab">
+        <div class="system-card__title flex items-center justify-between">
+            <div class="flex items-center gap-sm flex-wrap">
+                <span class="fw-600">{lbl_esc}</span>
+                <span class="badge badge-muted">GitLab</span>
+                <span class="badge badge-secondary badge--xs" title="Recorded for report publishing, which is planned">Planned</span>
+                {status_pill}
+            </div>
+            <div class="flex gap-xs">
+                {test_btn}
+                <button class="btn btn-ghost btn-sm"
+                        data-click="mgmt.gitlabEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-group="{grp_esc}"
+                        data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
+                        title="Edit">
+                    {_icon("pencil", "14")}
+                </button>
+                <button class="btn btn-ghost btn-sm text-danger"
+                        hx-delete="/api/management/gitlab/{iid}"
+                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
+                        hx-confirm="Delete GitLab instance '{lbl_esc}'?"
+                        title="Delete">
+                    {_icon("trash-2", "14")}
+                </button>
+            </div>
         </div>
-        <button class="btn btn-primary" data-click="mgmt.gitlabNew">
-            {_icon("plus", "16")}
-            New GitLab
-        </button>
-    </div>
-    <div class="callout">
-        GitLab integration will allow TIDE to push generated reports to a configured repository.
-        Register your instance now and it will be available when the feature ships.
-    </div>
-    <div class="systems-grid">{cards}</div>
-    {empty}'''
+        <div class="system-card__desc mt-sm">
+            <div class="kv-grid">
+                <span class="text-secondary">URL</span>
+                <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
+                <span class="text-secondary">Group</span>
+                <span class="mono text-sm">{grp_esc}</span>
+                <span class="text-secondary">Token</span>
+                <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if i.get('token_set') else _icon_text('x', 'not set', '12')}</span>
+            </div>
+        </div>
+        <div class="system-card__footer card-footer-wrap">
+            {tenant_chips}
+        </div>
+    </div>'''
 
 
-def _render_keycloak_tab(instances: list) -> str:
-    """Render the Keycloak tab as system-card style cards."""
+def _keycloak_card(i: dict) -> str:
+    """The Keycloak card in the Integrations list: the Keycloak TIDE signs people in with
+    (app.services.keycloak_config), or one recorded before 6.3.0 that it doesn't."""
     from html import escape
-    count = len(instances)
-    cards = ""
-    for i in instances:
-        iid = i["id"]
-        lbl_esc = escape(i["label"])
-        url_esc = escape(i["url"])
-        realm_esc = escape(i.get("realm") or "master")
-        has_client_id = bool(i.get("client_id_enc"))
-        has_secret = bool(i.get("client_secret_enc"))
-        status_pill = _status_pill_html(i, target_id=f"keycloak-status-{iid}")
-        tenant_chips = _tenant_chips_html([], all_tenants=True)
-        test_btn = _test_button_html("keycloak", iid, f"keycloak-status-{iid}")
 
-        cards += f'''
-        <div class="system-card stack">
-            <div class="system-card__title flex items-center justify-between">
-                <div class="flex items-center gap-sm flex-wrap">
-                    <span class="fw-600">{lbl_esc}</span>
-                    {status_pill}
-                </div>
-                <div class="flex gap-xs">
-                    {test_btn}
-                    <button class="btn btn-ghost btn-sm"
-                            data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}" data-realm="{realm_esc}"
-                            data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
-                            title="Edit">
-                        {_icon("pencil", "14")}
-                    </button>
-                    <button class="btn btn-ghost btn-sm text-danger"
-                            hx-delete="/api/management/keycloak/{iid}"
-                            hx-target="#mgmt-sub-keycloak" hx-swap="innerHTML"
-                            hx-confirm="Delete Keycloak instance &#39;{lbl_esc}&#39;?"
-                            title="Delete">
-                        {_icon("trash-2", "14")}
-                    </button>
-                </div>
-            </div>
-            <div class="system-card__desc mt-sm">
-                <div class="kv-grid">
-                    <span class="text-secondary">URL</span>
-                    <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
-                    <span class="text-secondary">Realm</span>
-                    <span class="mono text-sm">{realm_esc}</span>
-                    <span class="text-secondary">Client ID</span>
-                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if has_client_id else _icon_text('x', 'not set', '12')}</span>
-                    <span class="text-secondary">Secret</span>
-                    <span class="text-secondary fs-sm">{_icon_text('check', 'configured', '12') if has_secret else _icon_text('x', 'not set', '12')}</span>
-                </div>
-            </div>
-            <div class="system-card__footer card-footer-wrap">
-                {tenant_chips}
-            </div>
-        </div>'''
+    def configured(v):
+        return _icon_text('check', 'configured', '12') if v else _icon_text('x', 'not set', '12')
 
-    empty = ""
-    if not instances:
-        empty = _empty_state("lock", 'No Keycloak instances configured yet.', 'Register Keycloak to centralise SSO configuration across clients.')
+    iid = i["id"]
+    lbl_esc = escape(i["label"])
+    url_esc = escape(i["url"])
+    internal_esc = escape(i.get("internal_url") or "")
+    realm_esc = escape(i.get("realm") or "master")
+    client_esc = escape(i.get("client_id_enc") or "")
+    pg_esc = escape(i.get("pg_client_id") or "")
+    signin = bool(i.get("used_for_signin"))
+    status_pill = _status_pill_html(i, target_id=f"keycloak-status-{iid}")
+    tenant_chips = _tenant_chips_html([], all_tenants=True)
+    test_btn = _test_button_html("keycloak", iid, f"keycloak-status-{iid}")
+    role_badge = ('<span class="badge badge-info" title="TIDE signs people in with this Keycloak">Sign-in</span>'
+                  if signin else
+                  '<span class="badge badge-secondary badge--xs" title="Recorded before 6.3.0; TIDE signs in with '
+                  'the Keycloak marked Sign-in">Not used for sign-in</span>')
+    confirm = ("Delete the Keycloak integration TIDE signs in with? Sign-in then uses the Keycloak settings in "
+               ".env, and TIDE makes this integration again from them at its next start; with none, SSO sign-in stops."
+               if signin else f"Delete Keycloak instance &#39;{lbl_esc}&#39;?")
 
     return f'''
-    <div class="mgmt-tab-head">
-        <span class="text-secondary">{count} Keycloak instance{"s" if count != 1 else ""} configured</span>
-        <button class="btn btn-primary" data-click="mgmt.keycloakNew">
-            {_icon("plus", "16")}
-            New Keycloak
-        </button>
-    </div>
-    <div class="systems-grid">{cards}</div>
-    {empty}'''
+    <div class="system-card stack" data-integration="keycloak">
+        <div class="system-card__title flex items-center justify-between">
+            <div class="flex items-center gap-sm flex-wrap">
+                <span class="fw-600">{lbl_esc}</span>
+                <span class="badge badge-muted">Keycloak</span>
+                {role_badge}
+                {status_pill}
+            </div>
+            <div class="flex gap-xs">
+                {test_btn}
+                <button class="btn btn-ghost btn-sm"
+                        data-click="mgmt.keycloakEdit" data-id="{iid}" data-label="{lbl_esc}" data-url="{url_esc}"
+                        data-internal-url="{internal_esc}" data-realm="{realm_esc}" data-client-id="{client_esc}"
+                        data-pg-client-id="{pg_esc}" data-tls-verify="{'true' if i.get('tls_verify') else 'false'}"
+                        title="Edit">
+                    {_icon("pencil", "14")}
+                </button>
+                <button class="btn btn-ghost btn-sm text-danger"
+                        hx-delete="/api/management/keycloak/{iid}"
+                        hx-target="#mgmt-integrations" hx-swap="innerHTML"
+                        hx-confirm="{confirm}"
+                        title="Delete">
+                    {_icon("trash-2", "14")}
+                </button>
+            </div>
+        </div>
+        <div class="system-card__desc mt-sm">
+            <div class="kv-grid">
+                <span class="text-secondary">Address</span>
+                <span class="mono-ellipsis" title="{url_esc}">{url_esc}</span>
+                {f'<span class="text-secondary">Internal address</span><span class="mono-ellipsis" title="{internal_esc}">{internal_esc}</span>' if internal_esc else ''}
+                <span class="text-secondary">Realm</span>
+                <span class="mono text-sm">{realm_esc}</span>
+                <span class="text-secondary">Client ID</span>
+                <span class="mono text-sm">{client_esc or '—'}</span>
+                <span class="text-secondary">Client secret</span>
+                <span class="text-secondary fs-sm">{configured(i.get("client_secret_enc"))}</span>
+                <span class="text-secondary">Password-grant client</span>
+                <span class="mono text-sm">{pg_esc or '—'}</span>
+            </div>
+        </div>
+        <div class="system-card__footer card-footer-wrap">
+            {tenant_chips}
+        </div>
+    </div>'''
 
 
 # ---------------------------------------------------------------------------
@@ -4712,164 +4272,160 @@ def _render_vendor_fields_html(vendor, current_cfg: dict | None = None) -> str:
     return "".join(rows)
 
 
-def _render_connectors_tab(connectors: list, vendors: list, all_clients: list | None = None) -> str:
-    """Render the Connectors subsection: per-vendor cards + New button.
-
-    Mirrors :func:`_render_threat_intel_tab` (system-card grid) so the look
-    is consistent across Management subsections.
-    """
+def _connector_card(c: dict, vendor_by_name: dict) -> str:
+    """One connector's card in the Integrations list (``c["_clients"]``: the clients it is linked to)."""
     from html import escape as _e
-    all_clients = all_clients or []
-    vendor_by_name = {v.name: v for v in vendors}
-    count = len(connectors)
-    cards = ""
-    for c in connectors:
-        cid = c["id"]
-        vendor = vendor_by_name.get(c.get("vendor"))
-        vendor_label = _e(vendor.label if vendor else (c.get("vendor") or "Unknown"))
-        lbl_esc = _e(c.get("label") or "(unnamed)")
-        # 4.1.20 — the kind chip (CTI / actors / actors + CTI) was
-        # dropped from the card header to keep the row aligned with
-        # the SIEM cards; the kind is still editable from the modal.
-        vendor_badge = f'<span class="badge badge-muted">{vendor_label}</span>'
-        # 4.1.20 — drop the standalone "Active/Disabled" badge. It
-        # duplicated the live status pill (operators were seeing two
-        # green chips on every card), and the SIEM cards next door
-        # surface availability through the status pill alone. The
-        # disabled state is still reachable from the Edit modal's
-        # ``is_active`` toggle.
-        status_pill = _connector_status_pill(c, target_id=f"connector-status-{cid}")
-        # 5.0.x — auto-sync interval chip. Quiet "manual only" muted
-        # chip when interval is NULL/0 so operators can tell at a
-        # glance which connectors are on the scheduler.
-        iv = c.get("sync_interval_minutes")
-        if iv and int(iv) > 0:
-            iv_int = int(iv)
-            if iv_int % 1440 == 0:
-                iv_text = f"every {iv_int // 1440}d"
-            elif iv_int % 60 == 0:
-                iv_text = f"every {iv_int // 60}h"
+    cid = c["id"]
+    vendor = vendor_by_name.get(c.get("vendor"))
+    vendor_label = _e(vendor.label if vendor else (c.get("vendor") or "Unknown"))
+    lbl_esc = _e(c.get("label") or "(unnamed)")
+    status_pill = _connector_status_pill(c, target_id=f"connector-status-{cid}")
+    tenant_chips = _tenant_chips_html(c.get("_clients", []))
+    cfg = c.get("config") or {}
+    # Config summary line — non-secret keys only
+    summary_pairs = []
+    if vendor:
+        for spec in vendor.fields:
+            if spec.secret:
+                has = bool(cfg.get(spec.key))
+                summary_pairs.append(
+                    (spec.label, f'<span class="text-secondary">{_icon_text("check", "set", "12")}</span>' if has else f'<span class="text-secondary">{_icon_text("x", "missing", "12")}</span>')
+                )
             else:
-                iv_text = f"every {iv_int}m"
-            auto_chip = f'<span class="badge badge-info" title="Auto-sync runs in the background through the CTI scheduler">auto &middot; {_e(iv_text)}</span>'
-        else:
-            auto_chip = '<span class="badge badge-muted" title="This connector only syncs when an operator clicks Sync">manual only</span>'
-        tenant_chips = _tenant_chips_html(c.get("_clients", []))
-        cfg = c.get("config") or {}
-        # Config summary line — non-secret keys only
-        summary_pairs = []
-        if vendor:
-            for spec in vendor.fields:
-                if spec.secret:
-                    has = bool(cfg.get(spec.key))
-                    summary_pairs.append(
-                        (spec.label, f'<span class="text-secondary">{_icon_text("check", "set", "12")}</span>' if has else f'<span class="text-secondary">{_icon_text("x", "missing", "12")}</span>')
-                    )
-                else:
-                    v = cfg.get(spec.key)
-                    if v is None or v == "":
-                        continue
-                    summary_pairs.append((spec.label, _e(str(v))))
-        summary_html = "".join(
-            f'<span class="text-secondary">{_e(k)}</span>'
-            f'<span class="mono-ellipsis" title="{_e(str(v))}">{v}</span>'
-            for k, v in summary_pairs
-        )
-        # Test connection button — mirrors the SIEM card layout. The
-        # standalone "Sync" button was removed in 4.1.20 (the
-        # per-connector sync now runs from the connector's edit modal
-        # / the per-page Check-connection action; the management hub
-        # card just confirms reachability and surfaces CRUD).
-        test_btn = (
-            f'<button class="btn btn-ghost btn-sm" '
-            f'hx-post="/api/management/connectors/{cid}/test" '
-            f'hx-target="#connector-status-{cid}" hx-swap="outerHTML" '
-            f'title="Test connection now" aria-label="Test connection">'
-            f'{_icon("arrow-right", "14")}</button>'
-        )
-        edit_btn = (
-            f'<button class="btn btn-ghost btn-sm" '
-            f'data-click="mgmt.connectorEdit" data-id="{cid}" title="Edit">'
-            f'{_icon("pencil", "14")}</button>'
-        )
-        del_btn = (
-            f'<button class="btn btn-ghost btn-sm text-danger" '
-            f'hx-delete="/api/management/connectors/{cid}" '
-            f'hx-target="#mgmt-sub-connectors" hx-swap="innerHTML" '
-            f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients." '
-            f'title="Delete">'
-            f'{_icon("trash-2", "14")}</button>'
-        )
-        cards += f'''
-        <div class="system-card stack">
-            <div class="system-card__title flex items-center justify-between">
-                <div class="flex items-center gap-sm flex-wrap">
-                    <span class="fw-600">{lbl_esc}</span>
-                    {vendor_badge}
-                    {status_pill}
-                    {auto_chip}
-                </div>
-                <div class="flex gap-xs">
-                    {test_btn}
-                    {edit_btn}
-                    {del_btn}
-                </div>
+                v = cfg.get(spec.key)
+                if v is None or v == "":
+                    continue
+                summary_pairs.append((spec.label, _e(str(v))))
+    summary_html = "".join(
+        f'<span class="text-secondary">{_e(k)}</span>'
+        f'<span class="mono-ellipsis" title="{_e(str(v))}">{v}</span>'
+        for k, v in summary_pairs
+    )
+    test_btn = (
+        f'<button class="btn btn-ghost btn-sm" '
+        f'hx-post="/api/management/connectors/{cid}/test" '
+        f'hx-target="#connector-status-{cid}" hx-swap="outerHTML" '
+        f'title="Test connection now" aria-label="Test connection">'
+        f'{_icon("arrow-right", "14")}</button>'
+    )
+    edit_btn = (
+        f'<button class="btn btn-ghost btn-sm" '
+        f'data-click="mgmt.connectorEdit" data-id="{cid}" title="Edit">'
+        f'{_icon("pencil", "14")}</button>'
+    )
+    del_btn = (
+        f'<button class="btn btn-ghost btn-sm text-danger" '
+        f'hx-delete="/api/management/connectors/{cid}" '
+        f'hx-target="#mgmt-integrations" hx-swap="innerHTML" '
+        f'hx-confirm="Delete connector \'{lbl_esc}\'? This will unlink it from all clients." '
+        f'title="Delete">'
+        f'{_icon("trash-2", "14")}</button>'
+    )
+    return f'''
+    <div class="system-card stack" data-integration="intel">
+        <div class="system-card__title flex items-center justify-between">
+            <div class="flex items-center gap-sm flex-wrap">
+                <span class="fw-600">{lbl_esc}</span>
+                <span class="badge badge-muted">{vendor_label}</span>
+                {status_pill}
             </div>
-            <div class="system-card__desc mt-sm">
-                <div class="kv-grid">
-                    {summary_html}
-                </div>
+            <div class="flex gap-xs">
+                {test_btn}
+                {edit_btn}
+                {del_btn}
             </div>
-            <div class="system-card__footer card-footer-wrap">
-                {tenant_chips}
+        </div>
+        <div class="system-card__desc mt-sm">
+            <div class="kv-grid">
+                {summary_html}
             </div>
-        </div>'''
+        </div>
+        <div class="system-card__footer card-footer-wrap">
+            {tenant_chips}
+        </div>
+    </div>'''
 
-    empty = ""
-    if not connectors:
-        empty = _empty_state("link", 'No connectors configured yet.')
 
-    # Vendors and connector rows for the dialogs (management.js reads #connector-data).
-    connector_payload = htmlsafe_json_dumps({"vendors": [
+def _connector_payload(connectors: list, vendors: list) -> str:
+    """Vendors and connector rows for the connector dialogs (management.js reads #connector-data)."""
+    return htmlsafe_json_dumps({"vendors": [
         {"name": v.name, "label": v.label} for v in vendors
     ], "rows": [
         {
             "id": c["id"],
             "vendor": c.get("vendor"),
             "label": c.get("label"),
-            "kind": c.get("kind"),
-            "sync_interval_minutes": c.get("sync_interval_minutes"),
             "config": c.get("config") or {},
         } for c in connectors
     ]})
 
-    return f'''
-    <div class="mgmt-tab-head">
-        <span class="text-secondary">{count} connector{"s" if count != 1 else ""} configured &middot; {len(vendors)} vendor{"s" if len(vendors) != 1 else ""} available</span>
-        <div class="flex gap-sm">
-            <button class="btn btn-secondary" data-click="mgmt.importOpen" title="Import a connector from JSON exported elsewhere">
-                {_icon("download", "16")}
-                Import
-            </button>
-            <button class="btn btn-primary" data-click="mgmt.connectorNew">
-                {_icon("plus", "16")}
-                New Connector
-            </button>
-        </div>
-    </div>
-    <div class="systems-grid">{cards}</div>
-    {empty}
-    <script type="application/json" id="connector-data">{connector_payload}</script>'''
+
+# ── The Integrations section: every integration in one list ─────────────────
+# Group by is remembered per browser in a cookie, set when it is chosen, so the list a dialog's save
+# or a Delete re-draws keeps it.
+INTEGRATION_GROUPS = (("none", "None"), ("type", "Type"))
+INTEGRATIONS_GROUP_COOKIE = "tide_integrations_group"
 
 
-def _connectors_tab_response(db) -> HTMLResponse:
-    """Shared helper so every CRUD endpoint can return the refreshed tab."""
+def _integrations_html(request: Request, db, group: Optional[str] = None, banner: str = "") -> str:
+    """The Integrations list (partials/integrations.html): the Keycloak TIDE signs in with first,
+    then SIEMs, OpenCTI connectors and GitLab; with Group by → Type, a group for each type."""
     from app.services.cti_connectors import all_vendors
+    if group is None:
+        group = request.cookies.get(INTEGRATIONS_GROUP_COOKIE, "none")
+    if group not in dict(INTEGRATION_GROUPS):
+        group = "none"
+    keycloaks = db.list_keycloak_inventory()
+    siems = db.list_siem_inventory()
+    for s in siems:
+        s["_clients"] = db.get_siem_clients(s["id"])
+    vendors = all_vendors()
+    vendor_by_name = {v.name: v for v in vendors}
     connectors = db.list_cti_connectors()
     for c in connectors:
         c["_clients"] = db.get_cti_connector_clients(c["id"])
-    all_clients = db.list_clients()
-    return HTMLResponse(_render_connectors_tab(connectors, all_vendors(), all_clients))
+    gitlabs = db.list_gitlab_inventory()
+    for i in gitlabs:
+        i["_clients"] = db.get_gitlab_clients(i["id"])
+    groups = [
+        {"key": "identity", "title": "Identity", "icon": "key", "what": "Keycloak, which TIDE signs people in with",
+         "cards": [_keycloak_card(k) for k in keycloaks]},
+        {"key": "siem", "title": "SIEMs", "icon": "shield-check", "what": "Elastic, Splunk, Sentinel",
+         "cards": [_siem_card(s) for s in siems]},
+        {"key": "intel", "title": "Threat intel", "icon": "target", "what": "OpenCTI, for the threat actors in Threat Landscape",
+         "cards": [_connector_card(c, vendor_by_name) for c in connectors]},
+        {"key": "source", "title": "Source control", "icon": "gitlab", "what": "GitLab, for report publishing (planned)",
+         "cards": [_gitlab_card(i) for i in gitlabs]},
+    ]
+    total = sum(len(g["cards"]) for g in groups)
+    return request.app.state.templates.env.get_template("partials/integrations.html").render(
+        group=group, group_options=INTEGRATION_GROUPS, groups=[g for g in groups if g["cards"]], total=total,
+        can_add_keycloak=not keycloaks, banner=banner,
+        empty=_empty_state("link", "No integrations yet.", "Add one with Add integration.") if not total else "",
+        connector_payload=_connector_payload(connectors, vendors),
+    )
+
+
+def _integrations_response(request: Request, db, toast: str = "", level: str = "success") -> HTMLResponse:
+    """The re-drawn Integrations list, after a change, with a toast when ``toast`` is given."""
+    html = _integrations_html(request, db)
+    if toast:
+        html = (f'<div hx-swap-oob="afterbegin:#toast-container"><div class="toast toast-{level}">'
+                f'{_esc(toast)}</div></div>') + html
+    return HTMLResponse(html)
+
+
+@router.get("/tab/integrations", response_class=HTMLResponse)
+def tab_integrations(request: Request, db: DbDep, user: RequireSuperadmin, group: Optional[str] = None):
+    """The Integrations section's list. ``group`` (Group by) is remembered for this browser.
+
+    Platform super admins only (4.1.6): integrations serve every client and hold their credentials.
+    Client admins link SIEMs and connectors to their clients from the client's page."""
+    resp = HTMLResponse(_integrations_html(request, db, group))
+    if group in dict(INTEGRATION_GROUPS):
+        resp.set_cookie(INTEGRATIONS_GROUP_COOKIE, group, max_age=365 * 86400, httponly=True, samesite="lax",
+                        secure=request.url.scheme == "https")
+    return resp
 
 
 def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> tuple[dict, dict, list[str]]:
@@ -4883,32 +4439,9 @@ def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> 
     errors: list[str] = []
     generic = {
         "label": str(form.get("label", "")).strip(),
-        "kind": str(form.get("kind", "cti")).strip().lower() or "cti",
     }
-    # 5.0.x — optional auto-sync interval (minutes). Blank/0/missing
-    # means "off"; the CTI scheduler skips connectors whose interval
-    # is NULL. Capped at 7 days (10 080 min) so a typo can't park a
-    # connector for years; min 5 min so the scheduler tick isn't
-    # outrun by the interval.
-    interval_raw = str(form.get("sync_interval_minutes", "")).strip()
-    interval_val: Optional[int] = None
-    if interval_raw:
-        try:
-            iv = int(interval_raw)
-            if iv > 0:
-                if iv < 5:
-                    errors.append("Auto-sync interval must be at least 5 minutes.")
-                elif iv > 10080:
-                    errors.append("Auto-sync interval cannot exceed 7 days (10080 minutes).")
-                else:
-                    interval_val = iv
-        except ValueError:
-            errors.append("Auto-sync interval must be a whole number of minutes.")
-    generic["sync_interval_minutes"] = interval_val
     if not generic["label"]:
         errors.append("Label is required.")
-    if generic["kind"] not in ("cti", "actors", "both"):
-        errors.append("Kind must be one of: cti, actors, both.")
     cfg: dict = {}
     for spec in vendor.fields:
         raw = form.get(f"cfg_{spec.key}")
@@ -4934,12 +4467,6 @@ def _parse_connector_form(form, vendor, *, existing_cfg: dict | None = None) -> 
         else:
             cfg[spec.key] = s
     return generic, cfg, errors
-
-
-@router.get("/tab/connectors", response_class=HTMLResponse)
-def tab_connectors(request: Request, db: DbDep, user: RequireSuperadmin):
-    """Connectors tab partial for the management hub."""
-    return _connectors_tab_response(db)
 
 
 @router.get("/connectors/vendor-fields/{vendor_name}", response_class=HTMLResponse)
@@ -4973,29 +4500,15 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
         )
     generic, cfg, errors = _parse_connector_form(form, vendor)
     if errors:
-        return HTMLResponse(
-            '<div class="alert alert-danger">' + "; ".join(_esc(e) for e in errors) + '</div>',
-            status_code=400,
-        )
+        return _form_refused("; ".join(errors))
     try:
         created = db.create_cti_connector(
             vendor=vendor_name,
             label=generic["label"],
-            kind=generic["kind"],
             is_active=True,
             config=cfg,
         )
         cid = (created or {}).get("id", "?")
-        # Apply interval as an update (create_cti_connector signature
-        # is a stable wire contract we don't want to change just for
-        # this optional field).
-        if cid and generic.get("sync_interval_minutes") is not None:
-            try:
-                db.update_cti_connector(
-                    cid, sync_interval_minutes=generic["sync_interval_minutes"],
-                )
-            except Exception:
-                logger.warning("create_connector: could not set interval on %s", cid)
     except Exception as exc:
         logger.error("create_cti_connector failed: %s", exc, exc_info=True)
         return HTMLResponse(
@@ -5003,7 +4516,7 @@ async def create_connector(request: Request, db: DbDep, user: RequireSuperadmin)
             status_code=500,
         )
     logger.info("Connector created: %s (%s) by %s", cid, vendor_name, user.username)
-    return _connectors_tab_response(db)
+    return _integrations_response(request, db, f"Connector '{generic['label']}' created.")
 
 
 @router.post("/connectors/import", response_class=HTMLResponse)
@@ -5011,9 +4524,9 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
     """Bulk-create connectors from a pasted JSON payload.
 
     Accepts either a single connector object or ``{"connectors": [...]}``.
-    Each entry must specify ``vendor`` + ``label``; ``kind`` defaults to the
-    vendor's ``kind_default``; ``config`` is validated against the vendor's
-    FieldSpec list using the same parser as the create form.
+    Each entry must specify ``vendor`` + ``label``; ``config`` is validated
+    against the vendor's FieldSpec list using the same parser as the create
+    form. A ``kind`` from an export made before 6.3.0 is ignored.
     """
     from app.services.cti_connectors import get as get_vendor
     form = await request.form()
@@ -5056,10 +4569,6 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
         if not label:
             errors.append(f"Entry {idx} ({vendor_name}): label is required.")
             continue
-        kind = str(entry.get("kind", vendor.kind_default) or vendor.kind_default).strip().lower()
-        if kind not in ("cti", "actors", "both"):
-            errors.append(f"Entry {idx} ({label}): kind must be cti, actors, or both.")
-            continue
         cfg_in = entry.get("config") or {}
         if not isinstance(cfg_in, dict):
             errors.append(f"Entry {idx} ({label}): config must be an object.")
@@ -5080,7 +4589,6 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             created = db.create_cti_connector(
                 vendor=vendor_name,
                 label=label,
-                kind=kind,
                 is_active=bool(entry.get("is_active", True)),
                 config=cfg,
             )
@@ -5098,12 +4606,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             + "</ul></div>",
             status_code=400,
         )
-    # Partial or full success: refresh tab, with a banner about errors if any.
-    refreshed = _render_connectors_tab(
-        [dict(c, _clients=db.get_cti_connector_clients(c["id"])) for c in db.list_cti_connectors()],
-        __import__("app.services.cti_connectors", fromlist=["all_vendors"]).all_vendors(),
-        db.list_clients(),
-    )
+    # Partial or full success: the re-drawn list, with a banner about errors if any.
     banner = (
         f'<div class="alert alert-success mb-md">Imported {len(created_ids)} connector(s).</div>'
     )
@@ -5114,7 +4617,7 @@ async def import_connectors(request: Request, db: DbDep, user: RequireSuperadmin
             + "".join(f"<li>{_esc(e)}</li>" for e in errors)
             + "</ul></div>"
         )
-    return HTMLResponse(banner + refreshed)
+    return HTMLResponse(_integrations_html(request, db, banner=banner))
 
 
 @router.put("/connectors/{connector_id}", response_class=HTMLResponse)
@@ -5138,17 +4641,12 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
         form, vendor, existing_cfg=(existing.get("config") or {}),
     )
     if errors:
-        return HTMLResponse(
-            '<div class="alert alert-danger">' + "; ".join(_esc(e) for e in errors) + '</div>',
-            status_code=400,
-        )
+        return _form_refused("; ".join(errors))
     try:
         db.update_cti_connector(
             connector_id,
             label=generic["label"],
-            kind=generic["kind"],
             config=cfg,
-            sync_interval_minutes=generic.get("sync_interval_minutes"),
         )
     except Exception as exc:
         logger.error("update_cti_connector failed: %s", exc, exc_info=True)
@@ -5157,15 +4655,15 @@ async def update_connector(request: Request, connector_id: str, db: DbDep, user:
             status_code=500,
         )
     logger.info("Connector updated: %s by %s", connector_id, user.username)
-    return _connectors_tab_response(db)
+    return _integrations_response(request, db)
 
 
 @router.delete("/connectors/{connector_id}", response_class=HTMLResponse)
-def delete_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
+def delete_connector(request: Request, connector_id: str, db: DbDep, user: RequireSuperadmin):
     """Delete a connector and all its client links."""
     existing = db.get_cti_connector(connector_id)
     if not existing:
-        return _connectors_tab_response(db)
+        return _integrations_response(request, db)
     try:
         db.delete_cti_connector(connector_id)
     except Exception as exc:
@@ -5175,7 +4673,7 @@ def delete_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
             status_code=500,
         )
     logger.info("Connector deleted: %s by %s", connector_id, user.username)
-    return _connectors_tab_response(db)
+    return _integrations_response(request, db, "Connector deleted.")
 
 
 @router.post("/connectors/{connector_id}/test", response_class=HTMLResponse)
@@ -5215,16 +4713,9 @@ def test_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
             result = vendor.tester(connector) or {}
             ok = bool(result.get("ok"))
             err = (result.get("error") or "").strip()
-            cols = result.get("collections")
             if ok:
                 status = "pass"
-                if isinstance(cols, list):
-                    message = f"collections={len(cols)}" + (
-                        f" ({', '.join(cols[:3])}{'…' if len(cols) > 3 else ''})"
-                        if cols else ""
-                    )
-                else:
-                    message = "connection ok"
+                message = (result.get("message") or "").strip() or "connection ok"
             else:
                 status = "fail"
                 message = err or "connection probe returned ok=false"
@@ -5252,146 +4743,6 @@ def test_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
         )
     refreshed = db.get_cti_connector(connector_id) or connector
     return HTMLResponse(_connector_status_pill(refreshed, target_id=f"connector-status-{connector_id}"))
-
-
-@router.post("/connectors/{connector_id}/sync", response_class=HTMLResponse)
-def sync_connector(connector_id: str, db: DbDep, user: RequireSuperadmin):
-    """Kick off a background sync job and return the polling badge.
-
-    The pre-5.0.x synchronous implementation held the worker thread
-    through the entire vendor fetch, so the operator's HTMX click
-    timed out on populous OpenCTI / Mandiant tenants before the data
-    landed (nginx 504 → no visible state → row count silently caught
-    up minutes later if the work finished at all). We now submit the
-    work to :mod:`app.services.cti_jobs` and return a polling fragment
-    that swaps itself out for the terminal badge when the job ends.
-    """
-    from app.services.cti_connectors import get as get_vendor
-    from app.services import cti_jobs
-
-    connector = db.get_cti_connector(connector_id)
-    if not connector:
-        return HTMLResponse('<span class="badge badge-warning">Connector not found</span>')
-    vendor = get_vendor(connector.get("vendor") or "")
-    if vendor is None:
-        return HTMLResponse(
-            f'<span class="badge badge-danger">Vendor &lsquo;{_esc(connector.get("vendor") or "?")}&rsquo; is no longer registered</span>'
-        )
-    linked = db.get_cti_connector_clients(connector_id)
-    if not linked:
-        return HTMLResponse(
-            '<span class="badge badge-warning">No linked tenants &mdash; link this connector to at least one client first.</span>'
-        )
-
-    def _runner():
-        # Re-resolve at run-time so an operator who links/unlinks a
-        # tenant between submit and start still gets the current fan-out.
-        connector_now = db.get_cti_connector(connector_id) or connector
-        linked_now = db.get_cti_connector_clients(connector_id) or linked
-        try:
-            result = vendor.fetcher(connector_now, linked_now)
-        except Exception as exc:
-            msg = str(exc)[:200]
-            try:
-                db.update_cti_connector(
-                    connector_id,
-                    last_status="fail",
-                    last_message=msg,
-                    last_run_at=_cn_datetime.utcnow(),
-                )
-            except Exception:
-                pass
-            raise
-        summary = result.as_dict() if hasattr(result, "as_dict") else (result or {})
-        errors = summary.get("errors") or []
-        tenants = summary.get("tenants", 0)
-        new = summary.get("indicators_new", 0)
-        merged = summary.get("indicators_merged", 0)
-        review = summary.get("indicators_review", 0)
-        actors = summary.get("actors", 0) + summary.get("intrusion_sets", 0)
-        reports = summary.get("reports", 0)
-        rels = summary.get("relationships", 0)
-        badge_msg = (
-            f"{tenants} tenant(s) · +{new} new / ~{merged} merged / ?{review} review"
-            f" · {actors} actors / {reports} reports / {rels} links"
-        )
-        try:
-            db.update_cti_connector(
-                connector_id,
-                last_status="pass" if not errors else "fail",
-                last_message=badge_msg[:500],
-                last_run_at=_cn_datetime.utcnow(),
-            )
-        except Exception:
-            logger.warning("Failed to persist sync status for connector %s", connector_id)
-        return summary
-
-    job_id = cti_jobs.submit(
-        kind="connector",
-        runner=_runner,
-        label=connector.get("label") or connector.get("vendor") or connector_id,
-        actor=user.username,
-        scope={"connector_id": connector_id},
-    )
-    # Inline polling fragment — re-uses the same render shape as the
-    # /cti/sync/jobs/{id} endpoint so the badge swap is identical.
-    target_id = f"connector-sync-job-{job_id}"
-    return HTMLResponse(
-        f'<span id="{target_id}" class="badge badge-info" '
-        f'hx-get="/api/management/connectors/sync/jobs/{job_id}" '
-        f'hx-trigger="every 2s" '
-        f'hx-swap="outerHTML">… syncing {_esc(connector.get("label") or "")}</span>'
-    )
-
-
-@router.get("/connectors/sync/jobs/{job_id}", response_class=HTMLResponse)
-def sync_connector_job_status(job_id: str, user: RequireSuperadmin):
-    """HTMX polling target for a connector sync job."""
-    from app.services import cti_jobs
-    job = cti_jobs.get(job_id)
-    target_id = f"connector-sync-job-{_esc(job_id)}"
-    if job is None:
-        return HTMLResponse(
-            f'<span id="{target_id}" class="badge badge-warning">'
-            f'Job no longer tracked &mdash; refresh to see status.</span>'
-        )
-    status = job.get("status")
-    label = job.get("label") or ""
-    if status in ("pending", "running"):
-        return HTMLResponse(
-            f'<span id="{target_id}" class="badge badge-info" '
-            f'hx-get="/api/management/connectors/sync/jobs/{_esc(job_id)}" '
-            f'hx-trigger="every 2s" '
-            f'hx-swap="outerHTML">… syncing {_esc(label)}</span>'
-        )
-    if status == "failed":
-        err = job.get("error") or "unknown error"
-        return HTMLResponse(
-            f'<span id="{target_id}" class="badge badge-danger">'
-            f'Sync failed &mdash; {_esc(err[:200])}</span>'
-        )
-    summary = job.get("summary") or {}
-    if not isinstance(summary, dict):
-        summary = {}
-    errors = summary.get("errors") or []
-    cls = "badge-success" if not errors else "badge-warning"
-    tenants = summary.get("tenants", 0)
-    new = summary.get("indicators_new", 0)
-    merged = summary.get("indicators_merged", 0)
-    review = summary.get("indicators_review", 0)
-    actors = summary.get("actors", 0) + summary.get("intrusion_sets", 0)
-    reports = summary.get("reports", 0)
-    rels = summary.get("relationships", 0)
-    err_suffix = f" &middot; {len(errors)} error(s)" if errors else ""
-    # The errors themselves on hover: the same text the run's record (sync_history) and log hold.
-    err_title = f' title="{_esc("; ".join(str(e) for e in errors[:5]))}"' if errors else ""
-    badge_msg = (
-        f"{tenants} tenant(s) &middot; +{new} new / ~{merged} merged / ?{review} review"
-        f" &middot; {actors} actors / {reports} reports / {rels} links{err_suffix}"
-    )
-    return HTMLResponse(
-        f'<span id="{target_id}" class="badge {cls}"{err_title}>{badge_msg}</span>'
-    )
 
 
 @router.post("/clients/{client_id}/connectors/{connector_id}", response_class=HTMLResponse)

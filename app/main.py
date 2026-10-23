@@ -30,7 +30,8 @@ except Exception:  # pragma: no cover
 
 from app.config import get_settings
 from app.api.deps import CurrentUser, DbDep, ActiveClient, OptionalClient
-from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, cti as cti_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api
+from app.services import keycloak_config
+from app.api import auth, rules, heatmap, threats, promotion, sigma, elastic as elastic_api, rule_upstream as rule_upstream_api, hunting as hunting_api, settings as settings_api, inventory, external_sharing, clients as clients_api, management as management_api, mitre as mitre_api, bulk_edit as bulk_edit_api, diagnostics as diagnostics_api, dashboard as dashboard_api, rule_monitoring as rule_monitoring_api
 
 # 4.1.0 P1: structured JSON logging with per-request context. Replaces the
 # old basicConfig() call. Format selected by TIDE_LOG_FORMAT env (default
@@ -332,18 +333,6 @@ async def lifespan(app: FastAPI):
     # ``DatabaseService._backfill_legacy_opencti_to_connectors``
     # explicitly from a maintenance script.
 
-    # T2 — swap the TAXII 2.1 client's process-wide cursor store from
-    # the in-memory default to the DuckDB-backed implementation so
-    # ``added_after`` watermarks survive container restarts.
-    try:
-        from app.services.cti_fetchers.taxii21 import (
-            DuckDBCursorStore, set_default_cursor_store,
-        )
-        set_default_cursor_store(DuckDBCursorStore())
-        logger.info("TAXII 2.1 cursor store: DuckDB-backed (cti_taxii_cursors)")
-    except Exception as _e:
-        logger.warning(f"TAXII cursor store wiring skipped: {_e}")
-
     # Initialize multi-tenant DB routing.
     # Per design (Migration 29), every client owns a physical DB file so that
     # tenant data (rules, baselines, systems, ...) is physically isolated
@@ -377,14 +366,17 @@ async def lifespan(app: FastAPI):
 
         # Encrypt credentials stored before encryption (#59).
         try:
-            from app.services.cti_database import seal_egress_keys
             _sealed = db.seal_stored_credentials()
-            for _c in db.list_clients():
-                _sealed += seal_egress_keys(_c["id"])
             if _sealed:
                 logger.info(f"Encrypted {_sealed} stored credential(s) (data/credentials.key)")
         except Exception as _e:
             logger.error(f"Could not encrypt stored credentials: {_e}")
+
+        # The first start with Keycloak in .env makes it the Keycloak integration TIDE signs in with.
+        try:
+            keycloak_config.import_from_env(db)
+        except Exception as _e:
+            logger.error(f"Could not take the Keycloak settings from .env (sign-in uses .env's): {_e}")
 
         # Open every tenant DB once so legacy reference-table copies are dropped.
         try:
@@ -573,18 +565,6 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.error(f"Rule-log export scheduler failed to start: {exc}", exc_info=True)
 
-    # 5.0.x — CTI connector auto-sync scheduler. This is the only
-    # background ticker TIDE owns; per CLAUDE.md §2 it is the
-    # sanctioned exception to the "operator-triggered only" rule.
-    # The scheduler wakes once a minute, asks the shared DB which
-    # cti_connectors rows are due (per the new sync_interval_minutes
-    # column) and submits jobs through the same cti_jobs registry the
-    # operator's Sync button uses.
-    try:
-        from app.services import cti_scheduler
-        cti_scheduler.start()
-    except Exception as exc:  # pragma: no cover
-        logger.warning(f"CTI scheduler failed to start (non-fatal): {exc}")
     # Say plainly, once, if a background service isn't running: TIDE works without them, but
     # what they do stops happening (Diagnostics → "Background services not running" shows it too).
     for name, consequence in background_services_down():
@@ -599,11 +579,6 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     scheduler.shutdown()
-    try:
-        from app.services import cti_scheduler
-        await cti_scheduler.stop()
-    except Exception as exc:  # pragma: no cover
-        logger.warning(f"CTI scheduler stop failed: {exc}")
     try:
         apm_client = getattr(app.state, "apm_client", None)
         if apm_client:
@@ -621,15 +596,9 @@ async def lifespan(app: FastAPI):
 
 
 def background_services() -> list:
-    """TIDE's two background services (CLAUDE.md Hard Stop 6), each as
+    """TIDE's background services (CLAUDE.md Hard Stop 6), each as
     ``(name, running, detail, what stops when it isn't running)``."""
-    from app.services import cti_scheduler
-    cti = cti_scheduler.status()
-    last = cti["last_tick"].strftime("%Y-%m-%d %H:%M UTC") if cti["last_tick"] else "not yet"
     return [
-        ("CTI connector scheduler", cti["running"],
-         cti["error"] or f"last checked for due connectors: {last}",
-         "Connectors with a sync interval won't sync on their own; their Sync buttons still work."),
         ("Rule-log export and backup schedule", bool(scheduler.running),
          f"{len(scheduler.get_jobs())} job(s) scheduled" if scheduler.running else "not started",
          "Rule logs won't be exported and backups won't run on their schedule; Export now and Back up now still work."),
@@ -847,9 +816,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/mitre/mitigations": "page:mitre_mitigations",
         "/api/mitre/grid/mitigations": "page:mitre_mitigations",
         "/api/mitre/window/mitigations": "page:mitre_mitigations",
-        "/cti/indicators": "page:cti_indicators",
-        "/cti/actors": "page:cti_actors",
-        "/cti/reports": "page:cti_reports",
 
         "/api/dashboard": "page:dashboard",
         "/api/heatmap": "page:heatmap",
@@ -1799,8 +1765,7 @@ def create_app() -> FastAPI:
 
         return templates.TemplateResponse(request, name, ctx)
 
-    # Expose for routers that live in their own modules (e.g. app.api.cti)
-    # so page renders pick up active_client / user_clients / space_labels
+    # Expose for routers that live in their own modules so page renders pick up active_client / user_clients / space_labels
     # without each router re-deriving them.
     app.state.render_template = render_template
     
@@ -1821,7 +1786,6 @@ def create_app() -> FastAPI:
     app.include_router(external_sharing.router)
     app.include_router(clients_api.router)
     app.include_router(management_api.router)
-    app.include_router(cti_api.router)
     app.include_router(mitre_api.router)
     app.include_router(diagnostics_api.router)
     app.include_router(dashboard_api.router)
@@ -2711,7 +2675,7 @@ def create_app() -> FastAPI:
                 "user": user,
                 "active_page": "settings",
                 "account": db_user or {},
-                "sso": {"realm": settings.keycloak_realm},
+                "sso": {"realm": keycloak_config.current().realm},
             }
         )
 
@@ -2836,15 +2800,6 @@ def create_app() -> FastAPI:
         except Exception as _exc:
             logger.warning(f"client_connectors read for client {client_id} failed: {_exc}")
             client_connectors, available_connectors = [], []
-        # CTI egress targets for this client (per-tenant). We tolerate a
-        # missing per-tenant CTI DB (fresh clients) by returning an empty
-        # list rather than 500'ing the detail page.
-        cti_targets: list = []
-        try:
-            from app.services import cti_database as _cti_db
-            cti_targets = _cti_db.list_egress_targets(client_id)
-        except Exception as _exc:
-            logger.warning(f"cti_targets read for client {client_id} failed: {_exc}")
         # Available users not yet assigned
         all_users = db.get_all_users()
         assigned_user_ids = {u["id"] for u in client_users}
@@ -2914,7 +2869,6 @@ def create_app() -> FastAPI:
                 "available_opencti": available_opencti,
                 "client_connectors": client_connectors,
                 "available_connectors": available_connectors,
-                "cti_targets": cti_targets,
                 "siems": all_siems,
                 "client_systems": client_systems,
                 "client_baselines": client_baselines,

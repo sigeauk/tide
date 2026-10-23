@@ -86,8 +86,8 @@
    the Tenants & Users tab to manage role permissions for a specific client. #}
 
 {# ------------------------------------------------------------------ #}
-{# Integrations — SIEM, Threat Intel, GitLab, Keycloak                #}
-{# Each sub-section auto-loads its own card list via hx-trigger=load. #}
+{# Integrations — every SIEM, OpenCTI, GitLab and Keycloak in one     #}
+{# list (partials/integrations.html), with Group by and Add integration. #}
 {# ------------------------------------------------------------------ #}
 <details class="mgmt-section" open>
     <summary class="mgmt-section__summary">
@@ -97,61 +97,10 @@
     </summary>
     <div class="mgmt-section__body">
         {% if user and user.is_superadmin %}
-        <details class="mgmt-subsection" open>
-            <summary class="mgmt-subsection__summary">
-                {{ icon('shield-check', '16') }}
-                <span class="mgmt-subsection__title">SIEMs</span>
-                <span class="mgmt-subsection__hint">Elastic, Splunk, Sentinel</span>
-            </summary>
-            <div name="Open Siems" id="mgmt-sub-siems" class="mgmt-subsection__body"
-                 hx-get="/api/management/tab/siems" hx-trigger="load" hx-swap="innerHTML">
-                {{ loading_state("Loading SIEMs…") }}
-            </div>
-        </details>
-
-        <details class="mgmt-subsection" open>
-            <summary class="mgmt-subsection__summary">
-                {{ icon('link', '16') }}
-                <span class="mgmt-subsection__title">Connectors</span>
-                <span class="mgmt-subsection__hint">Multi-vendor CTI framework (OpenCTI, Mandiant, CrowdStrike…)</span>
-            </summary>
-            <div name="Open Connectors" id="mgmt-sub-connectors" class="mgmt-subsection__body"
-                 hx-get="/api/management/tab/connectors" hx-trigger="load" hx-swap="innerHTML">
-                {{ loading_state("Loading connectors…") }}
-            </div>
-        </details>
-
-        {# Threat Intel (legacy) section removed in 4.1.20. Any rows that
-           remain in opencti_inventory are auto-copied into the Connectors
-           framework at startup via
-           DatabaseService._backfill_legacy_opencti_to_connectors. The
-           legacy CRUD endpoints under /api/management/tab/threat-intel
-           are retained for one release as a deep-link safety net but are
-           no longer surfaced in the UI. #}
-
-        <details class="mgmt-subsection" open>
-            <summary class="mgmt-subsection__summary">
-                {{ icon('gitlab', '16') }}
-                <span class="mgmt-subsection__title">GitLab</span>
-                <span class="mgmt-subsection__hint">Report publishing destinations</span>
-            </summary>
-            <div name="Open Gitlab" id="mgmt-sub-gitlab" class="mgmt-subsection__body"
-                 hx-get="/api/management/tab/gitlab" hx-trigger="load" hx-swap="innerHTML">
-                {{ loading_state("Loading GitLab…") }}
-            </div>
-        </details>
-
-        <details class="mgmt-subsection" open>
-            <summary class="mgmt-subsection__summary">
-                {{ icon('key', '16') }}
-                <span class="mgmt-subsection__title">Keycloak</span>
-                <span class="mgmt-subsection__hint">SSO identity provider (global)</span>
-            </summary>
-            <div name="Open Keycloak" id="mgmt-sub-keycloak" class="mgmt-subsection__body"
-                 hx-get="/api/management/tab/keycloak" hx-trigger="load" hx-swap="innerHTML">
-                {{ loading_state("Loading Keycloak…") }}
-            </div>
-        </details>
+        <div name="Open Integrations" id="mgmt-integrations"
+             hx-get="/api/management/tab/integrations" hx-trigger="load" hx-swap="innerHTML">
+            {{ loading_state("Loading integrations…") }}
+        </div>
         {% else %}
         {# SIEMs, connectors, GitLab and Keycloak serve the whole install and hold its credentials. #}
         <details class="mgmt-subsection">
@@ -330,27 +279,6 @@
         </div>
     </div>
 </details>
-
-{# ------------------------------------------------------------------ #}
-{# Query — read-only DuckDB console (super-admin only).               #}
-{# Loaded lazily so the SQL textarea / preset list isn't built when   #}
-{# tenant admins open the page.                                       #}
-{# ------------------------------------------------------------------ #}
-{% if user and user.is_superadmin %}
-<details class="mgmt-section" id="mgmt-query-section">
-    <summary class="mgmt-section__summary">
-        {{ icon('database', '18') }}
-        <span class="mgmt-section__title">Query</span>
-        <span class="mgmt-section__hint">Read-only DuckDB diagnostics (super-admin)</span>
-    </summary>
-    <div name="Open Query" class="mgmt-section__body"
-         hx-get="/api/management/tab/query"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        {{ loading_state("Loading the query console…") }}
-    </div>
-</details>
-{% endif %}
 
 <!-- ── Create / Edit Client Modal ─────────────────────────────────── -->
 <div name="Client Modal" class="modal-overlay" id="client-modal" style="display:none;"
@@ -563,19 +491,27 @@
      data-click="mgmt.keycloakBackdrop">
     <div class="modal-content modal-md">
         <div class="modal-header">
-            <h3 class="modal-title" id="keycloak-modal-title">New Keycloak Instance</h3>
+            <h3 class="modal-title" id="keycloak-modal-title">New Keycloak</h3>
             {{ close_button('name="Close Modal"
                     data-click="mgmt.keycloakClose"') }}
         </div>
         <form id="keycloak-form" data-submit="mgmt.keycloakSubmit" class="form-stack">
             <input name="Keycloak Form Id" type="hidden" id="keycloak-form-id" value="">
+            <p class="modal-intro">TIDE signs people in with this Keycloak. Saving a change to where it is first
+                checks that its realm answers there, so a mistake can't stop everyone signing in.</p>
             <div>
                 <label for="keycloak-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Keycloak Form Label" type="text" id="keycloak-form-label" class="form-input" required maxlength="200" placeholder="Corporate SSO">
             </div>
             <div>
-                <label for="keycloak-form-url" class="form-label">URL <span class="req">*</span></label>
+                <label for="keycloak-form-url" class="form-label">Address <span class="req">*</span></label>
                 <input name="Keycloak Form Url" type="text" id="keycloak-form-url" class="form-input" required placeholder="https://keycloak.example.com">
+                <span class="form-hint">Where browsers are sent to sign in.</span>
+            </div>
+            <div>
+                <label for="keycloak-form-internal-url" class="form-label">Internal address</label>
+                <input name="Keycloak Form Internal Url" type="text" id="keycloak-form-internal-url" class="form-input" placeholder="http://keycloak:8080">
+                <span class="form-hint">Where TIDE itself calls Keycloak, when that differs (for example inside Docker). Blank: the address above.</span>
             </div>
             <div>
                 <label for="keycloak-form-realm" class="form-label">Realm</label>
@@ -585,11 +521,23 @@
             <div>
                 <label for="keycloak-form-client-id" class="form-label">Client ID</label>
                 <input name="Keycloak Form Client Id" type="text" id="keycloak-form-client-id" class="form-input"
-                       placeholder="Leave blank to keep existing">
+                       placeholder="tide-app">
+                <span class="form-hint">The Keycloak client TIDE signs in with. Blank keeps the one stored.</span>
             </div>
             <div>
                 <label for="keycloak-form-client-secret" class="form-label">Client secret</label>
                 <input name="Keycloak Form Client Secret" type="password" id="keycloak-form-client-secret" class="form-input"
+                       placeholder="Leave blank to keep existing" autocomplete="new-password">
+            </div>
+            <div>
+                <label for="keycloak-form-pg-client-id" class="form-label">Password-grant client</label>
+                <input name="Keycloak Form Password Grant Client Id" type="text" id="keycloak-form-pg-client-id" class="form-input"
+                       placeholder="admin-cli">
+                <span class="form-hint">The client a Keycloak user's name and password, typed on TIDE's sign-in page, are checked with first. Blank: the client above only.</span>
+            </div>
+            <div>
+                <label for="keycloak-form-pg-client-secret" class="form-label">Password-grant client secret</label>
+                <input name="Keycloak Form Password Grant Client Secret" type="password" id="keycloak-form-pg-client-secret" class="form-input"
                        placeholder="Leave blank to keep existing" autocomplete="new-password">
             </div>
             {{ tls_verify_row('keycloak-form-tls-verify') }}
@@ -606,7 +554,7 @@
     </div>
 </div>
 
-<!-- ── Create / Edit Connector Modal (multi-vendor CTI framework) ─── -->
+<!-- ── Create / Edit Connector Modal ─── -->
 <div name="Connector Modal" class="modal-overlay" id="connector-modal" style="display:none;"
      data-click="mgmt.connectorBackdrop">
     <div class="modal-content modal-md">
@@ -629,23 +577,8 @@
                 <label for="connector-form-label" class="form-label">Label <span class="req">*</span></label>
                 <input name="Connector Form Label" type="text" id="connector-form-label" class="form-input" required maxlength="200" placeholder="Production OpenCTI">
             </div>
-            {# 5.0.0 — the per-connector Kind dropdown was retired with the
-               legacy OpenCTI GraphQL fetcher. Every TAXII vendor now pulls
-               a full STIX bundle, so the create form defaults to "cti"
-               server-side and the operator has nothing useful to tweak. #}
             <div id="connector-vendor-fields" class="form-stack form-stack--md">
                 <div class="text-secondary fs-md">Select a vendor to see its configuration fields.</div>
-            </div>
-            <div>
-                <label for="connector-form-interval" class="form-label">Auto-sync interval</label>
-                <select  name="Sync Schedule Selector" id="connector-form-interval" class="form-input">
-                    <option value="">Off &mdash; sync only when an operator clicks Sync</option>
-                    <option value="15">Every 15 minutes</option>
-                    <option value="60">Every hour</option>
-                    <option value="360">Every 6 hours</option>
-                    <option value="1440">Every 24 hours</option>
-                </select>
-                <span class="form-hint">Runs in the background through the same job queue as the manual Sync button.</span>
             </div>
             <div id="connector-test-result" class="form-result"></div>
             <div class="form-footer">
@@ -677,11 +610,10 @@
                 <pre class="code-block">{
   "connectors": [
     {
-      "vendor": "opencti",
+      "vendor": "opencti_taxii",
       "label": "Production OpenCTI",
-      "kind": "both",
       "is_active": true,
-      "config": { "url": "https://opencti.example", "token": "REPLACE_ME" }
+      "config": { "taxii_root": "https://opencti.example", "token": "REPLACE_ME", "verify_tls": true }
     }
   ]
 }</pre>
@@ -689,7 +621,7 @@
             <div>
                 <label for="connector-import-payload" class="form-label">JSON payload <span class="req">*</span></label>
                 <textarea id="connector-import-payload" name="payload" rows="12" class="form-input mono-input"
-                          placeholder='{ "vendor": "opencti", "label": "...", "config": { ... } }'></textarea>
+                          placeholder='{ "vendor": "opencti_taxii", "label": "...", "config": { ... } }'></textarea>
             </div>
             <div id="connector-import-result" class="mt-sm"></div>
             <div class="modal-actions mt-md">

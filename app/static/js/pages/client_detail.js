@@ -1,7 +1,7 @@
 /*
  * A client's page (pages/admin/client_detail.html) and its sections: Edit client, Move a system to
  * another client, Linked SIEMs (partials/client_siems.html: a destination's edit popover, colour
- * swatches, the Add SIEM form's spaces, validation mode) and CTI egress (partials/client_cti_egress.html).
+ * swatches, the Add SIEM form's spaces, validation mode).
  */
 (function () {
     'use strict';
@@ -140,14 +140,6 @@
             });
     }
 
-    // ── CTI egress: the fields of the chosen kind ──
-    function egressKind(e, sel) {
-        $('cti-egress-elastic-fields').style.display = sel.value === 'elastic' ? '' : 'none';
-        $('cti-egress-stix-fields').style.display = sel.value === 'stix_folder' ? '' : 'none';
-        var extras = $('cti-egress-elastic-extras');
-        if (extras) extras.style.display = sel.value === 'elastic' ? '' : 'none';
-    }
-
-    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem, egressKind: egressKind });
+    TIDE.actions('clientDetail', { submitEdit: submitEdit, moveSystem: moveSystem });
     TIDE.actions('clientSiems', { toggleEdit: toggleEdit, pickColor: pickColor, validationMode: validationMode, addSiem: addSiemChange });
 })();

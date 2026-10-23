@@ -57,7 +57,8 @@
         closePanel: function (e, el) { el.closest('.slide-panel-overlay').remove(); },
         // Diagnostics: the look-up's placeholder follows its kind; Support needs a client.
         lookupKind: function (e, sel) { sel.form.q.placeholder = sel.selectedOptions[0].dataset.hint; },
-        accessAction: function (e, sel) { sel.form.client.hidden = !sel.value.endsWith('_support'); },
+        // (form.client would also find the enhanced select's button, which carries the same name.)
+        accessAction: function (e, sel) { sel.form.querySelector('select[name="client"]').hidden = !sel.value.endsWith('_support'); },
         // Generate baselines: the button counts the ticked ones.
         genCount: function () {
             var a = document.getElementById('gen-preview-area'), b = a.querySelector('.gen-btn-count');

@@ -1,4 +1,4 @@
-"""Credentials at rest: the SIEM, connector, GitLab, Keycloak and egress secrets TIDE stores.
+"""Credentials at rest: the SIEM, connector, GitLab and Keycloak secrets TIDE stores.
 
 They are encrypted with a key kept in ``data/credentials.key``, which TIDE creates on first start.
 A stored value reads ``enc:v1:<token>``; anything without that prefix is a value from before

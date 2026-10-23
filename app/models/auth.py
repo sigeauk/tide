@@ -28,11 +28,6 @@ class TokenData(BaseModel):
     resource_access: Optional[dict] = None
     groups: List[str] = Field(default_factory=list)
 
-    # CTI TLP ceiling claim (step D). When present, scopes /cti/... reads
-    # to indicators / reports whose TLP marking is <= this value. Absent
-    # claim → default ceiling 'amber' (set by the TlpScope dependency).
-    tide_tlp_max: Optional[str] = None
-
     @property
     def roles(self) -> List[str]:
         """Extract realm roles from token."""
@@ -57,12 +52,6 @@ class User(BaseModel):
     is_active: bool = True
     is_superadmin: bool = False  # Maps from Keycloak `superadmin` group; bypasses tenant role checks.
     permissions: Dict[str, Dict[str, bool]] = Field(default_factory=dict)
-
-    # CTI TLP ceiling for this user (step D). ``None`` means "no claim was
-    # presented" — the TlpScope dependency normalises that to the default
-    # ``'amber'`` ceiling. Only ever populated from the Keycloak
-    # ``tide_tlp_max`` claim; never stored in the local users table.
-    tlp_max: Optional[str] = None
 
     # Multi-tenant fields
     clients: List[str] = Field(default_factory=list)  # Assigned client IDs
@@ -113,7 +102,6 @@ class User(BaseModel):
                 is_active=db_user.get("is_active", True),
                 is_superadmin=bool(db_user.get("is_superadmin", False)),
                 client_roles=client_roles or {},
-                tlp_max=token.tide_tlp_max,
                 authenticated_at=datetime.now(),
                 **cls._profile(db_user),
             )
@@ -125,7 +113,6 @@ class User(BaseModel):
             roles=token.roles,
             groups=token.groups,
             auth_provider="keycloak",
-            tlp_max=token.tide_tlp_max,
             authenticated_at=datetime.now(),
         )
 

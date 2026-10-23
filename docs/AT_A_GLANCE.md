@@ -187,12 +187,9 @@ Measure detection against how real adversaries behave, and against the intellige
 <span class="rm-tag rm-tag--system">NIST 800-53</span>
 <span class="rm-tag rm-tag--system">CVEs and CISA KEV</span>
 <span class="rm-tag rm-tag--system">OpenCTI</span>
-<span class="rm-tag rm-tag--system">Mandiant</span>
-<span class="rm-tag rm-tag--system">CrowdStrike</span>
-<span class="rm-tag rm-tag--system">TAXII feeds</span>
 <span class="rm-tag rm-tag--system">Nessus scans</span>
 </div>
-<p class="doc-card__more"><a href="THREATS.md#cti">CTI in the guide</a></p>
+<p class="doc-card__more"><a href="THREATS.md#where-it-comes-from">Where TIDE's intelligence comes from</a></p>
 </section>
 </div>
 

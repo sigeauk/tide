@@ -52,9 +52,9 @@
 {% call empty_state('link') %}
     <p class="empty-state-title">No CTI connectors linked to this client yet.</p>
     <p>
-        Register connectors in
-        <a name="Management Connectors" href="/settings/management#mgmt-sub-connectors" class="text-primary">Management &rsaquo; Connectors</a>,
-        then link them here.
+        Add an OpenCTI in
+        <a name="Management Connectors" href="/settings/management#mgmt-integrations" class="text-primary">Management &rsaquo; Integrations</a>,
+        then link it here.
     </p>
 {% endcall %}
 {% endif %}
@@ -111,9 +111,8 @@
             <p class="text-muted fs-base text-center">
                 All registered connectors are already linked to this client, or none have been
                 registered yet.
-                Register connectors in the
-                <a name="Connectors" href="/settings/management#mgmt-sub-connectors" class="text-primary">Connectors</a>
-                tab.
+                Add an OpenCTI in
+                <a name="Connectors" href="/settings/management#mgmt-integrations" class="text-primary">Management &rsaquo; Integrations</a>.
             </p>
             {% endif %}
             <div class="modal-actions">

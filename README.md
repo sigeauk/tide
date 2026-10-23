@@ -1,6 +1,6 @@
 # Threat Informed Detection Engine (TIDE)
 
-TIDE shows which threats your SIEM's detection rules cover, where the gaps are, and how good each rule is. It brings your detection rules, MITRE ATT&CK, your CTI feeds and the systems you defend into one place, and a person makes and records every coverage decision. It runs as two Docker containers and needs no internet access once installed.
+TIDE shows which threats your SIEM's detection rules cover, where the gaps are, and how good each rule is. It brings your detection rules, MITRE ATT&CK, your OpenCTI and the systems you defend into one place, and a person makes and records every coverage decision. It runs as two Docker containers and needs no internet access once installed.
 
 > **Inside TIDE:** this guide and the documents it links to are under your name at the bottom of the sidebar → **Settings → Documentation**, and the release notes under **Settings → Changelog**.
 
@@ -10,8 +10,7 @@ TIDE shows which threats your SIEM's detection rules cover, where the gaps are, 
 
 - **Rule Health:** every detection rule from your SIEMs, scored for quality, with when it was last validated and which baseline techniques it covers. Move, copy, compare and edit rules across SIEM spaces.
 - **Systems and baselines:** describe the environments you defend and the ATT&CK techniques each should detect, map rules to those techniques, and record known gaps. Coverage is worked out per system and exported as PDF or Markdown reports.
-- **Threat landscape:** threat actors from ATT&CK and your CTI feeds, with how much of each one's behaviour your rules cover, plus heatmaps and the full ATT&CK and NIST 800-53 catalogues.
-- **CTI:** indicators, actors and reports from OpenCTI, Mandiant, CrowdStrike and other TAXII feeds.
+- **Threat landscape:** threat actors from ATT&CK and your OpenCTI, with how much of each one's behaviour your rules cover, plus heatmaps and the full ATT&CK and NIST 800-53 catalogues.
 - **Multi-tenancy:** each client (team or customer) has its own database, users, roles and SIEM destinations. Nothing is shared between clients.
 - **Dashboards and diagnostics:** dashboards built from the figures you choose, and built-in checks that find known problems and say how to fix them.
 - **Offline by design:** ATT&CK, NIST 800-53, SigmaHQ, Elastic's detection rules and the CISA KEV catalogue are built into the image.
@@ -25,7 +24,7 @@ You need:
 - A Linux host with **Docker** and **Docker Compose v2**.
 - A **TLS certificate and key** for the address people will open TIDE at.
 - For each SIEM: its Elasticsearch and Kibana addresses, and an **API key** that can read detection rules (and write them, if you will move or deploy rules from TIDE).
-- Optional: a **Keycloak** realm for single sign-on, and **CTI feeds**.
+- Optional: a **Keycloak** realm for single sign-on, and an **OpenCTI** for threat actors.
 
 ---
 
@@ -62,7 +61,7 @@ Create a `certs/` folder next to `docker-compose.yml` with three files:
 | File | What it is |
 |------|------------|
 | `server.crt`, `server.key` | The certificate and key people's browsers see when they open TIDE. |
-| `ca.crt` | Your organisation's CA certificate. TIDE trusts it when connecting to your SIEMs, Keycloak and CTI feeds. If you have no internal CA, copy `server.crt` to `ca.crt`; the file must exist. |
+| `ca.crt` | Your organisation's CA certificate. TIDE trusts it when connecting to your SIEMs, Keycloak and OpenCTI. If you have no internal CA, copy `server.crt` to `ca.crt`; the file must exist. |
 
 See [Certificates](docs/CONFIGURATION.md#certificates) for how strictly TIDE checks them.
 
@@ -95,14 +94,14 @@ docker compose ps
 ### 6. First sign-in
 
 1. Sign in with the administrator from step 4, then change its password: your name at the bottom of the sidebar → **Settings → Profile & Preferences → Sign-in**.
-2. **Add a SIEM:** Settings → Management → Integrations → SIEMs → **New SIEM**. Use **Test Connection** before saving.
+2. **Add a SIEM:** Settings → Management → Integrations → **Add integration** → **SIEM**. Use **Test Connection** before saving.
 3. **Set up a client:** a **Primary Client** already exists. Add more under Management → Tenants & Users → Clients for each team or customer whose data must stay separate.
 4. **Link destinations:** open the client → **Linked SIEMs → Edit → Add SIEM**. Pick the SIEM and one of its Kibana spaces and give it a name such as "Prod". Add one for each space whose rules the client should see.
 5. **Add people:** create users, or assign single sign-on users, with their roles, in Management → Tenants & Users → Users.
 6. **Load the rules:** switch to the client, open **Rule Health** and choose **⋮ → Sync**.
 7. **Turn on backups:** Settings → Management → **Backups** → tick **Back up every day at** and **Save**.
 
-TIDE is ready. [Operations](docs/OPERATIONS.md) explains what to do next: syncing, CTI feeds, coverage and backups.
+TIDE is ready. [Operations](docs/OPERATIONS.md) explains what to do next: syncing, OpenCTI, coverage and backups.
 
 ---
 
@@ -115,12 +114,12 @@ In TIDE, the whole guide is under **Settings → Documentation**, with a search.
 | [TIDE at a glance](docs/AT_A_GLANCE.md) | What TIDE does for your team, with your own figures in TIDE, and how to get the most from it. |
 | [Getting started](docs/GETTING_STARTED.md) | Finding your way around: signing in, choosing a client, filters, windows, dashboards and your profile. |
 | [Systems & baselines](docs/SYSTEMS.md) | Systems, baseline templates and their techniques, mapping rules, known gaps, risks, devices and CVEs. |
-| [Threat intelligence](docs/THREATS.md) | Threat Landscape, the Heatmap, the MITRE pages and CTI, and making baselines from threats. |
+| [Threat intelligence](docs/THREATS.md) | Threat Landscape, the Heatmap and the MITRE pages, and making baselines from threats. |
 | [Rules](docs/RULES.md) | Rule Health, the rule window, editing, validating, moving and merging rules, and Elastic and Sigma updates. |
 | [Sigma, Elastic & Hunting](docs/LIBRARIES.md) | Converting Sigma rules, deploying Elastic's rules, and running hunts. |
 | [Setting up clients](docs/CLIENTS.md) | SIEMs, clients, destinations, users and roles, validation, scoring and threat feeds. |
 | [Configuration](docs/CONFIGURATION.md) | Every `.env` setting, certificates and how strictly they are checked, single sign-on with Keycloak, users and roles. |
-| [Operations](docs/OPERATIONS.md) | How TIDE runs day to day: syncing rules and CTI, how coverage is worked out, backups and upgrades, moving hosts, reclaiming disk space, Diagnostics and troubleshooting. |
+| [Operations](docs/OPERATIONS.md) | How TIDE runs day to day: syncing rules and threat actors, how coverage is worked out, backups and upgrades, moving hosts, reclaiming disk space, Diagnostics and troubleshooting. |
 | [External Query API](docs/API.md) | Reading TIDE's data from other tools over HTTPS: API keys, endpoints, what queries may do, and examples. |
 | [Changelog](CHANGELOG.md) | What changed in each release. |
 

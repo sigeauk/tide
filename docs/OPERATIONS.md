@@ -1,10 +1,10 @@
 # Operations
 
-How TIDE runs day to day, and how to look after it: syncing, CTI feeds, how coverage is worked out, backups and upgrades, moving to new hardware, disk space, and what to do when something goes wrong.
+How TIDE runs day to day, and how to look after it: syncing, OpenCTI, how coverage is worked out, backups and upgrades, moving to new hardware, disk space, and what to do when something goes wrong.
 
 [← Back to the README](../README.md)
 
-**Contents:** [How TIDE runs](#how-tide-runs) · [What runs on its own](#what-runs-on-its-own) · [Syncing rules](#syncing-rules) · [CTI feeds](#cti-feeds) · [Rule-log export](#rule-log-export) · [How coverage is worked out](#how-coverage-is-worked-out) · [Backups and upgrades](#backups-and-upgrades) · [Moving to new hardware](#moving-to-new-hardware) · [Reclaiming disk space](#reclaiming-disk-space) · [Diagnostics](#diagnostics) · [Troubleshooting](#troubleshooting)
+**Contents:** [How TIDE runs](#how-tide-runs) · [What runs on its own](#what-runs-on-its-own) · [Syncing rules](#syncing-rules) · [OpenCTI connectors](#opencti-connectors) · [Rule-log export](#rule-log-export) · [How coverage is worked out](#how-coverage-is-worked-out) · [Backups and upgrades](#backups-and-upgrades) · [Moving to new hardware](#moving-to-new-hardware) · [Reclaiming disk space](#reclaiming-disk-space) · [Diagnostics](#diagnostics) · [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -26,7 +26,6 @@ Everything TIDE keeps is in `data/`, next to `docker-compose.yml`:
 | `tide.duckdb` | Users, roles, clients, and SIEM and integration settings. |
 | `credentials.key` | The key that encrypts the SIEM, connector, GitLab and Keycloak credentials TIDE stores. Created on the first start. **Without it, those credentials must be entered again.** |
 | `<client>_<id>.duckdb` | One database per client: its rules, scores, validations, systems and baselines. |
-| `cti_<client>_<id>.duckdb` | One CTI database per client. |
 | `sigma_pipelines/`, `sigma_templates/` | Your Sigma conversion pipelines and templates. |
 | `log/` | TIDE's log, and the rule-log exports. |
 | `diagnostics-backups/` | A copy of a client's database taken before each Diagnostics fix (the last three). |
@@ -40,9 +39,8 @@ ATT&CK, NIST 800-53, the SigmaHQ rules and Elastic's detection rules and hunting
 | What | When | Where |
 |------|------|-------|
 | Rule sync from your SIEMs | Only when someone clicks **Sync** | Rule Health |
-| CTI connectors | When someone clicks Sync, and on the connector's **Auto-sync interval** if it has one | Management → Integrations → Connectors, and the CTI pages |
 | Threat Landscape actors | Only when someone clicks **Sync Threats** | Threat Landscape |
-| Rule-log export | Daily, at each SIEM's scheduled time, if turned on | Management → Integrations → SIEMs → Rule Logging |
+| Rule-log export | Daily, at each SIEM's scheduled time, if turned on | Management → Integrations, a SIEM's card → Rule Logging |
 | Backups | Daily, at the scheduled time, if turned on | Management → Backups |
 | CVE data (CISA KEV) | Only when someone imports a file | CVE Overview → Actions → Import CVE |
 | Coverage and heatmaps | Worked out each time a page opens | — |
@@ -79,21 +77,17 @@ Syncs run when someone starts one. TIDE's figures for a destination are as of it
 
 ---
 
-## CTI feeds
+## OpenCTI connectors
 
-A connector is one CTI feed (OpenCTI, Mandiant, CrowdStrike or another TAXII source). A super admin adds it once in **Management → Integrations → Connectors**; each client that should receive it links it from the client's page (**Linked CTI Connectors → Edit**). Each client's CTI is kept in its own database.
+A connector links TIDE to an OpenCTI. A super admin adds it once in **Management → Integrations** (**Add integration** → **OpenCTI**), with OpenCTI's address and an API token; each client that should use it links it from the client's page (**Linked CTI Connectors → Edit**). **Sync Threats** on **Threat Landscape** then adds the intrusion sets of the client's OpenCTI to ATT&CK's actors and shows how much of each one's techniques your rules cover; **Create Baseline** turns an actor's techniques into a baseline.
 
-- **Manual or scheduled.** A connector's **Auto-sync interval** is **Off** (it syncs only when someone clicks Sync) or every 15 minutes, hour, 6 hours or 24 hours. A scheduled sync does exactly what clicking Sync does.
-- **Connection status.** A connector shows **Active** when its last connection test passed, **Failed** when it didn't (hover for the reason), or **Untested**. The arrow button on its card tests it again.
-- **Syncing from the CTI pages.** **Sync indicators**, **Sync actors** and **Sync reports** run every connector linked to the selected client. While it runs the badge says *syncing*; afterwards it shows what came in, turns amber with a count of errors (hover to read them), or red with the reason it failed.
-
-The **CTI Indicators**, **Actors** and **Reports** pages list what your feeds supplied. **Threat Landscape** combines ATT&CK's actors with your feeds' and shows how much of each one's techniques your rules cover; **Create Baseline** turns an actor's techniques into a baseline.
+- **Connection status.** A connector shows **Active** when its last connection test passed, **Failed** when it didn't (hover for the reason), or **Untested**. The arrow button on its card asks OpenCTI for its version, as a sync would connect.
 
 ---
 
 ## Rule-log export
 
-Each SIEM can write a daily file of its rules' scores for your log platform to collect. Turn it on in **Management → Integrations → SIEMs → Rule Logging**: choose the spaces, the time (server time) and how many days of files to keep.
+Each SIEM can write a daily file of its rules' scores for your log platform to collect. Turn it on in **Management → Integrations**, on the SIEM's card, under **Rule Logging**: choose the spaces, the time (server time) and how many days of files to keep.
 
 Files are written to `data/log/rules/<SIEM>/<date>-<space>-rules.log`, one JSON line per rule, and copied to the folder `RULE_LOG_PATH` names if it is set (see [Configuration](CONFIGURATION.md#optional)).
 
@@ -264,14 +258,15 @@ The file is rewritten and checked table by table before it replaces the original
 
 ## Diagnostics
 
-**Settings → Diagnostics** is for super admins, and for people with the **Support** role on a client (who see that client only).
+**Settings → Diagnostics** is for super admins, and for people with the **Support** role on a client (who see that client only). Click a section's heading to fold it away.
 
 - **Snapshot:** the TIDE version, database schema, clients and their destinations (with whether each SIEM answered at the last sync), and recent errors from the log.
 - **Checks:** **Run all checks**, or one, for every client or one. Each finding says what it means and what to do. Checks only read data. The two database health checks (a client's database, and TIDE's own) copy the database and test every table's indexes on the copy, so they take a while on a large database and run only on their own **Run**.
 - **Look up:** everything TIDE holds for one rule, user or destination, with names and spaces shown exactly as stored, so stray spaces or invisible characters are marked.
-- **Sync activity:** every rule and CTI sync for the last 90 days, with **Retry**.
+- **Sync activity:** every rule and Threat Landscape sync for the last 90 days, with **Retry**.
 - **Fixes:** some checks offer a fix. Fixes are off for every client until a super admin turns on **Allow diagnostic fixes** for it. A fix shows what it will change first, copies the client's database to `data/diagnostics-backups/` before changing anything, and can be undone.
 - **Access:** who has Platform Admin and who has Support on each client (super admins only).
+- **Query:** run a read-only SQL statement against TIDE's own database or a client's, and save the ones you use again (super admins only). It runs on a copy of the database, so it never changes or holds up the live one.
 
 Every check, look-up, fix and access change is recorded in the audit log.
 
@@ -281,14 +276,14 @@ Every check, look-up, fix and access change is recorded in the audit log.
 
 | What you see | What to do |
 |--------------|------------|
-| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test Connection** in Management → Integrations → SIEMs, then click **Retry**. |
+| A rule sync **Failed** or **Partly done** | Read the reason under Rule Health's title. Usually a SIEM was unreachable or refused its API key: check it with **Test Connection** in the SIEM's dialog in Management → Integrations, then click **Retry**. |
 | A rule sync shows **Interrupted** | TIDE restarted during it. Click **Retry**. |
 | A rule sync shows **Done, steps failed** | The rules were read, but a step afterwards failed; the result says which and why. Click **Retry**. If it fails again, report the error from **Diagnostics → Sync activity** with TIDE's log from that time. |
 | Diagnostics shows **A database stopped after a DuckDB fatal error** | DuckDB stopped a client's database, so TIDE restarted itself, which repairs the rule history indexes. If that client's pages work, nothing more is needed. If they say its database stopped, a second error came within 10 minutes and TIDE didn't restart again: restart it with `docker compose restart tide-app`, and if it happens again, back up the data folder and report the error. |
 | Rules show **SIEM offline** | That destination didn't answer at the last sync. Fix the connection, then sync that destination. |
-| A connector shows **Failed**, or a CTI sync badge is red | Hover for the reason, fix the address, credentials or certificate in the connector's form, test it with the arrow button, then sync again. |
+| A connector shows **Failed**, or **Sync Threats** reports an OpenCTI error | Hover for the reason, fix the address, token or certificate in the connector's form, test it with the arrow button, then click **Sync Threats** again. |
 | A certificate is refused | See [When a certificate is refused](CONFIGURATION.md#when-a-certificate-is-refused). |
-| Scheduled connectors, rule-log exports or backups stopped | A background service isn't running; Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
+| Scheduled rule-log exports or backups stopped | A background service isn't running; Diagnostics shows it. Restart TIDE: `docker compose restart tide-app`. |
 | A backup failed | Management → Backups shows why. Usually the disk is short of space: free some, or keep fewer backups. |
 | TIDE doesn't come up after a restart | Run `docker compose logs -f tide-app`. A large client database can make the first start after an upgrade slow; wait for `Application startup complete`. |
 | Anything else | Open **Diagnostics** and click **Run all checks**. |

@@ -3,7 +3,7 @@
 A backup is one folder, tide-backup-<YYYYMMDD-HHMMSS>-v<version>/ (when, then the TIDE version
 that made it; backups made before 6.2.3 have the version only in their manifest), in BACKUP_DIR
 (the host folder BACKUP_PATH names in docker-compose.yml). It holds a fresh copy of the shared
-database and of each client's two databases, credentials.key (without it the stored SIEM and
+database and of each client's database, credentials.key (without it the stored SIEM and
 connector credentials can't be read), the Sigma pipelines and templates, and manifest.json (with
 the TIDE version). Each database is copied with
 DuckDB's COPY FROM DATABASE through TIDE's own connection, inside one transaction: a consistent
@@ -102,15 +102,14 @@ def disk() -> Optional[Dict]:
 # ── what is backed up ────────────────────────────────────────────────────────
 
 def _databases(db) -> List[Dict]:
-    """The shared database and each client's databases that exist: ``{name, path, client}``."""
-    from app.services.cti_database import get_cti_db_path
+    """The shared database and each client's database that exists: ``{name, path, client}``."""
     from app.services.tenant_manager import resolve_tenant_db_path
     data = _data_dir()
     out = [{"name": "tide.duckdb", "path": Path(get_settings().db_path), "client": None}]
     for c in sorted(db.list_clients(), key=lambda c: (c.get("name") or "").lower()):
-        for path in (resolve_tenant_db_path(c["id"], str(data)), get_cti_db_path(c["id"], c.get("slug"))):
-            if path and os.path.exists(path):
-                out.append({"name": os.path.basename(path), "path": Path(path), "client": c["name"]})
+        path = resolve_tenant_db_path(c["id"], str(data))
+        if path and os.path.exists(path):
+            out.append({"name": os.path.basename(path), "path": Path(path), "client": c["name"]})
     return out
 
 

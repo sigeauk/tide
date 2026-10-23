@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.0] - 2026-10-23
+
+### Added
+- **All your integrations in one list.** **Settings → Management → Integrations** now shows every SIEM, OpenCTI, GitLab and Keycloak together, the Keycloak TIDE signs in with first. **Add integration** asks what to add and opens its form. **Group by** → **Type** puts them in a group for each kind (SIEMs, Threat intel, Identity, Source control), and your browser remembers the choice.
+- **Keycloak is managed in TIDE.** The Keycloak TIDE signs people in with is now an integration: change its address, realm, client or secrets in TIDE, without editing `.env` and restarting. When you upgrade, TIDE makes it from the Keycloak settings in your `.env`, so sign-in carries on as before; after that the `.env` lines are not read, and **Diagnostics** says if they still differ, for example when your deployment rewrites `.env`. Saving a change to where Keycloak is first checks that its realm answers, so a mistake can't stop everyone signing in.
+
+### Changed
+- **TIDE's database engine is DuckDB 2.0, since 6.2.4.** Databases that TIDE 6.2.4 or later creates, including every backup, can't be opened by TIDE 6.2.3 or earlier. To go back to an earlier version, restore the backup you took before upgrading. Each release is now built with fixed versions of the database engine and every other package TIDE installs, so the same release always installs the same ones.
+- **OpenCTI connectors are Threat Landscape's link to OpenCTI.** **Sync Threats** still brings in the intrusion sets of the client's OpenCTI. A connector now asks for OpenCTI's address (the TAXII root an existing connector holds still works), and the arrow button on its card checks the address and token that sync uses.
+- **Diagnostics sections fold away, and Query has moved there.** Each section of **Settings → Diagnostics** now opens and closes from its heading, as in Management. The client choice and **Run all checks** sit on the right of **Checks**, on one line. The read-only **Query** console has moved from Management to the bottom of Diagnostics.
+
+### Removed
+- **The CTI pages, and the feeds that filled them.** The **CTI** menu, with its **Indicators**, **Actors** and **Reports** pages, is gone. So are the CTI database each client had, the Mandiant, CrowdStrike, GreyNoise and MITRE ATT&CK connectors, a connector's sync and **Auto-sync interval**, and **CTI Egress Targets** on a client's page. TIDE no longer reads the `tide_tlp_max` token claim. When you upgrade, TIDE deletes each client's CTI database and those connectors; to keep them, take a backup in **Settings → Management → Backups** first.
+
+### Fixed
+- **Access asks for a client only for Support.** In **Diagnostics → Access**, the client choice showed whatever you chose to change, since 6.2.1. It now shows only for **Grant Support** and **Revoke Support**, and drop-downs elsewhere that should be out of sight stay hidden too.
+- **CVE Overview's sort arrow points the same way as every other list's.** It now points down when the CVEs run from highest to lowest (the newest first, as the page opens) and up for the reverse.
+
 ## [6.2.4] - 2026-10-22
 
 ### Added

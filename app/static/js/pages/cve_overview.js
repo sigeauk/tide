@@ -63,7 +63,7 @@
         var sortSel = $('sort-field');
         if (sortSel) sortSel.value = 'cve_id';
         var dirIcon = $('sort-dir-icon');
-        if (dirIcon) dirIcon.innerHTML = TIDE.iconHtml('chevron-up', 14);
+        if (dirIcon) dirIcon.innerHTML = TIDE.iconHtml('chevron-down', 14);
         sortCards();
     });
 
@@ -101,7 +101,7 @@
         sortDir: function () {
             sortAsc = !sortAsc;
             var icon = $('sort-dir-icon');
-            if (icon) icon.innerHTML = TIDE.iconHtml(sortAsc ? 'chevron-down' : 'chevron-up', 14);
+            if (icon) icon.innerHTML = TIDE.iconHtml(sortAsc ? 'chevron-up' : 'chevron-down', 14);   // as every sortable list
             sortCards();
         },
         // "All" / "None" in a filter dropdown: data-boxes is the class of its checkboxes.

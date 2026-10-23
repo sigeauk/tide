@@ -1,27 +1,23 @@
-"""Registry of CTI connector vendors (step F).
+"""Registry of CTI connector vendors.
 
 Vendor modules register themselves by being imported here. Consumers
 use :func:`get` / :func:`all_vendors` rather than importing vendor
 modules directly so the API/UI can stay schema-driven.
+
+Since 6.3.0 the only vendor is OpenCTI, Threat Landscape's source of
+intrusion sets; the TAXII feeds (Mandiant, CrowdStrike, GreyNoise, MITRE
+ATT&CK) went with the CTI pages they fed.
 """
 
 from __future__ import annotations
 
 from typing import Dict, List
 
-from ._base import ConnectorFetcher, ConnectorVendor, FieldSpec, SyncResult
-# NOTE: the legacy OpenCTI GraphQL vendor module (``cti_connectors.opencti``)
-# was deleted in 5.0.0. Actors, indicators, reports and relationships
-# now flow exclusively through the TAXII 2.1 connector
-# (``opencti_taxii``).
+from ._base import ConnectorVendor, FieldSpec
 from . import opencti_taxii as _opencti_taxii
-from . import mandiant_taxii as _mandiant_taxii
-from . import crowdstrike_taxii as _crowdstrike_taxii
-from . import mitre_attack as _mitre_attack
-from . import greynoise as _greynoise
 
 __all__ = [
-    "ConnectorFetcher", "ConnectorVendor", "FieldSpec", "SyncResult",
+    "ConnectorVendor", "FieldSpec",
     "get", "all_vendors", "register",
 ]
 
@@ -46,7 +42,3 @@ def all_vendors() -> List[ConnectorVendor]:
 
 # ── Built-in vendors ────────────────────────────────────────────────
 register(_opencti_taxii.VENDOR)
-register(_mandiant_taxii.VENDOR)
-register(_crowdstrike_taxii.VENDOR)
-register(_mitre_attack.VENDOR)
-register(_greynoise.VENDOR)

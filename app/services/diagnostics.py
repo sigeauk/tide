@@ -230,6 +230,11 @@ def _background_services_down(conn, ctx):
     return ["service", "state", "what stops"], rows
 
 
+def _keycloak_env_differs(conn, ctx):
+    from app.services import keycloak_config
+    return [".env line", "in .env", "in TIDE"], keycloak_config.env_differences()
+
+
 def _database_health(conn, ctx):
     """The tables of this connection's database whose indexes are missing rows, tested on a copy
     (db_health)."""
@@ -272,11 +277,21 @@ def _database_fatal(conn, ctx):
 CHECKS: List[Check] = [
     Check(
         "background_services", "Background services not running", "install", "error",
-        "One of TIDE's two background services is not running: the CTI connector scheduler or the "
-        "rule-log export schedule. Pages still work, but what that service does on its own has stopped.",
+        "TIDE's background service, the schedule for rule-log export and backups, is not running. "
+        "Pages still work, but what it does on its own has stopped.",
         "Restart TIDE. If it still isn't running, the log at startup says why "
         "('Background service not running', and the error before it).",
         _background_services_down,
+    ),
+    Check(
+        "keycloak_env_differs", "Keycloak settings in .env that TIDE no longer reads", "install", "warning",
+        "TIDE signs people in with its Keycloak integration, made from .env's Keycloak settings the first "
+        "time TIDE 6.3.0 started; .env's Keycloak lines are not read after that. These lines differ from "
+        "the integration, so a change made in .env (for example by a deployment that writes it) has not "
+        "taken effect.",
+        "Make the change in the Keycloak integration (Settings → Management → Integrations), then remove "
+        "the Keycloak lines from .env or make them match.",
+        _keycloak_env_differs,
     ),
     Check(
         "database_fatal", "A database stopped after a DuckDB fatal error", "install", "error",

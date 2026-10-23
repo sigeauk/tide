@@ -7,7 +7,6 @@ plus local username/password authentication with signed session tokens.
 import bcrypt
 import httpx
 import jwt
-import ssl as _ssl
 import time
 from jwt import PyJWKClient
 from datetime import datetime
@@ -18,6 +17,7 @@ from itsdangerous import URLSafeTimedSerializer
 
 from app.config import get_settings
 from app.models.auth import User, TokenData
+from app.services import keycloak_config
 
 import logging
 
@@ -33,72 +33,69 @@ class AuthService:
     def __init__(self):
         self.settings = get_settings()
         self._jwks_client: Optional[PyJWKClient] = None
-    
+        self._jwks_for: Optional[tuple] = None
+
     @property
     def auth_disabled(self) -> bool:
         """Check if auth is disabled for development."""
         return self.settings.auth_disabled
-    
-    def _build_ssl_context(self) -> _ssl.SSLContext:
-        """
-        Build an ssl.SSLContext that honours SSL_VERIFY.
-        
-        When running in Docker the entrypoint installs CA certs into the
-        system trust store, so the default context trusts them automatically.
-        """
-        if not self.settings.ssl_verify:
-            ctx = _ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
-            return ctx
-        return _ssl.create_default_context()
-    
+
+    @property
+    def keycloak(self) -> keycloak_config.KeycloakConfig:
+        """The Keycloak sign-in uses: the Keycloak integration, else .env's (app.services.keycloak_config)."""
+        return keycloak_config.current()
+
     @property
     def jwks_client(self) -> PyJWKClient:
-        """Lazy-loaded JWKS client for public key retrieval."""
-        if self._jwks_client is None:
+        """Lazy-loaded JWKS client for public key retrieval, made again when the Keycloak changes."""
+        kc = self.keycloak
+        if self._jwks_client is None or self._jwks_for != (kc.jwks_url, kc.verify_tls):
             self._jwks_client = PyJWKClient(
-                self.settings.oidc_jwks_url,
+                kc.jwks_url,
                 cache_keys=True,
                 lifespan=3600,  # Cache keys for 1 hour
-                ssl_context=self._build_ssl_context(),
+                ssl_context=kc.ssl_context(),
             )
+            self._jwks_for = (kc.jwks_url, kc.verify_tls)
         return self._jwks_client
     
     def get_login_url(self, redirect_uri: str, state: str = "") -> str:
         """Generate Keycloak authorization URL."""
+        kc = self.keycloak
         params = {
-            "client_id": self.settings.keycloak_client_id,
+            "client_id": kc.client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
             "scope": "openid email profile",
             "state": state,
         }
-        return f"{self.settings.oidc_auth_url}?{urlencode(params)}"
-    
+        return f"{kc.auth_url}?{urlencode(params)}"
+
     def get_logout_url(self, redirect_uri: str) -> str:
         """Generate Keycloak logout URL."""
+        kc = self.keycloak
         params = {
-            "client_id": self.settings.keycloak_client_id,
+            "client_id": kc.client_id,
             "post_logout_redirect_uri": redirect_uri,
         }
-        return f"{self.settings.oidc_logout_url}?{urlencode(params)}"
-    
+        return f"{kc.logout_url}?{urlencode(params)}"
+
     async def exchange_code(self, code: str, redirect_uri: str) -> Optional[dict]:
         """Exchange authorization code for tokens."""
+        kc = self.keycloak
         data = {
             "grant_type": "authorization_code",
-            "client_id": self.settings.keycloak_client_id,
-            "client_secret": self.settings.keycloak_client_secret,
+            "client_id": kc.client_id,
+            "client_secret": kc.client_secret,
             "code": code,
             "redirect_uri": redirect_uri,
         }
-        
-        token_url = self.settings.oidc_token_url
+
+        token_url = kc.token_url
         logger.info(f"Exchanging auth code at: {token_url}")
         logger.debug(f"Exchange data: client_id={data['client_id']}, redirect_uri={redirect_uri}")
-        
-        async with httpx.AsyncClient(verify=self.settings.ssl_context) as client:
+
+        async with httpx.AsyncClient(verify=kc.ssl_context()) as client:
             try:
                 response = await client.post(
                     token_url,
@@ -118,17 +115,18 @@ class AuthService:
     
     async def refresh_token(self, refresh_token: str) -> Optional[dict]:
         """Refresh access token using refresh token."""
+        kc = self.keycloak
         data = {
             "grant_type": "refresh_token",
-            "client_id": self.settings.keycloak_client_id,
-            "client_secret": self.settings.keycloak_client_secret,
+            "client_id": kc.client_id,
+            "client_secret": kc.client_secret,
             "refresh_token": refresh_token,
         }
-        
-        async with httpx.AsyncClient(verify=self.settings.ssl_context) as client:
+
+        async with httpx.AsyncClient(verify=kc.ssl_context()) as client:
             try:
                 response = await client.post(
-                    self.settings.oidc_token_url,
+                    kc.token_url,
                     data=data,
                     timeout=10.0
                 )
@@ -144,8 +142,9 @@ class AuthService:
         Uses Keycloak's JWKS for signature verification.
         """
         import time
+        kc = self.keycloak
         try:
-            logger.debug(f"Validating token, expected issuer: {self.settings.oidc_issuer}")
+            logger.debug(f"Validating token, expected issuer: {kc.issuer}")
             
             # First, decode without verification to check expiration time
             try:
@@ -174,7 +173,7 @@ class AuthService:
                 token,
                 signing_key.key,
                 algorithms=[self.settings.jwt_algorithm],
-                issuer=self.settings.oidc_issuer,
+                issuer=kc.issuer,
                 options={
                     "verify_exp": True,
                     "verify_aud": False,  # Keycloak uses azp instead of aud for client verification
@@ -186,8 +185,8 @@ class AuthService:
             
             # Verify authorized party (azp) matches our client
             azp = payload.get("azp")
-            if azp and azp != self.settings.keycloak_client_id:
-                logger.warning(f"Token azp '{azp}' doesn't match client_id '{self.settings.keycloak_client_id}'")
+            if azp and azp != kc.client_id:
+                logger.warning(f"Token azp '{azp}' doesn't match client_id '{kc.client_id}'")
                 return None
             
             return TokenData(**payload)
@@ -293,9 +292,10 @@ class AuthService:
 
     def _password_grant_clients(self) -> List[Dict[str, str]]:
         clients: List[Dict[str, str]] = []
+        kc = self.keycloak
 
-        preferred_client_id = self.settings.keycloak_password_grant_client_id.strip()
-        preferred_client_secret = self.settings.keycloak_password_grant_client_secret.strip()
+        preferred_client_id = kc.pg_client_id.strip()
+        preferred_client_secret = kc.pg_client_secret.strip()
         if preferred_client_id:
             clients.append(
                 {
@@ -304,8 +304,8 @@ class AuthService:
                 }
             )
 
-        browser_client_id = self.settings.keycloak_client_id.strip()
-        browser_client_secret = self.settings.keycloak_client_secret.strip()
+        browser_client_id = kc.client_id.strip()
+        browser_client_secret = kc.client_secret.strip()
         if browser_client_id and all(c["client_id"] != browser_client_id for c in clients):
             clients.append(
                 {
@@ -319,8 +319,9 @@ class AuthService:
     def _authenticate_via_keycloak(self, username: str, password: str) -> Optional[dict]:
         """Authenticate credentials against Keycloak using a password-grant capable client.
         Returns the token payload on success, None on failure."""
+        kc = self.keycloak
         try:
-            with httpx.Client(verify=self.settings.ssl_context, timeout=10.0) as client:
+            with httpx.Client(verify=kc.ssl_context(), timeout=10.0) as client:
                 for client_cfg in self._password_grant_clients():
                     data = {
                         "grant_type": "password",
@@ -332,7 +333,7 @@ class AuthService:
                     if client_cfg.get("client_secret"):
                         data["client_secret"] = client_cfg["client_secret"]
 
-                    response = client.post(self.settings.oidc_token_url, data=data)
+                    response = client.post(kc.token_url, data=data)
                     if response.status_code == 200:
                         logger.info(
                             "Keycloak password grant auth succeeded for '%s' via client '%s'",

@@ -1433,7 +1433,7 @@ a:hover { color: var(--color-primary); }
   gap: 0.5rem;
 }
 
-/* Column header row above a .cve-list (CTI/CVE list pages) — was
+/* Column header row above a .cve-list (CVE list pages) — was
    duplicated inline, byte-for-byte, on every list page. */
 .cve-list-header {
   display: flex;
@@ -3054,6 +3054,7 @@ a:hover { color: var(--color-primary); }
    invisible over its button, so a form can still point at it when it is required and empty. */
 .tide-select { position: relative; display: inline-block; vertical-align: middle; min-width: 8rem; }
 .tide-select--block { display: block; width: 100%; }
+.tide-select[hidden] { display: none; }
 .tide-select > .tide-filter-btn { width: 100%; }
 .tide-select > .tide-select__native {
   position: absolute !important; inset: 0; width: 100% !important; height: 100% !important; margin: 0 !important;
@@ -3358,25 +3359,6 @@ body.light {
 .text-muted   { color: var(--color-text-muted); }
 .text-primary { color: var(--color-primary); }
 .text-secondary { color: var(--color-text-secondary); }
-
-/* CTI detail pages (actor/indicator/report) — was duplicated inline on
-   every page: the "Back to X" link above the title, small separators
-   between inline subtitle badges, and muted hint text under a heading. */
-.cti-back-link {
-  margin: 0 0 0.25rem 0;
-}
-.cti-back-link a {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  text-decoration: none;
-}
-.cti-back-link a span { vertical-align: middle; }
-.cti-meta-sep { margin-left: 0.5rem; }
-.cti-hint {
-  color: var(--color-text-muted);
-  font-size: 0.85rem;
-  margin-top: 0;
-}
 
 
 /* ================================================================
@@ -8119,11 +8101,13 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rh-last-sync--problem .btn { margin-left: 0; }
 
 /* ═════════ DIAGNOSTICS (super admins and Support: pages/admin/diagnostics.html, macros/diagnostics_ui.html) ═════════ */
-.diag-section { margin-top: 1.25rem; }
-.diag-section__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; }
-.diag-intro { margin: 0.35rem 0 0; }
-.diag-toolbar { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
-.diag-toolbar .form-select { min-width: 15rem; width: auto; }
+/* Each section is a Management fold (.mgmt-section); its intro opens the body. */
+.diag-section__head { display: flex; align-items: center; justify-content: space-between; gap: 1rem 2rem; flex-wrap: wrap; }
+.diag-section__head > .diag-intro { flex: 1 1 24rem; }
+.diag-intro { margin: 0; }
+/* The client choice and Run all checks: one line, on the right even when it wraps under the intro. */
+.diag-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 0.6rem; margin-left: auto; }
+.diag-toolbar .tide-select { min-width: 15rem; width: auto; }
 
 /* Checks: one row per check, grouped; its findings open inside it. */
 .diag-group { margin-top: 1.5rem; }
@@ -8186,7 +8170,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 
 /* Look up: one card per rule, user or destination, with its stored values shown exactly. */
 .diag-lookup__form { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; margin-top: 1rem; }
-.diag-lookup__form .form-select { width: auto; min-width: 9rem; }
+.diag-lookup__form .tide-select { width: auto; min-width: 9rem; }
 .diag-lookup__form input[type="search"] { flex: 1 1 22rem; min-width: 0; }
 .diag-lookup:not(:empty) { margin-top: 1.25rem; }
 .diag-lookup__key { font-size: 0.8rem; margin: 0 0 1rem; }
@@ -8211,6 +8195,7 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .diag-client__size { font-weight: 400; font-size: 0.8rem; }
 .diag-client__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; }
 .diag-client__head .diag-client__name { margin-bottom: 0.6rem; }
+.diag-client:first-child .diag-client__name { margin-top: 0; }
 .diag-nowrap { white-space: nowrap; }
 .diag-section__table { margin-top: 1rem; }
 
@@ -8640,13 +8625,6 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rd-cell.right { border-left: 1px solid var(--color-border); }
 .rd-srow.same { opacity: 0.7; }
 .rd-srow.gap { display: block; text-align: center; font-style: italic; opacity: 0.6; padding: 0.15rem 0; }
-
-/* CTI lists and report (pages/cti/*) */
-.cve-card-item__id.cti-id-col, .cti-id-col { min-width: 240px; }
-.dot-sep { margin: 0 0.25rem; opacity: 0.4; }
-.report-frame { width: 100%; height: 75vh; border: 1px solid var(--color-border); border-radius: 4px; }
-.report-image { max-width: 100%; border: 1px solid var(--color-border); border-radius: 4px; }
-.report-list { margin: 0; padding-left: 1.25rem; }
 
 /* CVE detail (pages/inventory/cve_detail.html, partials/cve_*.html) */
 .btn.cve-export-btn { display: flex; align-items: center; gap: 0.375rem; }

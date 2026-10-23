@@ -1,6 +1,7 @@
 /*
  * Management (pages/admin/management.html and the tabs app/api/management.py renders into it):
- * the Clients/Users tab bar, the SIEM, OpenCTI, GitLab, Keycloak and Connector dialogs, the Sigma
+ * the Clients/Users tab bar, the dialogs Add integration opens (SIEM, OpenCTI connector, GitLab,
+ * Keycloak; each saves into the Integrations list, #mgmt-integrations), the Sigma
  * pipeline and template editors with their tenant assignment, and the Query tab's presets.
  */
 (function () {
@@ -13,11 +14,17 @@
         try { return el ? JSON.parse(el.textContent) : null; } catch (_) { return null; }
     }
 
-    // A dialog's form posts, and the tab it belongs to is replaced by the response.
+    // A dialog's form posts, and the tab it belongs to is replaced by the response. A save the server
+    // refuses in plain text (an integration's, e.g. a Keycloak whose realm doesn't answer) says why,
+    // and the dialog stays open.
     async function submitTo(url, method, formData, close, panelId) {
         try {
             var resp = await fetch(url, { method: method, body: formData });
-            if (!resp.ok) { showToast('Could not complete that (HTTP ' + resp.status + '). Try again.', 'error'); return; }
+            if (!resp.ok) {
+                var why = (resp.headers.get('content-type') || '').indexOf('text/plain') === 0 ? await resp.text() : '';
+                showToast(why || 'Could not complete that (HTTP ' + resp.status + '). Try again.', 'error');
+                return;
+            }
             close();
             var html = await resp.text();
             var panel = $(panelId) || $('management-content');
@@ -110,7 +117,7 @@
             fd.append('kibana_url', $('siem-form-sentinel-url').value);
             fd.append('api_token', $('siem-form-sentinel-token').value);
         }
-        submitTo(id ? '/api/management/siems/' + id : '/api/management/siems', id ? 'PUT' : 'POST', fd, closeSiem, 'mgmt-sub-siems');
+        submitTo(id ? '/api/management/siems/' + id : '/api/management/siems', id ? 'PUT' : 'POST', fd, closeSiem, 'mgmt-integrations');
     }
     function testSiem() {
         var fd = new FormData();
@@ -176,21 +183,25 @@
         fd.append('token', $('gitlab-form-token').value);
         fd.append('default_group', $('gitlab-form-group').value);
         fd.append('tls_verify', checked('gitlab-form-tls-verify'));
-        submitTo(id ? '/api/management/gitlab/' + id : '/api/management/gitlab', id ? 'PUT' : 'POST', fd, closeGitLab, 'mgmt-sub-gitlab');
+        submitTo(id ? '/api/management/gitlab/' + id : '/api/management/gitlab', id ? 'PUT' : 'POST', fd, closeGitLab, 'mgmt-integrations');
     }
 
-    // ── Keycloak dialog ──
+    // ── Keycloak dialog: the Keycloak TIDE signs in with ──
     function openKeycloak(d) {
         var editing = !!d.id;
-        $('keycloak-modal-title').textContent = editing ? 'Edit Keycloak Instance' : 'New Keycloak Instance';
+        $('keycloak-modal-title').textContent = editing ? 'Edit Keycloak' : 'New Keycloak';
         $('keycloak-form-submit').textContent = editing ? 'Save' : 'Create';
         $('keycloak-form-id').value = d.id || '';
         $('keycloak-form-label').value = d.label || '';
         $('keycloak-form-url').value = d.url || '';
+        $('keycloak-form-internal-url').value = d.internalUrl || '';
         $('keycloak-form-realm').value = d.realm || 'master';
-        $('keycloak-form-client-id').value = '';
+        $('keycloak-form-client-id').value = d.clientId || '';
         $('keycloak-form-client-secret').value = '';
+        $('keycloak-form-pg-client-id').value = editing ? (d.pgClientId || '') : 'admin-cli';
+        $('keycloak-form-pg-client-secret').value = '';
         $('keycloak-form-tls-verify').checked = d.tlsVerify === 'true';
+        $('keycloak-test-result').innerHTML = '';
         $('keycloak-modal').style.display = 'flex';
     }
     function closeKeycloak() { $('keycloak-modal').style.display = 'none'; }
@@ -199,22 +210,26 @@
         var id = $('keycloak-form-id').value, fd = new FormData();
         fd.append('label', $('keycloak-form-label').value);
         fd.append('url', $('keycloak-form-url').value);
+        fd.append('internal_url', $('keycloak-form-internal-url').value);
         fd.append('realm', $('keycloak-form-realm').value || 'master');
         fd.append('client_id', $('keycloak-form-client-id').value);
         fd.append('client_secret', $('keycloak-form-client-secret').value);
+        fd.append('pg_client_id', $('keycloak-form-pg-client-id').value);
+        fd.append('pg_client_secret', $('keycloak-form-pg-client-secret').value);
         fd.append('tls_verify', checked('keycloak-form-tls-verify'));
-        submitTo(id ? '/api/management/keycloak/' + id : '/api/management/keycloak', id ? 'PUT' : 'POST', fd, closeKeycloak, 'mgmt-sub-keycloak');
+        submitTo(id ? '/api/management/keycloak/' + id : '/api/management/keycloak', id ? 'PUT' : 'POST', fd, closeKeycloak, 'mgmt-integrations');
     }
     function testKeycloak() {
         var fd = new FormData();
         fd.append('keycloak_id', $('keycloak-form-id').value);
         fd.append('url', $('keycloak-form-url').value);
+        fd.append('internal_url', $('keycloak-form-internal-url').value);
         fd.append('realm', $('keycloak-form-realm').value || 'master');
         fd.append('tls_verify', checked('keycloak-form-tls-verify'));
         testConnection('keycloak-test-btn', 'keycloak-test-result', '/api/management/keycloak/test-connection', fd);
     }
 
-    // ── Connectors (multi-vendor CTI framework) ──
+    // ── Connectors (OpenCTI, for Threat Landscape) ──
     // The Connectors tab carries its vendors and rows as JSON (#connector-data), read when needed,
     // so a tab replaced after a save is current.
     var editingConnector = null;
@@ -234,10 +249,6 @@
         $('connector-form-submit').textContent = c ? 'Save' : 'Create';
         $('connector-form-id').value = c ? c.id : '';
         $('connector-form-label').value = c ? (c.label || '') : '';
-        // Auto-sync interval: match against one of the preset options, fall back to '' (Off) if
-        // the stored value isn't one of the presets so the operator sees a defined state.
-        var iv = c && c.sync_interval_minutes != null ? String(c.sync_interval_minutes) : '';
-        $('connector-form-interval').value = ['', '15', '60', '360', '1440'].indexOf(iv) >= 0 ? iv : '';
         var vsel = $('connector-form-vendor');
         vsel.replaceChildren.apply(vsel, vendorOptions(c && c.vendor));
         vsel.disabled = !!c;
@@ -270,13 +281,11 @@
         var id = $('connector-form-id').value, fd = new FormData();
         fd.append('vendor', $('connector-form-vendor').value);
         fd.append('label', $('connector-form-label').value);
-        fd.append('kind', 'cti');
-        fd.append('sync_interval_minutes', $('connector-form-interval').value || '');
         // Append all cfg_* fields from the vendor-specific block
         form.querySelectorAll('[name^="cfg_"]').forEach(function (inp) {
             fd.append(inp.name, inp.type === 'checkbox' ? (inp.checked ? 'true' : 'false') : inp.value);
         });
-        submitTo(id ? '/api/management/connectors/' + id : '/api/management/connectors', id ? 'PUT' : 'POST', fd, closeConnector, 'mgmt-sub-connectors');
+        submitTo(id ? '/api/management/connectors/' + id : '/api/management/connectors', id ? 'PUT' : 'POST', fd, closeConnector, 'mgmt-integrations');
     }
     function openImport() {
         $('connector-import-payload').value = '';
@@ -294,7 +303,7 @@
             var resp = await fetch('/api/management/connectors/import', { method: 'POST', body: fd });
             var html = await resp.text();
             if (!resp.ok) { result.innerHTML = html; return; }
-            var panel = $('mgmt-sub-connectors');
+            var panel = $('mgmt-integrations');
             panel.innerHTML = html;
             htmx.process(panel);
             closeImport();

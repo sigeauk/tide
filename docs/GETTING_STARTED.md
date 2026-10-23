@@ -26,7 +26,6 @@ The sidebar lists TIDE's pages, grouped as they are in this guide:
 | Rules | **Rule Health**, **Rule Monitoring**, **Sigma**, **Elastic**, **Hunting** | Your detection rules, the ones that need action, and the rule libraries built into TIDE |
 | Threats | **Threat Landscape**, **Heatmap** | Threat actors, and how well you cover what they do |
 | MITRE | **Tactics**, **Techniques**, **Groups**, **Software**, **Campaigns**, **Mitigations**, **NIST** | The ATT&CK knowledge base, with your coverage of each part |
-| CTI | **Indicators**, **Actors**, **Reports** | Threat intelligence from your feeds |
 
 You only see the pages your role allows. The arrow at the foot of the sidebar (**Expand**) widens it to show the page names; click it again to keep just the icons.
 

@@ -1,16 +1,13 @@
-"""In-process async job registry for CTI sync triggers.
+"""In-process async job registry for the Threat Landscape sync.
 
-The pre-5.0.x ``POST /cti/{kind}/sync`` and
-``POST /api/management/connectors/{id}/sync`` endpoints ran the vendor
-fetcher synchronously inside the request handler. For a populous
-OpenCTI tenant that meant the HTMX click held the worker thread for
-minutes and the nginx upstream timeout would fire long before the
-sync finished — operators saw a 502, the request thread kept running
-to completion in the background, and there was no way to tell whether
-the data had actually landed without refreshing the page and counting
-rows. This module gives every sync trigger a job id, runs the work on
-a background thread, and lets the HTMX badge poll
-``GET /cti/sync/jobs/{job_id}`` for the terminal state.
+A sync run inside the request handler held the worker thread for
+minutes against a populous OpenCTI, and the nginx upstream timeout
+fired long before it finished — operators saw a 502 while the work went
+on in the background, with no way to tell whether it had landed. This
+module gives every sync trigger a job id, runs the work on a background
+thread, and lets the HTMX badge poll ``GET /api/threats/sync/jobs/{job_id}``
+for the terminal state. (It also ran the CTI pages' and connectors'
+syncs until the CTI engine was removed in 6.3.0.)
 
 Design notes
 ------------
@@ -82,8 +79,8 @@ def submit(
     ----------
     kind:
         Short tag used by the status template to choose how to render
-        the terminal badge (``"indicators"``, ``"actors"``,
-        ``"reports"``, ``"connector"``).
+        the terminal badge, and the run's kind in sync_history
+        (``"threat-sync"``).
     runner:
         Zero-arg callable that performs the work and returns the
         summary dict (or any object whose ``__repr__`` is reasonable —
@@ -92,8 +89,7 @@ def submit(
         Human-facing identifier for the job (e.g. the connector label
         or tenant name) so the status fragment can name what's running.
     client_id:
-        Optional. Lets a future ``/cti/sync/jobs?client=`` filter scope
-        jobs to the active tenant.
+        Optional. The tenant the job runs for, recorded with the run.
     on_success:
         Optional callback invoked with the runner's return value when
         the job finishes without raising. Errors raised by the callback
@@ -101,13 +97,12 @@ def submit(
         ``failed`` because the work itself succeeded.
 
     actor, scope:
-        Optional. Who started it, and what it covers (e.g. the connector id), for the run's record
-        in sync_history. A ``connector-auto`` job is recorded as scheduled.
+        Optional. Who started it, and what it covers, for the run's record in sync_history.
 
     Returns
     -------
     str
-        The job id, suitable for ``/cti/sync/jobs/{id}``. The run is recorded in sync_history under
+        The job id, suitable for ``/api/threats/sync/jobs/{id}``. The run is recorded in sync_history under
         the same id (app.services.sync_runs).
     """
     from app.services import sync_runs

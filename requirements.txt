@@ -1,51 +1,55 @@
 
+# Exact versions, so every build of a release installs the same packages. These are what the
+# 6.2.4 image shipped. Change a version on purpose, then run every test before releasing.
+# duckdb: never below 2.0.0. Databases and backups made by 2.0 can't be read by DuckDB 1.x.
+
 # --- FastAPI Stack --
-fastapi>=0.109.1
-uvicorn[standard]>=0.27.0
-pydantic>=2.5.0
-pydantic-settings>=2.1.0
-python-multipart>=0.0.18
+fastapi==0.159.1
+uvicorn[standard]==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.16.1
+python-multipart==0.0.32
 
 # --- Templates ---
-jinja2>=3.1.6
-markdown>=3.5
+jinja2==3.1.6
+markdown==3.11.2
 
-weasyprint>=62.0
+weasyprint==70.0
 
 # --- Authentication ---
-pyjwt[crypto]>=2.8.0
-httpx>=0.26.0
-bcrypt>=4.1.0
-itsdangerous>=2.1.0
+pyjwt[crypto]==2.15.1
+httpx==0.28.1
+bcrypt==5.0.0
+itsdangerous==2.2.0
 
 # --- Database ---
-duckdb>=0.9.0
-pandas>=2.2.0
-openpyxl>=3.1.0
+duckdb==2.0.0
+pandas==3.0.6
+openpyxl==3.1.5
 
 # --- Background Tasks ---
-apscheduler>=3.10.0
+apscheduler==3.11.3
 
 # --- Integrations ---
-requests>=2.32.4
-python-dotenv>=1.0.0
-elastic-apm[starlette]>=6.23.0
+requests==2.34.2
+python-dotenv==1.2.4
+elastic-apm[starlette]==6.26.2
 
 # --- Sigma/MITRE ---
-pysigma>=0.11.0
-pysigma-backend-elasticsearch>=2.0.2
-pysigma-backend-splunk>=2.0.0
-pysigma-backend-microsoft365defender>=0.2.0
-pysigma-pipeline-windows>=2.0.0
-pysigma-pipeline-sysmon>=2.0.0
-sigma-cli>=2.0.0
-pyyaml>=6.0.1
+pysigma==1.5.1
+pysigma-backend-elasticsearch==2.1.1
+pysigma-backend-splunk==2.1.0
+pysigma-backend-microsoft365defender==0.3.2
+pysigma-pipeline-windows==2.0.1
+pysigma-pipeline-sysmon==2.0.0
+sigma-cli==3.1.0
+pyyaml==6.0.3
 
 # --- Version comparison (CPE / NVD range matching) ---
-packaging>=23.0
+packaging==26.3
 
 # --- Build Tools ---
-wheel>=0.46.2
+wheel==0.48.0
 
 # --- Optional: Development ---
-watchfiles>=0.21.0
+watchfiles==1.3.0
