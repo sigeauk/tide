@@ -1007,6 +1007,8 @@ a:hover { color: var(--color-primary); }
 .metric-change { display: flex; align-items: center; justify-content: center; gap: 0.2rem; margin-top: 0.35rem; font: var(--small); font-weight: 600; color: var(--color-text-muted); }
 .metric-change--good { color: var(--color-success); }
 .metric-change--bad { color: var(--color-danger); }
+.metric-change--flow { flex-wrap: wrap; column-gap: 0.35rem; }
+.metric-change--flow > span { display: inline-flex; align-items: center; gap: 0.2rem; }
 
 
 /* ================================================================
@@ -8407,19 +8409,27 @@ body.rt-resizing { cursor: col-resize; user-select: none; }
 .rmon-table th:nth-child(3) { width: 7rem; }
 .rmon-table th:nth-child(4) { width: 7rem; }
 .rmon-table .rmon-detail { white-space: normal; overflow-wrap: anywhere; }
-.rmon-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0 0 0.6rem; }
+.rmon-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin: 0 0 0.6rem; }
+/* A cause's GitLab issues sit at the end of its actions, so the buttons stay put however many there are. */
+.rmon-actions__issues { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-left: auto; }
 .rmon-fix { margin-top: 0.4rem; }
-/* Copy for engineers: Raise in GitLab, below the Markdown it raises */
-.rmon-gitlab { margin: 0 0 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
-.rmon-gitlab__title { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.5rem; font-size: var(--fs-base); }
-.rmon-gitlab__raised { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.4rem; }
-.rmon-gitlab__raised li { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.rmon-gitlab__comment { display: inline; }
-.rmon-gitlab__form { display: grid; gap: 0.6rem; }
-.rmon-gitlab__result { margin: 0.6rem 0 0; }
-.rmon-md { max-height: 50vh; overflow: auto; margin: 0 0 1rem; padding: 0.75rem 0.9rem; font-family: var(--font-mono);
+/* Raise issue: the Markdown (Copy in its corner), then Raise in GitLab; Raise issue sits beside Close. */
+.rmon-md-box { position: relative; margin: 0 0 1rem; }
+.rmon-md-box__copy { position: absolute; top: 0.45rem; right: 0.45rem; }
+.rmon-md { max-height: 14rem; overflow: auto; margin: 0; padding: 0.75rem 5.5rem 0.75rem 0.9rem; font-family: var(--font-mono);
            font-size: 0.78rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
            background: var(--bg-level-3-inner); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
+.rmon-gitlab { margin: 0 0 1rem; padding-top: 0.75rem; border-top: 1px solid var(--color-border); }
+.rmon-gitlab__title { display: flex; align-items: center; gap: 0.4rem; margin: 0 0 0.5rem; font-size: var(--fs-base); }
+.rmon-gitlab__raised { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.3rem; }
+.rmon-gitlab__raised li { display: flex; align-items: center; gap: 0.5rem; min-width: 0; white-space: nowrap; font-size: var(--fs-sm); }
+.rmon-gitlab__name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-text-secondary); }
+.rmon-gitlab__comment { display: inline; flex: none; }
+.rmon-gitlab__form { display: grid; gap: 0.6rem; }
+.rmon-gitlab__pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+.rmon-gitlab__pair > div { min-width: 0; }
+@media (max-width: 560px) { .rmon-gitlab__pair { grid-template-columns: 1fr; } }
+.rmon-gitlab__result { margin: 0.6rem 0 0; }
 
 /* Table view: Rule Health's table, narrower column set. */
 .sys-table-wrap { overflow-x: auto; }

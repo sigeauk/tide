@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [6.3.2] - 2026-10-29
+
+### Added
+- **Find rules that have never been validated.** **Rule Health**'s **Validate** filter has **Show**, where you tick **Validated**, **Due soon**, **Expired** or **Never validated** to see only those rules, each with how many there are. Tick **Expired** and **Never validated** together for every rule that needs validating. A date range narrows the validated rules only, so ticking **Never validated** still shows rules with no date.
+- **See what Rule Monitoring found and fixed over time on the Dashboard.** A Rule Monitoring section has **Compare with**: **Yesterday**, **7 days ago**, **30 days ago** or **90 days ago**. **Rules Needing Action**, **Errors**, **Warnings** and **Things to Fix** then show how many began and how many were fixed in that time, such as "12 new · 30 fixed in 30 days", as syncs found them. TIDE keeps what it needs from this upgrade on, with the 14 days before it, so until then a section says the date its figures start from.
+
+### Changed
+- **Three people fix what Rule Monitoring finds: Engineer, Author and TIDE.** **Data / ingest** and **Kibana / platform** are now one, **Engineer**, and **Rule author** is now **Author**, in **Who fixes**, **Group by** and the **Things to Fix** card. Dashboards and bookmarks filtered on either old choice now show **Engineer**.
+- **Copy for engineers is now Raise issue, for one person, and easier to read.** Where either the engineer or the author can fix it (a field no index maps, a missing timestamp override field, a field Elasticsearch can't find), choose who it is **For**: it holds only that person's table and what they need to do, instead of both tables. Anything the same on every row, such as the timestamp override field, is said once above the table instead of in a column, a rule in several destinations is one row, and fields and indexes show as code.
+- **The Raise issue dialog fits on the screen.** The Markdown is shorter, with **Copy** in its corner, issues already raised take one line each (hover one for who raised it and when), the GitLab fields run title, then project and assignee side by side, then labels, and **Raise issue** sits beside **Close**. On the page, a cause's GitLab issues now sit at the end of its row, so **Raise issue**, **Sync these rules** and **Acknowledge…** stay in place.
+
+### Fixed
+- **Rule Monitoring's Resolved recently loads again.** Choosing **Show → Resolved recently** failed with an error when something had been fixed on a rule TIDE no longer holds, whatever **Rules** and **Group by** were set to (except **Rule**). That rule is now listed by its rule id.
+
 ## [6.3.1] - 2026-10-29
 
 ### Added

@@ -30,7 +30,7 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 <table class="rules-table rmon-table">
     <thead><tr><th>Rule</th><th>Destination</th><th>State</th><th>For</th><th>What was found</th></tr></thead>
     <tbody>
-    {% for f in rows | sort(attribute='name', case_sensitive=false) %}
+    {% for f in rows | sort(attribute='sort_name') %}
         {% if f.rule_id %}
         <tr class="rule-row rule-row--val-{{ 'danger' if f.severity == 'error' else 'warning' }}" {{ open_attrs(f) }}>
             <td class="rt-name"><span class="rt-title" title="{{ f.name }}">{{ f.name or f.rule_id }}</span></td>
@@ -108,21 +108,16 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
 </div>
 {%- endmacro %}
 
-{# A cause's actions: the GitLab issues raised for it (Copy for engineers → Raise in GitLab; open ones
-   and those closed in the last few days, gitlab_issues.shown; state and assignee are GitLab's when
-   TIDE last looked), Copy for engineers, Sync, Acknowledge or Unmute. In the group's body, so a click
-   never folds the group. #}
+{# A cause's actions: Raise issue, Sync, Acknowledge or Unmute, then at the end of the row the GitLab
+   issues raised for it (open ones and those closed in the last few days, gitlab_issues.shown; state
+   and assignee are GitLab's when TIDE last looked), so the buttons stay put. In the group's body, so
+   a click never folds the group. #}
 {% macro cause_actions(node, acked) -%}
 {% set q = 'issue=' ~ (node.issue | urlencode) ~ '&cause=' ~ (node.cause | urlencode) ~ '&siem_id=' ~ (node.siem_ids | join(',') | urlencode) ~ '&space=' ~ (node.space | urlencode) %}
 <div class="rmon-actions">
-    {% for gi in node.gitlab_issues or [] %}
-    <a name="GitLab Issue" href="{{ gi.web_url }}" target="_blank" rel="noopener"
-       class="badge {{ 'badge-success' if gi.state == 'opened' else 'badge-grey' }} badge--xs"
-       title="{{ gi.title }}: raised {{ gi.created_at.strftime('%Y-%m-%d') }} by {{ gi.created_by }}{% if gi.assignee %}, assigned to {{ gi.assignee_name or gi.assignee }}{% endif %}">{{ icon('gitlab', '11') }} {{ gi.project }}#{{ gi.iid }}{{ '' if gi.state == 'opened' else ' (closed)' if gi.state == 'closed' else ' (gone)' }}</a>
-    {% endfor %}
-    <button name="Copy for Engineers" type="button" class="btn btn-secondary btn-sm"
+    <button name="Raise Issue" type="button" class="btn btn-secondary btn-sm"
             hx-get="/api/rule-monitoring/copy?{{ q }}" hx-include="{{ filter_include }}"
-            hx-target="#modal-container" hx-swap="innerHTML" title="This cause as Markdown, for a ticket or a chat, or to raise in GitLab">{{ icon_text('copy', 'Copy for engineers', '13') }}</button>
+            hx-target="#modal-container" hx-swap="innerHTML" title="Raise this cause in GitLab, or copy it as Markdown for a ticket or a chat">{{ icon_text('plus-circle', 'Raise issue', '13') }}</button>
     {% if can_fix %}
     {% if node.rule_keys and node.issue == 'custom_elastic_id' %}
     <button name="Give Them Own Rule Ids" type="button" class="btn btn-secondary btn-sm"
@@ -161,6 +156,15 @@ hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset" hx-trigger="
             hx-target="#modal-container" hx-swap="innerHTML" hx-include="unset"
             title="Mute this cause until it affects more rules, with a note">{{ icon_text('bell-off', 'Acknowledge…', '13') }}</button>
     {% endif %}
+    {% endif %}
+    {% if node.gitlab_issues %}
+    <span class="rmon-actions__issues">
+        {% for gi in node.gitlab_issues %}
+        <a name="GitLab Issue" href="{{ gi.web_url }}" target="_blank" rel="noopener"
+           class="badge {{ 'badge-success' if gi.state == 'opened' else 'badge-grey' }} badge--xs"
+           title="{{ gi.title }}: raised {{ gi.created_at.strftime('%Y-%m-%d') }} by {{ gi.created_by }}{% if gi.assignee %}, assigned to {{ gi.assignee_name or gi.assignee }}{% endif %}">{{ icon('gitlab', '11') }} {{ gi.project }}#{{ gi.iid }}{{ '' if gi.state == 'opened' else ' (closed)' if gi.state == 'closed' else ' (gone)' }}</a>
+        {% endfor %}
+    </span>
     {% endif %}
 </div>
 {% if node.ack %}

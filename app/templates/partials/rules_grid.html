@@ -10,6 +10,7 @@
 {% if state %}{% set pagination_qs = pagination_qs ~ "&state=" ~ (state | map('urlencode') | join('&state=')) %}{% endif %}
 {% if linked_to %}{% set pagination_qs = pagination_qs ~ "&linked_to=" ~ (linked_to | urlencode) %}{% endif %}
 {% if upstream %}{% set pagination_qs = pagination_qs ~ "&upstream=" ~ (upstream | map('urlencode') | join('&upstream=')) %}{% endif %}
+{% if validation %}{% set pagination_qs = pagination_qs ~ "&validation=" ~ (validation | map('urlencode') | join('&validation=')) %}{% endif %}
 
 {% macro sort_arrow(current) -%}
     {%- if current == 'desc' %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-down', '12') }}</span>{% elif current == 'asc' %}<span class="rt-sort" aria-hidden="true">{{ icon('chevron-up', '12') }}</span>{% endif -%}

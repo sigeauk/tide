@@ -1047,6 +1047,7 @@ def list_rules(
     upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
+    validation: list[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
     sort_by: str = Query("score_desc"),
@@ -1078,6 +1079,7 @@ def list_rules(
             upstream=[u for u in upstream if u],
             min_score=min_score_int,
             max_score=max_score_int,
+            validation=[v for v in validation if v],
             validated_from=validated_from_dt,
             validated_to=validated_to_dt,
             sort_by=sort_by,
@@ -1138,6 +1140,7 @@ def list_rules(
             "upstream": [u for u in upstream if u],
             "min_score": min_score if min_score is not None else "",
             "max_score": max_score if max_score is not None else "",
+            "validation": [v for v in validation if v],
             "validated_from": validated_from or "",
             "validated_to": validated_to or "",
             "sort_by": sort_by,
@@ -1178,6 +1181,7 @@ def get_metrics(
     upstream: list[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
+    validation: list[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
 ):
@@ -1186,14 +1190,14 @@ def get_metrics(
     field (app.js puts them in the filter bar, which isn't redrawn)."""
     params = {
         "search": search, "space": space, "enabled": enabled, "state": state, "linked_to": linked_to,
-        "upstream": upstream, "min_score": min_score,
-        "max_score": max_score, "validated_from": validated_from, "validated_to": validated_to,
+        "upstream": upstream, "min_score": min_score, "max_score": max_score,
+        "validation": validation, "validated_from": validated_from, "validated_to": validated_to,
     }
     ctx = filtered_rule_metrics(db, client_id, params)
     response = request.app.state.templates.TemplateResponse(request, "partials/metrics_row.html", ctx)
     counts = db.rule_filter_counts(rule_filters_from(params), client_id=client_id)
     response.headers["HX-Trigger"] = json.dumps({"filterCounts": {
-        "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream")}}})
+        "space": counts["scope"], **{k: counts[k] for k in ("enabled", "state", "linked_to", "upstream", "validation")}}})
     return response
 
 
@@ -1213,6 +1217,7 @@ def rule_filters_from(params: dict) -> RuleFilters:
         upstream=[u for u in (params.get("upstream") or []) if u],
         min_score=_int(params.get("min_score")),
         max_score=_int(params.get("max_score")),
+        validation=[v for v in (params.get("validation") or []) if v],
         validated_from=_parse_date_bound(params.get("validated_from"), end_of_day=False),
         validated_to=_parse_date_bound(params.get("validated_to"), end_of_day=True),
     )

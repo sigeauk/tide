@@ -1977,12 +1977,13 @@ def create_app() -> FastAPI:
         search_q = qp.get("search") or ""
         space_q = qp.get("space") or ""
         enabled_q = qp.get("enabled") or ""
-        from app.services.database import normalize_rule_states
+        from app.services.database import VALIDATION_STATES, normalize_rule_states
         state_q = normalize_rule_states(qp.getlist("state"))
         linked_to_q = (qp.get("linked_to") or "") if "linked" in state_q else ""
         upstream_q = rule_origins.filter_values(u for u in qp.getlist("upstream") if u)
         min_score_q = qp.get("min_score") or ""
         max_score_q = qp.get("max_score") or ""
+        validation_q = [v for v in qp.getlist("validation") if v]
         validated_from_q = qp.get("validated_from") or ""
         validated_to_q = qp.get("validated_to") or ""
         # Table-header column sort (siem / state / severity / author / language) — when
@@ -2017,6 +2018,7 @@ def create_app() -> FastAPI:
             upstream=upstream_q,
             min_score=min_score_int,
             max_score=max_score_int,
+            validation=validation_q,
             validated_from=_parse_date_bound(validated_from_q, end_of_day=False),
             validated_to=_parse_date_bound(validated_to_q, end_of_day=True),
         )
@@ -2085,11 +2087,14 @@ def create_app() -> FastAPI:
                 "linked_to": linked_to_q,
                 "upstream": upstream_q,
                 "upstream_options": rule_origins.FILTER_STATES,
-                # How many rules each SIEM, Status, State, Linked to and Upstream choice would show,
-                # with the other filters as they are (kept up to date by the metrics' filterCounts)
+                # How many rules each SIEM, Status, State, Linked to, Upstream and Validate Show choice
+                # would show, with the other filters as they are (kept up to date by the metrics'
+                # filterCounts)
                 "filter_counts": db.rule_filter_counts(page_filters, client_id=_cid),
                 "min_score": min_score_q,
                 "max_score": max_score_q,
+                "validation": validation_q,
+                "validation_options": VALIDATION_STATES,
                 "validated_from": validated_from_q,
                 "validated_to": validated_to_q,
                 "sort_by": "score_desc",

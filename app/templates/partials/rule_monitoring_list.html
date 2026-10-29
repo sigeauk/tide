@@ -12,14 +12,14 @@
 <div class="metrics-grid" id="rmon-metrics" hx-swap-oob="true">{% include "partials/rule_monitoring_metrics.html" %}</div>
 {% endif %}
 
-{# An issue's action: Copy for engineers, every cause of it as listed here (its path): for an index or
-   field problem the fields and indexes to fix, then the rules where the rule may be at fault; for the
-   rest, the rules with what was found on each. #}
+{# An issue's action: Raise issue, every cause of it as listed here (its path): for an index or field
+   problem the fields and indexes to fix, or the rules where the rule may be at fault; for the rest,
+   the rules with what was found on each. #}
 {% macro issue_actions(node) -%}
 <div class="rmon-actions">
-    <button name="Copy Issue for Engineers" type="button" class="btn btn-secondary btn-sm"
+    <button name="Raise Issue for All Causes" type="button" class="btn btn-secondary btn-sm"
             hx-get="/api/rule-monitoring/copy" hx-vals='{{ {"node": node.path | tojson} | tojson }}' hx-include="{{ filter_include }}"
-            hx-target="#modal-container" hx-swap="innerHTML" title="This issue as Markdown, for a ticket or a chat">{{ icon_text('copy', 'Copy for engineers', '13') }}</button>
+            hx-target="#modal-container" hx-swap="innerHTML" title="Raise every cause of this issue in GitLab, or copy them as Markdown for a ticket or a chat">{{ icon_text('plus-circle', 'Raise issue', '13') }}</button>
 </div>
 {%- endmacro %}
 

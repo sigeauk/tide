@@ -72,7 +72,7 @@ Click **Save thresholds**.
 
 Who can: the client's Admins, once a Platform Admin has added the GitLab under **Integrations**.
 
-A client links the GitLab projects TIDE should use: one to back up its rules to, and any number to raise issues in, for example one for engineers and one for analysts. One project can do both. Each project has its own access token, so TIDE reaches only the projects you link. Issues are raised from Rule Monitoring's **Copy for engineers** (see [Rule Monitoring](RULES.md)); rules are backed up as below.
+A client links the GitLab projects TIDE should use: one to back up its rules to, and any number to raise issues in, for example one for engineers and one for analysts. One project can do both. Each project has its own access token, so TIDE reaches only the projects you link. Issues are raised from Rule Monitoring's **Raise issue** (see [Rule Monitoring](RULES.md)); rules are backed up as below.
 
 1. In the project, make a project access token (**Settings → Access tokens**) with the `api` scope. Give it the **Developer** role for rule backup (**Maintainer** if the branch is protected), or **Planner** or above for issues only. Keep the project private: a backup holds every rule's logic.
 2. On the client's page, open the **⋮** on **GitLab Projects** and choose **Manage projects**. Choose the GitLab, tick what it's for under **Use it for** (**Rule backup**, **Issues** or both), then enter its path (as in its address, `group/project`), an optional name, and the token. For rule backup, also the branch (`main` unless you choose another), optionally a folder in it, and under **Back up** the destinations to back up (all of them unless you untick some).

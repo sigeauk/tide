@@ -33,7 +33,7 @@ def filters_from(params) -> Dict[str, Any]:
         "search": (params.get("search") or "").strip(),
         "scope": params.get("scope") or "",
         "severity": many("severity", {s for s, _ in rule_issues.SEVERITIES}),
-        "fixer": many("fixer", set(rule_issues.FIXERS)),
+        "fixer": rule_issues.fixer_values(params.getlist("fixer")),
         "issue": many("issue", set(rule_issues.KNOWN)),
         "rules": one("rules", rule_issues.RULES, "enabled"),
         "show": one("show", rule_issues.SHOW, "open"),
@@ -62,7 +62,7 @@ def page_context(db, client_id: str, params, user=None) -> Dict[str, Any]:
         raised = gitlab_issues.by_cause(conn)
     rule_issues.remember_keys(data["groups"], f"rmon.{filters['group']}")
     _mark_lazy(data["groups"])
-    # Each cause shows the GitLab issues raised for it (Raise in GitLab, in Copy for engineers):
+    # Each cause shows the GitLab issues raised for it (Raise in GitLab, in Raise issue):
     # open ones, and those closed in the last few days.
     for node in _causes(data["groups"]):
         found = {i["id"]: i for k in _keys([node]) for i in raised.get(k, []) if gitlab_issues.shown(i)}
@@ -173,10 +173,12 @@ async def unacknowledge(request: Request, db: DbDep, user: RequireUser, client_i
 
 
 def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
-    """What Copy for engineers (and Raise in GitLab) is for: one cause (issue, cause, siem_id, space);
+    """What Raise issue (and Raise in GitLab) is for: one cause (issue, cause, siem_id, space);
     one issue as it is listed (``node``: its path, as JSON), every cause of it; or with ``all`` every
-    issue the filter bar shows that isn't acknowledged. ``params`` is the dialog's query string, or
-    the same fields posted back. Returns its cause nodes, their Markdown and the page's context."""
+    issue the filter bar shows that isn't acknowledged. ``for``: who it is for, where either role may
+    fix an issue in it (``rule_issues.audiences``; the first by default). ``params`` is the dialog's
+    query string, or the same fields posted back. Returns its cause nodes, their Markdown and the
+    page's context."""
     ctx = page_context(db, client_id, params, user)
     every = params.get("all") == "1"
     issue = None
@@ -199,9 +201,12 @@ def _selection(db, client_id: str, params, user) -> Dict[str, Any]:
     if unknown:
         with db.get_connection() as conn:
             patterns = rule_issues.rule_patterns(conn, unknown)
-    text = rule_issues.markdown(nodes, labels, ctx["now"], patterns) if nodes else ""
+    audiences = rule_issues.audiences(nodes)
+    audience = params.get("for") if params.get("for") in audiences else (audiences[0] if audiences else "")
+    text = rule_issues.markdown(nodes, labels, ctx["now"], patterns, audience) if nodes else ""
     return {"ctx": ctx, "nodes": nodes, "text": text, "every": every, "issue": issue["label"] if issue else "",
-            "causes": len(nodes), "issues": len({n["issue"] for n in nodes})}
+            "causes": len(nodes), "issues": len({n["issue"] for n in nodes}),
+            "audiences": [(a, rule_issues.FIXERS[a]) for a in audiences], "audience": audience}
 
 
 def _title(sel: Dict[str, Any]) -> str:
@@ -234,17 +239,20 @@ def _footer(user, now) -> str:
 
 @router.get("/copy", response_class=HTMLResponse)
 def copy_markdown(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
-    """Copy for engineers, as Markdown in a dialog to copy (``_selection``). Who can fix (``can_fix``)
-    can also raise it as an issue in one of the client's GitLab issues projects, or comment on an
-    issue already raised for it."""
+    """Raise issue: the Markdown in a dialog, to copy (``_selection``); For picks who it is for, and
+    opens it again for them. Who can fix (``can_fix``) can also raise it as an issue in one of the
+    client's GitLab issues projects, or comment on an issue already raised for it."""
     sel = _selection(db, client_id, request.query_params, user)
+    selection = [(k, v) for k, v in request.query_params.multi_items() if k != "for"]
+    if sel["audience"]:
+        selection.append(("for", sel["audience"]))
     gitlab = {}
     if sel["ctx"]["can_fix"] and sel["nodes"]:
         gitlab = {"projects": gitlab_issues.usable_projects(db, client_id), "raised": _raised(db, client_id, _keys(sel["nodes"])),
-                  "title": _title(sel), "labels": "TIDE",
-                  "selection": [(k, v) for k, v in request.query_params.multi_items()]}
+                  "title": _title(sel), "labels": "TIDE", "selection": selection}
     return request.app.state.templates.TemplateResponse(request, "components/rule_monitoring_copy.html", {
-        **{k: sel[k] for k in ("text", "every", "issue", "causes", "issues")}, "gitlab": gitlab})
+        **{k: sel[k] for k in ("text", "every", "issue", "causes", "issues", "audiences", "audience")},
+        "selection": [(k, v) for k, v in selection if k != "for"], "gitlab": gitlab})
 
 
 def _gitlab_done(request: Request, html: str, kind: str = "success") -> HTMLResponse:
@@ -257,7 +265,7 @@ def _gitlab_done(request: Request, html: str, kind: str = "success") -> HTMLResp
 
 @router.post("/gitlab-issue", response_class=HTMLResponse)
 async def raise_gitlab_issue(request: Request, db: DbDep, user: RequireUser, client_id: ActiveClient):
-    """Raise what Copy for engineers shows (the posted selection) as an issue in the chosen GitLab
+    """Raise what Raise issue shows (the posted selection) as an issue in the chosen GitLab
     issues project; TIDE keeps which causes it was raised for (gitlab_issues)."""
     from html import escape
     from starlette.concurrency import run_in_threadpool

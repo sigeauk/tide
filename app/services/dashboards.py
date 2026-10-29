@@ -166,8 +166,10 @@ def _clean_filters(source: str, raw) -> dict:
             from app.services import rule_issues
             allowed_values = {"severity": {s for s, _ in rule_issues.SEVERITIES}, "fixer": set(rule_issues.FIXERS),
                               "issue": set(rule_issues.KNOWN)}[key]
-            picked = [v for v in ([value] if isinstance(value, str) else value if isinstance(value, list) else [])
-                      if v in allowed_values]
+            values = [value] if isinstance(value, str) else value if isinstance(value, list) else []
+            if key == "fixer":                              # a role from before 6.3.2 as the one it is now
+                values = rule_issues.fixer_values(values)
+            picked = [v for v in values if v in allowed_values]
             if picked:
                 out[key] = picked
         elif key == "rules":
@@ -215,7 +217,8 @@ def clean(cards) -> List[dict]:
                 "icon": card.get("icon") if card.get("icon") in available_icons() else "",
                 "metrics": [k for k in keys if k in chosen] or keys,
                 "filters": _clean_filters(source, card.get("filters")),
-                "compare": card["compare"] if source in past_figures.FIGURES and isinstance(card.get("compare"), str)
+                "compare": card["compare"] if (source in past_figures.FIGURES or source in past_figures.FLOWS)
+                           and isinstance(card.get("compare"), str)
                            and card["compare"] in dict(past_figures.COMPARE) else "",
             })
         elif kind in TEXT_CARDS:

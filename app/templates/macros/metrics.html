@@ -24,3 +24,13 @@
 {% macro metric_change_tip(change) -%}
 {% if change %}<div class="metric-tip__row">{{ change.then_label }} <span>{{ change.then }}</span></div>{% endif %}
 {%- endmacro %}
+
+{# Rule Monitoring's comparison (past_figures.flow_lines): how many began (red, the figure went up for
+   them) and how many were fixed (green), in the period; the tip names each. #}
+{% macro metric_flow(flow) -%}
+{% if flow %}<p class="metric-change metric-change--flow"><span class="metric-change--{{ 'bad' if flow.new else 'neutral' }}">{% if flow.new %}{{ icon('arrow-up', '12') }}{% endif %}{{ flow.new }} new</span><span aria-hidden="true">·</span><span class="metric-change--{{ 'good' if flow.fixed else 'neutral' }}">{% if flow.fixed %}{{ icon('arrow-down', '12') }}{% endif %}{{ flow.fixed }} fixed</span><span>{{ flow.period }}</span></p>{% endif %}
+{%- endmacro %}
+
+{% macro metric_flow_tip(flow, began, ended) -%}
+{% if flow %}<div class="metric-tip__row">{{ began }} {{ flow.period }} <span>{{ flow.new }}</span></div><div class="metric-tip__row">{{ ended }} {{ flow.period }} <span>{{ flow.fixed }}</span></div>{% endif %}
+{%- endmacro %}

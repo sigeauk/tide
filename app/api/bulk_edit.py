@@ -129,6 +129,7 @@ def matching_rule_ids(
     upstream: List[str] = Query([]),
     min_score: Optional[str] = Query(None),
     max_score: Optional[str] = Query(None),
+    validation: List[str] = Query([]),
     validated_from: Optional[str] = Query(None),
     validated_to: Optional[str] = Query(None),
 ):
@@ -147,6 +148,7 @@ def matching_rule_ids(
         upstream=[u for u in upstream if u],
         min_score=_int(min_score),
         max_score=_int(max_score),
+        validation=[v for v in validation if v],
         validated_from=_parse_date_bound(validated_from, end_of_day=False),
         validated_to=_parse_date_bound(validated_to, end_of_day=True),
     )

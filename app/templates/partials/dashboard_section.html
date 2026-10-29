@@ -17,7 +17,7 @@
     {% set scope_labels = view.scope_labels %}{% set space_labels = view.space_labels %}{% set changes = view.changes or {} %}
     {% include "partials/metrics_row.html" %}
 {% elif src == 'rule_monitoring' %}
-    {% set metrics = view.metrics %}{% set filters = view.filters %}{% set stale_days = view.stale_days %}
+    {% set metrics = view.metrics %}{% set filters = view.filters %}{% set stale_days = view.stale_days %}{% set flows = view.flows or {} %}
     {% include "partials/rule_monitoring_metrics.html" %}
 {% elif src == 'system' %}
     {% set totals = view.totals %}{% set coverage_undefined = view.coverage_undefined %}{% set changes = view.changes or {} %}

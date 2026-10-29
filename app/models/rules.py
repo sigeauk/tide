@@ -201,6 +201,9 @@ class RuleFilters(BaseModel):
     # Upstream checklist: any of "update", "current", "retired", "removed" (rule_origins.STATES) or
     # "own" (did not come from Elastic's or the Sigma rules). Empty = all.
     upstream: List[str] = Field(default_factory=list)
+    # Validate's Show checklist: any of "valid", "amber", "expired", "never" (a rule's
+    # validation_status; database.VALIDATION_STATES). Empty = all.
+    validation: List[str] = Field(default_factory=list)
     validated_from: Optional[datetime] = None
     validated_to: Optional[datetime] = None
     sort_by: str = "score_asc"  # score_asc, score_desc, validated_asc, validated_desc, name_asc

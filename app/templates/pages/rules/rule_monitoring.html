@@ -26,15 +26,15 @@
     <div class="flex items-center gap-ms shrink-0">
         <div id="sync-status"></div>
         <div class="rh-more" data-more>
-            {{ more_button('More actions', title='Sync, copy for engineers', attrs='name="More Actions"') }}
+            {{ more_button('More actions', title='Sync, raise an issue', attrs='name="More Actions"') }}
             <div class="rh-more__menu" role="menu" hidden>
                 {{ sync_menu_items(client_siems) }}
                 <div class="rh-more__sep" role="separator"></div>
-                <button name="Copy Shown for Engineers" type="button" role="menuitem" class="rh-more__item"
-                    title="Every cause the filters show, as Markdown for a ticket or a chat"
+                <button name="Raise Issue for All Shown" type="button" role="menuitem" class="rh-more__item"
+                    title="Raise every cause the filters show in GitLab, or copy them as Markdown for a ticket or a chat"
                     hx-get="/api/rule-monitoring/copy?all=1" hx-include="{{ filter_include }}"
                     hx-target="#modal-container" hx-swap="innerHTML">
-                    {{ icon('copy', '15') }}<span>Copy shown for engineers</span>
+                    {{ icon('plus-circle', '15') }}<span>Raise issue for all shown</span>
                 </button>
             </div>
         </div>

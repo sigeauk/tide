@@ -1,11 +1,12 @@
 {#
   Rule Monitoring's stat cards, laid out as Rule Health's (a figure, a label, a line of figures, the
   detail on hover). Context: metrics, stale_days (rule_issues.view). Of what is open, whichever
-  Show is chosen.
+  Show is chosen. On the Dashboard, a section that compares has ``flows`` (past_figures.flow_lines):
+  how many began and how many were fixed in the period, in place of Errors' and Warnings' new in 7 days.
 #}
-{% from "macros/metrics.html" import metric_card %}
+{% from "macros/metrics.html" import metric_card, metric_flow, metric_flow_tip %}
 {% set keys = metric_keys | default(none) %}{% set link = metric_link | default(none) %}
-{% set m = metrics %}
+{% set m = metrics %}{% set flows = flows | default({}) %}
 {# Until Rule Monitoring has a week of history, every problem looks new: say since when it has tracked instead. #}
 {% set new_known = m.new_known | default(true) %}
 {% set new_tip %}New: their first problem began in the last 7 days{% if not new_known %}. Shown once Rule Monitoring has a week of history; it began on {{ m.tracked_since.strftime('%d %b') }}{% endif %}.{% endset %}
@@ -15,21 +16,27 @@
     <p class="metric-label">Rules Needing Action</p>
     <p class="metric-sub">{% if filters.rules == 'all' %}of {{ m.rules_total }} rules{% else %}{{ m.rules_enabled }} of {{ m.rules_total }} enabled{% endif %}</p>
     {% if filters.rules != 'all' and m.rules > m.rules_enabled %}<p class="metric-sub">{{ m.rules - m.rules_enabled }} disabled</p>{% endif %}
-    <div class="metric-tip" role="tooltip">Rules with at least one open issue, for the filters shown{% if filters.rules != 'all' %}: enabled rules, and disabled ones with a rule id problem TIDE can fix. Beneath: the enabled rules needing action, out of the enabled rules in the destinations shown{% endif %}.</div>
+    {{ metric_flow(flows.rules) }}
+    <div class="metric-tip" role="tooltip">Rules with at least one open issue, for the filters shown{% if filters.rules != 'all' %}: enabled rules, and disabled ones with a rule id problem TIDE can fix. Beneath: the enabled rules needing action, out of the enabled rules in the destinations shown{% endif %}.
+        {{ metric_flow_tip(flows.rules, 'Began needing action', 'No longer needing action') }}</div>
 {% endcall %}
 
 {% call metric_card('errors', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value{{ ' danger' if m.errors }}">{{ m.errors }}</p>
     <p class="metric-label">Errors</p>
-    <p class="metric-sub">{% if new_known %}{{ m.new_errors }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>
-    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with an error: they don't do their job until it is fixed. {{ new_tip }}</div>
+    {% if flows.errors %}{{ metric_flow(flows.errors) }}
+    {% else %}<p class="metric-sub">{% if new_known %}{{ m.new_errors }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>{% endif %}
+    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with an error: they don't do their job until it is fixed. {{ new_tip if not flows.errors }}
+        {{ metric_flow_tip(flows.errors, 'With a new error', 'With every error fixed') }}</div>
 {% endcall %}
 
 {% call metric_card('warnings', keys, link, 'metric-card--tip', tip=true) %}
     <p class="metric-value{{ ' warning' if m.warnings }}">{{ m.warnings }}</p>
     <p class="metric-label">Warnings</p>
-    <p class="metric-sub">{% if new_known %}{{ m.new_warnings }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>
-    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with warnings only: they run, but less well. {{ new_tip }}</div>
+    {% if flows.warnings %}{{ metric_flow(flows.warnings) }}
+    {% else %}<p class="metric-sub">{% if new_known %}{{ m.new_warnings }} new in 7 days{% else %}tracked since {{ m.tracked_since.strftime('%d %b') }}{% endif %}</p>{% endif %}
+    <div class="metric-tip" role="tooltip">Rules (or whole destinations) with warnings only: they run, but less well. {{ new_tip if not flows.warnings }}
+        {{ metric_flow_tip(flows.warnings, 'With a new warning', 'With every warning fixed') }}</div>
 {% endcall %}
 
 {% call metric_card('causes', keys, link, 'metric-card--tip', tip=true) %}
@@ -38,13 +45,14 @@
     {# Who fixes them, in words; a fixer with nothing to fix is left off the face, not the detail. #}
     {# Two to a line, so the card wraps between them, not inside one. #}
     {% set fix = namespace(parts=[]) %}
-    {% for key, word in (('data', 'data'), ('author', 'author'), ('platform', 'Kibana'), ('tide', 'TIDE')) if m.by_fixer[key] %}{% set fix.parts = fix.parts + [m.by_fixer[key] ~ ' ' ~ word] %}{% endfor %}
+    {% for key, word in (('engineer', 'engineer'), ('author', 'author'), ('tide', 'TIDE')) if m.by_fixer[key] %}{% set fix.parts = fix.parts + [m.by_fixer[key] ~ ' ' ~ word] %}{% endfor %}
     {% for pair in fix.parts | batch(2) %}<p class="metric-sub">{{ pair | join(' · ') }}</p>{% else %}<p class="metric-sub">nothing to fix</p>{% endfor %}
+    {{ metric_flow(flows.causes) }}
     <div class="metric-tip" role="tooltip">
         <div class="metric-tip__head">Distinct causes: one missing index or field is one thing to fix, however many rules it affects</div>
-        <div class="metric-tip__row"><b>Data / ingest</b> indexes and pipelines <span>{{ m.by_fixer.data }}</span></div>
-        <div class="metric-tip__row"><b>Rule author</b> the rule's query <span>{{ m.by_fixer.author }}</span></div>
-        <div class="metric-tip__row"><b>Kibana / platform</b> the SIEM itself <span>{{ m.by_fixer.platform }}</span></div>
+        {{ metric_flow_tip(flows.causes, 'Found', 'Fixed') }}
+        <div class="metric-tip__row"><b>Engineer</b> indexes, pipelines and the SIEM itself <span>{{ m.by_fixer.engineer }}</span></div>
+        <div class="metric-tip__row"><b>Author</b> the rule's query and schedule <span>{{ m.by_fixer.author }}</span></div>
         <div class="metric-tip__row"><b>TIDE</b> rule ids, syncs <span>{{ m.by_fixer.tide }}</span></div>
     </div>
 {% endcall %}

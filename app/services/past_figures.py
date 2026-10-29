@@ -34,15 +34,22 @@ FIGURES: Dict[str, Dict[str, Figure]] = {
                "unmapped": Figure(better="down"), "not_counted": Figure(better="down")},
     "baselines": {"rules_mapped": Figure(), "uncovered": Figure(better="down"), "fully_covered": Figure()},
 }
+# Rule Monitoring compares differently: its cards say how many began and how many were fixed in the
+# period (rule_issues.flows), not how far a figure moved.
+FLOWS: Dict[str, Tuple[str, ...]] = {"rule_monitoring": ("rules", "errors", "warnings", "causes")}
 # The filters a comparing section may have. Any other is a filter on something TIDE keeps no
 # history of, which would mix today's values with the earlier day's, so the section shows no change.
-COMPARE_FILTERS: Dict[str, Tuple[str, ...]] = {"rule_health": ("space",), "system": ("system_id",)}
+COMPARE_FILTERS: Dict[str, Tuple[str, ...]] = {"rule_health": ("space",), "system": ("system_id",),
+                                               "rule_monitoring": ("scope", "severity", "fixer", "issue", "rules")}
 _COVERAGE_NOTE = "TIDE has the history to work this out from its 6.0 upgrade on, for the systems you have now."
 NOTES = {"rule_health": "Total Rules, Enabled, Validated and Avg Quality show how much they have changed "
                         "since then, when the section has no filter other than SIEM.",
          "system": "Each card shows how much it has changed since then. " + _COVERAGE_NOTE,
          "baselines": "Rules Mapped, Uncovered and Fully Covered show how much they have changed since then. "
-                      + _COVERAGE_NOTE}
+                      + _COVERAGE_NOTE,
+         "rule_monitoring": "Rules Needing Action, Errors, Warnings and Things to Fix show how many began and how "
+                            "many were fixed since then, as syncs found them, when the section has no Search. "
+                            "TIDE has the history to work this out from its 6.3.2 upgrade on, and the 14 days before."}
 COMPARE = (("", "None"), ("1", "Yesterday"), ("7", "7 days ago"), ("30", "30 days ago"), ("90", "90 days ago"))
 PERIODS = {1: "since yesterday", 7: "in 7 days", 30: "in 30 days", 90: "in 90 days"}
 # Avg Quality on an earlier day needs that day's scores, from today's scoring model, for most rules.
@@ -54,7 +61,7 @@ def compare_days(card: dict) -> int:
     changes, or it has a filter TIDE can't apply to an earlier day)."""
     source, days = card.get("source"), card.get("compare") or ""
     allowed = COMPARE_FILTERS.get(source, ())
-    if source not in FIGURES or not days.isdigit() or int(days) not in PERIODS:
+    if (source not in FIGURES and source not in FLOWS) or not days.isdigit() or int(days) not in PERIODS:
         return 0
     return int(days) if all(k in allowed for k in card.get("filters") or {}) else 0
 
@@ -83,6 +90,14 @@ def changes(source: str, now: Dict[str, Optional[float]], then: Dict[str, Option
         out[key] = {"text": text, "direction": direction, "tone": tone,
                     "then": f"{then[key]:,.{fig.digits}f}{fig.unit}", "then_label": f"On {day.day} {day:%b}"}
     return out
+
+
+def flow_lines(moved: dict, days: int) -> Dict[str, dict]:
+    """Each Rule Monitoring card's line for ``rule_issues.flows``: how many began and how many were
+    fixed, in the period, or since the history is complete from when that is later."""
+    since = moved.get("since")
+    period = f"since {since.day} {since:%b}" if since else PERIODS[days]
+    return {card: {**moved[card], "period": period} for card in FLOWS["rule_monitoring"]}
 
 
 def rule_health_then(db, client_id: str, rules: List, scope: Optional[str], at: datetime) -> Dict[str, Optional[float]]:

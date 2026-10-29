@@ -63,7 +63,7 @@
         </div>
     </div>
 </div>
-{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
+{% set rh_filter_include = "[name='search'], [name='space'], [name='enabled'], [name='state'], [name='linked_to'], [name='upstream'], [name='min_score'], [name='max_score'], [name='validation'], [name='validated_from'], [name='validated_to'], [name='sort_score'], [name='sort_validated'], [name='sort_name'], [name='sort_col'], [name='sort_dir'], [name='view']" %}
 
 <div class="rule-browser-controls">
 <!-- Metrics Row -->
@@ -130,7 +130,8 @@
                      'removed': "The rule it came from is no longer in the Elastic or Sigma rules built into TIDE",
                      'own': "Did not come from Elastic's or the Sigma rules"}) }}
 
-    {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons. #}
+    {# Score, Validate and Name sort (Score and Validate narrow too); the page script names them on their buttons.
+       Validate's date range narrows the validated rules; Never validated has no date, so it sets the range aside. #}
     {% call filter_dropdown('rh-score', 'Score', 'Score') %}
         <div class="tide-filter-section-label">Sort</div>
         {{ choice_rows('rh-sort-score', 'sort_score', [('desc', 'High → Low'), ('asc', 'Low → High'), ('', 'Off')], sort_score, attrs=rh_hx) }}
@@ -144,6 +145,12 @@
     {% call filter_dropdown('rh-validated', 'Validate', 'Validate') %}
         <div class="tide-filter-section-label">Sort</div>
         {{ choice_rows('rh-sort-validated', 'sort_validated', [('desc', 'Newest → Oldest'), ('asc', 'Oldest → Newest'), ('', 'Off')], sort_validated, attrs=rh_hx) }}
+        <div class="tide-filter-section-label">Show</div>
+        {{ check_rows('validation', validation_options, validation, counts.validation or {}, rh_hx,
+                      {'valid': 'Validated and still in policy',
+                       'amber': 'Validated, but due to be validated again soon',
+                       'expired': 'Validated too long ago: no longer counts as validated',
+                       'never': 'Never validated; the date range does not apply'}) }}
         <div class="tide-filter-section-label">Date range</div>
         <div class="tide-filter-range">
             <input type="date" name="validated_from" value="{{ validated_from }}" class="form-input" {{ rh_hx | safe }}>

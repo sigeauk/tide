@@ -134,6 +134,19 @@ def rule_badge(rule, offline_scopes, links, linked_to: Optional[str] = None) -> 
     return "linked" if not linked_to or destination_key(*linked_to.partition("|")[::2]) in dests else "linked_elsewhere"
 
 
+# Validate's Show checklist: a rule's validation_status, worded as the metrics' Validated card.
+VALIDATION_STATES = (("valid", "Validated"), ("amber", "Due soon"), ("expired", "Expired"), ("never", "Never validated"))
+
+
+def in_validated_range(rule, lo: Optional[datetime], hi: Optional[datetime], statuses) -> bool:
+    """Validate's date range narrows the validated rules to those validated in it. A never-validated
+    rule has no date, so a range leaves it out unless Never validated is ticked."""
+    d = rule.validation_date
+    if d is None:
+        return (lo is None and hi is None) or "never" in statuses
+    return (lo is None or d >= lo) and (hi is None or d <= hi)
+
+
 # Schema version for migrations
 SCHEMA_VERSION = 96
 
@@ -5359,7 +5372,8 @@ class DatabaseService:
             # require a Python-side pass after row hydration, same as the
             # validation-date sort above.
             needs_state_filter = bool(filters.state)
-            needs_validated_range = filters.validated_from is not None or filters.validated_to is not None
+            needs_validated_range = (filters.validated_from is not None or filters.validated_to is not None
+                                     or bool(filters.validation))
             needs_upstream_filter = bool(filters.upstream)
             needs_post_filter = needs_state_filter or needs_validated_range or needs_upstream_filter
             fetch_all = is_validation_sort or needs_post_filter
@@ -5417,13 +5431,11 @@ class DatabaseService:
         # Post-filter by state and/or validated-date range (see fetch_all above).
         if needs_post_filter:
             if needs_validated_range:
-                lo = filters.validated_from
-                hi = filters.validated_to
+                wanted_validation = set(filters.validation)
                 rules = [
                     r for r in rules
-                    if r.validation_date
-                    and (lo is None or r.validation_date >= lo)
-                    and (hi is None or r.validation_date <= hi)
+                    if (not wanted_validation or r.validation_status in wanted_validation)
+                    and in_validated_range(r, filters.validated_from, filters.validated_to, wanted_validation)
                 ]
             if needs_state_filter:
                 # Deprecated (not found at the last good sync), else offline (its SIEM failed the
@@ -5781,6 +5793,7 @@ class DatabaseService:
         ("rule_migrations", "master_rule_id", "master_siem_id", "master_space"),
         ("step_detections", "rule_ref", "siem_id", "space"),
         ("rule_issues", "rule_id", "siem_id", "space"),
+        ("rule_issue_history", "rule_id", "siem_id", "space"),
     )
 
     def rekey_rule(self, old_rule_id: str, new_rule_id: str, siem_id: str, space: str,
@@ -6359,17 +6372,20 @@ class DatabaseService:
         that choice is picked. ``scope`` by :func:`destination_key` (a deprecated rule only when a
         State is picked, as the SIEM filter shows it), ``enabled`` by ``"true"``/``"false"``,
         ``state`` by the card's badge, ``upstream`` by ``rule_origins.filter_value`` (``own`` when the
-        rule has no origin), and ``linked_to`` by destination: how many of the Linked rules are linked
-        to a copy there."""
+        rule has no origin), ``linked_to`` by destination: how many of the Linked rules are linked
+        to a copy there, and ``validation`` by the rule's validation status (Validate's Show)."""
         from app.services.rule_origins import filter_value, filter_values
         f = filters or RuleFilters()
-        counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to")}
-        # Search, score and validation date narrow every count; the counted filters are applied here.
+        counts = {k: Counter() for k in ("scope", "enabled", "state", "upstream", "linked_to", "validation")}
+        # Search and score narrow every count; the counted filters, and Validate's date range (which
+        # Never validated sets aside), are applied here.
         rules = self.get_rules(f.model_copy(update={
             "siem_id": None, "space": None, "enabled": None, "state": [], "upstream": [], "linked_to": None,
+            "validation": [], "validated_from": None, "validated_to": None,
             "page": 1, "page_size": 1_000_000}), client_id=client_id, slim=True)[0]
         offline, links, upstream = self.get_offline_scopes(), self.rule_link_destinations(), self.upstream_statuses()
         states, wanted_upstream = set(normalize_rule_states(f.state)), set(filter_values(f.upstream))
+        wanted_validation = set(f.validation)
         siem = destination_key(f.siem_id or "", f.space) if f.space else ""
         linked_to = f.linked_to if "linked" in states else None
         for r in rules:
@@ -6382,16 +6398,21 @@ class DatabaseService:
             in_status = f.enabled is None or r.enabled == f.enabled
             in_state = not states or rule_badge(r, offline, links, linked_to) in states
             in_upstream = not wanted_upstream or up in wanted_upstream
-            if in_status and in_state and in_upstream and (states or not r.deprecated):
+            in_validation = ((not wanted_validation or r.validation_status in wanted_validation)
+                             and in_validated_range(r, f.validated_from, f.validated_to, wanted_validation))
+            if in_status and in_state and in_upstream and in_validation and (states or not r.deprecated):
                 counts["scope"][dest] += 1
-            if in_siem and in_state and in_upstream:
+            if in_siem and in_state and in_upstream and in_validation:
                 counts["enabled"]["true" if r.enabled else "false"] += 1
-            if at_siem and in_status and in_upstream:
+            if at_siem and in_status and in_upstream and in_validation:
                 counts["state"][rule_badge(r, offline, links, f.linked_to)] += 1
-            if in_siem and in_status and in_state:
+            if in_siem and in_status and in_state and in_validation:
                 counts["upstream"][up] += 1
-            if badge == "linked" and at_siem and in_status and in_upstream:
+            if badge == "linked" and at_siem and in_status and in_upstream and in_validation:
                 counts["linked_to"].update(links[key])
+            if in_siem and in_status and in_state and in_upstream and in_validated_range(
+                    r, f.validated_from, f.validated_to, {"never"}):
+                counts["validation"][r.validation_status] += 1
         return counts
 
     def get_rule_links_bulk(

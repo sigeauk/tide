@@ -61,7 +61,11 @@
         var sort = $('rh-sort-validated').value;
         var from = document.querySelector("#rh-validated-dropdown [name='validated_from']").value;
         var to = document.querySelector("#rh-validated-dropdown [name='validated_to']").value;
+        var shown = Array.prototype.map.call(document.querySelectorAll("#rh-validated-dropdown input[name='validation']:checked"), function (cb) {
+            return cb.nextElementSibling.textContent.trim();
+        });
         var parts = [];
+        if (shown.length) parts.push(shown.join(', '));
         if (sort === 'desc') parts.push('Newest → Oldest');
         else if (sort === 'asc') parts.push('Oldest → Newest');
         if (from || to) parts.push((from || '…') + ' – ' + (to || '…'));
